@@ -122,7 +122,6 @@ jobs:
         working-directory: web
         run: |
           docker build \
-            # TODO: Update NEXT_PUBLIC_API_URL to the actual Cloud Run api service URL once deployed
             --build-arg NEXT_PUBLIC_API_URL=https://api-TODO.asia-northeast1.run.app \
             --build-arg NEXT_PUBLIC_AUTH_MODE=firebase \
             --build-arg NEXT_PUBLIC_FIREBASE_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }} \
