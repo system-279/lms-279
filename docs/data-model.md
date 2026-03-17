@@ -1,0 +1,140 @@
+# データモデル
+
+## Firestore構造
+
+全データは `tenants/{tenantId}/` 配下に格納。
+
+### 継承コレクション（参考プロジェクトから）
+
+| コレクション | 用途 |
+|-------------|------|
+| `users` | ユーザー情報 |
+| `allowed_emails` | アクセス許可リスト |
+| `user_settings` | ユーザー設定 |
+| `notification_policies` | 通知ポリシー |
+| `notification_logs` | 通知ログ |
+| `auth_error_logs` | 認証エラーログ |
+| `enrollments` | 受講登録 |
+
+### 新規コレクション
+
+#### courses/{id}
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| name | string | 講座名 |
+| description | string | 説明 |
+| status | string | draft / published / archived |
+| lessonOrder | string[] | レッスンID順序配列 |
+| passThreshold | number | 合格基準（%） |
+| createdBy | string | 作成者ID |
+| createdAt | Timestamp | 作成日時 |
+| updatedAt | Timestamp | 更新日時 |
+
+#### lessons/{id}
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| courseId | string | 所属コースID |
+| title | string | レッスンタイトル |
+| order | number | 表示順 |
+| hasVideo | boolean | 動画あり |
+| hasQuiz | boolean | クイズあり |
+| videoUnlocksPrior | boolean | 前レッスン完了必須 |
+| createdAt | Timestamp | 作成日時 |
+| updatedAt | Timestamp | 更新日時 |
+
+#### videos/{id}
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| lessonId | string | 所属レッスンID |
+| courseId | string | 所属コースID |
+| sourceType | string | gcs / external_url |
+| sourceUrl | string | 外部URL（sourceType=external_url時） |
+| gcsPath | string | GCSパス（sourceType=gcs時） |
+| durationSec | number | 動画長（秒） |
+| requiredWatchRatio | number | 完了判定比率（default 0.95） |
+| speedLock | boolean | 倍速禁止（default true） |
+| createdAt | Timestamp | 作成日時 |
+| updatedAt | Timestamp | 更新日時 |
+
+#### video_events/{id}
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| videoId | string | 動画ID |
+| userId | string | ユーザーID |
+| sessionToken | string | 再生セッショントークン |
+| eventType | string | play/pause/seek/ended/heartbeat/ratechange/visibility_hidden/visibility_visible |
+| position | number | 再生位置（秒） |
+| seekFrom | number | シーク元位置（seek時のみ） |
+| playbackRate | number | 再生速度 |
+| timestamp | Timestamp | サーバー受信時刻 |
+| clientTimestamp | number | クライアント送信時刻 |
+| metadata | object | 追加情報 |
+
+#### video_analytics/{id} (ID=userId_videoId)
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| watchedRanges | array | 視聴済み区間 [{start, end}] |
+| totalWatchTimeSec | number | 合計視聴時間（秒） |
+| coverageRatio | number | カバー率（0-1） |
+| isComplete | boolean | 完了判定 |
+| seekCount | number | シーク回数 |
+| pauseCount | number | 一時停止回数 |
+| totalPauseDurationSec | number | 合計一時停止時間 |
+| speedViolationCount | number | 倍速違反回数 |
+| suspiciousFlags | string[] | 不審フラグ |
+| updatedAt | Timestamp | 最終更新 |
+
+#### quizzes/{id}
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| lessonId | string | 所属レッスンID |
+| courseId | string | 所属コースID |
+| title | string | クイズタイトル |
+| passThreshold | number | 合格基準（default 70%） |
+| maxAttempts | number | 最大受験回数（default 3） |
+| timeLimitSec | number | 制限時間（秒、null=無制限） |
+| randomizeQuestions | boolean | 問題順ランダム |
+| randomizeAnswers | boolean | 選択肢順ランダム |
+| requireVideoCompletion | boolean | 動画完了必須 |
+| questions | array | 問題配列（上限50問） |
+
+questions配列の各要素:
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| id | string | 問題ID |
+| text | string | 問題文 |
+| type | string | single / multi |
+| options | array | 選択肢 [{id, text, isCorrect}] |
+| points | number | 配点 |
+| explanation | string | 解説（採点後表示） |
+
+#### quiz_attempts/{id}
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| quizId | string | クイズID |
+| userId | string | ユーザーID |
+| attemptNumber | number | 受験回数 |
+| status | string | in_progress / submitted / timed_out |
+| answers | object | {questionId: optionIds[]} |
+| score | number | 得点（%） |
+| isPassed | boolean | 合否 |
+| startedAt | Timestamp | 開始時刻 |
+| submittedAt | Timestamp | 提出時刻 |
+
+#### user_progress/{id} (ID=userId_lessonId)
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| videoCompleted | boolean | 動画完了 |
+| quizPassed | boolean | クイズ合格 |
+| quizBestScore | number | クイズ最高得点 |
+| lessonCompleted | boolean | レッスン完了 |
+| updatedAt | Timestamp | 最終更新 |
+
+#### course_progress/{id} (ID=userId_courseId)
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| completedLessons | number | 完了レッスン数 |
+| totalLessons | number | 全レッスン数 |
+| progressRatio | number | 進捗率（0-1） |
+| isCompleted | boolean | コース完了 |
+| updatedAt | Timestamp | 最終更新 |
