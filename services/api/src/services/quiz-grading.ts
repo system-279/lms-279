@@ -3,21 +3,7 @@
  * ADR-017: サーバーサイド採点、正解はsubmit後まで非公開
  */
 
-// 型はentities.tsに追加予定だが、まだ存在しないのでローカルで定義
-interface QuizOption {
-  id: string;
-  text: string;
-  isCorrect: boolean;
-}
-
-interface QuizQuestion {
-  id: string;
-  text: string;
-  type: "single" | "multi";
-  options: QuizOption[];
-  points: number;
-  explanation: string;
-}
+import type { QuizQuestion } from "../types/entities.js";
 
 interface GradingResult {
   score: number;           // パーセント (0-100)
