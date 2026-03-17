@@ -240,3 +240,30 @@ export interface QuizAttemptFilter {
   userId?: string;
   status?: QuizAttemptStatus;
 }
+
+// ========================================
+// 進捗トラッキング
+// ========================================
+
+export interface UserProgress {
+  id: string;              // userId_lessonId
+  userId: string;
+  lessonId: string;
+  courseId: string;
+  videoCompleted: boolean;
+  quizPassed: boolean;
+  quizBestScore: number | null;
+  lessonCompleted: boolean;
+  updatedAt: string;
+}
+
+export interface CourseProgress {
+  id: string;              // userId_courseId
+  userId: string;
+  courseId: string;
+  completedLessons: number;
+  totalLessons: number;
+  progressRatio: number;   // 0-1
+  isCompleted: boolean;
+  updatedAt: string;
+}

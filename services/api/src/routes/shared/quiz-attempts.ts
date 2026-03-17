@@ -7,6 +7,7 @@
 import { Router, Request, Response } from "express";
 import { requireUser } from "../../middleware/auth.js";
 import { gradeQuiz, stripCorrectAnswers, randomizeQuiz } from "../../services/quiz-grading.js";
+import { updateLessonProgress } from "../../services/progress.js";
 
 const router = Router();
 
@@ -300,6 +301,16 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
     isPassed: gradingResult.isPassed,
     submittedAt: now.toISOString(),
   });
+
+  // 進捗更新: 合格した場合
+  if (gradingResult.isPassed) {
+    if (quiz) {
+      await updateLessonProgress(ds, userId, quiz.lessonId, quiz.courseId, {
+        quizPassed: true,
+        quizBestScore: gradingResult.score,
+      });
+    }
+  }
 
   res.json({
     attempt: {

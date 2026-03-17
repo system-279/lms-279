@@ -32,6 +32,8 @@ import type {
   QuizAttempt,
   QuizFilter,
   QuizAttemptFilter,
+  UserProgress,
+  CourseProgress,
 } from "../types/entities.js";
 
 // デモ用初期データ
@@ -190,6 +192,9 @@ export class InMemoryDataSource implements DataSource {
   private videoAnalytics: Map<string, VideoAnalytics> = new Map();
   private quizzes: Quiz[] = [];
   private quizAttempts: QuizAttempt[] = [];
+
+  private userProgress: Map<string, UserProgress> = new Map();
+  private courseProgress: Map<string, CourseProgress> = new Map();
 
   private readonly readOnly: boolean;
 
@@ -687,5 +692,82 @@ export class InMemoryDataSource implements DataSource {
     if (index === -1) return null;
     this.quizAttempts[index] = { ...this.quizAttempts[index], ...data };
     return this.quizAttempts[index];
+  }
+
+  // User Progress
+  async getUserProgress(userId: string, lessonId: string): Promise<UserProgress | null> {
+    const key = `${userId}_${lessonId}`;
+    return this.userProgress.get(key) ?? null;
+  }
+
+  async getUserProgressByCourse(userId: string, courseId: string): Promise<UserProgress[]> {
+    const result: UserProgress[] = [];
+    for (const progress of this.userProgress.values()) {
+      if (progress.userId === userId && progress.courseId === courseId) {
+        result.push(progress);
+      }
+    }
+    return result;
+  }
+
+  async upsertUserProgress(
+    userId: string,
+    lessonId: string,
+    data: Partial<Omit<UserProgress, "id" | "userId" | "lessonId">>
+  ): Promise<UserProgress> {
+    this.throwIfReadOnly();
+    const key = `${userId}_${lessonId}`;
+    const existing = this.userProgress.get(key);
+    const progress: UserProgress = {
+      id: key,
+      userId,
+      lessonId,
+      courseId: data.courseId ?? existing?.courseId ?? "",
+      videoCompleted: data.videoCompleted ?? existing?.videoCompleted ?? false,
+      quizPassed: data.quizPassed ?? existing?.quizPassed ?? false,
+      quizBestScore: data.quizBestScore !== undefined ? data.quizBestScore : (existing?.quizBestScore ?? null),
+      lessonCompleted: data.lessonCompleted ?? existing?.lessonCompleted ?? false,
+      updatedAt: new Date().toISOString(),
+    };
+    this.userProgress.set(key, progress);
+    return progress;
+  }
+
+  // Course Progress
+  async getCourseProgress(userId: string, courseId: string): Promise<CourseProgress | null> {
+    const key = `${userId}_${courseId}`;
+    return this.courseProgress.get(key) ?? null;
+  }
+
+  async upsertCourseProgress(
+    userId: string,
+    courseId: string,
+    data: Partial<Omit<CourseProgress, "id" | "userId" | "courseId">>
+  ): Promise<CourseProgress> {
+    this.throwIfReadOnly();
+    const key = `${userId}_${courseId}`;
+    const existing = this.courseProgress.get(key);
+    const progress: CourseProgress = {
+      id: key,
+      userId,
+      courseId,
+      completedLessons: data.completedLessons ?? existing?.completedLessons ?? 0,
+      totalLessons: data.totalLessons ?? existing?.totalLessons ?? 0,
+      progressRatio: data.progressRatio ?? existing?.progressRatio ?? 0,
+      isCompleted: data.isCompleted ?? existing?.isCompleted ?? false,
+      updatedAt: new Date().toISOString(),
+    };
+    this.courseProgress.set(key, progress);
+    return progress;
+  }
+
+  async getCourseProgressByUser(userId: string): Promise<CourseProgress[]> {
+    const result: CourseProgress[] = [];
+    for (const progress of this.courseProgress.values()) {
+      if (progress.userId === userId) {
+        result.push(progress);
+      }
+    }
+    return result;
   }
 }

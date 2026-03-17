@@ -32,6 +32,8 @@ import type {
   QuizAttempt,
   QuizFilter,
   QuizAttemptFilter,
+  UserProgress,
+  CourseProgress,
 } from "../types/entities.js";
 
 // Firestore Timestampを Date に変換
@@ -865,6 +867,129 @@ export class FirestoreDataSource implements DataSource {
           : typeof data.submittedAt?.toDate === "function"
             ? data.submittedAt.toDate().toISOString()
             : data.submittedAt,
+    };
+  }
+
+  // User Progress
+  async getUserProgress(userId: string, lessonId: string): Promise<UserProgress | null> {
+    const docId = `${userId}_${lessonId}`;
+    const doc = await this.collection("user_progress").doc(docId).get();
+    if (!doc.exists) return null;
+    return this.toUserProgress(doc.id, doc.data()!);
+  }
+
+  async getUserProgressByCourse(userId: string, courseId: string): Promise<UserProgress[]> {
+    const snapshot = await this.collection("user_progress")
+      .where("userId", "==", userId)
+      .where("courseId", "==", courseId)
+      .get();
+    return snapshot.docs.map((doc) => this.toUserProgress(doc.id, doc.data()));
+  }
+
+  async upsertUserProgress(
+    userId: string,
+    lessonId: string,
+    data: Partial<Omit<UserProgress, "id" | "userId" | "lessonId">>
+  ): Promise<UserProgress> {
+    const docId = `${userId}_${lessonId}`;
+    const docRef = this.collection("user_progress").doc(docId);
+    const doc = await docRef.get();
+
+    if (doc.exists) {
+      await docRef.update({
+        ...data,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    } else {
+      await docRef.set({
+        userId,
+        lessonId,
+        courseId: data.courseId ?? "",
+        videoCompleted: data.videoCompleted ?? false,
+        quizPassed: data.quizPassed ?? false,
+        quizBestScore: data.quizBestScore ?? null,
+        lessonCompleted: data.lessonCompleted ?? false,
+        ...data,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    const updated = await docRef.get();
+    return this.toUserProgress(docId, updated.data()!);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toUserProgress(id: string, data: any): UserProgress {
+    return {
+      id,
+      userId: data.userId,
+      lessonId: data.lessonId,
+      courseId: data.courseId,
+      videoCompleted: data.videoCompleted ?? false,
+      quizPassed: data.quizPassed ?? false,
+      quizBestScore: data.quizBestScore ?? null,
+      lessonCompleted: data.lessonCompleted ?? false,
+      updatedAt: toDate(data.updatedAt).toISOString(),
+    };
+  }
+
+  // Course Progress
+  async getCourseProgress(userId: string, courseId: string): Promise<CourseProgress | null> {
+    const docId = `${userId}_${courseId}`;
+    const doc = await this.collection("course_progress").doc(docId).get();
+    if (!doc.exists) return null;
+    return this.toCourseProgress(doc.id, doc.data()!);
+  }
+
+  async upsertCourseProgress(
+    userId: string,
+    courseId: string,
+    data: Partial<Omit<CourseProgress, "id" | "userId" | "courseId">>
+  ): Promise<CourseProgress> {
+    const docId = `${userId}_${courseId}`;
+    const docRef = this.collection("course_progress").doc(docId);
+    const doc = await docRef.get();
+
+    if (doc.exists) {
+      await docRef.update({
+        ...data,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    } else {
+      await docRef.set({
+        userId,
+        courseId,
+        completedLessons: data.completedLessons ?? 0,
+        totalLessons: data.totalLessons ?? 0,
+        progressRatio: data.progressRatio ?? 0,
+        isCompleted: data.isCompleted ?? false,
+        ...data,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    const updated = await docRef.get();
+    return this.toCourseProgress(docId, updated.data()!);
+  }
+
+  async getCourseProgressByUser(userId: string): Promise<CourseProgress[]> {
+    const snapshot = await this.collection("course_progress")
+      .where("userId", "==", userId)
+      .get();
+    return snapshot.docs.map((doc) => this.toCourseProgress(doc.id, doc.data()));
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toCourseProgress(id: string, data: any): CourseProgress {
+    return {
+      id,
+      userId: data.userId,
+      courseId: data.courseId,
+      completedLessons: data.completedLessons ?? 0,
+      totalLessons: data.totalLessons ?? 0,
+      progressRatio: data.progressRatio ?? 0,
+      isCompleted: data.isCompleted ?? false,
+      updatedAt: toDate(data.updatedAt).toISOString(),
     };
   }
 }

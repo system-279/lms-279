@@ -9,6 +9,7 @@ import { Router, Request, Response } from "express";
 import { requireUser } from "../../middleware/auth.js";
 import type { VideoEventType } from "../../types/entities.js";
 import { processVideoEvents } from "../../services/video-analytics.js";
+import { updateLessonProgress } from "../../services/progress.js";
 
 const router = Router();
 
@@ -162,7 +163,20 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
     isComplete,
   });
 
-  // 8. レスポンス
+  // 8. 進捗更新: isComplete=true になった場合
+  if (isComplete) {
+    const lesson = await ds.getLessonById(video.lessonId);
+    if (lesson) {
+      // クイズなしレッスンの場合、quizPassed=trueとして完了扱い
+      const quizPassed = !lesson.hasQuiz;
+      await updateLessonProgress(ds, userId, lesson.id, lesson.courseId, {
+        videoCompleted: true,
+        quizPassed: quizPassed ? true : undefined,
+      });
+    }
+  }
+
+  // 9. レスポンス
   res.json({
     analytics: {
       coverageRatio: updatedAnalytics.coverageRatio,

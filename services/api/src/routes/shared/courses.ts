@@ -271,22 +271,43 @@ router.patch("/admin/courses/:id/archive", requireAdmin, async (req: Request, re
 /**
  * 受講者向け: 公開講座一覧取得
  * GET /courses
- * status=published のみ返す
+ * status=published のみ返す。自分のcourse_progressを付与。
  */
 router.get("/courses", requireUser, async (req: Request, res: Response) => {
   const ds = req.dataSource!;
+  const userId = req.user!.id;
 
   const courses = await ds.getCourses({ status: "published" });
 
+  // 自分のコース進捗を一括取得
+  const allCourseProgress = await ds.getCourseProgressByUser(userId);
+  const progressMap = new Map(allCourseProgress.map((p) => [p.courseId, p]));
+
   res.json({
-    courses: courses.map((course) => ({
-      id: course.id,
-      name: course.name,
-      description: course.description,
-      status: course.status,
-      lessonOrder: course.lessonOrder,
-      passThreshold: course.passThreshold,
-    })),
+    courses: courses.map((course) => {
+      const progress = progressMap.get(course.id);
+      return {
+        id: course.id,
+        name: course.name,
+        description: course.description,
+        status: course.status,
+        lessonOrder: course.lessonOrder,
+        passThreshold: course.passThreshold,
+        progress: progress
+          ? {
+              completedLessons: progress.completedLessons,
+              totalLessons: progress.totalLessons,
+              progressRatio: progress.progressRatio,
+              isCompleted: progress.isCompleted,
+            }
+          : {
+              completedLessons: 0,
+              totalLessons: course.lessonOrder.length,
+              progressRatio: 0,
+              isCompleted: false,
+            },
+      };
+    }),
   });
 });
 

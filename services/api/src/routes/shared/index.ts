@@ -13,6 +13,7 @@ import { videosRouter } from "./videos.js";
 import { videoEventsRouter } from "./video-events.js";
 import { quizzesRouter } from "./quizzes.js";
 import { quizAttemptsRouter } from "./quiz-attempts.js";
+import { progressRouter } from "./progress.js";
 
 /**
  * 全ての共通ルーターを統合したルーター
@@ -31,6 +32,7 @@ export function createSharedRouter(): Router {
   router.use(videoEventsRouter);
   router.use(quizzesRouter);
   router.use(quizAttemptsRouter);
+  router.use(progressRouter);
 
   return router;
 }
@@ -45,3 +47,4 @@ export { videosRouter } from "./videos.js";
 export { videoEventsRouter } from "./video-events.js";
 export { quizzesRouter } from "./quizzes.js";
 export { quizAttemptsRouter } from "./quiz-attempts.js";
+export { progressRouter } from "./progress.js";

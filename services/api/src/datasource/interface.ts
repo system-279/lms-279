@@ -22,10 +22,13 @@ import type {
   QuizAttempt,
   QuizFilter,
   QuizAttemptFilter,
+  UserProgress,
+  CourseProgress,
 } from "../types/entities.js";
 
 export type { CourseFilter, LessonFilter, Video, VideoEvent, VideoAnalytics, VideoFilter, VideoEventFilter, WatchedRange, SuspiciousFlag } from "../types/entities.js";
 export type { Quiz, QuizAttempt, QuizFilter, QuizAttemptFilter, QuizQuestion, QuizOption, QuestionType, QuizAttemptStatus } from "../types/entities.js";
+export type { UserProgress, CourseProgress } from "../types/entities.js";
 
 export interface NotificationPolicyFilter {
   scope?: "global" | "course" | "user";
@@ -149,6 +152,16 @@ export interface DataSource {
   getQuizAttemptById(id: string): Promise<QuizAttempt | null>;
   createQuizAttempt(data: Omit<QuizAttempt, "id">): Promise<QuizAttempt>;
   updateQuizAttempt(id: string, data: Partial<Omit<QuizAttempt, "id">>): Promise<QuizAttempt | null>;
+
+  // User Progress
+  getUserProgress(userId: string, lessonId: string): Promise<UserProgress | null>;
+  getUserProgressByCourse(userId: string, courseId: string): Promise<UserProgress[]>;
+  upsertUserProgress(userId: string, lessonId: string, data: Partial<Omit<UserProgress, "id" | "userId" | "lessonId">>): Promise<UserProgress>;
+
+  // Course Progress
+  getCourseProgress(userId: string, courseId: string): Promise<CourseProgress | null>;
+  upsertCourseProgress(userId: string, courseId: string, data: Partial<Omit<CourseProgress, "id" | "userId" | "courseId">>): Promise<CourseProgress>;
+  getCourseProgressByUser(userId: string): Promise<CourseProgress[]>;
 }
 
 /**

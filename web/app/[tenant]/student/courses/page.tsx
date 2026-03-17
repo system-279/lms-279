@@ -2,15 +2,24 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useAuthenticatedFetch } from "@/lib/hooks/use-authenticated-fetch";
 import { useTenant } from "@/lib/tenant-context";
+
+type CourseProgress = {
+  completedLessonCount: number;
+  totalLessonCount: number;
+  progressRatio: number;
+  courseCompleted: boolean;
+};
 
 type Course = {
   id: string;
   name: string;
   description: string;
   lessonCount: number;
+  progress?: CourseProgress;
 };
 
 export default function StudentCoursesPage() {
@@ -61,29 +70,66 @@ export default function StudentCoursesPage() {
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {courses.map((course) => (
-            <Link
-              key={course.id}
-              href={`/${tenantId}/student/courses/${course.id}`}
-              className="group"
-            >
-              <Card className="h-full transition-shadow hover:shadow-md group-hover:border-primary/50">
-                <CardHeader>
-                  <CardTitle className="text-lg">{course.name}</CardTitle>
-                  {course.description && (
-                    <CardDescription className="line-clamp-3">
-                      {course.description}
-                    </CardDescription>
-                  )}
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">
-                    レッスン数: {course.lessonCount ?? 0}
-                  </p>
-                </CardContent>
-              </Card>
-            </Link>
-          ))}
+          {courses.map((course) => {
+            const progress = course.progress ?? null;
+            const completedCount = progress?.completedLessonCount ?? 0;
+            const totalCount = progress?.totalLessonCount ?? course.lessonCount ?? 0;
+            const progressPercent = progress
+              ? Math.round(progress.progressRatio * 100)
+              : totalCount > 0
+              ? Math.round((completedCount / totalCount) * 100)
+              : 0;
+            const isCourseCompleted = progress?.courseCompleted ?? false;
+
+            return (
+              <Link
+                key={course.id}
+                href={`/${tenantId}/student/courses/${course.id}`}
+                className="group"
+              >
+                <Card className="h-full transition-shadow hover:shadow-md group-hover:border-primary/50">
+                  <CardHeader>
+                    <div className="flex items-start justify-between gap-2">
+                      <CardTitle className="text-lg">{course.name}</CardTitle>
+                      {isCourseCompleted && (
+                        <Badge className="flex-shrink-0 bg-green-600 hover:bg-green-600 text-white">
+                          完了
+                        </Badge>
+                      )}
+                    </div>
+                    {course.description && (
+                      <CardDescription className="line-clamp-3">
+                        {course.description}
+                      </CardDescription>
+                    )}
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      レッスン数: {course.lessonCount ?? 0}
+                    </p>
+                    {progress != null ? (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span>
+                            {completedCount}/{totalCount} レッスン完了
+                          </span>
+                          <span>{progressPercent}%</span>
+                        </div>
+                        <div className="w-full bg-secondary rounded-full h-2 overflow-hidden">
+                          <div
+                            className={`h-2 rounded-full transition-all duration-500 ${
+                              isCourseCompleted ? "bg-green-500" : "bg-primary"
+                            }`}
+                            style={{ width: `${progressPercent}%` }}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+                  </CardContent>
+                </Card>
+              </Link>
+            );
+          })}
         </div>
       )}
     </div>
