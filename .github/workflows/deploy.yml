@@ -82,7 +82,7 @@ jobs:
         run: |
           # Build env vars string
           # TODO: Update CORS_ORIGIN to the actual Cloud Run web service URL once deployed
-          ENV_VARS="DEMO_ENABLED=true,AUTH_MODE=firebase,CORS_ORIGIN=https://web-TODO.asia-northeast1.run.app"
+          ENV_VARS="DEMO_ENABLED=true,AUTH_MODE=firebase,CORS_ORIGIN=https://web-1034821634012.asia-northeast1.run.app"
           if [ -n "${{ secrets.SUPER_ADMIN_EMAILS }}" ]; then
             ENV_VARS="${ENV_VARS},SUPER_ADMIN_EMAILS=${{ secrets.SUPER_ADMIN_EMAILS }}"
           fi
@@ -122,7 +122,7 @@ jobs:
         working-directory: web
         run: |
           docker build \
-            --build-arg NEXT_PUBLIC_API_URL=https://api-TODO.asia-northeast1.run.app \
+            --build-arg NEXT_PUBLIC_API_URL=https://api-1034821634012.asia-northeast1.run.app \
             --build-arg NEXT_PUBLIC_AUTH_MODE=firebase \
             --build-arg NEXT_PUBLIC_FIREBASE_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }} \
             --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }} \
