@@ -23,6 +23,11 @@ import type {
   AllowedEmail,
   UserSettings,
   AuthErrorLog,
+  Video,
+  VideoEvent,
+  VideoAnalytics,
+  VideoFilter,
+  VideoEventFilter,
 } from "../types/entities.js";
 
 // Firestore Timestampを Date に変換
@@ -500,6 +505,206 @@ export class FirestoreDataSource implements DataSource {
       notificationEnabled: data.notificationEnabled ?? true,
       timezone: data.timezone ?? "Asia/Tokyo",
       updatedAt: toDate(data.updatedAt),
+    };
+  }
+
+  // Videos
+  async getVideos(filter?: VideoFilter): Promise<Video[]> {
+    let query = this.collection("videos").orderBy("createdAt", "desc");
+
+    if (filter?.lessonId !== undefined) {
+      query = query.where("lessonId", "==", filter.lessonId);
+    }
+    if (filter?.courseId !== undefined) {
+      query = query.where("courseId", "==", filter.courseId);
+    }
+
+    const snapshot = await query.get();
+    return snapshot.docs.map((doc) => this.toVideo(doc.id, doc.data()));
+  }
+
+  async getVideoById(id: string): Promise<Video | null> {
+    const doc = await this.collection("videos").doc(id).get();
+    if (!doc.exists) return null;
+    return this.toVideo(doc.id, doc.data()!);
+  }
+
+  async getVideoByLessonId(lessonId: string): Promise<Video | null> {
+    const snapshot = await this.collection("videos")
+      .where("lessonId", "==", lessonId)
+      .limit(1)
+      .get();
+    if (snapshot.empty) return null;
+    const doc = snapshot.docs[0];
+    return this.toVideo(doc.id, doc.data());
+  }
+
+  async createVideo(data: Omit<Video, "id" | "createdAt" | "updatedAt">): Promise<Video> {
+    const docRef = this.collection("videos").doc();
+    const now = FieldValue.serverTimestamp();
+    await docRef.set({
+      ...data,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const doc = await docRef.get();
+    return this.toVideo(doc.id, doc.data()!);
+  }
+
+  async updateVideo(
+    id: string,
+    data: Partial<Pick<Video, "sourceType" | "sourceUrl" | "gcsPath" | "durationSec" | "requiredWatchRatio" | "speedLock">>
+  ): Promise<Video | null> {
+    const docRef = this.collection("videos").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return null;
+
+    await docRef.update({
+      ...data,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    const updated = await docRef.get();
+    return this.toVideo(updated.id, updated.data()!);
+  }
+
+  async deleteVideo(id: string): Promise<boolean> {
+    const docRef = this.collection("videos").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return false;
+    await docRef.delete();
+    return true;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toVideo(id: string, data: any): Video {
+    return {
+      id,
+      lessonId: data.lessonId,
+      courseId: data.courseId,
+      sourceType: data.sourceType,
+      sourceUrl: data.sourceUrl,
+      gcsPath: data.gcsPath,
+      durationSec: data.durationSec ?? 0,
+      requiredWatchRatio: data.requiredWatchRatio ?? 0.95,
+      speedLock: data.speedLock ?? true,
+      createdAt: toDate(data.createdAt).toISOString(),
+      updatedAt: toDate(data.updatedAt).toISOString(),
+    };
+  }
+
+  // Video Events
+  async createVideoEvents(events: Omit<VideoEvent, "id" | "timestamp">[]): Promise<VideoEvent[]> {
+    const batch = this.db.batch();
+    const docRefs = events.map(() => this.collection("video_events").doc());
+    const now = FieldValue.serverTimestamp();
+
+    docRefs.forEach((docRef, index) => {
+      batch.set(docRef, {
+        ...events[index],
+        timestamp: now,
+      });
+    });
+
+    await batch.commit();
+
+    const docs = await Promise.all(docRefs.map((ref) => ref.get()));
+    return docs.map((doc) => this.toVideoEvent(doc.id, doc.data()!));
+  }
+
+  async getVideoEvents(filter: VideoEventFilter): Promise<VideoEvent[]> {
+    let query = this.collection("video_events").orderBy("timestamp", "desc");
+
+    if (filter.videoId !== undefined) {
+      query = query.where("videoId", "==", filter.videoId);
+    }
+    if (filter.userId !== undefined) {
+      query = query.where("userId", "==", filter.userId);
+    }
+    if (filter.sessionToken !== undefined) {
+      query = query.where("sessionToken", "==", filter.sessionToken);
+    }
+
+    const snapshot = await query.get();
+    return snapshot.docs.map((doc) => this.toVideoEvent(doc.id, doc.data()));
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toVideoEvent(id: string, data: any): VideoEvent {
+    return {
+      id,
+      videoId: data.videoId,
+      userId: data.userId,
+      sessionToken: data.sessionToken,
+      eventType: data.eventType,
+      position: data.position,
+      seekFrom: data.seekFrom,
+      playbackRate: data.playbackRate,
+      timestamp: toDate(data.timestamp).toISOString(),
+      clientTimestamp: data.clientTimestamp,
+      metadata: data.metadata,
+    };
+  }
+
+  // Video Analytics
+  async getVideoAnalytics(userId: string, videoId: string): Promise<VideoAnalytics | null> {
+    const docId = `${userId}_${videoId}`;
+    const doc = await this.collection("video_analytics").doc(docId).get();
+    if (!doc.exists) return null;
+    return this.toVideoAnalytics(doc.id, doc.data()!);
+  }
+
+  async upsertVideoAnalytics(
+    userId: string,
+    videoId: string,
+    data: Partial<Omit<VideoAnalytics, "id" | "videoId" | "userId">>
+  ): Promise<VideoAnalytics> {
+    const docId = `${userId}_${videoId}`;
+    const docRef = this.collection("video_analytics").doc(docId);
+    const doc = await docRef.get();
+
+    if (doc.exists) {
+      await docRef.update({
+        ...data,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    } else {
+      await docRef.set({
+        videoId,
+        userId,
+        watchedRanges: [],
+        totalWatchTimeSec: 0,
+        coverageRatio: 0,
+        isComplete: false,
+        seekCount: 0,
+        pauseCount: 0,
+        totalPauseDurationSec: 0,
+        speedViolationCount: 0,
+        suspiciousFlags: [],
+        ...data,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    const updated = await docRef.get();
+    return this.toVideoAnalytics(docId, updated.data()!);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toVideoAnalytics(id: string, data: any): VideoAnalytics {
+    return {
+      id,
+      videoId: data.videoId,
+      userId: data.userId,
+      watchedRanges: data.watchedRanges ?? [],
+      totalWatchTimeSec: data.totalWatchTimeSec ?? 0,
+      coverageRatio: data.coverageRatio ?? 0,
+      isComplete: data.isComplete ?? false,
+      seekCount: data.seekCount ?? 0,
+      pauseCount: data.pauseCount ?? 0,
+      totalPauseDurationSec: data.totalPauseDurationSec ?? 0,
+      speedViolationCount: data.speedViolationCount ?? 0,
+      suspiciousFlags: data.suspiciousFlags ?? [],
+      updatedAt: toDate(data.updatedAt).toISOString(),
     };
   }
 }

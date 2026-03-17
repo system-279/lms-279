@@ -9,6 +9,8 @@ import { lessonsRouter } from "./lessons.js";
 import { usersRouter } from "./users.js";
 import { allowedEmailsRouter } from "./allowed-emails.js";
 import { authErrorsRouter } from "./auth-errors.js";
+import { videosRouter } from "./videos.js";
+import { videoEventsRouter } from "./video-events.js";
 
 /**
  * 全ての共通ルーターを統合したルーター
@@ -23,6 +25,8 @@ export function createSharedRouter(): Router {
   router.use(usersRouter);
   router.use(allowedEmailsRouter);
   router.use(authErrorsRouter);
+  router.use(videosRouter);
+  router.use(videoEventsRouter);
 
   return router;
 }
@@ -33,3 +37,5 @@ export { lessonsRouter } from "./lessons.js";
 export { usersRouter } from "./users.js";
 export { allowedEmailsRouter } from "./allowed-emails.js";
 export { authErrorsRouter } from "./auth-errors.js";
+export { videosRouter } from "./videos.js";
+export { videoEventsRouter } from "./video-events.js";

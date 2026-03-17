@@ -13,9 +13,14 @@ import type {
   AllowedEmail,
   UserSettings,
   AuthErrorLog,
+  Video,
+  VideoEvent,
+  VideoAnalytics,
+  VideoFilter,
+  VideoEventFilter,
 } from "../types/entities.js";
 
-export type { CourseFilter, LessonFilter } from "../types/entities.js";
+export type { CourseFilter, LessonFilter, Video, VideoEvent, VideoAnalytics, VideoFilter, VideoEventFilter, WatchedRange, SuspiciousFlag } from "../types/entities.js";
 
 export interface NotificationPolicyFilter {
   scope?: "global" | "course" | "user";
@@ -109,6 +114,22 @@ export interface DataSource {
   // User Settings
   getUserSettings(userId: string): Promise<UserSettings | null>;
   upsertUserSettings(userId: string, data: Partial<UserSettings>): Promise<UserSettings>;
+
+  // Videos
+  getVideos(filter?: VideoFilter): Promise<Video[]>;
+  getVideoById(id: string): Promise<Video | null>;
+  getVideoByLessonId(lessonId: string): Promise<Video | null>;
+  createVideo(data: Omit<Video, "id" | "createdAt" | "updatedAt">): Promise<Video>;
+  updateVideo(id: string, data: Partial<Pick<Video, "sourceType" | "sourceUrl" | "gcsPath" | "durationSec" | "requiredWatchRatio" | "speedLock">>): Promise<Video | null>;
+  deleteVideo(id: string): Promise<boolean>;
+
+  // Video Events
+  createVideoEvents(events: Omit<VideoEvent, "id" | "timestamp">[]): Promise<VideoEvent[]>;
+  getVideoEvents(filter: VideoEventFilter): Promise<VideoEvent[]>;
+
+  // Video Analytics
+  getVideoAnalytics(userId: string, videoId: string): Promise<VideoAnalytics | null>;
+  upsertVideoAnalytics(userId: string, videoId: string, data: Partial<Omit<VideoAnalytics, "id" | "videoId" | "userId">>): Promise<VideoAnalytics>;
 }
 
 /**

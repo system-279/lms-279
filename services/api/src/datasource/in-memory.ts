@@ -23,6 +23,11 @@ import type {
   AllowedEmail,
   UserSettings,
   AuthErrorLog,
+  Video,
+  VideoEvent,
+  VideoAnalytics,
+  VideoFilter,
+  VideoEventFilter,
 } from "../types/entities.js";
 
 // デモ用初期データ
@@ -176,6 +181,9 @@ export class InMemoryDataSource implements DataSource {
   private notificationPolicies: NotificationPolicy[] = [...initialNotificationPolicies];
   private allowedEmails: AllowedEmail[] = [...initialAllowedEmails];
   private userSettings: Map<string, UserSettings> = new Map();
+  private videos: Video[] = [];
+  private videoEvents: VideoEvent[] = [];
+  private videoAnalytics: Map<string, VideoAnalytics> = new Map();
 
   private readonly readOnly: boolean;
 
@@ -465,5 +473,117 @@ export class InMemoryDataSource implements DataSource {
     };
     this.userSettings.set(userId, settings);
     return settings;
+  }
+
+  // Videos
+  async getVideos(filter?: VideoFilter): Promise<Video[]> {
+    let result = [...this.videos];
+    if (filter?.lessonId !== undefined) {
+      result = result.filter((v) => v.lessonId === filter.lessonId);
+    }
+    if (filter?.courseId !== undefined) {
+      result = result.filter((v) => v.courseId === filter.courseId);
+    }
+    return result;
+  }
+
+  async getVideoById(id: string): Promise<Video | null> {
+    return this.videos.find((v) => v.id === id) ?? null;
+  }
+
+  async getVideoByLessonId(lessonId: string): Promise<Video | null> {
+    return this.videos.find((v) => v.lessonId === lessonId) ?? null;
+  }
+
+  async createVideo(data: Omit<Video, "id" | "createdAt" | "updatedAt">): Promise<Video> {
+    this.throwIfReadOnly();
+    const now = new Date().toISOString();
+    const video: Video = {
+      ...data,
+      id: `video-${Date.now()}`,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.videos.push(video);
+    return video;
+  }
+
+  async updateVideo(
+    id: string,
+    data: Partial<Pick<Video, "sourceType" | "sourceUrl" | "gcsPath" | "durationSec" | "requiredWatchRatio" | "speedLock">>
+  ): Promise<Video | null> {
+    this.throwIfReadOnly();
+    const index = this.videos.findIndex((v) => v.id === id);
+    if (index === -1) return null;
+    this.videos[index] = { ...this.videos[index], ...data, updatedAt: new Date().toISOString() };
+    return this.videos[index];
+  }
+
+  async deleteVideo(id: string): Promise<boolean> {
+    this.throwIfReadOnly();
+    const index = this.videos.findIndex((v) => v.id === id);
+    if (index === -1) return false;
+    this.videos.splice(index, 1);
+    return true;
+  }
+
+  // Video Events
+  async createVideoEvents(events: Omit<VideoEvent, "id" | "timestamp">[]): Promise<VideoEvent[]> {
+    this.throwIfReadOnly();
+    const now = new Date().toISOString();
+    const created: VideoEvent[] = events.map((event) => ({
+      ...event,
+      id: `video-event-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      timestamp: now,
+    }));
+    this.videoEvents.push(...created);
+    return created;
+  }
+
+  async getVideoEvents(filter: VideoEventFilter): Promise<VideoEvent[]> {
+    let result = [...this.videoEvents];
+    if (filter.videoId !== undefined) {
+      result = result.filter((e) => e.videoId === filter.videoId);
+    }
+    if (filter.userId !== undefined) {
+      result = result.filter((e) => e.userId === filter.userId);
+    }
+    if (filter.sessionToken !== undefined) {
+      result = result.filter((e) => e.sessionToken === filter.sessionToken);
+    }
+    return result;
+  }
+
+  // Video Analytics
+  async getVideoAnalytics(userId: string, videoId: string): Promise<VideoAnalytics | null> {
+    const key = `${userId}_${videoId}`;
+    return this.videoAnalytics.get(key) ?? null;
+  }
+
+  async upsertVideoAnalytics(
+    userId: string,
+    videoId: string,
+    data: Partial<Omit<VideoAnalytics, "id" | "videoId" | "userId">>
+  ): Promise<VideoAnalytics> {
+    this.throwIfReadOnly();
+    const key = `${userId}_${videoId}`;
+    const existing = this.videoAnalytics.get(key);
+    const analytics: VideoAnalytics = {
+      id: key,
+      videoId,
+      userId,
+      watchedRanges: data.watchedRanges ?? existing?.watchedRanges ?? [],
+      totalWatchTimeSec: data.totalWatchTimeSec ?? existing?.totalWatchTimeSec ?? 0,
+      coverageRatio: data.coverageRatio ?? existing?.coverageRatio ?? 0,
+      isComplete: data.isComplete ?? existing?.isComplete ?? false,
+      seekCount: data.seekCount ?? existing?.seekCount ?? 0,
+      pauseCount: data.pauseCount ?? existing?.pauseCount ?? 0,
+      totalPauseDurationSec: data.totalPauseDurationSec ?? existing?.totalPauseDurationSec ?? 0,
+      speedViolationCount: data.speedViolationCount ?? existing?.speedViolationCount ?? 0,
+      suspiciousFlags: data.suspiciousFlags ?? existing?.suspiciousFlags ?? [],
+      updatedAt: new Date().toISOString(),
+    };
+    this.videoAnalytics.set(key, analytics);
+    return analytics;
   }
 }
