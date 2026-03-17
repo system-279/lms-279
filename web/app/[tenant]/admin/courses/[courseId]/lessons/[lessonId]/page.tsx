@@ -4,8 +4,28 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useAuthenticatedFetch } from "@/lib/hooks/use-authenticated-fetch";
 import { useTenant } from "@/lib/tenant-context";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type Lesson = {
   id: string;
@@ -28,6 +48,790 @@ type LessonDetail = {
   lesson: Lesson;
   video: VideoInfo | null;
 };
+
+type QuizChoice = {
+  id: string;
+  text: string;
+  isCorrect: boolean;
+};
+
+type QuizQuestion = {
+  id: string;
+  text: string;
+  type: "single" | "multi";
+  points: number;
+  explanation: string;
+  choices: QuizChoice[];
+};
+
+type Quiz = {
+  id: string;
+  title: string;
+  passingScore: number;
+  maxAttempts: number;
+  timeLimitSec: number | null;
+  requireVideoCompletion: boolean;
+  shuffleQuestions: boolean;
+  shuffleChoices: boolean;
+  questions: QuizQuestion[];
+};
+
+// ─── Default factories ────────────────────────────────────────────────────────
+
+function newChoice(): QuizChoice {
+  return { id: crypto.randomUUID(), text: "", isCorrect: false };
+}
+
+function newQuestion(): QuizQuestion {
+  return {
+    id: crypto.randomUUID(),
+    text: "",
+    type: "single",
+    points: 1,
+    explanation: "",
+    choices: [newChoice(), newChoice()],
+  };
+}
+
+const defaultQuizForm = {
+  title: "",
+  passingScore: 70,
+  maxAttempts: 3,
+  timeLimitSec: "" as string, // empty = unlimited
+  requireVideoCompletion: true,
+  shuffleQuestions: false,
+  shuffleChoices: false,
+};
+
+// ─── QuizSection component ────────────────────────────────────────────────────
+
+function QuizSection({ lessonId }: { lessonId: string }) {
+  const { authFetch } = useAuthenticatedFetch();
+
+  const [quiz, setQuiz] = useState<Quiz | null>(null);
+  const [quizLoading, setQuizLoading] = useState(true);
+  const [quizError, setQuizError] = useState<string | null>(null);
+
+  // Create/edit quiz dialog
+  const [quizDialogOpen, setQuizDialogOpen] = useState(false);
+  const [isEditingQuiz, setIsEditingQuiz] = useState(false);
+  const [quizForm, setQuizForm] = useState({ ...defaultQuizForm });
+  const [quizSaving, setQuizSaving] = useState(false);
+  const [quizSaveError, setQuizSaveError] = useState<string | null>(null);
+
+  // Delete quiz
+  const [deleteQuizLoading, setDeleteQuizLoading] = useState(false);
+  const [deleteQuizError, setDeleteQuizError] = useState<string | null>(null);
+
+  // Question dialog
+  const [questionDialogOpen, setQuestionDialogOpen] = useState(false);
+  const [editingQuestion, setEditingQuestion] = useState<QuizQuestion | null>(null);
+  const [questionForm, setQuestionForm] = useState<QuizQuestion>(newQuestion());
+  const [questionSaving, setQuestionSaving] = useState(false);
+  const [questionSaveError, setQuestionSaveError] = useState<string | null>(null);
+
+  // ── Fetch quiz ────────────────────────────────────────────────────────────
+
+  const fetchQuiz = useCallback(async () => {
+    setQuizLoading(true);
+    setQuizError(null);
+    try {
+      const data = await authFetch<Quiz>(
+        `/api/v1/admin/lessons/${lessonId}/quiz`
+      );
+      setQuiz(data);
+    } catch (e: unknown) {
+      // 404 means no quiz yet — not an error
+      if (e instanceof Error && e.message.includes("404")) {
+        setQuiz(null);
+      } else {
+        setQuizError(e instanceof Error ? e.message : "クイズの取得に失敗しました");
+      }
+    } finally {
+      setQuizLoading(false);
+    }
+  }, [authFetch, lessonId]);
+
+  useEffect(() => {
+    fetchQuiz();
+  }, [fetchQuiz]);
+
+  // ── Quiz create/edit dialog helpers ──────────────────────────────────────
+
+  const openCreateQuizDialog = () => {
+    setIsEditingQuiz(false);
+    setQuizForm({ ...defaultQuizForm });
+    setQuizSaveError(null);
+    setQuizDialogOpen(true);
+  };
+
+  const openEditQuizDialog = () => {
+    if (!quiz) return;
+    setIsEditingQuiz(true);
+    setQuizForm({
+      title: quiz.title,
+      passingScore: quiz.passingScore,
+      maxAttempts: quiz.maxAttempts,
+      timeLimitSec: quiz.timeLimitSec != null ? String(quiz.timeLimitSec) : "",
+      requireVideoCompletion: quiz.requireVideoCompletion,
+      shuffleQuestions: quiz.shuffleQuestions,
+      shuffleChoices: quiz.shuffleChoices,
+    });
+    setQuizSaveError(null);
+    setQuizDialogOpen(true);
+  };
+
+  const handleSaveQuiz = async () => {
+    setQuizSaving(true);
+    setQuizSaveError(null);
+    try {
+      const payload = {
+        title: quizForm.title,
+        passingScore: Number(quizForm.passingScore),
+        maxAttempts: Number(quizForm.maxAttempts),
+        timeLimitSec:
+          quizForm.timeLimitSec === "" ? null : Number(quizForm.timeLimitSec),
+        requireVideoCompletion: quizForm.requireVideoCompletion,
+        shuffleQuestions: quizForm.shuffleQuestions,
+        shuffleChoices: quizForm.shuffleChoices,
+      };
+
+      if (isEditingQuiz) {
+        const updated = await authFetch<Quiz>(
+          `/api/v1/admin/lessons/${lessonId}/quiz`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...payload, questions: quiz?.questions ?? [] }),
+          }
+        );
+        setQuiz(updated);
+      } else {
+        const created = await authFetch<Quiz>(
+          `/api/v1/admin/lessons/${lessonId}/quiz`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...payload, questions: [] }),
+          }
+        );
+        setQuiz(created);
+      }
+      setQuizDialogOpen(false);
+    } catch (e) {
+      setQuizSaveError(e instanceof Error ? e.message : "保存に失敗しました");
+    } finally {
+      setQuizSaving(false);
+    }
+  };
+
+  // ── Delete quiz ───────────────────────────────────────────────────────────
+
+  const handleDeleteQuiz = async () => {
+    if (!confirm("クイズを削除しますか？この操作は取り消せません。")) return;
+    setDeleteQuizLoading(true);
+    setDeleteQuizError(null);
+    try {
+      await authFetch(`/api/v1/admin/lessons/${lessonId}/quiz`, {
+        method: "DELETE",
+      });
+      setQuiz(null);
+    } catch (e) {
+      setDeleteQuizError(e instanceof Error ? e.message : "削除に失敗しました");
+    } finally {
+      setDeleteQuizLoading(false);
+    }
+  };
+
+  // ── Question dialog helpers ───────────────────────────────────────────────
+
+  const openAddQuestionDialog = () => {
+    setEditingQuestion(null);
+    setQuestionForm(newQuestion());
+    setQuestionSaveError(null);
+    setQuestionDialogOpen(true);
+  };
+
+  const openEditQuestionDialog = (q: QuizQuestion) => {
+    setEditingQuestion(q);
+    setQuestionForm({ ...q, choices: q.choices.map((c) => ({ ...c })) });
+    setQuestionSaveError(null);
+    setQuestionDialogOpen(true);
+  };
+
+  const handleDeleteQuestion = async (questionId: string) => {
+    if (!quiz) return;
+    if (!confirm("この問題を削除しますか？")) return;
+    const updated = quiz.questions.filter((q) => q.id !== questionId);
+    try {
+      const saved = await authFetch<Quiz>(
+        `/api/v1/admin/lessons/${lessonId}/quiz`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ questions: updated }),
+        }
+      );
+      setQuiz(saved);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "削除に失敗しました");
+    }
+  };
+
+  const handleSaveQuestion = async () => {
+    setQuestionSaving(true);
+    setQuestionSaveError(null);
+    try {
+      if (!quiz) return;
+      let updatedQuestions: QuizQuestion[];
+      if (editingQuestion) {
+        updatedQuestions = quiz.questions.map((q) =>
+          q.id === editingQuestion.id ? { ...questionForm } : q
+        );
+      } else {
+        updatedQuestions = [...quiz.questions, { ...questionForm }];
+      }
+      const saved = await authFetch<Quiz>(
+        `/api/v1/admin/lessons/${lessonId}/quiz`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ questions: updatedQuestions }),
+        }
+      );
+      setQuiz(saved);
+      setQuestionDialogOpen(false);
+    } catch (e) {
+      setQuestionSaveError(e instanceof Error ? e.message : "保存に失敗しました");
+    } finally {
+      setQuestionSaving(false);
+    }
+  };
+
+  // ── Question form helpers ─────────────────────────────────────────────────
+
+  const updateQuestionField = <K extends keyof QuizQuestion>(
+    key: K,
+    value: QuizQuestion[K]
+  ) => {
+    setQuestionForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleQuestionTypeChange = (type: "single" | "multi") => {
+    setQuestionForm((prev) => {
+      let choices = prev.choices;
+      // If switching to single, ensure at most one choice is marked correct
+      if (type === "single") {
+        let foundFirst = false;
+        choices = choices.map((c) => {
+          if (c.isCorrect && !foundFirst) {
+            foundFirst = true;
+            return c;
+          }
+          return { ...c, isCorrect: false };
+        });
+      }
+      return { ...prev, type, choices };
+    });
+  };
+
+  const handleChoiceTextChange = (choiceId: string, text: string) => {
+    setQuestionForm((prev) => ({
+      ...prev,
+      choices: prev.choices.map((c) => (c.id === choiceId ? { ...c, text } : c)),
+    }));
+  };
+
+  const handleChoiceCorrectChange = (choiceId: string, isCorrect: boolean) => {
+    setQuestionForm((prev) => {
+      let choices: QuizChoice[];
+      if (prev.type === "single") {
+        // Radio: only the clicked one is correct
+        choices = prev.choices.map((c) => ({
+          ...c,
+          isCorrect: c.id === choiceId ? isCorrect : false,
+        }));
+      } else {
+        choices = prev.choices.map((c) =>
+          c.id === choiceId ? { ...c, isCorrect } : c
+        );
+      }
+      return { ...prev, choices };
+    });
+  };
+
+  const handleAddChoice = () => {
+    setQuestionForm((prev) => {
+      if (prev.choices.length >= 6) return prev;
+      return { ...prev, choices: [...prev.choices, newChoice()] };
+    });
+  };
+
+  const handleRemoveChoice = (choiceId: string) => {
+    setQuestionForm((prev) => ({
+      ...prev,
+      choices: prev.choices.filter((c) => c.id !== choiceId),
+    }));
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  if (quizLoading) {
+    return (
+      <section className="rounded-md border p-6 space-y-2">
+        <h2 className="text-lg font-semibold">クイズ</h2>
+        <p className="text-sm text-muted-foreground">読み込み中...</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-md border p-6 space-y-4">
+      <h2 className="text-lg font-semibold">クイズ</h2>
+
+      {quizError && (
+        <div className="rounded-md bg-destructive/10 p-3 text-destructive text-sm">
+          {quizError}
+        </div>
+      )}
+
+      {!quiz ? (
+        /* ── No quiz yet ── */
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            このレッスンにはまだクイズが作成されていません。
+          </p>
+          <Button onClick={openCreateQuizDialog}>クイズを作成</Button>
+        </div>
+      ) : (
+        /* ── Quiz exists ── */
+        <div className="space-y-6">
+          {/* Quiz settings summary */}
+          <div className="rounded-md bg-muted/40 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-medium">{quiz.title}</h3>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={openEditQuizDialog}>
+                  設定を編集
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleDeleteQuiz}
+                  disabled={deleteQuizLoading}
+                >
+                  {deleteQuizLoading ? "削除中..." : "削除"}
+                </Button>
+              </div>
+            </div>
+
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm max-w-lg">
+              <dt className="text-muted-foreground">合格基準</dt>
+              <dd>{quiz.passingScore}%</dd>
+
+              <dt className="text-muted-foreground">最大受験回数</dt>
+              <dd>{quiz.maxAttempts} 回</dd>
+
+              <dt className="text-muted-foreground">制限時間</dt>
+              <dd>{quiz.timeLimitSec != null ? `${quiz.timeLimitSec} 秒` : "無制限"}</dd>
+
+              <dt className="text-muted-foreground">動画完了必須</dt>
+              <dd>{quiz.requireVideoCompletion ? "はい" : "いいえ"}</dd>
+
+              <dt className="text-muted-foreground">問題ランダム化</dt>
+              <dd>{quiz.shuffleQuestions ? "有効" : "無効"}</dd>
+
+              <dt className="text-muted-foreground">選択肢ランダム化</dt>
+              <dd>{quiz.shuffleChoices ? "有効" : "無効"}</dd>
+            </dl>
+
+            {deleteQuizError && (
+              <p className="text-sm text-destructive">{deleteQuizError}</p>
+            )}
+          </div>
+
+          {/* Questions list */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-medium">
+                問題一覧{" "}
+                <span className="text-sm text-muted-foreground font-normal">
+                  ({quiz.questions.length} 問)
+                </span>
+              </h3>
+              <Button size="sm" onClick={openAddQuestionDialog}>
+                問題を追加
+              </Button>
+            </div>
+
+            {quiz.questions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                問題がまだありません。「問題を追加」ボタンから追加してください。
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {quiz.questions.map((q, idx) => (
+                  <div
+                    key={q.id}
+                    className="rounded-md border p-4 space-y-3"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 space-y-1">
+                        <p className="text-sm font-medium">
+                          Q{idx + 1}.{" "}
+                          <span className="font-normal">{q.text}</span>
+                        </p>
+                        <div className="flex gap-3 text-xs text-muted-foreground">
+                          <span>
+                            タイプ:{" "}
+                            {q.type === "single" ? "単一選択" : "複数選択"}
+                          </span>
+                          <span>配点: {q.points} 点</span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 shrink-0">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openEditQuestionDialog(q)}
+                        >
+                          編集
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleDeleteQuestion(q.id)}
+                        >
+                          削除
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Choices */}
+                    <ul className="space-y-1">
+                      {q.choices.map((c) => (
+                        <li
+                          key={c.id}
+                          className="flex items-center gap-2 text-sm"
+                        >
+                          <span
+                            className={
+                              c.isCorrect
+                                ? "text-green-600 font-medium"
+                                : "text-muted-foreground"
+                            }
+                          >
+                            {c.isCorrect ? "✓" : "○"}
+                          </span>
+                          <span>{c.text}</span>
+                        </li>
+                      ))}
+                    </ul>
+
+                    {q.explanation && (
+                      <p className="text-xs text-muted-foreground border-t pt-2">
+                        解説: {q.explanation}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Quiz create/edit dialog ── */}
+      <Dialog open={quizDialogOpen} onOpenChange={setQuizDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {isEditingQuiz ? "クイズ設定を編集" : "クイズを作成"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-1">
+              <Label htmlFor="quiz-title">タイトル</Label>
+              <Input
+                id="quiz-title"
+                value={quizForm.title}
+                onChange={(e) =>
+                  setQuizForm((p) => ({ ...p, title: e.target.value }))
+                }
+                placeholder="クイズのタイトル"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <Label htmlFor="quiz-passing">合格基準 (%)</Label>
+                <Input
+                  id="quiz-passing"
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={quizForm.passingScore}
+                  onChange={(e) =>
+                    setQuizForm((p) => ({
+                      ...p,
+                      passingScore: Number(e.target.value),
+                    }))
+                  }
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="quiz-attempts">最大受験回数</Label>
+                <Input
+                  id="quiz-attempts"
+                  type="number"
+                  min={1}
+                  value={quizForm.maxAttempts}
+                  onChange={(e) =>
+                    setQuizForm((p) => ({
+                      ...p,
+                      maxAttempts: Number(e.target.value),
+                    }))
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="quiz-timelimit">制限時間（秒）</Label>
+              <Input
+                id="quiz-timelimit"
+                type="number"
+                min={1}
+                value={quizForm.timeLimitSec}
+                onChange={(e) =>
+                  setQuizForm((p) => ({ ...p, timeLimitSec: e.target.value }))
+                }
+                placeholder="空欄 = 無制限"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="quiz-require-video"
+                  checked={quizForm.requireVideoCompletion}
+                  onCheckedChange={(v) =>
+                    setQuizForm((p) => ({
+                      ...p,
+                      requireVideoCompletion: Boolean(v),
+                    }))
+                  }
+                />
+                <Label htmlFor="quiz-require-video">動画完了必須</Label>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="quiz-shuffle-q"
+                  checked={quizForm.shuffleQuestions}
+                  onCheckedChange={(v) =>
+                    setQuizForm((p) => ({
+                      ...p,
+                      shuffleQuestions: Boolean(v),
+                    }))
+                  }
+                />
+                <Label htmlFor="quiz-shuffle-q">問題ランダム化</Label>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="quiz-shuffle-c"
+                  checked={quizForm.shuffleChoices}
+                  onCheckedChange={(v) =>
+                    setQuizForm((p) => ({
+                      ...p,
+                      shuffleChoices: Boolean(v),
+                    }))
+                  }
+                />
+                <Label htmlFor="quiz-shuffle-c">選択肢ランダム化</Label>
+              </div>
+            </div>
+
+            {quizSaveError && (
+              <p className="text-sm text-destructive">{quizSaveError}</p>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setQuizDialogOpen(false)}
+              disabled={quizSaving}
+            >
+              キャンセル
+            </Button>
+            <Button onClick={handleSaveQuiz} disabled={quizSaving}>
+              {quizSaving ? "保存中..." : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Question add/edit dialog ── */}
+      <Dialog open={questionDialogOpen} onOpenChange={setQuestionDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {editingQuestion ? "問題を編集" : "問題を追加"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {/* Question text */}
+            <div className="space-y-1">
+              <Label htmlFor="q-text">問題文</Label>
+              <Textarea
+                id="q-text"
+                value={questionForm.text}
+                onChange={(e) => updateQuestionField("text", e.target.value)}
+                placeholder="問題文を入力してください"
+                rows={3}
+              />
+            </div>
+
+            {/* Type + points */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <Label htmlFor="q-type">タイプ</Label>
+                <Select
+                  value={questionForm.type}
+                  onValueChange={(v) =>
+                    handleQuestionTypeChange(v as "single" | "multi")
+                  }
+                >
+                  <SelectTrigger id="q-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="single">単一選択</SelectItem>
+                    <SelectItem value="multi">複数選択</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="q-points">配点</Label>
+                <Input
+                  id="q-points"
+                  type="number"
+                  min={1}
+                  value={questionForm.points}
+                  onChange={(e) =>
+                    updateQuestionField("points", Number(e.target.value))
+                  }
+                />
+              </div>
+            </div>
+
+            {/* Choices */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>
+                  選択肢{" "}
+                  <span className="text-xs text-muted-foreground font-normal">
+                    ({questionForm.type === "single"
+                      ? "1つ正解"
+                      : "複数正解可"})
+                  </span>
+                </Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAddChoice}
+                  disabled={questionForm.choices.length >= 6}
+                >
+                  選択肢を追加
+                </Button>
+              </div>
+
+              <div className="space-y-2">
+                {questionForm.choices.map((choice, idx) => (
+                  <div key={choice.id} className="flex items-center gap-2">
+                    <Checkbox
+                      id={`choice-correct-${choice.id}`}
+                      checked={choice.isCorrect}
+                      onCheckedChange={(v) =>
+                        handleChoiceCorrectChange(choice.id, Boolean(v))
+                      }
+                    />
+                    <Label
+                      htmlFor={`choice-correct-${choice.id}`}
+                      className="text-xs text-muted-foreground w-4 shrink-0"
+                    >
+                      {idx + 1}
+                    </Label>
+                    <Input
+                      value={choice.text}
+                      onChange={(e) =>
+                        handleChoiceTextChange(choice.id, e.target.value)
+                      }
+                      placeholder={`選択肢 ${idx + 1}`}
+                      className="flex-1"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRemoveChoice(choice.id)}
+                      disabled={questionForm.choices.length <= 2}
+                      className="shrink-0 text-destructive hover:text-destructive"
+                    >
+                      削除
+                    </Button>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                チェックボックスをオンにした選択肢が正解になります。
+              </p>
+            </div>
+
+            {/* Explanation */}
+            <div className="space-y-1">
+              <Label htmlFor="q-explanation">解説（任意）</Label>
+              <Textarea
+                id="q-explanation"
+                value={questionForm.explanation}
+                onChange={(e) =>
+                  updateQuestionField("explanation", e.target.value)
+                }
+                placeholder="解説文を入力してください"
+                rows={2}
+              />
+            </div>
+
+            {questionSaveError && (
+              <p className="text-sm text-destructive">{questionSaveError}</p>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setQuestionDialogOpen(false)}
+              disabled={questionSaving}
+            >
+              キャンセル
+            </Button>
+            <Button onClick={handleSaveQuestion} disabled={questionSaving}>
+              {questionSaving ? "保存中..." : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </section>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function LessonDetailPage() {
   const params = useParams();
@@ -333,13 +1137,8 @@ export default function LessonDetailPage() {
             )}
           </section>
 
-          {/* Quiz Section — placeholder */}
-          <section className="rounded-md border p-6 space-y-2">
-            <h2 className="text-lg font-semibold">クイズ</h2>
-            <p className="text-sm text-muted-foreground">
-              Phase 3で実装予定
-            </p>
-          </section>
+          {/* Quiz Section */}
+          <QuizSection lessonId={lessonId} />
         </>
       )}
     </div>

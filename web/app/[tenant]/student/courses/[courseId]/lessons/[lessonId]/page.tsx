@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
@@ -64,6 +64,601 @@ type Analytics = {
 };
 
 // ============================================================
+// クイズ関連の型定義
+// ============================================================
+
+type QuizOption = {
+  id: string;
+  text: string;
+  isCorrect: boolean; // 受講者向けAPIでは常にfalse
+};
+
+type QuizQuestion = {
+  id: string;
+  text: string;
+  type: "single" | "multi";
+  options: QuizOption[];
+  points: number;
+};
+
+type Quiz = {
+  id: string;
+  title: string;
+  passThreshold: number;
+  maxAttempts: number;
+  timeLimitSec: number | null;
+  questions: QuizQuestion[];
+};
+
+type AttemptSummary = {
+  id: string;
+  attemptNumber: number;
+  status: "submitted" | "timed_out" | "in_progress";
+  score: number | null;
+  isPassed: boolean | null;
+  startedAt: string;
+  submittedAt: string | null;
+};
+
+type QuizByLessonResponse = {
+  quiz: Quiz;
+  userAttemptCount: number;
+  attemptSummaries: AttemptSummary[];
+};
+
+type ActiveAttempt = {
+  id: string;
+  quizId: string;
+  attemptNumber: number;
+  status: string;
+  startedAt: string;
+  timeLimitSec: number | null;
+};
+
+type QuestionResult = {
+  questionId: string;
+  questionText: string;
+  isCorrect: boolean;
+  earnedPoints: number;
+  maxPoints: number;
+  correctOptionIds: string[];
+  selectedOptionIds: string[];
+  explanation: string;
+};
+
+type AttemptResult = {
+  attempt: {
+    id: string;
+    quizId: string;
+    attemptNumber: number;
+    status: string;
+    score: number | null;
+    isPassed: boolean | null;
+    startedAt: string;
+    submittedAt: string | null;
+  };
+  quiz: { title: string };
+  questionResults: QuestionResult[];
+};
+
+type QuizUIState = "idle" | "taking" | "result";
+
+// ============================================================
+// クイズセクションコンポーネント
+// ============================================================
+
+function QuizSection({
+  lessonId,
+  authFetch,
+}: {
+  lessonId: string;
+  authFetch: <T>(url: string, options?: RequestInit) => Promise<T>;
+}) {
+  const [quizState, setQuizState] = useState<QuizUIState>("idle");
+  const [quiz, setQuiz] = useState<Quiz | null>(null);
+  const [userAttemptCount, setUserAttemptCount] = useState(0);
+  const [attemptSummaries, setAttemptSummaries] = useState<AttemptSummary[]>([]);
+  const [activeAttempt, setActiveAttempt] = useState<ActiveAttempt | null>(null);
+  const [answers, setAnswers] = useState<Record<string, string[]>>({});
+  const [remainingSec, setRemainingSec] = useState<number | null>(null);
+  const [showSubmitDialog, setShowSubmitDialog] = useState(false);
+  const [result, setResult] = useState<AttemptResult | null>(null);
+  const [loadingQuiz, setLoadingQuiz] = useState(true);
+  const [loadingStart, setLoadingStart] = useState(false);
+  const [loadingSubmit, setLoadingSubmit] = useState(false);
+  const [quizError, setQuizError] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // クイズ情報取得
+  const fetchQuiz = useCallback(async () => {
+    setLoadingQuiz(true);
+    setQuizError(null);
+    try {
+      const data = await authFetch<QuizByLessonResponse>(
+        `/api/v1/quizzes/by-lesson/${lessonId}`
+      );
+      setQuiz(data.quiz);
+      setUserAttemptCount(data.userAttemptCount);
+      setAttemptSummaries(data.attemptSummaries);
+    } catch (e) {
+      setQuizError(e instanceof Error ? e.message : "クイズ情報の取得に失敗しました");
+    } finally {
+      setLoadingQuiz(false);
+    }
+  }, [authFetch, lessonId]);
+
+  useEffect(() => {
+    fetchQuiz();
+  }, [fetchQuiz]);
+
+  // タイマー管理
+  useEffect(() => {
+    if (quizState !== "taking" || activeAttempt?.timeLimitSec == null) return;
+
+    const startedAt = new Date(activeAttempt.startedAt).getTime();
+    const deadlineMs = startedAt + activeAttempt.timeLimitSec * 1000;
+
+    const tick = () => {
+      const now = Date.now();
+      const left = Math.max(0, Math.floor((deadlineMs - now) / 1000));
+      setRemainingSec(left);
+      if (left === 0) {
+        if (timerRef.current) clearInterval(timerRef.current);
+        // 時間切れ: 自動提出
+        handleSubmit(true);
+      }
+    };
+
+    tick();
+    timerRef.current = setInterval(tick, 1000);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quizState, activeAttempt]);
+
+  // クイズ開始
+  const handleStart = async () => {
+    if (!quiz) return;
+    setLoadingStart(true);
+    setQuizError(null);
+    try {
+      const data = await authFetch<{ attempt: ActiveAttempt }>(
+        `/api/v1/quizzes/${quiz.id}/attempts`,
+        { method: "POST" }
+      );
+      setActiveAttempt(data.attempt);
+      setAnswers({});
+      setResult(null);
+      setQuizState("taking");
+    } catch (e) {
+      setQuizError(e instanceof Error ? e.message : "クイズの開始に失敗しました");
+    } finally {
+      setLoadingStart(false);
+    }
+  };
+
+  // 回答選択（single: 1つのみ、multi: トグル）
+  const handleOptionChange = (questionId: string, optionId: string, type: "single" | "multi") => {
+    setAnswers((prev) => {
+      if (type === "single") {
+        return { ...prev, [questionId]: [optionId] };
+      } else {
+        const current = prev[questionId] ?? [];
+        const exists = current.includes(optionId);
+        return {
+          ...prev,
+          [questionId]: exists
+            ? current.filter((id) => id !== optionId)
+            : [...current, optionId],
+        };
+      }
+    });
+  };
+
+  // 提出実行
+  const handleSubmit = async (isAutoSubmit = false) => {
+    if (!activeAttempt) return;
+    if (!isAutoSubmit) setShowSubmitDialog(false);
+    setLoadingSubmit(true);
+    setQuizError(null);
+    try {
+      await authFetch<{ attempt: { id: string; status: string; score: number | null; isPassed: boolean | null } }>(
+        `/api/v1/quiz-attempts/${activeAttempt.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answers }),
+        }
+      );
+      // 結果取得
+      const resultData = await authFetch<AttemptResult>(
+        `/api/v1/quiz-attempts/${activeAttempt.id}/result`
+      );
+      setResult(resultData);
+      setQuizState("result");
+      // 受験回数などを更新
+      await fetchQuiz();
+    } catch (e) {
+      setQuizError(e instanceof Error ? e.message : "クイズの提出に失敗しました");
+    } finally {
+      setLoadingSubmit(false);
+    }
+  };
+
+  // もう一度挑戦
+  const handleRetry = () => {
+    setQuizState("idle");
+    setActiveAttempt(null);
+    setAnswers({});
+    setResult(null);
+    setRemainingSec(null);
+  };
+
+  // タイマー表示フォーマット
+  const formatTime = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
+  if (loadingQuiz) {
+    return (
+      <div className="rounded-md border p-6">
+        <p className="text-sm text-muted-foreground">クイズを読み込み中...</p>
+      </div>
+    );
+  }
+
+  if (quizError && quizState === "idle" && !quiz) {
+    return (
+      <div className="rounded-md border p-6">
+        <p className="text-sm text-destructive">{quizError}</p>
+      </div>
+    );
+  }
+
+  if (!quiz) return null;
+
+  const remainingAttempts = quiz.maxAttempts - userAttemptCount;
+
+  // ============================================================
+  // 状態1: クイズ未開始
+  // ============================================================
+  if (quizState === "idle") {
+    return (
+      <div className="rounded-md border p-6 space-y-5">
+        <div className="space-y-1">
+          <h2 className="text-lg font-semibold">{quiz.title}</h2>
+          <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
+            <span>合格基準: {quiz.passThreshold}%</span>
+            {quiz.timeLimitSec != null && (
+              <span>制限時間: {formatTime(quiz.timeLimitSec)}</span>
+            )}
+            <span>残り受験回数: {remainingAttempts}/{quiz.maxAttempts}回</span>
+          </div>
+        </div>
+
+        {quizError && (
+          <p className="text-sm text-destructive">{quizError}</p>
+        )}
+
+        {remainingAttempts > 0 ? (
+          <button
+            onClick={handleStart}
+            disabled={loadingStart}
+            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loadingStart ? "開始中..." : "クイズを開始"}
+          </button>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            受験可能な回数の上限に達しています。
+          </p>
+        )}
+
+        {/* 過去の受験結果 */}
+        {attemptSummaries.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium text-muted-foreground">過去の受験結果</h3>
+            <div className="divide-y rounded-md border">
+              {attemptSummaries.map((a) => (
+                <div key={a.id} className="flex items-center justify-between px-4 py-3 text-sm">
+                  <span className="text-muted-foreground">第{a.attemptNumber}回</span>
+                  <div className="flex items-center gap-3">
+                    {a.status === "timed_out" ? (
+                      <Badge variant="outline" className="text-orange-600 border-orange-300">時間切れ</Badge>
+                    ) : a.isPassed ? (
+                      <Badge variant="default" className="bg-green-600 hover:bg-green-600 text-white">合格</Badge>
+                    ) : (
+                      <Badge variant="destructive">不合格</Badge>
+                    )}
+                    {a.score != null && <span className="font-medium">{a.score}%</span>}
+                    {a.submittedAt && (
+                      <span className="text-muted-foreground">
+                        {new Date(a.submittedAt).toLocaleDateString("ja-JP")}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ============================================================
+  // 状態2: クイズ受験中
+  // ============================================================
+  if (quizState === "taking") {
+    const totalQuestions = quiz.questions.length;
+    const answeredCount = Object.keys(answers).filter(
+      (qId) => (answers[qId]?.length ?? 0) > 0
+    ).length;
+
+    return (
+      <div className="rounded-md border space-y-0 overflow-hidden">
+        {/* ヘッダー: タイトル + タイマー + 進捗 */}
+        <div className="flex items-center justify-between px-6 py-4 bg-secondary/50 border-b">
+          <div>
+            <h2 className="text-base font-semibold">{quiz.title}</h2>
+            <p className="text-xs text-muted-foreground">
+              {answeredCount}/{totalQuestions} 問回答済み
+            </p>
+          </div>
+          {remainingSec != null && (
+            <div
+              className={`text-lg font-mono font-bold ${
+                remainingSec <= 60 ? "text-destructive" : "text-foreground"
+              }`}
+            >
+              {formatTime(remainingSec)}
+            </div>
+          )}
+        </div>
+
+        {/* 問題一覧（全問スクロール） */}
+        <div className="divide-y">
+          {quiz.questions.map((q, idx) => (
+            <div key={q.id} className="px-6 py-5 space-y-3">
+              <div className="flex gap-3">
+                <span className="flex-shrink-0 flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-medium">
+                  {idx + 1}
+                </span>
+                <p className="text-sm font-medium leading-relaxed">{q.text}</p>
+              </div>
+              {q.type === "multi" && (
+                <p className="text-xs text-muted-foreground pl-9">複数選択可</p>
+              )}
+              <div className="space-y-2 pl-9">
+                {q.options.map((opt) => {
+                  const selected =
+                    q.type === "single"
+                      ? answers[q.id]?.[0] === opt.id
+                      : (answers[q.id] ?? []).includes(opt.id);
+                  return (
+                    <label
+                      key={opt.id}
+                      className={`flex items-center gap-3 p-3 rounded-md border cursor-pointer transition-colors ${
+                        selected
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-primary/50 hover:bg-secondary/50"
+                      }`}
+                    >
+                      <input
+                        type={q.type === "single" ? "radio" : "checkbox"}
+                        name={q.id}
+                        value={opt.id}
+                        checked={selected}
+                        onChange={() => handleOptionChange(q.id, opt.id, q.type)}
+                        className="accent-primary"
+                      />
+                      <span className="text-sm">{opt.text}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* フッター: エラー + 提出ボタン */}
+        <div className="px-6 py-4 border-t bg-secondary/30 space-y-3">
+          {quizError && (
+            <p className="text-sm text-destructive">{quizError}</p>
+          )}
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">
+              {answeredCount < totalQuestions && (
+                <>{totalQuestions - answeredCount} 問未回答</>
+              )}
+            </span>
+            <button
+              onClick={() => setShowSubmitDialog(true)}
+              disabled={loadingSubmit}
+              className="inline-flex items-center justify-center rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loadingSubmit ? "提出中..." : "提出する"}
+            </button>
+          </div>
+        </div>
+
+        {/* 提出確認ダイアログ */}
+        {showSubmitDialog && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="bg-background rounded-lg border shadow-lg p-6 w-full max-w-sm space-y-4 mx-4">
+              <h3 className="text-base font-semibold">クイズを提出しますか？</h3>
+              {answeredCount < totalQuestions && (
+                <p className="text-sm text-orange-600">
+                  {totalQuestions - answeredCount} 問が未回答です。このまま提出しますか？
+                </p>
+              )}
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setShowSubmitDialog(false)}
+                  className="rounded-md border px-4 py-2 text-sm hover:bg-secondary"
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={() => handleSubmit(false)}
+                  disabled={loadingSubmit}
+                  className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                >
+                  提出する
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ============================================================
+  // 状態3: 結果表示
+  // ============================================================
+  if (quizState === "result" && result) {
+    const { attempt, questionResults } = result;
+    const isTimedOut = attempt.status === "timed_out";
+    const isPassed = attempt.isPassed;
+
+    return (
+      <div className="rounded-md border overflow-hidden space-y-0">
+        {/* スコアヘッダー */}
+        <div
+          className={`px-6 py-6 text-center space-y-2 ${
+            isTimedOut
+              ? "bg-orange-50"
+              : isPassed
+              ? "bg-green-50"
+              : "bg-red-50"
+          }`}
+        >
+          <h2 className="text-lg font-semibold">{quiz.title}</h2>
+          {isTimedOut ? (
+            <Badge variant="outline" className="text-orange-600 border-orange-400 text-base px-3 py-1">
+              時間切れ
+            </Badge>
+          ) : isPassed ? (
+            <Badge className="bg-green-600 hover:bg-green-600 text-white text-base px-3 py-1">
+              合格
+            </Badge>
+          ) : (
+            <Badge variant="destructive" className="text-base px-3 py-1">
+              不合格
+            </Badge>
+          )}
+          {attempt.score != null && (
+            <p className="text-3xl font-bold">{attempt.score}%</p>
+          )}
+          <p className="text-sm text-muted-foreground">
+            合格基準: {quiz.passThreshold}%
+          </p>
+        </div>
+
+        {/* 各問題の正誤 */}
+        <div className="divide-y">
+          {questionResults.map((qr, idx) => (
+            <div key={qr.questionId} className="px-6 py-5 space-y-3">
+              <div className="flex items-start gap-3">
+                <span
+                  className={`flex-shrink-0 flex items-center justify-center w-6 h-6 rounded-full text-xs font-medium ${
+                    qr.isCorrect
+                      ? "bg-green-100 text-green-700"
+                      : "bg-red-100 text-red-700"
+                  }`}
+                >
+                  {idx + 1}
+                </span>
+                <div className="space-y-1 flex-1">
+                  <p className="text-sm font-medium">{qr.questionText}</p>
+                  <span
+                    className={`text-xs font-medium ${
+                      qr.isCorrect ? "text-green-600" : "text-red-600"
+                    }`}
+                  >
+                    {qr.isCorrect ? "正解" : "不正解"}
+                  </span>
+                </div>
+              </div>
+
+              {/* 選択肢表示 */}
+              {(() => {
+                const question = quiz.questions.find((q) => q.id === qr.questionId);
+                if (!question) return null;
+                return (
+                  <div className="space-y-2 pl-9">
+                    {question.options.map((opt) => {
+                      const isCorrectOpt = qr.correctOptionIds.includes(opt.id);
+                      const isSelected = qr.selectedOptionIds.includes(opt.id);
+                      return (
+                        <div
+                          key={opt.id}
+                          className={`flex items-center gap-2 p-2 rounded-md text-sm ${
+                            isCorrectOpt
+                              ? "bg-green-50 border border-green-200 text-green-800"
+                              : isSelected && !isCorrectOpt
+                              ? "bg-red-50 border border-red-200 text-red-800"
+                              : "text-muted-foreground"
+                          }`}
+                        >
+                          <span className="text-xs font-mono">
+                            {isCorrectOpt ? "✓" : isSelected ? "✗" : " "}
+                          </span>
+                          <span>{opt.text}</span>
+                          {isCorrectOpt && (
+                            <span className="ml-auto text-xs text-green-600">正解</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+
+              {/* 解説 */}
+              {qr.explanation && (
+                <div className="pl-9">
+                  <p className="text-xs text-muted-foreground bg-secondary/50 rounded-md px-3 py-2">
+                    <span className="font-medium">解説: </span>
+                    {qr.explanation}
+                  </p>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* フッター */}
+        <div className="px-6 py-4 border-t bg-secondary/30 flex items-center justify-between">
+          {quizError && (
+            <p className="text-sm text-destructive">{quizError}</p>
+          )}
+          <div />
+          {remainingAttempts > 0 ? (
+            <button
+              onClick={handleRetry}
+              className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-secondary"
+            >
+              もう一度挑戦 (残り{remainingAttempts}回)
+            </button>
+          ) : (
+            <span className="text-sm text-muted-foreground">
+              受験可能回数の上限に達しました
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// ============================================================
 // ページコンポーネント
 // ============================================================
 
@@ -93,6 +688,8 @@ export default function StudentLessonDetailPage() {
   const [videoMeta, setVideoMeta] = useState<VideoMeta | null>(null);
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
+  // 動画完了ゲート: 動画完了時にクイズセクションを表示するためのフラグ
+  const [videoCompleted, setVideoCompleted] = useState(false);
 
   const [loadingCourse, setLoadingCourse] = useState(true);
   const [loadingVideo, setLoadingVideo] = useState(false);
@@ -172,6 +769,10 @@ export default function StudentLessonDetailPage() {
         `/api/v1/videos/${videoMeta.id}/analytics`
       );
       setAnalytics(data.analytics);
+      // 動画完了状態を同期
+      if (data.analytics.isComplete) {
+        setVideoCompleted(true);
+      }
     } catch {
       // 分析取得失敗はサイレント（メイン機能ではない）
     } finally {
@@ -184,6 +785,12 @@ export default function StudentLessonDetailPage() {
       fetchAnalytics();
     }
   }, [videoMeta, fetchAnalytics]);
+
+  // 動画完了コールバック: analytics再取得 + クイズ表示フラグを立てる
+  const handleVideoComplete = useCallback(async () => {
+    await fetchAnalytics();
+    setVideoCompleted(true);
+  }, [fetchAnalytics]);
 
   // ============================================================
   // ナビゲーション（前後レッスン）
@@ -202,6 +809,13 @@ export default function StudentLessonDetailPage() {
   const coveragePercent = analytics
     ? Math.round(analytics.coverageRatio * 100)
     : 0;
+
+  // クイズセクションを表示すべきか:
+  // - 動画なしレッスン: 常に表示
+  // - 動画ありレッスン: analytics.isComplete === true または videoCompleted フラグ
+  const showQuizSection =
+    currentLesson?.hasQuiz &&
+    (!currentLesson.hasVideo || videoCompleted || analytics?.isComplete === true);
 
   // ============================================================
   // レンダリング
@@ -297,7 +911,7 @@ export default function StudentLessonDetailPage() {
                   speedLock={videoMeta.speedLock}
                   eventEndpoint={`/api/v2/${tenantId}/videos/${videoMeta.id}/events`}
                   fetchFn={eventFetchFn}
-                  onComplete={fetchAnalytics}
+                  onComplete={handleVideoComplete}
                 />
 
                 {/* 視聴進捗 */}
@@ -334,12 +948,17 @@ export default function StudentLessonDetailPage() {
 
       {/* クイズセクション */}
       {currentLesson.hasQuiz && (
-        <div className="rounded-md border p-6 space-y-2">
-          <h2 className="text-lg font-semibold">クイズ</h2>
-          <p className="text-sm text-muted-foreground">
-            Phase 3で実装予定
-          </p>
-        </div>
+        showQuizSection ? (
+          <QuizSection lessonId={lessonId} authFetch={authFetch} />
+        ) : (
+          /* 動画未完了ゲートメッセージ */
+          <div className="rounded-md border p-6 text-center space-y-2">
+            <p className="text-sm font-medium">クイズに挑戦する</p>
+            <p className="text-sm text-muted-foreground">
+              動画を最後まで視聴するとクイズに挑戦できます
+            </p>
+          </div>
+        )
       )}
 
       {/* ナビゲーション */}

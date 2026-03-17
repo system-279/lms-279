@@ -177,3 +177,66 @@ export interface VideoEventFilter {
   userId?: string;
   sessionToken?: string;
 }
+
+// ========================================
+// クイズ関連
+// ========================================
+
+export type QuestionType = "single" | "multi";
+
+export interface QuizOption {
+  id: string;
+  text: string;
+  isCorrect: boolean;
+}
+
+export interface QuizQuestion {
+  id: string;
+  text: string;
+  type: QuestionType;
+  options: QuizOption[];
+  points: number;
+  explanation: string;
+}
+
+export interface Quiz {
+  id: string;
+  lessonId: string;
+  courseId: string;
+  title: string;
+  passThreshold: number;      // default 70 (%)
+  maxAttempts: number;         // default 3
+  timeLimitSec: number | null; // null = 無制限
+  randomizeQuestions: boolean;
+  randomizeAnswers: boolean;
+  requireVideoCompletion: boolean; // default true
+  questions: QuizQuestion[];   // 上限50問、埋め込み（ADR-016）
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type QuizAttemptStatus = "in_progress" | "submitted" | "timed_out";
+
+export interface QuizAttempt {
+  id: string;
+  quizId: string;
+  userId: string;
+  attemptNumber: number;
+  status: QuizAttemptStatus;
+  answers: Record<string, string[]>; // { questionId: optionIds[] }
+  score: number | null;              // % (0-100), null if not yet scored
+  isPassed: boolean | null;
+  startedAt: string;
+  submittedAt: string | null;
+}
+
+export interface QuizFilter {
+  lessonId?: string;
+  courseId?: string;
+}
+
+export interface QuizAttemptFilter {
+  quizId?: string;
+  userId?: string;
+  status?: QuizAttemptStatus;
+}

@@ -28,6 +28,10 @@ import type {
   VideoAnalytics,
   VideoFilter,
   VideoEventFilter,
+  Quiz,
+  QuizAttempt,
+  QuizFilter,
+  QuizAttemptFilter,
 } from "../types/entities.js";
 
 // Firestore Timestampを Date に変換
@@ -705,6 +709,162 @@ export class FirestoreDataSource implements DataSource {
       speedViolationCount: data.speedViolationCount ?? 0,
       suspiciousFlags: data.suspiciousFlags ?? [],
       updatedAt: toDate(data.updatedAt).toISOString(),
+    };
+  }
+
+  // Quizzes
+  async getQuizzes(filter?: QuizFilter): Promise<Quiz[]> {
+    let query = this.collection("quizzes").orderBy("createdAt", "desc");
+
+    if (filter?.lessonId !== undefined) {
+      query = query.where("lessonId", "==", filter.lessonId);
+    }
+    if (filter?.courseId !== undefined) {
+      query = query.where("courseId", "==", filter.courseId);
+    }
+
+    const snapshot = await query.get();
+    return snapshot.docs.map((doc) => this.toQuiz(doc.id, doc.data()));
+  }
+
+  async getQuizById(id: string): Promise<Quiz | null> {
+    const doc = await this.collection("quizzes").doc(id).get();
+    if (!doc.exists) return null;
+    return this.toQuiz(doc.id, doc.data()!);
+  }
+
+  async getQuizByLessonId(lessonId: string): Promise<Quiz | null> {
+    const snapshot = await this.collection("quizzes")
+      .where("lessonId", "==", lessonId)
+      .limit(1)
+      .get();
+    if (snapshot.empty) return null;
+    const doc = snapshot.docs[0];
+    return this.toQuiz(doc.id, doc.data());
+  }
+
+  async createQuiz(data: Omit<Quiz, "id" | "createdAt" | "updatedAt">): Promise<Quiz> {
+    const docRef = this.collection("quizzes").doc();
+    const now = FieldValue.serverTimestamp();
+    await docRef.set({
+      ...data,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const doc = await docRef.get();
+    return this.toQuiz(doc.id, doc.data()!);
+  }
+
+  async updateQuiz(
+    id: string,
+    data: Partial<Omit<Quiz, "id" | "createdAt" | "updatedAt">>
+  ): Promise<Quiz | null> {
+    const docRef = this.collection("quizzes").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return null;
+
+    await docRef.update({
+      ...data,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    const updated = await docRef.get();
+    return this.toQuiz(updated.id, updated.data()!);
+  }
+
+  async deleteQuiz(id: string): Promise<boolean> {
+    const docRef = this.collection("quizzes").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return false;
+    await docRef.delete();
+    return true;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toQuiz(id: string, data: any): Quiz {
+    return {
+      id,
+      lessonId: data.lessonId,
+      courseId: data.courseId,
+      title: data.title,
+      passThreshold: data.passThreshold ?? 70,
+      maxAttempts: data.maxAttempts ?? 3,
+      timeLimitSec: data.timeLimitSec ?? null,
+      randomizeQuestions: data.randomizeQuestions ?? false,
+      randomizeAnswers: data.randomizeAnswers ?? false,
+      requireVideoCompletion: data.requireVideoCompletion ?? true,
+      questions: data.questions ?? [],
+      createdAt: toDate(data.createdAt).toISOString(),
+      updatedAt: toDate(data.updatedAt).toISOString(),
+    };
+  }
+
+  // Quiz Attempts
+  async getQuizAttempts(filter: QuizAttemptFilter): Promise<QuizAttempt[]> {
+    let query = this.collection("quiz_attempts").orderBy("startedAt", "desc");
+
+    if (filter.quizId !== undefined) {
+      query = query.where("quizId", "==", filter.quizId);
+    }
+    if (filter.userId !== undefined) {
+      query = query.where("userId", "==", filter.userId);
+    }
+    if (filter.status !== undefined) {
+      query = query.where("status", "==", filter.status);
+    }
+
+    const snapshot = await query.get();
+    return snapshot.docs.map((doc) => this.toQuizAttempt(doc.id, doc.data()));
+  }
+
+  async getQuizAttemptById(id: string): Promise<QuizAttempt | null> {
+    const doc = await this.collection("quiz_attempts").doc(id).get();
+    if (!doc.exists) return null;
+    return this.toQuizAttempt(doc.id, doc.data()!);
+  }
+
+  async createQuizAttempt(data: Omit<QuizAttempt, "id">): Promise<QuizAttempt> {
+    const docRef = this.collection("quiz_attempts").doc();
+    await docRef.set({ ...data });
+    const doc = await docRef.get();
+    return this.toQuizAttempt(doc.id, doc.data()!);
+  }
+
+  async updateQuizAttempt(
+    id: string,
+    data: Partial<Omit<QuizAttempt, "id">>
+  ): Promise<QuizAttempt | null> {
+    const docRef = this.collection("quiz_attempts").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return null;
+
+    await docRef.update({ ...data });
+    const updated = await docRef.get();
+    return this.toQuizAttempt(updated.id, updated.data()!);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toQuizAttempt(id: string, data: any): QuizAttempt {
+    return {
+      id,
+      quizId: data.quizId,
+      userId: data.userId,
+      attemptNumber: data.attemptNumber,
+      status: data.status,
+      answers: data.answers ?? {},
+      score: data.score ?? null,
+      isPassed: data.isPassed ?? null,
+      startedAt: data.startedAt instanceof Date
+        ? data.startedAt.toISOString()
+        : typeof data.startedAt?.toDate === "function"
+          ? data.startedAt.toDate().toISOString()
+          : data.startedAt,
+      submittedAt: data.submittedAt == null
+        ? null
+        : data.submittedAt instanceof Date
+          ? data.submittedAt.toISOString()
+          : typeof data.submittedAt?.toDate === "function"
+            ? data.submittedAt.toDate().toISOString()
+            : data.submittedAt,
     };
   }
 }

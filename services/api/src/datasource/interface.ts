@@ -18,9 +18,14 @@ import type {
   VideoAnalytics,
   VideoFilter,
   VideoEventFilter,
+  Quiz,
+  QuizAttempt,
+  QuizFilter,
+  QuizAttemptFilter,
 } from "../types/entities.js";
 
 export type { CourseFilter, LessonFilter, Video, VideoEvent, VideoAnalytics, VideoFilter, VideoEventFilter, WatchedRange, SuspiciousFlag } from "../types/entities.js";
+export type { Quiz, QuizAttempt, QuizFilter, QuizAttemptFilter, QuizQuestion, QuizOption, QuestionType, QuizAttemptStatus } from "../types/entities.js";
 
 export interface NotificationPolicyFilter {
   scope?: "global" | "course" | "user";
@@ -130,6 +135,20 @@ export interface DataSource {
   // Video Analytics
   getVideoAnalytics(userId: string, videoId: string): Promise<VideoAnalytics | null>;
   upsertVideoAnalytics(userId: string, videoId: string, data: Partial<Omit<VideoAnalytics, "id" | "videoId" | "userId">>): Promise<VideoAnalytics>;
+
+  // Quizzes
+  getQuizzes(filter?: QuizFilter): Promise<Quiz[]>;
+  getQuizById(id: string): Promise<Quiz | null>;
+  getQuizByLessonId(lessonId: string): Promise<Quiz | null>;
+  createQuiz(data: Omit<Quiz, "id" | "createdAt" | "updatedAt">): Promise<Quiz>;
+  updateQuiz(id: string, data: Partial<Omit<Quiz, "id" | "createdAt" | "updatedAt">>): Promise<Quiz | null>;
+  deleteQuiz(id: string): Promise<boolean>;
+
+  // Quiz Attempts
+  getQuizAttempts(filter: QuizAttemptFilter): Promise<QuizAttempt[]>;
+  getQuizAttemptById(id: string): Promise<QuizAttempt | null>;
+  createQuizAttempt(data: Omit<QuizAttempt, "id">): Promise<QuizAttempt>;
+  updateQuizAttempt(id: string, data: Partial<Omit<QuizAttempt, "id">>): Promise<QuizAttempt | null>;
 }
 
 /**

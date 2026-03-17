@@ -11,6 +11,8 @@ import { allowedEmailsRouter } from "./allowed-emails.js";
 import { authErrorsRouter } from "./auth-errors.js";
 import { videosRouter } from "./videos.js";
 import { videoEventsRouter } from "./video-events.js";
+import { quizzesRouter } from "./quizzes.js";
+import { quizAttemptsRouter } from "./quiz-attempts.js";
 
 /**
  * 全ての共通ルーターを統合したルーター
@@ -27,6 +29,8 @@ export function createSharedRouter(): Router {
   router.use(authErrorsRouter);
   router.use(videosRouter);
   router.use(videoEventsRouter);
+  router.use(quizzesRouter);
+  router.use(quizAttemptsRouter);
 
   return router;
 }
@@ -39,3 +43,5 @@ export { allowedEmailsRouter } from "./allowed-emails.js";
 export { authErrorsRouter } from "./auth-errors.js";
 export { videosRouter } from "./videos.js";
 export { videoEventsRouter } from "./video-events.js";
+export { quizzesRouter } from "./quizzes.js";
+export { quizAttemptsRouter } from "./quiz-attempts.js";

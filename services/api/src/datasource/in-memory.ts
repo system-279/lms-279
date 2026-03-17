@@ -28,6 +28,10 @@ import type {
   VideoAnalytics,
   VideoFilter,
   VideoEventFilter,
+  Quiz,
+  QuizAttempt,
+  QuizFilter,
+  QuizAttemptFilter,
 } from "../types/entities.js";
 
 // デモ用初期データ
@@ -184,6 +188,8 @@ export class InMemoryDataSource implements DataSource {
   private videos: Video[] = [];
   private videoEvents: VideoEvent[] = [];
   private videoAnalytics: Map<string, VideoAnalytics> = new Map();
+  private quizzes: Quiz[] = [];
+  private quizAttempts: QuizAttempt[] = [];
 
   private readonly readOnly: boolean;
 
@@ -585,5 +591,101 @@ export class InMemoryDataSource implements DataSource {
     };
     this.videoAnalytics.set(key, analytics);
     return analytics;
+  }
+
+  // Quizzes
+  async getQuizzes(filter?: QuizFilter): Promise<Quiz[]> {
+    let result = [...this.quizzes];
+    if (filter?.lessonId !== undefined) {
+      result = result.filter((q) => q.lessonId === filter.lessonId);
+    }
+    if (filter?.courseId !== undefined) {
+      result = result.filter((q) => q.courseId === filter.courseId);
+    }
+    return result;
+  }
+
+  async getQuizById(id: string): Promise<Quiz | null> {
+    return this.quizzes.find((q) => q.id === id) ?? null;
+  }
+
+  async getQuizByLessonId(lessonId: string): Promise<Quiz | null> {
+    return this.quizzes.find((q) => q.lessonId === lessonId) ?? null;
+  }
+
+  async createQuiz(data: Omit<Quiz, "id" | "createdAt" | "updatedAt">): Promise<Quiz> {
+    this.throwIfReadOnly();
+    const now = new Date().toISOString();
+    const quiz: Quiz = {
+      ...data,
+      id: `quiz-${Date.now()}`,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.quizzes.push(quiz);
+    return quiz;
+  }
+
+  async updateQuiz(
+    id: string,
+    data: Partial<Omit<Quiz, "id" | "createdAt" | "updatedAt">>
+  ): Promise<Quiz | null> {
+    this.throwIfReadOnly();
+    const index = this.quizzes.findIndex((q) => q.id === id);
+    if (index === -1) return null;
+    this.quizzes[index] = {
+      ...this.quizzes[index],
+      ...data,
+      updatedAt: new Date().toISOString(),
+    };
+    return this.quizzes[index];
+  }
+
+  async deleteQuiz(id: string): Promise<boolean> {
+    this.throwIfReadOnly();
+    const index = this.quizzes.findIndex((q) => q.id === id);
+    if (index === -1) return false;
+    this.quizzes.splice(index, 1);
+    return true;
+  }
+
+  // Quiz Attempts
+  async getQuizAttempts(filter: QuizAttemptFilter): Promise<QuizAttempt[]> {
+    let result = [...this.quizAttempts];
+    if (filter.quizId !== undefined) {
+      result = result.filter((a) => a.quizId === filter.quizId);
+    }
+    if (filter.userId !== undefined) {
+      result = result.filter((a) => a.userId === filter.userId);
+    }
+    if (filter.status !== undefined) {
+      result = result.filter((a) => a.status === filter.status);
+    }
+    return result;
+  }
+
+  async getQuizAttemptById(id: string): Promise<QuizAttempt | null> {
+    return this.quizAttempts.find((a) => a.id === id) ?? null;
+  }
+
+  async createQuizAttempt(data: Omit<QuizAttempt, "id">): Promise<QuizAttempt> {
+    this.throwIfReadOnly();
+    const attempt: QuizAttempt = {
+      ...data,
+      id: `quiz-attempt-${Date.now()}`,
+    };
+    this.quizAttempts.push(attempt);
+    return attempt;
+  }
+
+  async updateQuizAttempt(
+    id: string,
+    data: Partial<Omit<QuizAttempt, "id">>
+  ): Promise<QuizAttempt | null> {
+    this.throwIfReadOnly();
+    const index = this.quizAttempts.findIndex((a) => a.id === id);
+    if (index === -1) return null;
+    this.quizAttempts[index] = { ...this.quizAttempts[index], ...data };
+    return this.quizAttempts[index];
   }
 }
