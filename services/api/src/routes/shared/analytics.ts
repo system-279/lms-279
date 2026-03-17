@@ -26,37 +26,37 @@ router.get(
       return;
     }
 
-    const users = await ds.getUsers();
+    const [users, courseProgresses] = await Promise.all([
+      ds.getUsers(),
+      ds.getCourseProgressByCourseId(courseId),
+    ]);
     const students = users.filter((u) => u.role === "student");
 
-    const studentProgresses = await Promise.all(
-      students.map(async (student) => {
-        const progress = await ds.getCourseProgress(student.id, courseId);
-        return { student, progress };
-      })
-    );
+    const progressMap = new Map(courseProgresses.map((cp) => [cp.userId, cp]));
 
     const totalStudents = students.length;
-    const completedStudents = studentProgresses.filter(
-      ({ progress }) => progress?.isCompleted === true
+    const completedStudents = students.filter(
+      (s) => progressMap.get(s.id)?.isCompleted === true
     ).length;
 
-    const progressRatios = studentProgresses
-      .map(({ progress }) => progress?.progressRatio ?? 0);
+    const progressRatios = students.map((s) => progressMap.get(s.id)?.progressRatio ?? 0);
     const avgProgressRatio =
       totalStudents > 0
         ? progressRatios.reduce((sum, r) => sum + r, 0) / totalStudents
         : 0;
 
-    const studentList = studentProgresses.map(({ student, progress }) => ({
-      userId: student.id,
-      userName: student.name,
-      email: student.email,
-      completedLessons: progress?.completedLessons ?? 0,
-      totalLessons: progress?.totalLessons ?? course.lessonOrder.length,
-      progressRatio: progress?.progressRatio ?? 0,
-      isCompleted: progress?.isCompleted ?? false,
-    }));
+    const studentList = students.map((student) => {
+      const progress = progressMap.get(student.id);
+      return {
+        userId: student.id,
+        userName: student.name,
+        email: student.email,
+        completedLessons: progress?.completedLessons ?? 0,
+        totalLessons: progress?.totalLessons ?? course.lessonOrder.length,
+        progressRatio: progress?.progressRatio ?? 0,
+        isCompleted: progress?.isCompleted ?? false,
+      };
+    });
 
     res.json({
       course: { id: course.id, name: course.name },
@@ -143,46 +143,41 @@ router.get(
       return;
     }
 
-    const users = await ds.getUsers();
-    const students = users.filter((u) => u.role === "student");
-
-    const viewerAnalytics = await Promise.all(
-      students.map(async (student) => {
-        const analytics = await ds.getVideoAnalytics(student.id, videoId);
-        return { student, analytics };
-      })
+    const [users, analyticsForVideo] = await Promise.all([
+      ds.getUsers(),
+      ds.getVideoAnalyticsByVideoId(videoId),
+    ]);
+    const studentMap = new Map(
+      users.filter((u) => u.role === "student").map((u) => [u.id, u])
     );
 
-    const viewers = viewerAnalytics.filter(({ analytics }) => analytics !== null);
+    const viewers = analyticsForVideo.filter((a) => studentMap.has(a.userId));
 
     const totalViewers = viewers.length;
-    const completedViewers = viewers.filter(
-      ({ analytics }) => analytics!.isComplete
-    ).length;
+    const completedViewers = viewers.filter((a) => a.isComplete).length;
 
     const avgCoverageRatio =
       totalViewers > 0
-        ? viewers.reduce((sum, { analytics }) => sum + analytics!.coverageRatio, 0) /
-          totalViewers
+        ? viewers.reduce((sum, a) => sum + a.coverageRatio, 0) / totalViewers
         : 0;
 
     const avgWatchTimeSec =
       totalViewers > 0
-        ? viewers.reduce(
-            (sum, { analytics }) => sum + analytics!.totalWatchTimeSec,
-            0
-          ) / totalViewers
+        ? viewers.reduce((sum, a) => sum + a.totalWatchTimeSec, 0) / totalViewers
         : 0;
 
-    const viewerList = viewers.map(({ student, analytics }) => ({
-      userId: student.id,
-      userName: student.name,
-      coverageRatio: analytics!.coverageRatio,
-      isComplete: analytics!.isComplete,
-      seekCount: analytics!.seekCount,
-      speedViolationCount: analytics!.speedViolationCount,
-      suspiciousFlags: analytics!.suspiciousFlags,
-    }));
+    const viewerList = viewers.map((analytics) => {
+      const student = studentMap.get(analytics.userId)!;
+      return {
+        userId: student.id,
+        userName: student.name,
+        coverageRatio: analytics.coverageRatio,
+        isComplete: analytics.isComplete,
+        seekCount: analytics.seekCount,
+        speedViolationCount: analytics.speedViolationCount,
+        suspiciousFlags: analytics.suspiciousFlags,
+      };
+    });
 
     res.json({
       video: {
@@ -279,42 +274,49 @@ router.get(
   async (req: Request, res: Response) => {
     const ds = req.dataSource!;
 
-    const videos = await ds.getVideos();
-    const users = await ds.getUsers();
-    const students = users.filter((u) => u.role === "student");
+    const [allAnalytics, videos, users] = await Promise.all([
+      ds.getAllVideoAnalytics(),
+      ds.getVideos(),
+      ds.getUsers(),
+    ]);
 
-    const suspiciousViewings: Array<{
-      userId: string;
-      userName: string | null;
-      videoId: string;
-      lessonTitle: string | null;
-      coverageRatio: number;
-      seekCount: number;
-      speedViolationCount: number;
-      suspiciousFlags: string[];
-      updatedAt: string;
-    }> = [];
+    const studentMap = new Map(
+      users.filter((u) => u.role === "student").map((u) => [u.id, u])
+    );
+    const videoMap = new Map(videos.map((v) => [v.id, v]));
 
-    for (const video of videos) {
-      const lesson = await ds.getLessonById(video.lessonId);
+    const suspiciousList = allAnalytics.filter(
+      (a) => a.suspiciousFlags.length > 0 && studentMap.has(a.userId)
+    );
 
-      for (const student of students) {
-        const analytics = await ds.getVideoAnalytics(student.id, video.id);
-        if (analytics && analytics.suspiciousFlags.length > 0) {
-          suspiciousViewings.push({
-            userId: student.id,
-            userName: student.name,
-            videoId: video.id,
-            lessonTitle: lesson?.title ?? null,
-            coverageRatio: analytics.coverageRatio,
-            seekCount: analytics.seekCount,
-            speedViolationCount: analytics.speedViolationCount,
-            suspiciousFlags: analytics.suspiciousFlags,
-            updatedAt: analytics.updatedAt,
-          });
-        }
-      }
-    }
+    const lessonIds = [
+      ...new Set(
+        suspiciousList
+          .map((a) => videoMap.get(a.videoId)?.lessonId)
+          .filter((id): id is string => id !== undefined)
+      ),
+    ];
+    const lessons = await Promise.all(lessonIds.map((id) => ds.getLessonById(id)));
+    const lessonMap = new Map(
+      lessons.filter((l): l is NonNullable<typeof l> => l !== null).map((l) => [l.id, l])
+    );
+
+    const suspiciousViewings = suspiciousList.map((analytics) => {
+      const student = studentMap.get(analytics.userId)!;
+      const video = videoMap.get(analytics.videoId);
+      const lessonTitle = video ? (lessonMap.get(video.lessonId)?.title ?? null) : null;
+      return {
+        userId: student.id,
+        userName: student.name,
+        videoId: analytics.videoId,
+        lessonTitle,
+        coverageRatio: analytics.coverageRatio,
+        seekCount: analytics.seekCount,
+        speedViolationCount: analytics.speedViolationCount,
+        suspiciousFlags: analytics.suspiciousFlags,
+        updatedAt: analytics.updatedAt,
+      };
+    });
 
     res.json({ suspiciousViewings });
   }

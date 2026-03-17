@@ -659,6 +659,18 @@ export class FirestoreDataSource implements DataSource {
     return this.toVideoAnalytics(doc.id, doc.data()!);
   }
 
+  async getVideoAnalyticsByVideoId(videoId: string): Promise<VideoAnalytics[]> {
+    const snapshot = await this.collection("video_analytics")
+      .where("videoId", "==", videoId)
+      .get();
+    return snapshot.docs.map((doc) => this.toVideoAnalytics(doc.id, doc.data()));
+  }
+
+  async getAllVideoAnalytics(): Promise<VideoAnalytics[]> {
+    const snapshot = await this.collection("video_analytics").get();
+    return snapshot.docs.map((doc) => this.toVideoAnalytics(doc.id, doc.data()));
+  }
+
   async upsertVideoAnalytics(
     userId: string,
     videoId: string,
@@ -975,6 +987,13 @@ export class FirestoreDataSource implements DataSource {
   async getCourseProgressByUser(userId: string): Promise<CourseProgress[]> {
     const snapshot = await this.collection("course_progress")
       .where("userId", "==", userId)
+      .get();
+    return snapshot.docs.map((doc) => this.toCourseProgress(doc.id, doc.data()));
+  }
+
+  async getCourseProgressByCourseId(courseId: string): Promise<CourseProgress[]> {
+    const snapshot = await this.collection("course_progress")
+      .where("courseId", "==", courseId)
       .get();
     return snapshot.docs.map((doc) => this.toCourseProgress(doc.id, doc.data()));
   }

@@ -200,6 +200,110 @@ export class InMemoryDataSource implements DataSource {
 
   constructor(options: { readOnly?: boolean } = {}) {
     this.readOnly = options.readOnly ?? true;
+
+    // デモ用動画シードデータ
+    this.videos = [
+      {
+        id: "demo-video-1",
+        lessonId: "demo-lesson-1",
+        courseId: "demo-course-1",
+        sourceType: "external_url",
+        sourceUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+        durationSec: 596,
+        requiredWatchRatio: 0.95,
+        speedLock: true,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+      },
+      {
+        id: "demo-video-2",
+        lessonId: "demo-lesson-2",
+        courseId: "demo-course-1",
+        sourceType: "external_url",
+        sourceUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4",
+        durationSec: 653,
+        requiredWatchRatio: 0.95,
+        speedLock: true,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+      },
+    ];
+
+    // デモ用クイズシードデータ
+    this.quizzes = [
+      {
+        id: "demo-quiz-1",
+        lessonId: "demo-lesson-1",
+        courseId: "demo-course-1",
+        title: "変数とデータ型 確認テスト",
+        passThreshold: 70,
+        maxAttempts: 3,
+        timeLimitSec: 300,
+        randomizeQuestions: false,
+        randomizeAnswers: false,
+        requireVideoCompletion: true,
+        questions: [
+          {
+            id: "q1",
+            text: "JavaScriptで変数を宣言するキーワードとして正しいものはどれですか？",
+            type: "single",
+            options: [
+              { id: "q1-a", text: "var", isCorrect: false },
+              { id: "q1-b", text: "let", isCorrect: true },
+              { id: "q1-c", text: "set", isCorrect: false },
+              { id: "q1-d", text: "define", isCorrect: false },
+            ],
+            points: 10,
+            explanation: "JavaScriptではlet, const, varで変数を宣言できます。letはブロックスコープの変数宣言に使用されます。",
+          },
+          {
+            id: "q2",
+            text: "次のうち、JavaScriptのプリミティブ型として正しいものを全て選んでください。",
+            type: "multi",
+            options: [
+              { id: "q2-a", text: "string", isCorrect: true },
+              { id: "q2-b", text: "number", isCorrect: true },
+              { id: "q2-c", text: "array", isCorrect: false },
+              { id: "q2-d", text: "boolean", isCorrect: true },
+            ],
+            points: 20,
+            explanation: "JavaScriptのプリミティブ型はstring, number, boolean, null, undefined, symbol, bigintの7つです。arrayはオブジェクト型です。",
+          },
+          {
+            id: "q3",
+            text: "constで宣言した変数に再代入するとどうなりますか？",
+            type: "single",
+            options: [
+              { id: "q3-a", text: "値が上書きされる", isCorrect: false },
+              { id: "q3-b", text: "TypeError が発生する", isCorrect: true },
+              { id: "q3-c", text: "undefinedになる", isCorrect: false },
+              { id: "q3-d", text: "何も起きない", isCorrect: false },
+            ],
+            points: 10,
+            explanation: "constで宣言した変数は再代入できません。再代入しようとするとTypeErrorが発生します。",
+          },
+        ],
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+      },
+    ];
+
+    // デモ用VideoAnalyticsシードデータ（student1がdemo-video-1を視聴完了）
+    this.videoAnalytics.set("demo-student-1_demo-video-1", {
+      id: "demo-student-1_demo-video-1",
+      videoId: "demo-video-1",
+      userId: "demo-student-1",
+      watchedRanges: [{ start: 0, end: 566 }],
+      totalWatchTimeSec: 566,
+      coverageRatio: 0.95,
+      isComplete: true,
+      seekCount: 2,
+      pauseCount: 5,
+      totalPauseDurationSec: 30,
+      speedViolationCount: 0,
+      suspiciousFlags: [],
+      updatedAt: "2024-01-15T10:00:00.000Z",
+    });
   }
 
   private throwIfReadOnly(): void {
@@ -571,6 +675,20 @@ export class InMemoryDataSource implements DataSource {
     return this.videoAnalytics.get(key) ?? null;
   }
 
+  async getVideoAnalyticsByVideoId(videoId: string): Promise<VideoAnalytics[]> {
+    const result: VideoAnalytics[] = [];
+    for (const analytics of this.videoAnalytics.values()) {
+      if (analytics.videoId === videoId) {
+        result.push(analytics);
+      }
+    }
+    return result;
+  }
+
+  async getAllVideoAnalytics(): Promise<VideoAnalytics[]> {
+    return Array.from(this.videoAnalytics.values());
+  }
+
   async upsertVideoAnalytics(
     userId: string,
     videoId: string,
@@ -765,6 +883,16 @@ export class InMemoryDataSource implements DataSource {
     const result: CourseProgress[] = [];
     for (const progress of this.courseProgress.values()) {
       if (progress.userId === userId) {
+        result.push(progress);
+      }
+    }
+    return result;
+  }
+
+  async getCourseProgressByCourseId(courseId: string): Promise<CourseProgress[]> {
+    const result: CourseProgress[] = [];
+    for (const progress of this.courseProgress.values()) {
+      if (progress.courseId === courseId) {
         result.push(progress);
       }
     }

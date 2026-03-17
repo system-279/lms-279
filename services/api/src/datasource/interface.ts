@@ -137,6 +137,8 @@ export interface DataSource {
 
   // Video Analytics
   getVideoAnalytics(userId: string, videoId: string): Promise<VideoAnalytics | null>;
+  getVideoAnalyticsByVideoId(videoId: string): Promise<VideoAnalytics[]>;
+  getAllVideoAnalytics(): Promise<VideoAnalytics[]>;
   upsertVideoAnalytics(userId: string, videoId: string, data: Partial<Omit<VideoAnalytics, "id" | "videoId" | "userId">>): Promise<VideoAnalytics>;
 
   // Quizzes
@@ -162,6 +164,7 @@ export interface DataSource {
   getCourseProgress(userId: string, courseId: string): Promise<CourseProgress | null>;
   upsertCourseProgress(userId: string, courseId: string, data: Partial<Omit<CourseProgress, "id" | "userId" | "courseId">>): Promise<CourseProgress>;
   getCourseProgressByUser(userId: string): Promise<CourseProgress[]>;
+  getCourseProgressByCourseId(courseId: string): Promise<CourseProgress[]>;
 }
 
 /**
