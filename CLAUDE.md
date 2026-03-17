@@ -89,7 +89,7 @@ npm run test
 - **不審検出**: サーバーサイドヒューリスティクス（ADR-022）
 - **認証**: Firebase Authentication + Googleソーシャルログイン（ADR-005）
 - **マルチテナント**: Firestoreパスベース分離（ADR-007）
-- **エラーレスポンス**: 統一形式 { error: { code, message, details? } }（ADR-010）
+- **エラーレスポンス**: フラット形式 { error: "code", message: "..." }（ADR-010改訂済み）
 
 全ADRは`docs/adr/`を参照。
 
