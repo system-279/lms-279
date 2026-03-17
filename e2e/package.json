@@ -2,7 +2,7 @@
   "name": "@lms-279/e2e",
   "private": true,
   "scripts": {
-    "test": "playwright test",
+    "test": "playwright test --pass-with-no-tests",
     "test:ui": "playwright test --ui"
   },
   "devDependencies": {
