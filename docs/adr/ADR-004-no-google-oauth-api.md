@@ -1,16 +1,27 @@
-# ADR-004: Google OAuth API連携の見送り
+# ADR-004: Google Classroom / Forms API連携の見送り
 
 ## ステータス
 承認済み
 
 ## コンテキスト
-Google Classroom APIとの連携を検討したが、OAuth審査の時間とコストが大きい
+Google Classroom APIとの連携を検討した。LMSの中核要件として「動画の倍速禁止」「秒単位の視聴追跡」「完全な入退室管理」がある。
 
 ## 決定
-Google Classroom API / Google Forms APIとの連携は実装しない
+Google Classroom API / Google Forms APIとの連携は実装しない。LMS機能を全て自前で構築する。
 
 ## 根拠
-OAuth審査プロセスが長期化するリスク。講座・受講者情報は管理画面で手動管理する方が初期段階では現実的
+**主な理由（技術的制約）**: Google Classroomでは本LMSの中核要件を実現できない。
+- 倍速再生の禁止: YouTube/Driveプレイヤー依存のため制御不可
+- 視聴区間の追跡: 秒単位のheartbeat・イベント追跡が不可
+- 視聴完了の厳密判定: coverageRatio算出が不可
+- 不審視聴パターン検出: サーバーサイド分析が不可
+- 動画完了→クイズのゲート制御: Classroomでは独立した機能
+- 完全な入退室管理: Classroom APIに入退室ログなし
+
+**副次的理由**: OAuth審査プロセスの長期化リスクとコスト。
 
 ## 影響
-講座情報の自動同期なし。管理者が手動で講座・受講者を登録
+- 講座・受講者情報は管理画面で手動管理
+- 動画配信はGCS + カスタムHTML5プレイヤー（ADR-012）
+- クイズは自前実装（ADR-016, ADR-017）
+- 全機能をワンストップで提供するため開発スコープは大きいが、要件の完全な充足を保証
