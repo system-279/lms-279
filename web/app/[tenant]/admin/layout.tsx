@@ -19,7 +19,6 @@ export default function TenantAdminLayout({
 
   const navItems = [
     { href: `/${tenantId}/admin/courses`, label: "講座管理" },
-    { href: `/${tenantId}/admin/lessons`, label: "レッスン管理" },
     { href: `/${tenantId}/admin/users`, label: "受講者管理" },
     { href: `/${tenantId}/admin/allowed-emails`, label: "許可メール管理" },
     { href: `/${tenantId}/admin/analytics`, label: "分析" },
