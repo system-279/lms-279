@@ -31,10 +31,8 @@ jobs:
         id: auth
         uses: google-github-actions/auth@v2
         with:
-          # TODO: Set up Workload Identity Federation and configure the provider
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          # TODO: Create and configure the service account for GitHub Actions
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -64,10 +62,8 @@ jobs:
         id: auth
         uses: google-github-actions/auth@v2
         with:
-          # TODO: Set up Workload Identity Federation and configure the provider
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          # TODO: Create and configure the service account for GitHub Actions
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -113,10 +109,8 @@ jobs:
         id: auth
         uses: google-github-actions/auth@v2
         with:
-          # TODO: Set up Workload Identity Federation and configure the provider
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          # TODO: Create and configure the service account for GitHub Actions
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -164,10 +158,8 @@ jobs:
         id: auth
         uses: google-github-actions/auth@v2
         with:
-          # TODO: Set up Workload Identity Federation and configure the provider
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          # TODO: Create and configure the service account for GitHub Actions
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
