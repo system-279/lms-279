@@ -12,6 +12,7 @@ type UserRole = "admin" | "teacher" | "student" | null;
 interface AuthMeResponse {
   user?: { role?: string };
   isSuperAdminAccess?: boolean;
+  tenantName?: string;
 }
 
 /**
@@ -88,6 +89,7 @@ function TenantLayoutInner({ children }: { children: React.ReactNode }) {
   const { user, loading: authLoading } = useAuth();
   const authFetch = useAuthFetch();
   const [isSuperAdminAccess, setIsSuperAdminAccess] = useState(false);
+  const [tenantName, setTenantName] = useState<string | null>(null);
 
   useEffect(() => {
     if (authLoading || !user) return;
@@ -96,6 +98,7 @@ function TenantLayoutInner({ children }: { children: React.ReactNode }) {
       try {
         const data = await authFetch<AuthMeResponse>("/auth/me");
         setIsSuperAdminAccess(data.isSuperAdminAccess ?? false);
+        if (data.tenantName) setTenantName(data.tenantName);
       } catch {
         setIsSuperAdminAccess(false);
       }
@@ -129,6 +132,11 @@ function TenantLayoutInner({ children }: { children: React.ReactNode }) {
           >
             LMS 279{isDemo ? " (DEMO)" : ""}
           </Link>
+          {tenantName && (
+            <span className="text-sm text-muted-foreground border-l pl-4">
+              {tenantName}
+            </span>
+          )}
           <TenantNav isSuperAdminAccess={isSuperAdminAccess} />
         </div>
       </header>
