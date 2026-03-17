@@ -70,7 +70,7 @@ export function useAuthenticatedFetch() {
         idToken: idToken ?? undefined,
       });
     },
-    [user, authLoading, getIdToken, router, tenantId, isDemo]
+    [user, authLoading, getIdToken, router, tenant, tenantId, isDemo]
   );
 
   return {
