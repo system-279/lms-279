@@ -18,7 +18,8 @@ type Course = {
   id: string;
   name: string;
   description: string;
-  lessonCount: number;
+  lessonCount?: number;
+  lessonOrder?: string[];
   progress?: CourseProgress;
 };
 
@@ -73,7 +74,7 @@ export default function StudentCoursesPage() {
           {courses.map((course) => {
             const progress = course.progress ?? null;
             const completedCount = progress?.completedLessonCount ?? 0;
-            const totalCount = progress?.totalLessonCount ?? course.lessonCount ?? 0;
+            const totalCount = progress?.totalLessonCount ?? course.lessonCount ?? course.lessonOrder?.length ?? 0;
             const progressPercent = progress
               ? Math.round(progress.progressRatio * 100)
               : totalCount > 0
@@ -105,7 +106,7 @@ export default function StudentCoursesPage() {
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <p className="text-sm text-muted-foreground">
-                      レッスン数: {course.lessonCount ?? 0}
+                      レッスン数: {course.lessonCount ?? course.lessonOrder?.length ?? 0}
                     </p>
                     {progress != null ? (
                       <div className="space-y-1.5">

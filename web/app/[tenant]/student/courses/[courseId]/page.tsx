@@ -92,10 +92,10 @@ export default function StudentCourseDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await authFetch<{ course: Course }>(`/api/v1/courses/${courseId}`);
+      const data = await authFetch<{ course: Course; lessons: Lesson[] }>(`/api/v1/courses/${courseId}`);
       setCourse(data.course);
-      if (data.course.lessons) {
-        const sorted = [...data.course.lessons].sort((a, b) => a.order - b.order);
+      if (data.lessons) {
+        const sorted = [...data.lessons].sort((a, b) => a.order - b.order);
         setLessons(sorted);
       }
     } catch (e) {
