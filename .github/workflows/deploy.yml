@@ -1,0 +1,191 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  GCP_REGION: asia-northeast1
+  GCP_PROJECT_ID: lms-279
+  ARTIFACT_REGISTRY: asia-northeast1-docker.pkg.dev/lms-279/lms-279
+
+jobs:
+  # CI checks must pass before deployment
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy-firestore-indexes:
+    name: Deploy Firestore Indexes
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          # TODO: Set up Workload Identity Federation and configure the provider
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          # TODO: Create and configure the service account for GitHub Actions
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy Firestore indexes
+        run: |
+          # Install firebase-tools
+          npm install -g firebase-tools
+
+          # Deploy indexes using gcloud auth (Workload Identity Federation)
+          firebase deploy --only firestore:indexes --project=${{ env.GCP_PROJECT_ID }} --non-interactive
+
+  deploy-api:
+    name: Deploy API
+    needs: [ci]
+    # Note: Firestore indexes are deployed independently and don't block service deployment
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          # TODO: Set up Workload Identity Federation and configure the provider
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          # TODO: Create and configure the service account for GitHub Actions
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push API image
+        working-directory: services/api
+        run: |
+          docker build -t ${{ env.ARTIFACT_REGISTRY }}/api:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/api:latest .
+          docker push ${{ env.ARTIFACT_REGISTRY }}/api:${{ github.sha }}
+          docker push ${{ env.ARTIFACT_REGISTRY }}/api:latest
+
+      - name: Deploy API to Cloud Run
+        run: |
+          # Build env vars string
+          # TODO: Update CORS_ORIGIN to the actual Cloud Run web service URL once deployed
+          ENV_VARS="DEMO_ENABLED=true,AUTH_MODE=firebase,CORS_ORIGIN=https://web-TODO.asia-northeast1.run.app"
+          if [ -n "${{ secrets.SUPER_ADMIN_EMAILS }}" ]; then
+            ENV_VARS="${ENV_VARS},SUPER_ADMIN_EMAILS=${{ secrets.SUPER_ADMIN_EMAILS }}"
+          fi
+          gcloud run deploy api \
+            --image=${{ env.ARTIFACT_REGISTRY }}/api:${{ github.sha }} \
+            --region=${{ env.GCP_REGION }} \
+            --platform=managed \
+            --allow-unauthenticated \
+            --set-env-vars="${ENV_VARS}"
+
+  deploy-web:
+    name: Deploy Web
+    needs: [ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          # TODO: Set up Workload Identity Federation and configure the provider
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          # TODO: Create and configure the service account for GitHub Actions
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push Web image
+        working-directory: web
+        run: |
+          docker build \
+            # TODO: Update NEXT_PUBLIC_API_URL to the actual Cloud Run api service URL once deployed
+            --build-arg NEXT_PUBLIC_API_URL=https://api-TODO.asia-northeast1.run.app \
+            --build-arg NEXT_PUBLIC_AUTH_MODE=firebase \
+            --build-arg NEXT_PUBLIC_FIREBASE_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }} \
+            --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }} \
+            --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }} \
+            -t ${{ env.ARTIFACT_REGISTRY }}/web:${{ github.sha }} \
+            -t ${{ env.ARTIFACT_REGISTRY }}/web:latest \
+            .
+          docker push ${{ env.ARTIFACT_REGISTRY }}/web:${{ github.sha }}
+          docker push ${{ env.ARTIFACT_REGISTRY }}/web:latest
+
+      - name: Deploy Web to Cloud Run
+        run: |
+          gcloud run deploy web \
+            --image=${{ env.ARTIFACT_REGISTRY }}/web:${{ github.sha }} \
+            --region=${{ env.GCP_REGION }} \
+            --platform=managed \
+            --allow-unauthenticated
+
+  deploy-notification:
+    name: Deploy Notification
+    needs: [ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          # TODO: Set up Workload Identity Federation and configure the provider
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          # TODO: Create and configure the service account for GitHub Actions
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push Notification image
+        working-directory: services/notification
+        run: |
+          docker build -t ${{ env.ARTIFACT_REGISTRY }}/notification:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/notification:latest .
+          docker push ${{ env.ARTIFACT_REGISTRY }}/notification:${{ github.sha }}
+          docker push ${{ env.ARTIFACT_REGISTRY }}/notification:latest
+
+      - name: Deploy Notification to Cloud Run
+        run: |
+          gcloud run deploy notification \
+            --image=${{ env.ARTIFACT_REGISTRY }}/notification:${{ github.sha }} \
+            --region=${{ env.GCP_REGION }} \
+            --platform=managed \
+            --no-allow-unauthenticated

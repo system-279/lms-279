@@ -1,0 +1,505 @@
+/**
+ * FirestoreDataSource
+ * 本番用のFirestoreデータソース実装
+ */
+
+import { Firestore, FieldValue, Timestamp } from "@google-cloud/firestore";
+import type {
+  DataSource,
+  CourseFilter,
+  LessonFilter,
+  NotificationPolicyFilter,
+  AuthErrorLogFilter,
+  CourseUpdateData,
+  LessonUpdateData,
+  UserUpdateData,
+  NotificationPolicyUpdateData,
+} from "./interface.js";
+import type {
+  Course,
+  Lesson,
+  User,
+  NotificationPolicy,
+  AllowedEmail,
+  UserSettings,
+  AuthErrorLog,
+} from "../types/entities.js";
+
+// Firestore Timestampを Date に変換
+function toDate(timestamp: Timestamp | Date | null | undefined): Date {
+  if (!timestamp) return new Date();
+  if (timestamp instanceof Date) return timestamp;
+  if (typeof timestamp.toDate === "function") return timestamp.toDate();
+  return new Date();
+}
+
+export class FirestoreDataSource implements DataSource {
+  private db: Firestore;
+  private tenantPath: string;
+  readonly tenantId: string;
+
+  /**
+   * @param db Firestoreインスタンス
+   * @param tenantId テナントID（必須）- 空文字列の場合はレガシーモード（ルート直下）
+   */
+  constructor(db: Firestore, tenantId: string) {
+    if (tenantId === undefined || tenantId === null) {
+      throw new Error("tenantId is required for FirestoreDataSource");
+    }
+    this.db = db;
+    this.tenantId = tenantId;
+    // tenantIdが空文字列の場合はレガシーモード（既存データとの互換性）
+    // 空でない場合は tenants/{tenantId}/ プレフィックスを使用
+    this.tenantPath = tenantId ? `tenants/${tenantId}/` : "";
+  }
+
+  private collection(name: string) {
+    return this.db.collection(`${this.tenantPath}${name}`);
+  }
+
+  // Courses
+  async getCourses(filter?: CourseFilter): Promise<Course[]> {
+    let query = this.collection("courses").orderBy("createdAt", "desc");
+
+    if (filter?.status !== undefined) {
+      query = query.where("status", "==", filter.status);
+    }
+
+    const snapshot = await query.get();
+    return snapshot.docs.map((doc) => this.toCourse(doc.id, doc.data()));
+  }
+
+  async getCourseById(id: string): Promise<Course | null> {
+    const doc = await this.collection("courses").doc(id).get();
+    if (!doc.exists) return null;
+    return this.toCourse(doc.id, doc.data()!);
+  }
+
+  async createCourse(data: Omit<Course, "id" | "createdAt" | "updatedAt">): Promise<Course> {
+    const docRef = this.collection("courses").doc();
+    const now = FieldValue.serverTimestamp();
+    await docRef.set({
+      ...data,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const doc = await docRef.get();
+    return this.toCourse(doc.id, doc.data()!);
+  }
+
+  async updateCourse(id: string, data: CourseUpdateData): Promise<Course | null> {
+    const docRef = this.collection("courses").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return null;
+
+    await docRef.update({
+      ...data,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    const updated = await docRef.get();
+    return this.toCourse(updated.id, updated.data()!);
+  }
+
+  async deleteCourse(id: string): Promise<boolean> {
+    const docRef = this.collection("courses").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return false;
+    await docRef.delete();
+    return true;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toCourse(id: string, data: any): Course {
+    return {
+      id,
+      name: data.name,
+      description: data.description ?? null,
+      status: data.status ?? "draft",
+      lessonOrder: data.lessonOrder ?? [],
+      passThreshold: data.passThreshold ?? 80,
+      createdBy: data.createdBy,
+      createdAt: toDate(data.createdAt),
+      updatedAt: toDate(data.updatedAt),
+    };
+  }
+
+  // Lessons
+  async getLessons(filter?: LessonFilter): Promise<Lesson[]> {
+    let query = this.collection("lessons").orderBy("order", "asc");
+
+    if (filter?.courseId !== undefined) {
+      query = query.where("courseId", "==", filter.courseId);
+    }
+
+    const snapshot = await query.get();
+    return snapshot.docs.map((doc) => this.toLesson(doc.id, doc.data()));
+  }
+
+  async getLessonById(id: string): Promise<Lesson | null> {
+    const doc = await this.collection("lessons").doc(id).get();
+    if (!doc.exists) return null;
+    return this.toLesson(doc.id, doc.data()!);
+  }
+
+  async createLesson(data: Omit<Lesson, "id" | "createdAt" | "updatedAt">): Promise<Lesson> {
+    const docRef = this.collection("lessons").doc();
+    const now = FieldValue.serverTimestamp();
+    await docRef.set({
+      ...data,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const doc = await docRef.get();
+    return this.toLesson(doc.id, doc.data()!);
+  }
+
+  async updateLesson(id: string, data: LessonUpdateData): Promise<Lesson | null> {
+    const docRef = this.collection("lessons").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return null;
+
+    await docRef.update({
+      ...data,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    const updated = await docRef.get();
+    return this.toLesson(updated.id, updated.data()!);
+  }
+
+  async deleteLesson(id: string): Promise<boolean> {
+    const docRef = this.collection("lessons").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return false;
+    await docRef.delete();
+    return true;
+  }
+
+  async reorderLessons(courseId: string, lessonIds: string[]): Promise<void> {
+    const batch = this.db.batch();
+
+    // 各レッスンのorderフィールドをバッチ更新
+    lessonIds.forEach((lessonId, index) => {
+      const lessonRef = this.collection("lessons").doc(lessonId);
+      batch.update(lessonRef, {
+        order: index,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+
+    // コースのlessonOrderも更新
+    const courseRef = this.collection("courses").doc(courseId);
+    batch.update(courseRef, {
+      lessonOrder: lessonIds,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    await batch.commit();
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toLesson(id: string, data: any): Lesson {
+    return {
+      id,
+      courseId: data.courseId,
+      title: data.title,
+      order: data.order ?? 0,
+      hasVideo: data.hasVideo ?? false,
+      hasQuiz: data.hasQuiz ?? false,
+      videoUnlocksPrior: data.videoUnlocksPrior ?? false,
+      createdAt: toDate(data.createdAt),
+      updatedAt: toDate(data.updatedAt),
+    };
+  }
+
+  // Users
+  async getUsers(): Promise<User[]> {
+    const snapshot = await this.collection("users").orderBy("createdAt", "desc").get();
+    return snapshot.docs.map((doc) => this.toUser(doc.id, doc.data()));
+  }
+
+  async getUserById(id: string): Promise<User | null> {
+    const doc = await this.collection("users").doc(id).get();
+    if (!doc.exists) return null;
+    return this.toUser(doc.id, doc.data()!);
+  }
+
+  async getUserByEmail(email: string): Promise<User | null> {
+    const snapshot = await this.collection("users")
+      .where("email", "==", email)
+      .limit(1)
+      .get();
+    if (snapshot.empty) return null;
+    const doc = snapshot.docs[0];
+    return this.toUser(doc.id, doc.data());
+  }
+
+  async getUserByFirebaseUid(uid: string): Promise<User | null> {
+    const snapshot = await this.collection("users")
+      .where("firebaseUid", "==", uid)
+      .limit(1)
+      .get();
+    if (snapshot.empty) return null;
+    const doc = snapshot.docs[0];
+    return this.toUser(doc.id, doc.data());
+  }
+
+  async createUser(data: Omit<User, "id" | "createdAt" | "updatedAt">): Promise<User> {
+    const docRef = this.collection("users").doc();
+    const now = FieldValue.serverTimestamp();
+    await docRef.set({
+      ...data,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const doc = await docRef.get();
+    return this.toUser(doc.id, doc.data()!);
+  }
+
+  async updateUser(id: string, data: UserUpdateData): Promise<User | null> {
+    const docRef = this.collection("users").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return null;
+
+    await docRef.update({
+      ...data,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    const updated = await docRef.get();
+    return this.toUser(updated.id, updated.data()!);
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    const docRef = this.collection("users").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return false;
+    await docRef.delete();
+    return true;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toUser(id: string, data: any): User {
+    return {
+      id,
+      email: data.email,
+      name: data.name ?? null,
+      role: data.role ?? "student",
+      firebaseUid: data.firebaseUid,
+      createdAt: toDate(data.createdAt),
+      updatedAt: toDate(data.updatedAt),
+    };
+  }
+
+  // Allowed Emails
+  async getAllowedEmails(): Promise<AllowedEmail[]> {
+    const snapshot = await this.collection("allowed_emails").orderBy("createdAt", "desc").get();
+    return snapshot.docs.map((doc) => this.toAllowedEmail(doc.id, doc.data()));
+  }
+
+  async getAllowedEmailById(id: string): Promise<AllowedEmail | null> {
+    const doc = await this.collection("allowed_emails").doc(id).get();
+    if (!doc.exists) return null;
+    return this.toAllowedEmail(doc.id, doc.data()!);
+  }
+
+  async isEmailAllowed(email: string): Promise<boolean> {
+    const snapshot = await this.collection("allowed_emails")
+      .where("email", "==", email)
+      .limit(1)
+      .get();
+    return !snapshot.empty;
+  }
+
+  async createAllowedEmail(data: Omit<AllowedEmail, "id" | "createdAt">): Promise<AllowedEmail> {
+    const docRef = this.collection("allowed_emails").doc();
+    await docRef.set({
+      ...data,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    const doc = await docRef.get();
+    return this.toAllowedEmail(doc.id, doc.data()!);
+  }
+
+  async deleteAllowedEmail(id: string): Promise<boolean> {
+    const docRef = this.collection("allowed_emails").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return false;
+    await docRef.delete();
+    return true;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toAllowedEmail(id: string, data: any): AllowedEmail {
+    return {
+      id,
+      email: data.email,
+      note: data.note ?? null,
+      createdAt: toDate(data.createdAt),
+    };
+  }
+
+  // Notification Policies
+  async getNotificationPolicies(filter?: NotificationPolicyFilter): Promise<NotificationPolicy[]> {
+    let query = this.collection("notification_policies").orderBy("createdAt", "desc");
+
+    if (filter?.scope) {
+      query = query.where("scope", "==", filter.scope);
+    }
+    if (filter?.courseId) {
+      query = query.where("courseId", "==", filter.courseId);
+    }
+    if (filter?.userId) {
+      query = query.where("userId", "==", filter.userId);
+    }
+    if (filter?.active !== undefined) {
+      query = query.where("active", "==", filter.active);
+    }
+
+    const snapshot = await query.get();
+    return snapshot.docs.map((doc) => this.toNotificationPolicy(doc.id, doc.data()));
+  }
+
+  async getNotificationPolicyById(id: string): Promise<NotificationPolicy | null> {
+    const doc = await this.collection("notification_policies").doc(id).get();
+    if (!doc.exists) return null;
+    return this.toNotificationPolicy(doc.id, doc.data()!);
+  }
+
+  async createNotificationPolicy(
+    data: Omit<NotificationPolicy, "id" | "createdAt" | "updatedAt">
+  ): Promise<NotificationPolicy> {
+    const docRef = this.collection("notification_policies").doc();
+    const now = FieldValue.serverTimestamp();
+    await docRef.set({
+      ...data,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const doc = await docRef.get();
+    return this.toNotificationPolicy(doc.id, doc.data()!);
+  }
+
+  async updateNotificationPolicy(
+    id: string,
+    data: NotificationPolicyUpdateData
+  ): Promise<NotificationPolicy | null> {
+    const docRef = this.collection("notification_policies").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return null;
+
+    await docRef.update({
+      ...data,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    const updated = await docRef.get();
+    return this.toNotificationPolicy(updated.id, updated.data()!);
+  }
+
+  async deleteNotificationPolicy(id: string): Promise<boolean> {
+    const docRef = this.collection("notification_policies").doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return false;
+    await docRef.delete();
+    return true;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toNotificationPolicy(id: string, data: any): NotificationPolicy {
+    return {
+      id,
+      scope: data.scope ?? "global",
+      courseId: data.courseId ?? null,
+      userId: data.userId ?? null,
+      firstNotifyAfterMin: data.firstNotifyAfterMin ?? 60,
+      repeatIntervalHours: data.repeatIntervalHours ?? 24,
+      maxRepeatDays: data.maxRepeatDays ?? 7,
+      active: data.active ?? true,
+      createdAt: toDate(data.createdAt),
+      updatedAt: toDate(data.updatedAt),
+    };
+  }
+
+  // Auth Error Logs
+  async getAuthErrorLogs(filter?: AuthErrorLogFilter): Promise<AuthErrorLog[]> {
+    let query = this.collection("auth_error_logs").orderBy("occurredAt", "desc");
+
+    if (filter?.email) {
+      query = query.where("email", "==", filter.email);
+    }
+    if (filter?.startDate) {
+      query = query.where("occurredAt", ">=", Timestamp.fromDate(filter.startDate));
+    }
+    if (filter?.endDate) {
+      query = query.where("occurredAt", "<=", Timestamp.fromDate(filter.endDate));
+    }
+
+    const limit = filter?.limit ?? 100;
+    query = query.limit(limit);
+
+    const snapshot = await query.get();
+    return snapshot.docs.map((doc) => this.toAuthErrorLog(doc.id, doc.data()));
+  }
+
+  async createAuthErrorLog(data: Omit<AuthErrorLog, "id">): Promise<AuthErrorLog> {
+    const docRef = this.collection("auth_error_logs").doc();
+    await docRef.set({
+      ...data,
+      occurredAt: Timestamp.fromDate(data.occurredAt),
+    });
+    const doc = await docRef.get();
+    return this.toAuthErrorLog(doc.id, doc.data()!);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toAuthErrorLog(id: string, data: any): AuthErrorLog {
+    return {
+      id,
+      email: data.email,
+      tenantId: data.tenantId,
+      errorType: data.errorType,
+      errorMessage: data.errorMessage,
+      path: data.path,
+      method: data.method,
+      userAgent: data.userAgent ?? null,
+      ipAddress: data.ipAddress ?? null,
+      occurredAt: toDate(data.occurredAt),
+    };
+  }
+
+  // User Settings
+  async getUserSettings(userId: string): Promise<UserSettings | null> {
+    const doc = await this.collection("user_settings").doc(userId).get();
+    if (!doc.exists) return null;
+    return this.toUserSettings(userId, doc.data()!);
+  }
+
+  async upsertUserSettings(userId: string, data: Partial<UserSettings>): Promise<UserSettings> {
+    const docRef = this.collection("user_settings").doc(userId);
+    const doc = await docRef.get();
+
+    if (doc.exists) {
+      await docRef.update({
+        ...data,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    } else {
+      await docRef.set({
+        notificationEnabled: data.notificationEnabled ?? true,
+        timezone: data.timezone ?? "Asia/Tokyo",
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    const updated = await docRef.get();
+    return this.toUserSettings(userId, updated.data()!);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toUserSettings(userId: string, data: any): UserSettings {
+    return {
+      userId,
+      notificationEnabled: data.notificationEnabled ?? true,
+      timezone: data.timezone ?? "Asia/Tokyo",
+      updatedAt: toDate(data.updatedAt),
+    };
+  }
+}
