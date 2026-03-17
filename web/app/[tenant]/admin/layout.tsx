@@ -18,8 +18,8 @@ export default function TenantAdminLayout({
   const pathname = usePathname();
 
   const navItems = [
+    { href: `/${tenantId}/admin`, label: "ダッシュボード", exact: true },
     { href: `/${tenantId}/admin/courses`, label: "講座管理" },
-    { href: `/${tenantId}/admin/lessons`, label: "レッスン管理" },
     { href: `/${tenantId}/admin/users`, label: "受講者管理" },
     { href: `/${tenantId}/admin/allowed-emails`, label: "許可メール管理" },
     { href: `/${tenantId}/admin/analytics`, label: "分析" },
@@ -30,7 +30,9 @@ export default function TenantAdminLayout({
       {/* サブナビゲーション */}
       <nav className="flex gap-4 text-sm border-b pb-2 overflow-x-auto">
         {navItems.map((item) => {
-          const isActive = pathname?.startsWith(item.href);
+          const isActive = item.exact
+            ? pathname === item.href
+            : pathname?.startsWith(item.href);
           return (
             <Link
               key={item.href}

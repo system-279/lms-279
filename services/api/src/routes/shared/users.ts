@@ -15,9 +15,23 @@ const router = Router();
  * 認証ユーザー情報取得
  * GET /auth/me
  */
-router.get("/auth/me", requireUser, (req: Request, res: Response) => {
+router.get("/auth/me", requireUser, async (req: Request, res: Response) => {
+  const tenantId = req.tenantContext?.tenantId;
+  let tenantName: string | undefined;
+
+  if (tenantId && !req.tenantContext?.isDemo) {
+    try {
+      const { getFirestore } = await import("firebase-admin/firestore");
+      const doc = await getFirestore().collection("tenants").doc(tenantId).get();
+      tenantName = doc.exists ? (doc.data()?.name as string) : undefined;
+    } catch {
+      // ignore - tenant name is optional
+    }
+  }
+
   res.json({
     user: req.user,
+    ...(tenantName && { tenantName }),
   });
 });
 

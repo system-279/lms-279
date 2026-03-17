@@ -102,12 +102,12 @@ export default function TenantAdminPage() {
           </p>
         </Link>
         <Link
-          href={`/${tenantId}/admin/lessons`}
+          href={`/${tenantId}/admin/courses`}
           className="rounded-lg border bg-card p-6 hover:bg-accent transition-colors"
         >
           <h2 className="font-semibold">レッスン管理</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            レッスンの作成・編集・並び替え
+            講座を選んでレッスンを管理
           </p>
         </Link>
         <Link
