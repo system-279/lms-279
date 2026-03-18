@@ -508,7 +508,7 @@ function UserProgressTab() {
                               variant={lesson.quizPassed ? "default" : "outline"}
                               className="text-xs"
                             >
-                              クイズ{lesson.quizPassed ? "合格" : "未合格"}
+                              テスト{lesson.quizPassed ? "合格" : "未合格"}
                             </Badge>
                           </div>
                         </TableCell>

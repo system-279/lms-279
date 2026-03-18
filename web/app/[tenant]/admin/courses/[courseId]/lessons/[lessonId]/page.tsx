@@ -145,7 +145,7 @@ function QuizSection({ lessonId }: { lessonId: string }) {
       if (e instanceof Error && e.message.includes("404")) {
         setQuiz(null);
       } else {
-        setQuizError(e instanceof Error ? e.message : "クイズの取得に失敗しました");
+        setQuizError(e instanceof Error ? e.message : "テストの取得に失敗しました");
       }
     } finally {
       setQuizLoading(false);
@@ -228,7 +228,7 @@ function QuizSection({ lessonId }: { lessonId: string }) {
   // ── Delete quiz ───────────────────────────────────────────────────────────
 
   const handleDeleteQuiz = async () => {
-    if (!confirm("クイズを削除しますか？この操作は取り消せません。")) return;
+    if (!confirm("テストを削除しますか？この操作は取り消せません。")) return;
     setDeleteQuizLoading(true);
     setDeleteQuizError(null);
     try {
@@ -379,7 +379,7 @@ function QuizSection({ lessonId }: { lessonId: string }) {
   if (quizLoading) {
     return (
       <section className="rounded-md border p-6 space-y-2">
-        <h2 className="text-lg font-semibold">クイズ</h2>
+        <h2 className="text-lg font-semibold">テスト</h2>
         <p className="text-sm text-muted-foreground">読み込み中...</p>
       </section>
     );
@@ -387,7 +387,7 @@ function QuizSection({ lessonId }: { lessonId: string }) {
 
   return (
     <section className="rounded-md border p-6 space-y-4">
-      <h2 className="text-lg font-semibold">クイズ</h2>
+      <h2 className="text-lg font-semibold">テスト</h2>
 
       {quizError && (
         <div className="rounded-md bg-destructive/10 p-3 text-destructive text-sm">
@@ -399,9 +399,9 @@ function QuizSection({ lessonId }: { lessonId: string }) {
         /* ── No quiz yet ── */
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            このレッスンにはまだクイズが作成されていません。
+            このレッスンにはまだテストが作成されていません。
           </p>
-          <Button onClick={openCreateQuizDialog}>クイズを作成</Button>
+          <Button onClick={openCreateQuizDialog}>テストを作成</Button>
         </div>
       ) : (
         /* ── Quiz exists ── */
@@ -546,7 +546,7 @@ function QuizSection({ lessonId }: { lessonId: string }) {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>
-              {isEditingQuiz ? "クイズ設定を編集" : "クイズを作成"}
+              {isEditingQuiz ? "テスト設定を編集" : "テストを作成"}
             </DialogTitle>
           </DialogHeader>
 
@@ -559,7 +559,7 @@ function QuizSection({ lessonId }: { lessonId: string }) {
                 onChange={(e) =>
                   setQuizForm((p) => ({ ...p, title: e.target.value }))
                 }
-                placeholder="クイズのタイトル"
+                placeholder="テストのタイトル"
               />
             </div>
 
