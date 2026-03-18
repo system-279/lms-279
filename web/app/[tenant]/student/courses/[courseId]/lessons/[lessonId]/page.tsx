@@ -64,7 +64,7 @@ type Analytics = {
 };
 
 // ============================================================
-// クイズ関連の型定義
+// テスト関連の型定義
 // ============================================================
 
 type QuizOption = {
@@ -144,7 +144,7 @@ type AttemptResult = {
 type QuizUIState = "idle" | "taking" | "result";
 
 // ============================================================
-// クイズセクションコンポーネント
+// テストセクションコンポーネント
 // ============================================================
 
 function QuizSection({
@@ -169,7 +169,7 @@ function QuizSection({
   const [quizError, setQuizError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // クイズ情報取得
+  // テスト情報取得
   const fetchQuiz = useCallback(async () => {
     setLoadingQuiz(true);
     setQuizError(null);
@@ -181,7 +181,7 @@ function QuizSection({
       setUserAttemptCount(data.userAttemptCount);
       setAttemptSummaries(data.attemptSummaries);
     } catch (e) {
-      setQuizError(e instanceof Error ? e.message : "クイズ情報の取得に失敗しました");
+      setQuizError(e instanceof Error ? e.message : "テスト情報の取得に失敗しました");
     } finally {
       setLoadingQuiz(false);
     }
@@ -217,7 +217,7 @@ function QuizSection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quizState, activeAttempt]);
 
-  // クイズ開始
+  // テスト開始
   const handleStart = async () => {
     if (!quiz) return;
     setLoadingStart(true);
@@ -232,7 +232,7 @@ function QuizSection({
       setResult(null);
       setQuizState("taking");
     } catch (e) {
-      setQuizError(e instanceof Error ? e.message : "クイズの開始に失敗しました");
+      setQuizError(e instanceof Error ? e.message : "テストの開始に失敗しました");
     } finally {
       setLoadingStart(false);
     }
@@ -280,7 +280,7 @@ function QuizSection({
       // 受験回数などを更新
       await fetchQuiz();
     } catch (e) {
-      setQuizError(e instanceof Error ? e.message : "クイズの提出に失敗しました");
+      setQuizError(e instanceof Error ? e.message : "テストの提出に失敗しました");
     } finally {
       setLoadingSubmit(false);
     }
@@ -305,7 +305,7 @@ function QuizSection({
   if (loadingQuiz) {
     return (
       <div className="rounded-md border p-6">
-        <p className="text-sm text-muted-foreground">クイズを読み込み中...</p>
+        <p className="text-sm text-muted-foreground">テストを読み込み中...</p>
       </div>
     );
   }
@@ -323,7 +323,7 @@ function QuizSection({
   const remainingAttempts = quiz.maxAttempts - userAttemptCount;
 
   // ============================================================
-  // 状態1: クイズ未開始
+  // 状態1: テスト未開始
   // ============================================================
   if (quizState === "idle") {
     return (
@@ -349,7 +349,7 @@ function QuizSection({
             disabled={loadingStart}
             className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loadingStart ? "開始中..." : "クイズを開始"}
+            {loadingStart ? "開始中..." : "テストを開始"}
           </button>
         ) : (
           <p className="text-sm text-muted-foreground">
@@ -390,7 +390,7 @@ function QuizSection({
   }
 
   // ============================================================
-  // 状態2: クイズ受験中
+  // 状態2: テスト受験中
   // ============================================================
   if (quizState === "taking") {
     const totalQuestions = quiz.questions.length;
@@ -489,7 +489,7 @@ function QuizSection({
         {showSubmitDialog && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
             <div className="bg-background rounded-lg border shadow-lg p-6 w-full max-w-sm space-y-4 mx-4">
-              <h3 className="text-base font-semibold">クイズを提出しますか？</h3>
+              <h3 className="text-base font-semibold">テストを提出しますか？</h3>
               {answeredCount < totalQuestions && (
                 <p className="text-sm text-orange-600">
                   {totalQuestions - answeredCount} 問が未回答です。このまま提出しますか？
@@ -688,7 +688,7 @@ export default function StudentLessonDetailPage() {
   const [videoMeta, setVideoMeta] = useState<VideoMeta | null>(null);
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
-  // 動画完了ゲート: 動画完了時にクイズセクションを表示するためのフラグ
+  // 動画完了ゲート: 動画完了時にテストセクションを表示するためのフラグ
   const [videoCompleted, setVideoCompleted] = useState(false);
 
   const [loadingCourse, setLoadingCourse] = useState(true);
@@ -786,7 +786,7 @@ export default function StudentLessonDetailPage() {
     }
   }, [videoMeta, fetchAnalytics]);
 
-  // 動画完了コールバック: analytics再取得 + クイズ表示フラグを立てる
+  // 動画完了コールバック: analytics再取得 + テスト表示フラグを立てる
   const handleVideoComplete = useCallback(async () => {
     await fetchAnalytics();
     setVideoCompleted(true);
@@ -810,7 +810,7 @@ export default function StudentLessonDetailPage() {
     ? Math.round(analytics.coverageRatio * 100)
     : 0;
 
-  // クイズセクションを表示すべきか:
+  // テストセクションを表示すべきか:
   // - 動画なしレッスン: 常に表示
   // - 動画ありレッスン: analytics.isComplete === true または videoCompleted フラグ
   const showQuizSection =
@@ -946,16 +946,16 @@ export default function StudentLessonDetailPage() {
         )}
       </div>
 
-      {/* クイズセクション */}
+      {/* テストセクション */}
       {currentLesson.hasQuiz && (
         showQuizSection ? (
           <QuizSection lessonId={lessonId} authFetch={authFetch} />
         ) : (
           /* 動画未完了ゲートメッセージ */
           <div className="rounded-md border p-6 text-center space-y-2">
-            <p className="text-sm font-medium">クイズに挑戦する</p>
+            <p className="text-sm font-medium">テストに挑戦する</p>
             <p className="text-sm text-muted-foreground">
-              動画を最後まで視聴するとクイズに挑戦できます
+              動画を最後まで視聴するとテストに挑戦できます
             </p>
           </div>
         )

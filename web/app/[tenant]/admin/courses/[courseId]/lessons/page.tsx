@@ -227,7 +227,7 @@ export default function LessonsPage() {
               <TableHead>順序</TableHead>
               <TableHead>タイトル</TableHead>
               <TableHead>動画</TableHead>
-              <TableHead>クイズ</TableHead>
+              <TableHead>テスト</TableHead>
               <TableHead>操作</TableHead>
             </TableRow>
           </TableHeader>

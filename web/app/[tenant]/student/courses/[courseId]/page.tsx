@@ -202,7 +202,7 @@ export default function StudentCourseDetailPage() {
                     <TableHead className="w-12">#</TableHead>
                     <TableHead>タイトル</TableHead>
                     <TableHead>動画</TableHead>
-                    <TableHead>クイズ</TableHead>
+                    <TableHead>テスト</TableHead>
                     <TableHead>進捗</TableHead>
                   </TableRow>
                 </TableHeader>
