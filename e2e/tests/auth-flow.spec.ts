@@ -7,11 +7,11 @@ test.describe("認証フロー", () => {
     await expect(page).toHaveTitle(/.+/);
   });
 
-  test("存在しないテナントへのAPI呼び出しは認証エラーを返す", async ({ request }) => {
+  test("非デモテナントはヘッダなしで401を返す", async ({ request }) => {
+    // devモード: ヘッダなし → req.user未設定 → requireUser → 401
     const res = await request.get(
       "http://localhost:8080/api/v2/nonexistent-tenant/courses"
     );
-    // devモード: ヘッダなし→user未設定→401 or 403
-    expect([401, 403]).toContain(res.status());
+    expect(res.status()).toBe(401);
   });
 });
