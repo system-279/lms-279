@@ -6,6 +6,7 @@
 
 import { Request, Response, NextFunction, ErrorRequestHandler } from "express";
 import { AppError, ErrorCode } from "../utils/errors.js";
+import { logger } from "../utils/logger.js";
 
 /**
  * グローバルエラーハンドラー
@@ -25,7 +26,12 @@ export const errorHandler: ErrorRequestHandler = (
 
   // 通常のErrorの場合は500エラーに変換
   if (err instanceof Error) {
-    console.error("Unhandled error:", err);
+    logger.error(err.message, {
+      "@type": "type.googleapis.com/google.devtools.clouderrorreporting.v1beta1.ReportedErrorEvent",
+      error: err,
+      url: _req.originalUrl,
+      method: _req.method,
+    });
     res.status(500).json({
       error: {
         code: ErrorCode.INTERNAL_ERROR,
@@ -36,7 +42,12 @@ export const errorHandler: ErrorRequestHandler = (
   }
 
   // その他の場合も500エラー
-  console.error("Unknown error:", err);
+  logger.error("Unknown error", {
+    "@type": "type.googleapis.com/google.devtools.clouderrorreporting.v1beta1.ReportedErrorEvent",
+    rawError: String(err),
+    url: _req.originalUrl,
+    method: _req.method,
+  });
   res.status(500).json({
     error: {
       code: ErrorCode.INTERNAL_ERROR,
