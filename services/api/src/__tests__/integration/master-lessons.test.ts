@@ -4,7 +4,6 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import supertest from "supertest";
-import express from "express";
 import { InMemoryDataSource } from "../../datasource/in-memory.js";
 
 let testDS: InMemoryDataSource;
@@ -25,18 +24,7 @@ vi.mock("../../services/course-distributor.js", () => ({
   distributeCourseToTenant: vi.fn(),
 }));
 
-const { masterRouter } = await import("../../routes/super-admin-master.js");
-
-function createApp() {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    req.superAdmin = { email: "super@test.com" };
-    next();
-  });
-  app.use(masterRouter);
-  return app;
-}
+const { createSuperAdminApp } = await import("../helpers/create-super-admin-app.js");
 
 describe("Master Lessons API", () => {
   let request: ReturnType<typeof supertest>;
@@ -44,7 +32,7 @@ describe("Master Lessons API", () => {
 
   beforeEach(async () => {
     testDS = new InMemoryDataSource({ readOnly: false });
-    request = supertest(createApp());
+    request = supertest(createSuperAdminApp());
 
     // テスト用コースを作成
     const created = await request
@@ -79,6 +67,20 @@ describe("Master Lessons API", () => {
       expect(res.body.lesson.title).toBe("新規レッスン");
       expect(res.body.lesson.courseId).toBe(courseId);
       expect(res.body.lesson.order).toBe(0);
+    });
+
+    it("作成後にコースのlessonOrderに追加される", async () => {
+      const lesson1 = await request
+        .post(`/master/courses/${courseId}/lessons`)
+        .send({ title: "レッスン1" });
+      const lesson2 = await request
+        .post(`/master/courses/${courseId}/lessons`)
+        .send({ title: "レッスン2" });
+
+      const courseRes = await request.get(`/master/courses/${courseId}`);
+      expect(courseRes.body.course.lessonOrder).toContain(lesson1.body.lesson.id);
+      expect(courseRes.body.course.lessonOrder).toContain(lesson2.body.lesson.id);
+      expect(courseRes.body.course.lessonOrder.length).toBe(2);
     });
 
     it("titleが空の場合400を返す", async () => {
@@ -126,15 +128,18 @@ describe("Master Lessons API", () => {
   });
 
   describe("DELETE /master/lessons/:id", () => {
-    it("レッスンを削除して204を返す", async () => {
+    it("レッスンを削除して204を返し、コースのlessonOrderからも除去される", async () => {
       const created = await request
         .post(`/master/courses/${courseId}/lessons`)
         .send({ title: "削除テスト" });
       const lessonId = created.body.lesson.id;
 
       const res = await request.delete(`/master/lessons/${lessonId}`);
-
       expect(res.status).toBe(204);
+
+      // コースのlessonOrderからも除去されていること
+      const courseRes = await request.get(`/master/courses/${courseId}`);
+      expect(courseRes.body.course.lessonOrder).not.toContain(lessonId);
     });
 
     it("存在しないIDで404を返す", async () => {

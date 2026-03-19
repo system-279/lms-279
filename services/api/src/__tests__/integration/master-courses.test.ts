@@ -4,7 +4,6 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import supertest from "supertest";
-import express from "express";
 import { InMemoryDataSource } from "../../datasource/in-memory.js";
 
 // テスト用DS（各テストでリセット）
@@ -27,35 +26,26 @@ vi.mock("../../services/course-distributor.js", () => ({
   distributeCourseToTenant: vi.fn(),
 }));
 
-// masterRouter をモック適用後にインポート
-const { masterRouter } = await import("../../routes/super-admin-master.js");
-
-function createApp() {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    req.superAdmin = { email: "super@test.com" };
-    next();
-  });
-  app.use(masterRouter);
-  return app;
-}
+// ヘルパーをモック適用後にインポート
+const { createSuperAdminApp } = await import("../helpers/create-super-admin-app.js");
 
 describe("Master Courses API", () => {
   let request: ReturnType<typeof supertest>;
 
   beforeEach(() => {
     testDS = new InMemoryDataSource({ readOnly: false });
-    request = supertest(createApp());
+    request = supertest(createSuperAdminApp());
   });
 
   describe("GET /master/courses", () => {
     it("マスターコース一覧を取得して200を返す", async () => {
+      // InMemoryDataSource の初期データ（3件）が含まれる
       const res = await request.get("/master/courses");
 
       expect(res.status).toBe(200);
       expect(res.body.courses).toBeDefined();
       expect(Array.isArray(res.body.courses)).toBe(true);
+      expect(res.body.courses.length).toBeGreaterThanOrEqual(3);
     });
 
     it("status=draftでフィルタできる", async () => {
@@ -64,6 +54,7 @@ describe("Master Courses API", () => {
       const res = await request.get("/master/courses?status=draft");
 
       expect(res.status).toBe(200);
+      expect(res.body.courses.length).toBeGreaterThanOrEqual(1);
       res.body.courses.forEach((c: { status: string }) => {
         expect(c.status).toBe("draft");
       });
@@ -151,17 +142,34 @@ describe("Master Courses API", () => {
   });
 
   describe("DELETE /master/courses/:id", () => {
-    it("マスターコースを削除してレスポンスを返す", async () => {
+    it("マスターコースと関連データを削除する", async () => {
+      // コース → レッスン → 動画・クイズを作成
       const created = await request
         .post("/master/courses")
         .send({ name: "削除テスト" });
       const courseId = created.body.course.id;
+
+      const lessonRes = await request
+        .post(`/master/courses/${courseId}/lessons`)
+        .send({ title: "削除レッスン" });
+      const lessonId = lessonRes.body.lesson.id;
+
+      await request
+        .post(`/master/lessons/${lessonId}/video`)
+        .send({ durationSec: 60 });
+      await request
+        .post(`/master/lessons/${lessonId}/quiz`)
+        .send({
+          title: "削除クイズ",
+          questions: [{ id: "q1", text: "Q", type: "single", options: [{ id: "a", text: "A", isCorrect: true }], points: 10 }],
+        });
 
       const res = await request.delete(`/master/courses/${courseId}`);
 
       expect(res.status).toBe(200);
       expect(res.body.message).toContain("削除");
 
+      // コースが削除されていること
       const getRes = await request.get(`/master/courses/${courseId}`);
       expect(getRes.status).toBe(404);
     });

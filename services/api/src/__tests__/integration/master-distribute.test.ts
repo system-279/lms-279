@@ -5,7 +5,6 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import supertest from "supertest";
-import express from "express";
 import { InMemoryDataSource } from "../../datasource/in-memory.js";
 
 let testDS: InMemoryDataSource;
@@ -22,37 +21,29 @@ vi.mock("firebase-admin/firestore", () => ({
   FieldValue: { serverTimestamp: vi.fn() },
 }));
 
+const mockDistribute = vi.fn().mockResolvedValue({
+  tenantId: "tenant-1",
+  courseId: "course-1",
+  masterCourseId: "master-1",
+  status: "success",
+  lessonsCount: 2,
+  videosCount: 1,
+  quizzesCount: 1,
+});
+
 vi.mock("../../services/course-distributor.js", () => ({
-  distributeCourseToTenant: vi.fn().mockResolvedValue({
-    tenantId: "tenant-1",
-    courseId: "course-1",
-    masterCourseId: "master-1",
-    status: "success",
-    lessonsCount: 2,
-    videosCount: 1,
-    quizzesCount: 1,
-  }),
+  distributeCourseToTenant: mockDistribute,
 }));
 
-const { masterRouter } = await import("../../routes/super-admin-master.js");
-
-function createApp() {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    req.superAdmin = { email: "super@test.com" };
-    next();
-  });
-  app.use(masterRouter);
-  return app;
-}
+const { createSuperAdminApp } = await import("../helpers/create-super-admin-app.js");
 
 describe("Master Distribute API", () => {
   let request: ReturnType<typeof supertest>;
 
   beforeEach(() => {
     testDS = new InMemoryDataSource({ readOnly: false });
-    request = supertest(createApp());
+    request = supertest(createSuperAdminApp());
+    mockDistribute.mockClear();
   });
 
   describe("POST /master/distribute", () => {
@@ -66,6 +57,34 @@ describe("Master Distribute API", () => {
       expect(Array.isArray(res.body.results)).toBe(true);
       expect(res.body.results.length).toBe(1);
       expect(res.body.results[0].status).toBe("success");
+
+      // distributeCourseToTenant が正しい引数で呼ばれること
+      expect(mockDistribute).toHaveBeenCalledTimes(1);
+      expect(mockDistribute).toHaveBeenCalledWith(
+        expect.anything(), // db (mocked getFirestore)
+        "course-1",
+        "tenant-1",
+        "super@test.com", // distributedBy = req.superAdmin.email
+      );
+    });
+
+    it("複数コース×複数テナントの直積展開で呼ばれる", async () => {
+      const res = await request
+        .post("/master/distribute")
+        .send({ courseIds: ["c1", "c2"], tenantIds: ["t1", "t2"] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.results.length).toBe(4);
+      expect(mockDistribute).toHaveBeenCalledTimes(4);
+
+      // 4つの組み合わせが全て呼ばれること
+      const calls = mockDistribute.mock.calls.map(
+        (call: unknown[]) => `${call[1]}-${call[2]}`,
+      );
+      expect(calls).toContain("c1-t1");
+      expect(calls).toContain("c1-t2");
+      expect(calls).toContain("c2-t1");
+      expect(calls).toContain("c2-t2");
     });
 
     it("courseIdsが未指定の場合400を返す", async () => {
@@ -75,6 +94,7 @@ describe("Master Distribute API", () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_course_ids");
+      expect(mockDistribute).not.toHaveBeenCalled();
     });
 
     it("tenantIdsが未指定の場合400を返す", async () => {
@@ -84,6 +104,7 @@ describe("Master Distribute API", () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_tenant_ids");
+      expect(mockDistribute).not.toHaveBeenCalled();
     });
   });
 

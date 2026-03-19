@@ -4,7 +4,6 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import supertest from "supertest";
-import express from "express";
 import { InMemoryDataSource } from "../../datasource/in-memory.js";
 
 let testDS: InMemoryDataSource;
@@ -25,18 +24,7 @@ vi.mock("../../services/course-distributor.js", () => ({
   distributeCourseToTenant: vi.fn(),
 }));
 
-const { masterRouter } = await import("../../routes/super-admin-master.js");
-
-function createApp() {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    req.superAdmin = { email: "super@test.com" };
-    next();
-  });
-  app.use(masterRouter);
-  return app;
-}
+const { createSuperAdminApp } = await import("../helpers/create-super-admin-app.js");
 
 describe("Master Media API", () => {
   let request: ReturnType<typeof supertest>;
@@ -45,7 +33,7 @@ describe("Master Media API", () => {
 
   beforeEach(async () => {
     testDS = new InMemoryDataSource({ readOnly: false });
-    request = supertest(createApp());
+    request = supertest(createSuperAdminApp());
 
     const course = await request
       .post("/master/courses")
@@ -73,6 +61,17 @@ describe("Master Media API", () => {
       expect(res.body.video.lessonId).toBe(lessonId);
       expect(res.body.video.courseId).toBe(courseId);
       expect(res.body.video.durationSec).toBe(120);
+    });
+
+    it("動画作成後にレッスンのhasVideoがtrueになる", async () => {
+      await request
+        .post(`/master/lessons/${lessonId}/video`)
+        .send({ durationSec: 60 });
+
+      // レッスン詳細を取得して確認
+      const courseRes = await request.get(`/master/courses/${courseId}`);
+      const lesson = courseRes.body.lessons.find((l: { id: string }) => l.id === lessonId);
+      expect(lesson.hasVideo).toBe(true);
     });
 
     it("存在しないレッスンIDで404を返す", async () => {
@@ -111,27 +110,34 @@ describe("Master Media API", () => {
   });
 
   describe("DELETE /master/videos/:id", () => {
-    it("動画を削除して204を返す", async () => {
+    it("動画を削除して204を返し、レッスンのhasVideoがfalseになる", async () => {
       const created = await request
         .post(`/master/lessons/${lessonId}/video`)
         .send({});
       const videoId = created.body.video.id;
 
       const res = await request.delete(`/master/videos/${videoId}`);
-
       expect(res.status).toBe(204);
+
+      // hasVideo が false に戻っていること
+      const courseRes = await request.get(`/master/courses/${courseId}`);
+      const lesson = courseRes.body.lessons.find((l: { id: string }) => l.id === lessonId);
+      expect(lesson.hasVideo).toBe(false);
     });
   });
 
   describe("DELETE /master/lessons/:lessonId/video", () => {
-    it("レッスンIDから動画を削除して204を返す", async () => {
+    it("レッスンIDから動画を削除して204を返し、hasVideoがfalseになる", async () => {
       await request
         .post(`/master/lessons/${lessonId}/video`)
         .send({});
 
       const res = await request.delete(`/master/lessons/${lessonId}/video`);
-
       expect(res.status).toBe(204);
+
+      const courseRes = await request.get(`/master/courses/${courseId}`);
+      const lesson = courseRes.body.lessons.find((l: { id: string }) => l.id === lessonId);
+      expect(lesson.hasVideo).toBe(false);
     });
   });
 
@@ -163,6 +169,16 @@ describe("Master Media API", () => {
       expect(res.body.quiz.title).toBe("テストクイズ");
       expect(res.body.quiz.lessonId).toBe(lessonId);
       expect(res.body.quiz.questions).toHaveLength(1);
+    });
+
+    it("クイズ作成後にレッスンのhasQuizがtrueになる", async () => {
+      await request
+        .post(`/master/lessons/${lessonId}/quiz`)
+        .send({ title: "テストクイズ", questions: sampleQuestions });
+
+      const courseRes = await request.get(`/master/courses/${courseId}`);
+      const lesson = courseRes.body.lessons.find((l: { id: string }) => l.id === lessonId);
+      expect(lesson.hasQuiz).toBe(true);
     });
 
     it("questions付きで正しく作成できる", async () => {
@@ -217,15 +233,19 @@ describe("Master Media API", () => {
   });
 
   describe("DELETE /master/quizzes/:id", () => {
-    it("クイズを削除して204を返す", async () => {
+    it("クイズを削除して204を返し、レッスンのhasQuizがfalseになる", async () => {
       const created = await request
         .post(`/master/lessons/${lessonId}/quiz`)
         .send({ title: "削除クイズ", questions: sampleQuestions });
       const quizId = created.body.quiz.id;
 
       const res = await request.delete(`/master/quizzes/${quizId}`);
-
       expect(res.status).toBe(204);
+
+      // hasQuiz が false に戻っていること
+      const courseRes = await request.get(`/master/courses/${courseId}`);
+      const lesson = courseRes.body.lessons.find((l: { id: string }) => l.id === lessonId);
+      expect(lesson.hasQuiz).toBe(false);
     });
 
     it("存在しないIDで404を返す", async () => {
@@ -237,14 +257,17 @@ describe("Master Media API", () => {
   });
 
   describe("DELETE /master/lessons/:lessonId/quiz", () => {
-    it("レッスンIDからクイズを削除して204を返す", async () => {
+    it("レッスンIDからクイズを削除して204を返し、hasQuizがfalseになる", async () => {
       await request
         .post(`/master/lessons/${lessonId}/quiz`)
         .send({ title: "削除クイズ2", questions: sampleQuestions });
 
       const res = await request.delete(`/master/lessons/${lessonId}/quiz`);
-
       expect(res.status).toBe(204);
+
+      const courseRes = await request.get(`/master/courses/${courseId}`);
+      const lesson = courseRes.body.lessons.find((l: { id: string }) => l.id === lessonId);
+      expect(lesson.hasQuiz).toBe(false);
     });
   });
 });
