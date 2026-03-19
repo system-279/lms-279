@@ -5,6 +5,7 @@
 
 import { Router, Request, Response } from "express";
 import { requireUser, requireAdmin } from "../../middleware/auth.js";
+import { privateCache } from "../../middleware/cache-control.js";
 import type { Course, CourseStatus } from "../../types/entities.js";
 
 const VALID_STATUSES: CourseStatus[] = ["draft", "published", "archived"];
@@ -219,7 +220,7 @@ router.patch("/admin/courses/:id/archive", requireAdmin, async (req: Request, re
  * GET /courses
  * status=published のみ返す。自分のcourse_progressを付与。
  */
-router.get("/courses", requireUser, async (req: Request, res: Response) => {
+router.get("/courses", requireUser, privateCache(60), async (req: Request, res: Response) => {
   const ds = req.dataSource!;
   const userId = req.user!.id;
 

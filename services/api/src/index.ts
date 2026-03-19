@@ -106,7 +106,7 @@ app.use(
 app.use(dataSourceErrorHandler);
 
 const port = Number(process.env.PORT || 8080);
-app.listen(port, () => {
+const server = app.listen(port, () => {
   logger.info("LMS API service started", {
     port,
     routes: [
@@ -116,6 +116,15 @@ app.listen(port, () => {
       "/api/v2/:tenant/*",
       ...(DEMO_ENABLED ? ["/api/v2/demo/*"] : []),
     ],
+  });
+});
+
+// グレースフルシャットダウン
+process.on("SIGTERM", () => {
+  logger.info("SIGTERM received, shutting down gracefully");
+  server.close(() => {
+    logger.info("Server closed");
+    process.exit(0);
   });
 });
 
