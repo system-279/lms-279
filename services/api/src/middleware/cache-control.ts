@@ -12,6 +12,7 @@ import { RequestHandler } from "express";
 export function privateCache(maxAge: number): RequestHandler {
   return (_req, res, next) => {
     res.set("Cache-Control", `private, max-age=${maxAge}`);
+    res.set("Vary", "Authorization, Cookie");
     next();
   };
 }

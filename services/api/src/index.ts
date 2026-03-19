@@ -10,6 +10,7 @@ import {
   dataSourceErrorHandler,
 } from "./middleware/tenant.js";
 import { globalLimiter, authLimiter } from "./middleware/rate-limiter.js";
+import { errorHandler, notFoundHandler } from "./middleware/error-handler.js";
 import { createSharedRouter } from "./routes/shared/index.js";
 import { tenantsRouter } from "./routes/tenants.js";
 import { superAdminRouter } from "./routes/super-admin.js";
@@ -42,24 +43,15 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// レート制限
-app.use(globalLimiter);
-
-// リクエストログ
-app.use((req, _res, next) => {
-  logger.info(`${req.method} ${req.url}`, { method: req.method, url: req.url });
-  next();
-});
-
 // デモモード設定
 const DEMO_ENABLED = process.env.DEMO_ENABLED === "true";
 
-// ヘルスチェック（認証不要）
+// ヘルスチェック（認証不要・レート制限対象外）
 app.get(["/health", "/healthz", "/api/health"], (_req, res) => {
   res.json({ status: "ok" });
 });
 
-// Readiness チェック（Firestore接続 + メモリ使用量）
+// Readiness チェック（Firestore接続 + メモリ使用量、レート制限対象外）
 app.get("/health/ready", async (_req, res) => {
   const checks: Record<string, unknown> = {};
   let healthy = true;
@@ -85,6 +77,15 @@ app.get("/health/ready", async (_req, res) => {
   res.status(healthy ? 200 : 503).json({ status: healthy ? "ok" : "degraded", checks });
 });
 
+// レート制限（ヘルスチェックの後に配置し、プローブを除外）
+app.use(globalLimiter);
+
+// リクエストログ
+app.use((req, _res, next) => {
+  logger.info(`${req.method} ${req.url}`, { method: req.method, url: req.url });
+  next();
+});
+
 // ========================================
 // ルーターのマウント
 // ========================================
@@ -105,8 +106,10 @@ app.use(
   createSharedRouter()
 );
 
-// DataSourceエラーハンドラ
+// エラーハンドラ（順序重要: DataSource → 404 → グローバル）
 app.use(dataSourceErrorHandler);
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 const port = Number(process.env.PORT || 8080);
 const server = app.listen(port, () => {
