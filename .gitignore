@@ -34,8 +34,8 @@ sa-key.json
 .DS_Store
 Thumbs.db
 
-# Screenshots
-*.png
+# Screenshots (root only, not public assets)
+/*.png
 
 # Logs
 *.log
