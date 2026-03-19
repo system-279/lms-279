@@ -11,6 +11,7 @@ next-env.d.ts
 .env
 .env.local
 .env.*.local
+.envrc
 
 # Service account keys
 keys/
@@ -32,6 +33,9 @@ sa-key.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Screenshots
+*.png
 
 # Logs
 *.log
