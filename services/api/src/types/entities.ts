@@ -65,6 +65,8 @@ export interface Course {
   lessonOrder: string[];
   passThreshold: number;
   createdBy: string;
+  sourceMasterCourseId?: string;
+  copiedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -18,6 +18,7 @@ import {
   removeSuperAdmin,
 } from "../middleware/super-admin.js";
 import type { TenantMetadata, TenantStatus } from "../types/tenant.js";
+import { masterRouter } from "./super-admin-master.js";
 
 const router = Router();
 
@@ -26,6 +27,9 @@ const VALID_STATUSES: TenantStatus[] = ["active", "suspended"];
 
 // 全ルートにスーパー管理者認証を適用
 router.use(superAdminAuthMiddleware);
+
+// マスターコンテンツ管理ルート
+router.use(masterRouter);
 
 /**
  * テナント一覧のレスポンス型

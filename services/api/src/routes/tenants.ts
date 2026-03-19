@@ -31,6 +31,7 @@ const RESERVED_TENANT_IDS = new Set([
   "favicon",
   "robots",
   "sitemap",
+  "_master",
 ]);
 
 // ========================================

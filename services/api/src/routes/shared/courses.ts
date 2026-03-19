@@ -5,9 +5,25 @@
 
 import { Router, Request, Response } from "express";
 import { requireUser, requireAdmin } from "../../middleware/auth.js";
-import type { CourseStatus } from "../../types/entities.js";
+import type { Course, CourseStatus } from "../../types/entities.js";
 
 const VALID_STATUSES: CourseStatus[] = ["draft", "published", "archived"];
+
+export function serializeCourse(course: Course) {
+  return {
+    id: course.id,
+    name: course.name,
+    description: course.description,
+    status: course.status,
+    lessonOrder: course.lessonOrder,
+    passThreshold: course.passThreshold,
+    createdBy: course.createdBy,
+    ...(course.sourceMasterCourseId && { sourceMasterCourseId: course.sourceMasterCourseId }),
+    ...(course.copiedAt && { copiedAt: course.copiedAt.toISOString() }),
+    createdAt: course.createdAt.toISOString(),
+    updatedAt: course.updatedAt.toISOString(),
+  };
+}
 
 const router = Router();
 
@@ -35,17 +51,7 @@ router.get("/admin/courses", requireAdmin, async (req: Request, res: Response) =
   );
 
   res.json({
-    courses: courses.map((course) => ({
-      id: course.id,
-      name: course.name,
-      description: course.description,
-      status: course.status,
-      lessonOrder: course.lessonOrder,
-      passThreshold: course.passThreshold,
-      createdBy: course.createdBy,
-      createdAt: course.createdAt.toISOString(),
-      updatedAt: course.updatedAt.toISOString(),
-    })),
+    courses: courses.map(serializeCourse),
   });
 });
 
@@ -80,19 +86,7 @@ router.post("/admin/courses", requireAdmin, async (req: Request, res: Response) 
     createdBy: req.user!.id,
   });
 
-  res.status(201).json({
-    course: {
-      id: course.id,
-      name: course.name,
-      description: course.description,
-      status: course.status,
-      lessonOrder: course.lessonOrder,
-      passThreshold: course.passThreshold,
-      createdBy: course.createdBy,
-      createdAt: course.createdAt.toISOString(),
-      updatedAt: course.updatedAt.toISOString(),
-    },
-  });
+  res.status(201).json({ course: serializeCourse(course) });
 });
 
 /**
@@ -109,19 +103,7 @@ router.get("/admin/courses/:id", requireAdmin, async (req: Request, res: Respons
     return;
   }
 
-  res.json({
-    course: {
-      id: course.id,
-      name: course.name,
-      description: course.description,
-      status: course.status,
-      lessonOrder: course.lessonOrder,
-      passThreshold: course.passThreshold,
-      createdBy: course.createdBy,
-      createdAt: course.createdAt.toISOString(),
-      updatedAt: course.updatedAt.toISOString(),
-    },
-  });
+  res.json({ course: serializeCourse(course) });
 });
 
 /**
@@ -145,19 +127,7 @@ router.patch("/admin/courses/:id", requireAdmin, async (req: Request, res: Respo
     ...(passThreshold !== undefined && { passThreshold }),
   });
 
-  res.json({
-    course: {
-      id: course!.id,
-      name: course!.name,
-      description: course!.description,
-      status: course!.status,
-      lessonOrder: course!.lessonOrder,
-      passThreshold: course!.passThreshold,
-      createdBy: course!.createdBy,
-      createdAt: course!.createdAt.toISOString(),
-      updatedAt: course!.updatedAt.toISOString(),
-    },
-  });
+  res.json({ course: serializeCourse(course!) });
 });
 
 /**
@@ -213,19 +183,7 @@ router.patch("/admin/courses/:id/publish", requireAdmin, async (req: Request, re
 
   const course = await ds.updateCourse(id, { status: "published" });
 
-  res.json({
-    course: {
-      id: course!.id,
-      name: course!.name,
-      description: course!.description,
-      status: course!.status,
-      lessonOrder: course!.lessonOrder,
-      passThreshold: course!.passThreshold,
-      createdBy: course!.createdBy,
-      createdAt: course!.createdAt.toISOString(),
-      updatedAt: course!.updatedAt.toISOString(),
-    },
-  });
+  res.json({ course: serializeCourse(course!) });
 });
 
 /**
@@ -249,19 +207,7 @@ router.patch("/admin/courses/:id/archive", requireAdmin, async (req: Request, re
 
   const course = await ds.updateCourse(id, { status: "archived" });
 
-  res.json({
-    course: {
-      id: course!.id,
-      name: course!.name,
-      description: course!.description,
-      status: course!.status,
-      lessonOrder: course!.lessonOrder,
-      passThreshold: course!.passThreshold,
-      createdBy: course!.createdBy,
-      createdAt: course!.createdAt.toISOString(),
-      updatedAt: course!.updatedAt.toISOString(),
-    },
-  });
+  res.json({ course: serializeCourse(course!) });
 });
 
 // ============================================================
