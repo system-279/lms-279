@@ -46,6 +46,22 @@ app.use(express.json());
 // デモモード設定
 const DEMO_ENABLED = process.env.DEMO_ENABLED === "true";
 
+// GCP認証検出（プロセス起動時に1回だけ評価）
+const HAS_GCP_CREDENTIALS = !!(
+  process.env.FIRESTORE_EMULATOR_HOST ||
+  process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+  process.env.K_SERVICE // Cloud Run上で自動提供される
+);
+
+const FIRESTORE_PROBE_TIMEOUT_MS = 5_000;
+
+// Readiness チェックの型定義
+type FirestoreStatus = "ok" | "error" | "skipped";
+interface HealthChecks {
+  firestore: FirestoreStatus;
+  memory: { heapUsedMB: number; heapTotalMB: number; rssMB: number };
+}
+
 // ヘルスチェック（認証不要・レート制限対象外）
 app.get(["/health", "/healthz", "/api/health"], (_req, res) => {
   res.json({ status: "ok" });
@@ -53,39 +69,37 @@ app.get(["/health", "/healthz", "/api/health"], (_req, res) => {
 
 // Readiness チェック（Firestore接続 + メモリ使用量、レート制限対象外）
 app.get("/health/ready", async (_req, res) => {
-  const checks: Record<string, unknown> = {};
-  let healthy = true;
+  let firestoreStatus: FirestoreStatus = "skipped";
 
-  // Firestore接続確認（GCP認証がない環境ではスキップ）
-  const hasGcpCredentials = !!(
-    process.env.FIRESTORE_EMULATOR_HOST ||
-    process.env.GOOGLE_APPLICATION_CREDENTIALS ||
-    process.env.K_SERVICE // Cloud Run上で自動提供される
-  );
-  if (hasGcpCredentials) {
+  if (HAS_GCP_CREDENTIALS) {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
       const db = getFirestore();
       await Promise.race([
-        db.listCollections(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000)),
+        db.doc("_health/probe").get(),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error("timeout")), FIRESTORE_PROBE_TIMEOUT_MS);
+        }),
       ]);
-      checks.firestore = "ok";
+      firestoreStatus = "ok";
     } catch {
-      checks.firestore = "error";
-      healthy = false;
+      firestoreStatus = "error";
+    } finally {
+      clearTimeout(timeoutId);
     }
-  } else {
-    checks.firestore = "skipped";
   }
 
-  // メモリ使用量
   const mem = process.memoryUsage();
-  checks.memory = {
-    heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),
-    heapTotalMB: Math.round(mem.heapTotal / 1024 / 1024),
-    rssMB: Math.round(mem.rss / 1024 / 1024),
+  const checks: HealthChecks = {
+    firestore: firestoreStatus,
+    memory: {
+      heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),
+      heapTotalMB: Math.round(mem.heapTotal / 1024 / 1024),
+      rssMB: Math.round(mem.rss / 1024 / 1024),
+    },
   };
 
+  const healthy = firestoreStatus !== "error";
   res.status(healthy ? 200 : 503).json({ status: healthy ? "ok" : "degraded", checks });
 });
 

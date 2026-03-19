@@ -34,23 +34,14 @@ describe("Health endpoints", () => {
   });
 
   describe("GET /health/ready", () => {
-    it("checksオブジェクトとmemory情報を返す", async () => {
-      const res = await request.get("/health/ready");
-      // GCP認証なし環境では200（firestoreはskipped）
-      expect([200, 503]).toContain(res.status);
-      expect(res.body.checks).toBeDefined();
-      expect(res.body.checks.memory).toBeDefined();
-      expect(typeof res.body.checks.memory.heapUsedMB).toBe("number");
-      expect(typeof res.body.checks.memory.heapTotalMB).toBe("number");
-      expect(typeof res.body.checks.memory.rssMB).toBe("number");
-    });
-
-    it("GCP認証なし環境ではfirestore=skippedを返す", async () => {
-      // テスト環境ではGCP認証環境変数なし
+    it("GCP認証なし環境では200・firestore=skipped・memory情報を返す", async () => {
       const res = await request.get("/health/ready");
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("ok");
       expect(res.body.checks.firestore).toBe("skipped");
+      expect(typeof res.body.checks.memory.heapUsedMB).toBe("number");
+      expect(typeof res.body.checks.memory.heapTotalMB).toBe("number");
+      expect(typeof res.body.checks.memory.rssMB).toBe("number");
     });
   });
 });
