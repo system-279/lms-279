@@ -99,3 +99,190 @@
 | GET | `/admin/analytics/videos/:videoId/stats` | 動画視聴統計 |
 | GET | `/admin/analytics/quizzes/:quizId/stats` | クイズ統計 |
 | GET | `/admin/analytics/suspicious-viewing` | 不審視聴一覧 |
+
+### マスターコンテンツ管理（Super Admin）
+
+ベースURL: `/api/v2/super/`
+
+#### コースCRUD
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/master/courses` | マスターコース一覧 |
+| POST | `/master/courses` | マスターコース作成 |
+| GET | `/master/courses/:id` | マスターコース詳細+レッスン一覧 |
+| PATCH | `/master/courses/:id` | マスターコース更新 |
+| DELETE | `/master/courses/:id` | マスターコース削除（配下含む） |
+
+```json
+// POST /master/courses リクエスト
+{ "name": "基礎研修コース", "description": "新入社員向け", "passThreshold": 80 }
+
+// レスポンス 201
+{
+  "course": {
+    "id": "abc123",
+    "name": "基礎研修コース",
+    "description": "新入社員向け",
+    "status": "draft",
+    "lessonOrder": [],
+    "passThreshold": 80,
+    "createdBy": "admin@example.com",
+    "createdAt": "2026-03-19T00:00:00.000Z",
+    "updatedAt": "2026-03-19T00:00:00.000Z"
+  }
+}
+```
+
+#### レッスンCRUD
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/master/courses/:courseId/lessons` | レッスン一覧 |
+| POST | `/master/courses/:courseId/lessons` | レッスン作成 |
+| PATCH | `/master/lessons/:id` | レッスン更新 |
+| DELETE | `/master/lessons/:id` | レッスン削除（動画・クイズ含む） |
+
+```json
+// POST /master/courses/:courseId/lessons リクエスト
+{ "title": "第1回 基本操作" }
+
+// レスポンス 201
+{
+  "lesson": {
+    "id": "les123",
+    "courseId": "abc123",
+    "title": "第1回 基本操作",
+    "order": 0,
+    "hasVideo": false,
+    "hasQuiz": false,
+    "videoUnlocksPrior": false,
+    "createdAt": "2026-03-19T00:00:00.000Z",
+    "updatedAt": "2026-03-19T00:00:00.000Z"
+  }
+}
+```
+
+#### 動画CRUD
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| POST | `/master/lessons/:lessonId/video` | 動画作成/置換 |
+| PATCH | `/master/videos/:id` | 動画更新 |
+| DELETE | `/master/videos/:id` | 動画削除（IDで） |
+| DELETE | `/master/lessons/:lessonId/video` | 動画削除（レッスンIDで） |
+
+```json
+// POST /master/lessons/:lessonId/video リクエスト
+{ "sourceType": "gcs", "gcsPath": "videos/intro.mp4", "durationSec": 300 }
+
+// レスポンス 201
+{
+  "video": {
+    "id": "vid123",
+    "lessonId": "les123",
+    "courseId": "abc123",
+    "sourceType": "gcs",
+    "gcsPath": "videos/intro.mp4",
+    "durationSec": 300,
+    "requiredWatchRatio": 0.95,
+    "speedLock": true,
+    "createdAt": "2026-03-19T00:00:00.000Z",
+    "updatedAt": "2026-03-19T00:00:00.000Z"
+  }
+}
+```
+
+#### クイズCRUD
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| POST | `/master/lessons/:lessonId/quiz` | クイズ作成/置換 |
+| PATCH | `/master/quizzes/:id` | クイズ更新 |
+| DELETE | `/master/quizzes/:id` | クイズ削除（IDで） |
+| DELETE | `/master/lessons/:lessonId/quiz` | クイズ削除（レッスンIDで） |
+
+```json
+// POST /master/lessons/:lessonId/quiz リクエスト
+{
+  "title": "確認テスト",
+  "questions": [{
+    "id": "q1", "text": "1+1=?", "type": "single",
+    "options": [
+      { "id": "o1", "text": "2", "isCorrect": true },
+      { "id": "o2", "text": "3", "isCorrect": false }
+    ],
+    "points": 1, "explanation": "1+1=2"
+  }]
+}
+
+// レスポンス 201
+{ "quiz": { "id": "qz123", "lessonId": "les123", "courseId": "abc123", "title": "確認テスト", ... } }
+```
+
+#### 配信
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| POST | `/master/distribute` | コースをテナントに配信 |
+| GET | `/master/courses/:id/distributions` | 配信状況確認 |
+
+```json
+// POST /master/distribute リクエスト
+{ "courseIds": ["abc123"], "tenantIds": ["tenant1", "tenant2"] }
+
+// レスポンス 200
+{
+  "results": [
+    {
+      "tenantId": "tenant1",
+      "courseId": "new-course-id-1",
+      "masterCourseId": "abc123",
+      "status": "success",
+      "lessonsCount": 5,
+      "videosCount": 3,
+      "quizzesCount": 2
+    },
+    {
+      "tenantId": "tenant2",
+      "courseId": "existing-id",
+      "masterCourseId": "abc123",
+      "status": "skipped",
+      "reason": "already distributed",
+      "lessonsCount": 0,
+      "videosCount": 0,
+      "quizzesCount": 0
+    }
+  ]
+}
+
+// GET /master/courses/:id/distributions レスポンス
+{
+  "distributions": [
+    {
+      "tenantId": "tenant1",
+      "tenantName": "テスト組織",
+      "courseId": "new-course-id-1",
+      "courseName": "基礎研修コース",
+      "status": "draft",
+      "copiedAt": "2026-03-19T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+#### 配信済みコースの追加フィールド
+
+テナントAPIの講座レスポンスに、マスターから配信されたコースの場合のみ追加されるフィールド:
+
+```json
+{
+  "course": {
+    "id": "new-course-id-1",
+    "name": "基礎研修コース",
+    "sourceMasterCourseId": "abc123",
+    "copiedAt": "2026-03-19T00:00:00.000Z",
+    ...
+  }
+}
+```
