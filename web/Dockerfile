@@ -47,8 +47,8 @@ RUN if [ -d "standalone-temp/web" ]; then \
 # Copy static files to .next/static (required for standalone)
 COPY --from=builder /app/.next/static ./.next/static
 
-# Copy public directory if it exists (optional)
-RUN mkdir -p ./public
+# Copy public directory from builder (screenshots, etc.)
+COPY --from=builder /app/public ./public
 
 EXPOSE 3000
 
