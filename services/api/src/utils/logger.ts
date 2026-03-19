@@ -17,9 +17,21 @@ export const LogLevel = {
 export type LogLevelType = (typeof LogLevel)[keyof typeof LogLevel];
 
 /**
+ * Cloud Logging severity マッピング
+ * https://cloud.google.com/logging/docs/reference/v2/rest/v2/LogEntry#LogSeverity
+ */
+const severityMap: Record<LogLevelType, string> = {
+  debug: "DEBUG",
+  info: "INFO",
+  warn: "WARNING",
+  error: "ERROR",
+};
+
+/**
  * ログエントリの基本構造
  */
 interface LogEntry {
+  severity: string;
   timestamp: string;
   level: LogLevelType;
   message: string;
@@ -68,6 +80,7 @@ function createLogEntry(
   metadata?: LogMetadata
 ): LogEntry {
   const entry: LogEntry = {
+    severity: severityMap[level],
     timestamp: new Date().toISOString(),
     level,
     message,

@@ -13,12 +13,14 @@ import { globalLimiter, authLimiter } from "./middleware/rate-limiter.js";
 import { createSharedRouter } from "./routes/shared/index.js";
 import { tenantsRouter } from "./routes/tenants.js";
 import { superAdminRouter } from "./routes/super-admin.js";
+import { logger } from "./utils/logger.js";
+import { getFirestore } from "firebase-admin/firestore";
 
 // Firebase Admin初期化（エミュレータ対応）
 const projectId = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT || "lms-279";
 if (getApps().length === 0) {
   initializeApp({ projectId });
-  console.log(`Firebase Admin initialized with projectId: ${projectId}`);
+  logger.info("Firebase Admin initialized", { projectId });
 }
 
 const app = express();
@@ -42,7 +44,7 @@ app.use(globalLimiter);
 
 // リクエストログ
 app.use((req, _res, next) => {
-  console.log(`[${req.method}] ${req.url}`);
+  logger.info(`${req.method} ${req.url}`, { method: req.method, url: req.url });
   next();
 });
 
@@ -52,6 +54,32 @@ const DEMO_ENABLED = process.env.DEMO_ENABLED === "true";
 // ヘルスチェック（認証不要）
 app.get(["/health", "/healthz", "/api/health"], (_req, res) => {
   res.json({ status: "ok" });
+});
+
+// Readiness チェック（Firestore接続 + メモリ使用量）
+app.get("/health/ready", async (_req, res) => {
+  const checks: Record<string, unknown> = {};
+  let healthy = true;
+
+  // Firestore接続確認
+  try {
+    const db = getFirestore();
+    await db.listCollections();
+    checks.firestore = "ok";
+  } catch {
+    checks.firestore = "error";
+    healthy = false;
+  }
+
+  // メモリ使用量
+  const mem = process.memoryUsage();
+  checks.memory = {
+    heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),
+    heapTotalMB: Math.round(mem.heapTotal / 1024 / 1024),
+    rssMB: Math.round(mem.rss / 1024 / 1024),
+  };
+
+  res.status(healthy ? 200 : 503).json({ status: healthy ? "ok" : "degraded", checks });
 });
 
 // ========================================
@@ -79,15 +107,16 @@ app.use(dataSourceErrorHandler);
 
 const port = Number(process.env.PORT || 8080);
 app.listen(port, () => {
-  console.log(`LMS API service listening on :${port}`);
-  console.log("Routes:");
-  console.log("  - /health, /healthz, /api/health (health check)");
-  console.log("  - /api/v2/tenants (tenant registration)");
-  console.log("  - /api/v2/super/* (super admin API)");
-  console.log("  - /api/v2/:tenant/* (tenant-based API)");
-  if (DEMO_ENABLED) {
-    console.log("  - /api/v2/demo/* (demo mode)");
-  }
+  logger.info("LMS API service started", {
+    port,
+    routes: [
+      "/health, /healthz, /api/health",
+      "/api/v2/tenants",
+      "/api/v2/super/*",
+      "/api/v2/:tenant/*",
+      ...(DEMO_ENABLED ? ["/api/v2/demo/*"] : []),
+    ],
+  });
 });
 
 export default app;
