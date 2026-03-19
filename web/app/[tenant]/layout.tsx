@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { CircleHelp } from "lucide-react";
 import { TenantProvider, useTenant } from "@/lib/tenant-context";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { AuthFetchProvider, useAuthFetch } from "@/lib/auth-fetch-context";
@@ -138,6 +139,15 @@ function TenantLayoutInner({ children }: { children: React.ReactNode }) {
             </span>
           )}
           <TenantNav isSuperAdminAccess={isSuperAdminAccess} />
+          <div className="ml-auto">
+            <Link
+              href="/help"
+              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition"
+            >
+              <CircleHelp className="size-4" />
+              <span className="hidden sm:inline">ヘルプ</span>
+            </Link>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-7xl p-4">{children}</main>
