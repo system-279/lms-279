@@ -25,6 +25,9 @@ if (getApps().length === 0) {
 
 const app = express();
 
+// Cloud Run等リバースプロキシ経由時にクライアントIPを正しく取得
+app.set("trust proxy", 1);
+
 // セキュリティヘッダ（Helmet）
 app.use(helmet());
 
