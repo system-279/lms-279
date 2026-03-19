@@ -12,6 +12,11 @@ next-env.d.ts
 .env.local
 .env.*.local
 
+# Service account keys
+keys/
+*.key.json
+sa-key.json
+
 # GitHub CLI credentials (project-specific)
 .gh/
 

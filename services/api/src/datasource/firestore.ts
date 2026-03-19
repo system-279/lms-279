@@ -3,7 +3,7 @@
  * 本番用のFirestoreデータソース実装
  */
 
-import { Firestore, FieldValue, Timestamp } from "@google-cloud/firestore";
+import { Firestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import type {
   DataSource,
   CourseFilter,

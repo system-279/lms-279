@@ -7,7 +7,7 @@ import {
   Firestore,
   FieldValue,
   type DocumentReference,
-} from "@google-cloud/firestore";
+} from "firebase-admin/firestore";
 import { FirestoreDataSource } from "../datasource/firestore.js";
 import type { Course, Video, Quiz } from "../types/entities.js";
 
