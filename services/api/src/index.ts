@@ -82,8 +82,9 @@ app.get("/health/ready", async (_req, res) => {
         }),
       ]);
       firestoreStatus = "ok";
-    } catch {
+    } catch (err) {
       firestoreStatus = "error";
+      logger.warn("Firestore health check failed", { error: String(err) });
     } finally {
       clearTimeout(timeoutId);
     }
