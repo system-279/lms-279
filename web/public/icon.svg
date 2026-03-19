@@ -7,14 +7,27 @@
   </defs>
   <!-- Rounded square background -->
   <rect width="512" height="512" rx="96" ry="96" fill="url(#bg)"/>
-  <!-- "279" text -->
-  <text x="256" y="290" text-anchor="middle" dominant-baseline="central"
+  <!-- Open book icon -->
+  <g transform="translate(256, 180)" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Left page -->
+    <path d="M -8 -50 C -8 -50 -80 -60 -120 -40 L -120 70 C -80 50 -8 60 -8 60" fill="rgba(255,255,255,0.15)"/>
+    <!-- Right page -->
+    <path d="M 8 -50 C 8 -50 80 -60 120 -40 L 120 70 C 80 50 8 60 8 60" fill="rgba(255,255,255,0.15)"/>
+    <!-- Spine -->
+    <line x1="0" y1="-50" x2="0" y2="60"/>
+    <!-- Text lines on left page -->
+    <line x1="-90" y1="-15" x2="-30" y2="-15" stroke-width="5" opacity="0.5"/>
+    <line x1="-85" y1="5" x2="-35" y2="5" stroke-width="5" opacity="0.5"/>
+    <line x1="-80" y1="25" x2="-40" y2="25" stroke-width="5" opacity="0.5"/>
+    <!-- Text lines on right page -->
+    <line x1="30" y1="-15" x2="90" y2="-15" stroke-width="5" opacity="0.5"/>
+    <line x1="35" y1="5" x2="85" y2="5" stroke-width="5" opacity="0.5"/>
+    <line x1="40" y1="25" x2="80" y2="25" stroke-width="5" opacity="0.5"/>
+  </g>
+  <!-- "LMS" text -->
+  <text x="256" y="380" text-anchor="middle" dominant-baseline="central"
         font-family="'Helvetica Neue',Arial,sans-serif" font-weight="800"
-        font-size="220" fill="#ffffff" letter-spacing="-8">
-    279
+        font-size="120" fill="#ffffff" letter-spacing="8">
+    LMS
   </text>
-  <!-- Connecting hands accent line -->
-  <path d="M 100 380 Q 180 350 256 370 Q 332 390 412 360"
-        stroke="#ffffff" stroke-width="8" fill="none" opacity="0.6"
-        stroke-linecap="round"/>
 </svg>
