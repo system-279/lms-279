@@ -56,17 +56,26 @@ app.get("/health/ready", async (_req, res) => {
   const checks: Record<string, unknown> = {};
   let healthy = true;
 
-  // Firestore接続確認（タイムアウト5秒）
-  try {
-    const db = getFirestore();
-    await Promise.race([
-      db.listCollections(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000)),
-    ]);
-    checks.firestore = "ok";
-  } catch {
-    checks.firestore = "error";
-    healthy = false;
+  // Firestore接続確認（GCP認証がない環境ではスキップ）
+  const hasGcpCredentials = !!(
+    process.env.FIRESTORE_EMULATOR_HOST ||
+    process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+    process.env.K_SERVICE // Cloud Run上で自動提供される
+  );
+  if (hasGcpCredentials) {
+    try {
+      const db = getFirestore();
+      await Promise.race([
+        db.listCollections(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000)),
+      ]);
+      checks.firestore = "ok";
+    } catch {
+      checks.firestore = "error";
+      healthy = false;
+    }
+  } else {
+    checks.firestore = "skipped";
   }
 
   // メモリ使用量

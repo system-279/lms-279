@@ -10,10 +10,12 @@ test.describe("ヘルスチェック", () => {
 
   test("API /health/ready がchecksオブジェクトを含むレスポンスを返す", async ({ request }) => {
     const res = await request.get("http://localhost:8080/health/ready");
-    // ローカル環境ではFirestore接続状況により200 or 503
+    // GCP認証有無でステータスが変わる（200/503）
     expect([200, 503]).toContain(res.status());
     const body = await res.json();
     expect(body.checks).toBeDefined();
+    // Firestore: "ok" | "error" | "skipped"（GCP認証なし時）
+    expect(["ok", "error", "skipped"]).toContain(body.checks.firestore);
     expect(body.checks.memory).toBeDefined();
     expect(typeof body.checks.memory.heapUsedMB).toBe("number");
   });
