@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { CircleHelp } from "lucide-react";
 import { useAuth } from "../lib/auth-context";
 import { apiFetch } from "../lib/api";
 
@@ -42,6 +43,13 @@ export default function HomePage() {
           <p className="mt-4 pt-4 border-t text-xs text-muted-foreground">
             ログインして開始してください
           </p>
+          <Link
+            href="/help"
+            className="mt-3 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition"
+          >
+            <CircleHelp className="size-3.5" />
+            ヘルプ
+          </Link>
         </section>
       </main>
     );
@@ -103,6 +111,14 @@ export default function HomePage() {
             </Link>
           </div>
         )}
+
+        <Link
+          href="/help"
+          className="mt-4 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition"
+        >
+          <CircleHelp className="size-3.5" />
+          ヘルプ
+        </Link>
       </section>
     </main>
   );
