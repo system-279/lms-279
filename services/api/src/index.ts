@@ -56,10 +56,13 @@ app.get("/health/ready", async (_req, res) => {
   const checks: Record<string, unknown> = {};
   let healthy = true;
 
-  // Firestore接続確認
+  // Firestore接続確認（タイムアウト5秒）
   try {
     const db = getFirestore();
-    await db.listCollections();
+    await Promise.race([
+      db.listCollections(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000)),
+    ]);
     checks.firestore = "ok";
   } catch {
     checks.firestore = "error";
