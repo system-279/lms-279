@@ -9,6 +9,10 @@ interface VideoPlayerProps {
   src: string;
   speedLock?: boolean;
   onComplete?: () => void;
+  /** 再生開始時コールバック */
+  onPlay?: () => void;
+  /** 一時停止時コールバック */
+  onPause?: () => void;
   /** イベント送信先エンドポイント。省略時は /api/v1/videos/:videoId/events */
   eventEndpoint?: string;
   /** 認証付きfetch関数。省略時はグローバルfetch */
@@ -31,6 +35,8 @@ export function VideoPlayer({
   src,
   speedLock = true,
   onComplete,
+  onPlay,
+  onPause,
   eventEndpoint,
   fetchFn,
 }: VideoPlayerProps) {
@@ -68,8 +74,14 @@ export function VideoPlayer({
     const video = videoRef.current;
     if (!video) return;
 
-    const handlePlay = () => setIsPlaying(true);
-    const handlePause = () => setIsPlaying(false);
+    const handlePlay = () => {
+      setIsPlaying(true);
+      onPlay?.();
+    };
+    const handlePause = () => {
+      setIsPlaying(false);
+      onPause?.();
+    };
     const handleTimeUpdate = () => setCurrentTime(video.currentTime);
     const handleDurationChange = () => setDuration(video.duration);
     const handleLoadedMetadata = () => {
@@ -112,7 +124,7 @@ export function VideoPlayer({
       video.removeEventListener("ended", handleEnded);
       video.removeEventListener("error", handleError);
     };
-  }, [onComplete]);
+  }, [onComplete, onPlay, onPause]);
 
   // --- タブ離脱検知 ---
   useEffect(() => {

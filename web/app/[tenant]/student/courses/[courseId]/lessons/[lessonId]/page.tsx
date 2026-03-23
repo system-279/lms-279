@@ -7,6 +7,10 @@ import { Badge } from "@/components/ui/badge";
 import { VideoPlayer } from "@/components/video/VideoPlayer";
 import { useAuthenticatedFetch } from "@/lib/hooks/use-authenticated-fetch";
 import { useTenant } from "@/lib/tenant-context";
+import { SessionRulesNotice } from "@/components/session/SessionRulesNotice";
+import { SessionTimer } from "@/components/session/SessionTimer";
+import { PauseTimeoutOverlay } from "@/components/session/PauseTimeoutOverlay";
+import { ForceExitDialog } from "@/components/session/ForceExitDialog";
 
 // ============================================================
 // 型定義
@@ -140,6 +144,16 @@ type AttemptResult = {
   quiz: { title: string };
   questionResults: QuestionResult[];
 };
+
+type LessonSession = {
+  id: string;
+  entryAt: string;
+  deadlineAt: string;
+  remainingMs: number;
+  status: string;
+};
+
+type ForceExitReason = "pause_timeout" | "time_limit";
 
 type QuizUIState = "idle" | "taking" | "result";
 
@@ -691,6 +705,13 @@ export default function StudentLessonDetailPage() {
   // 動画完了ゲート: 動画完了時にテストセクションを表示するためのフラグ
   const [videoCompleted, setVideoCompleted] = useState(false);
 
+  // セッション（入退室管理）
+  const [session, setSession] = useState<LessonSession | null>(null);
+  const [videoPaused, setVideoPaused] = useState(false);
+  const [forceExitOpen, setForceExitOpen] = useState(false);
+  const [forceExitReason, setForceExitReason] = useState<ForceExitReason>("time_limit");
+  const sessionCreatingRef = useRef(false);
+
   const [loadingCourse, setLoadingCourse] = useState(true);
   const [loadingVideo, setLoadingVideo] = useState(false);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
@@ -723,6 +744,77 @@ export default function StudentLessonDetailPage() {
   useEffect(() => {
     fetchCourse();
   }, [fetchCourse]);
+
+  // ============================================================
+  // セッション（入退室管理）
+  // ============================================================
+
+  // ページ読み込み時: アクティブセッション取得
+  const fetchActiveSession = useCallback(async () => {
+    try {
+      const data = await authFetch<{ session: LessonSession | null }>(
+        `/api/v1/lesson-sessions/active?lessonId=${lessonId}`
+      );
+      if (data.session) {
+        setSession(data.session);
+      }
+    } catch {
+      // セッション取得失敗はサイレント
+    }
+  }, [authFetch, lessonId]);
+
+  useEffect(() => {
+    fetchActiveSession();
+  }, [fetchActiveSession]);
+
+  // 動画初回再生時: セッション作成
+  const createSession = useCallback(async () => {
+    if (session || sessionCreatingRef.current) return;
+    sessionCreatingRef.current = true;
+    try {
+      const data = await authFetch<{ session: LessonSession }>(
+        `/api/v1/lesson-sessions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lessonId }),
+        }
+      );
+      setSession(data.session);
+    } catch {
+      // セッション作成失敗はサイレント
+    } finally {
+      sessionCreatingRef.current = false;
+    }
+  }, [authFetch, lessonId, session]);
+
+  // 強制退室処理
+  const handleForceExit = useCallback(
+    async (reason: ForceExitReason) => {
+      if (!session) return;
+      try {
+        await authFetch<unknown>(
+          `/api/v1/lesson-sessions/${session.id}/force-exit`,
+          { method: "PATCH" }
+        );
+      } catch {
+        // 強制退室API失敗でもダイアログは表示
+      }
+      setForceExitReason(reason);
+      setForceExitOpen(true);
+    },
+    [authFetch, session]
+  );
+
+  // タイマー期限切れ
+  const handleSessionExpired = useCallback(() => {
+    handleForceExit("time_limit");
+  }, [handleForceExit]);
+
+  // 一時停止タイムアウト
+  const handlePauseTimeout = useCallback(() => {
+    handleForceExit("pause_timeout");
+  }, [handleForceExit]);
 
   // ============================================================
   // 動画メタデータ・再生URL取得
@@ -791,6 +883,17 @@ export default function StudentLessonDetailPage() {
     await fetchAnalytics();
     setVideoCompleted(true);
   }, [fetchAnalytics]);
+
+  // 動画再生開始: セッション作成
+  const handleVideoPlay = useCallback(() => {
+    setVideoPaused(false);
+    createSession();
+  }, [createSession]);
+
+  // 動画一時停止
+  const handleVideoPause = useCallback(() => {
+    setVideoPaused(true);
+  }, []);
 
   // ============================================================
   // ナビゲーション（前後レッスン）
@@ -863,6 +966,14 @@ export default function StudentLessonDetailPage() {
 
   return (
     <div className="space-y-6">
+      {/* セッションタイマー（セッション有効時のみ） */}
+      {session && (
+        <SessionTimer
+          deadlineAt={session.deadlineAt}
+          onExpired={handleSessionExpired}
+        />
+      )}
+
       {/* パンくずリスト */}
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Link
@@ -887,6 +998,9 @@ export default function StudentLessonDetailPage() {
         <h1 className="text-2xl font-bold">{currentLesson.title}</h1>
       </div>
 
+      {/* 受講ルール */}
+      <SessionRulesNotice session={session} />
+
       {/* 動画セクション */}
       <div className="space-y-4">
         {currentLesson.hasVideo ? (
@@ -905,14 +1019,24 @@ export default function StudentLessonDetailPage() {
 
             {!loadingVideo && !videoError && playbackUrl && videoMeta && (
               <>
-                <VideoPlayer
-                  videoId={videoMeta.id}
-                  src={playbackUrl}
-                  speedLock={videoMeta.speedLock}
-                  eventEndpoint={`/api/v2/${tenantId}/videos/${videoMeta.id}/events`}
-                  fetchFn={eventFetchFn}
-                  onComplete={handleVideoComplete}
-                />
+                <div className="relative">
+                  <VideoPlayer
+                    videoId={videoMeta.id}
+                    src={playbackUrl}
+                    speedLock={videoMeta.speedLock}
+                    eventEndpoint={`/api/v2/${tenantId}/videos/${videoMeta.id}/events`}
+                    fetchFn={eventFetchFn}
+                    onComplete={handleVideoComplete}
+                    onPlay={handleVideoPlay}
+                    onPause={handleVideoPause}
+                  />
+                  {session && (
+                    <PauseTimeoutOverlay
+                      isPaused={videoPaused}
+                      onTimeout={handlePauseTimeout}
+                    />
+                  )}
+                </div>
 
                 {/* 視聴進捗 */}
                 <div className="space-y-2">
@@ -994,6 +1118,9 @@ export default function StudentLessonDetailPage() {
           )}
         </div>
       </div>
+
+      {/* 強制退室ダイアログ */}
+      <ForceExitDialog open={forceExitOpen} reason={forceExitReason} />
     </div>
   );
 }
