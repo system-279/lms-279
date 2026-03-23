@@ -236,7 +236,7 @@ router.get("/videos/:videoId/playback-url", requireUser, async (req: Request, re
 
   let playbackUrl: string;
 
-  if (video.sourceType === "gcs" && video.gcsPath) {
+  if ((video.sourceType === "gcs" || video.sourceType === "google_drive") && video.gcsPath) {
     playbackUrl = await generatePlaybackUrl(video.gcsPath);
   } else if (video.sourceType === "external_url" && video.sourceUrl) {
     playbackUrl = video.sourceUrl;

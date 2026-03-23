@@ -125,15 +125,19 @@ export default function MasterCourseDetailPage() {
     Record<
       string,
       {
-        sourceType: "gcs" | "external_url";
+        sourceType: "gcs" | "external_url" | "google_drive";
         gcsPath: string;
         sourceUrl: string;
+        driveUrl: string;
         durationSec: string;
       }
     >
   >({});
   const [videoSaving, setVideoSaving] = useState<string | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [importStatus, setImportStatus] = useState<
+    Record<string, { status: string; error?: string | null }>
+  >({});
 
   // Quiz form state (per lesson, tracked by lessonId)
   const [quizForms, setQuizForms] = useState<
@@ -141,6 +145,14 @@ export default function MasterCourseDetailPage() {
   >({});
   const [quizSaving, setQuizSaving] = useState<string | null>(null);
   const [quizError, setQuizError] = useState<string | null>(null);
+
+  // Quiz generation state
+  const [quizGenDialog, setQuizGenDialog] = useState<string | null>(null); // lessonId or null
+  const [quizGenDocsUrl, setQuizGenDocsUrl] = useState("");
+  const [quizGenCount, setQuizGenCount] = useState("10");
+  const [quizGenDifficulty, setQuizGenDifficulty] = useState("medium");
+  const [quizGenerating, setQuizGenerating] = useState(false);
+  const [quizGenError, setQuizGenError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -260,6 +272,7 @@ export default function MasterCourseDetailPage() {
       sourceType: "gcs" as const,
       gcsPath: "",
       sourceUrl: "",
+      driveUrl: "",
       durationSec: "",
     };
 
@@ -273,11 +286,67 @@ export default function MasterCourseDetailPage() {
     }));
   };
 
+  const pollImportStatus = async (videoId: string, lessonId: string) => {
+    const maxAttempts = 120; // 最大10分（5秒間隔）
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((r) => setTimeout(r, 5000));
+      try {
+        const data = await superFetch<{
+          videoId: string;
+          importStatus: string | null;
+          importError: string | null;
+        }>(`/api/v2/super/master/videos/${videoId}/import-status`);
+
+        setImportStatus((prev) => ({
+          ...prev,
+          [lessonId]: { status: data.importStatus ?? "unknown", error: data.importError },
+        }));
+
+        if (data.importStatus === "completed") {
+          fetchData();
+          return;
+        }
+        if (data.importStatus === "error") {
+          setVideoError(data.importError ?? "インポートに失敗しました");
+          return;
+        }
+      } catch {
+        // ポーリングエラーは無視して次の試行へ
+      }
+    }
+    setVideoError("インポートがタイムアウトしました");
+  };
+
   const handleSaveVideo = async (lessonId: string) => {
     const form = getVideoForm(lessonId);
     setVideoSaving(lessonId);
     setVideoError(null);
     try {
+      if (form.sourceType === "google_drive") {
+        // Google Driveインポート
+        const body = {
+          driveUrl: form.driveUrl,
+          lessonId,
+          durationSec: form.durationSec ? Number(form.durationSec) : 0,
+        };
+        const data = await superFetch<{ video: { id: string } }>(
+          `/api/v2/super/master/videos/import-from-drive`,
+          {
+            method: "POST",
+            body: JSON.stringify(body),
+          },
+        );
+        setImportStatus((prev) => ({
+          ...prev,
+          [lessonId]: { status: "importing" },
+        }));
+        setVideoSaving(null);
+        // バックグラウンドでポーリング
+        pollImportStatus(data.video.id, lessonId);
+        return;
+      }
+
+      // GCS / 外部URL
       const body: Record<string, unknown> = {
         sourceType: form.sourceType,
       };
@@ -449,6 +518,41 @@ export default function MasterCourseDetailPage() {
     }
   };
 
+  const handleGenerateQuiz = async (lessonId: string) => {
+    setQuizGenerating(true);
+    setQuizGenError(null);
+    try {
+      const data = await superFetch<{
+        generatedQuestions: Question[];
+        suggestedTitle: string;
+      }>(`/api/v2/super/master/lessons/${lessonId}/quiz/generate`, {
+        method: "POST",
+        body: JSON.stringify({
+          docsUrl: quizGenDocsUrl,
+          questionCount: Number(quizGenCount) || 10,
+          difficulty: quizGenDifficulty,
+          language: "ja",
+        }),
+      });
+
+      // 生成結果をクイズフォームにセット
+      updateQuizForm(lessonId, {
+        title: data.suggestedTitle,
+        questions: data.generatedQuestions,
+      });
+
+      // ダイアログを閉じる
+      setQuizGenDialog(null);
+      setQuizGenDocsUrl("");
+    } catch (e) {
+      setQuizGenError(
+        e instanceof Error ? e.message : "クイズ生成に失敗しました",
+      );
+    } finally {
+      setQuizGenerating(false);
+    }
+  };
+
   // --- Render ---
 
   if (loading) {
@@ -599,7 +703,7 @@ export default function MasterCourseDetailPage() {
                                 value={vForm.sourceType}
                                 onValueChange={(v) =>
                                   updateVideoForm(lesson.id, {
-                                    sourceType: v as "gcs" | "external_url",
+                                    sourceType: v as "gcs" | "external_url" | "google_drive",
                                   })
                                 }
                               >
@@ -610,6 +714,9 @@ export default function MasterCourseDetailPage() {
                                   <SelectItem value="gcs">GCS</SelectItem>
                                   <SelectItem value="external_url">
                                     外部URL
+                                  </SelectItem>
+                                  <SelectItem value="google_drive">
+                                    Google Drive
                                   </SelectItem>
                                 </SelectContent>
                               </Select>
@@ -644,6 +751,34 @@ export default function MasterCourseDetailPage() {
                                 }
                                 placeholder="例: videos/course1/lesson1.mp4"
                               />
+                            </div>
+                          ) : vForm.sourceType === "google_drive" ? (
+                            <div className="space-y-1">
+                              <label className="text-sm font-medium">
+                                Google Drive URL
+                              </label>
+                              <Input
+                                value={vForm.driveUrl}
+                                onChange={(e) =>
+                                  updateVideoForm(lesson.id, {
+                                    driveUrl: e.target.value,
+                                  })
+                                }
+                                placeholder="https://drive.google.com/file/d/.../view"
+                              />
+                              {importStatus[lesson.id] && (
+                                <div className={`text-sm mt-1 ${
+                                  importStatus[lesson.id].status === "error"
+                                    ? "text-destructive"
+                                    : "text-muted-foreground"
+                                }`}>
+                                  {importStatus[lesson.id].status === "importing" && "インポート中..."}
+                                  {importStatus[lesson.id].status === "pending" && "待機中..."}
+                                  {importStatus[lesson.id].status === "completed" && "インポート完了"}
+                                  {importStatus[lesson.id].status === "error" &&
+                                    `エラー: ${importStatus[lesson.id].error}`}
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <div className="space-y-1">
@@ -700,6 +835,17 @@ export default function MasterCourseDetailPage() {
                         </div>
                       ) : (
                         <div className="space-y-4">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setQuizGenDialog(lesson.id);
+                              setQuizGenDocsUrl("");
+                              setQuizGenError(null);
+                            }}
+                          >
+                            Google Docsから生成
+                          </Button>
                           <div className="space-y-1">
                             <label className="text-sm font-medium">
                               テストタイトル
@@ -1001,6 +1147,74 @@ export default function MasterCourseDetailPage() {
               disabled={deleteLoading}
             >
               {deleteLoading ? "削除中..." : "削除"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quiz Generation Dialog */}
+      <Dialog open={quizGenDialog !== null} onOpenChange={(open) => !open && setQuizGenDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Google Docsからクイズを生成</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Google Docs URL</label>
+              <Input
+                value={quizGenDocsUrl}
+                onChange={(e) => setQuizGenDocsUrl(e.target.value)}
+                placeholder="https://docs.google.com/document/d/.../edit"
+                disabled={quizGenerating}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-sm font-medium">問題数</label>
+                <Input
+                  type="number"
+                  value={quizGenCount}
+                  onChange={(e) => setQuizGenCount(e.target.value)}
+                  min={1}
+                  max={50}
+                  disabled={quizGenerating}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium">難易度</label>
+                <Select
+                  value={quizGenDifficulty}
+                  onValueChange={setQuizGenDifficulty}
+                  disabled={quizGenerating}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="easy">基礎</SelectItem>
+                    <SelectItem value="medium">標準</SelectItem>
+                    <SelectItem value="hard">応用</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {quizGenError && (
+              <div className="text-sm text-destructive">{quizGenError}</div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setQuizGenDialog(null)}
+              disabled={quizGenerating}
+            >
+              キャンセル
+            </Button>
+            <Button
+              onClick={() => quizGenDialog && handleGenerateQuiz(quizGenDialog)}
+              disabled={!quizGenDocsUrl || quizGenerating}
+            >
+              {quizGenerating ? "生成中..." : "生成"}
             </Button>
           </DialogFooter>
         </DialogContent>

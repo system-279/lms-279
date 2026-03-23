@@ -550,8 +550,12 @@ export class FirestoreDataSource implements DataSource {
   async createVideo(data: Omit<Video, "id" | "createdAt" | "updatedAt">): Promise<Video> {
     const docRef = this.collection("videos").doc();
     const now = FieldValue.serverTimestamp();
+    // undefinedフィールドをnullに変換（Firestoreはundefinedを拒否する）
+    const sanitized = Object.fromEntries(
+      Object.entries(data).map(([k, v]) => [k, v ?? null])
+    );
     await docRef.set({
-      ...data,
+      ...sanitized,
       createdAt: now,
       updatedAt: now,
     });
@@ -561,14 +565,18 @@ export class FirestoreDataSource implements DataSource {
 
   async updateVideo(
     id: string,
-    data: Partial<Pick<Video, "sourceType" | "sourceUrl" | "gcsPath" | "durationSec" | "requiredWatchRatio" | "speedLock">>
+    data: Partial<Pick<Video, "sourceType" | "sourceUrl" | "gcsPath" | "durationSec" | "requiredWatchRatio" | "speedLock" | "driveFileId" | "importStatus" | "importError">>
   ): Promise<Video | null> {
     const docRef = this.collection("videos").doc(id);
     const doc = await docRef.get();
     if (!doc.exists) return null;
 
+    // undefinedフィールドを除外（Firestoreはundefinedを拒否する）
+    const sanitized = Object.fromEntries(
+      Object.entries(data).filter(([, v]) => v !== undefined)
+    );
     await docRef.update({
-      ...data,
+      ...sanitized,
       updatedAt: FieldValue.serverTimestamp(),
     });
     const updated = await docRef.get();
@@ -592,6 +600,9 @@ export class FirestoreDataSource implements DataSource {
       sourceType: data.sourceType,
       sourceUrl: data.sourceUrl,
       gcsPath: data.gcsPath,
+      driveFileId: data.driveFileId,
+      importStatus: data.importStatus,
+      importError: data.importError,
       durationSec: data.durationSec ?? 0,
       requiredWatchRatio: data.requiredWatchRatio ?? 0.95,
       speedLock: data.speedLock ?? true,

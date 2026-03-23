@@ -74,6 +74,8 @@ npm run test
 | `SUPER_ADMIN_EMAILS` | スーパー管理者メールアドレス（カンマ区切り） |
 | `GCS_VIDEO_BUCKET` | 動画保存バケット名（default: lms-279-videos） |
 | `GCS_UPLOAD_BUCKET` | 一時アップロードバケット名（default: lms-279-uploads） |
+| `GOOGLE_WORKSPACE_ADMIN_EMAIL` | DWD用Workspace管理者メール（Google Drive/Docs連携） |
+| `VERTEX_AI_LOCATION` | Vertex AIリージョン（default: asia-northeast1） |
 
 ## 重要な設計判断
 

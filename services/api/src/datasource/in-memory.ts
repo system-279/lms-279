@@ -625,7 +625,7 @@ export class InMemoryDataSource implements DataSource {
 
   async updateVideo(
     id: string,
-    data: Partial<Pick<Video, "sourceType" | "sourceUrl" | "gcsPath" | "durationSec" | "requiredWatchRatio" | "speedLock">>
+    data: Partial<Pick<Video, "sourceType" | "sourceUrl" | "gcsPath" | "durationSec" | "requiredWatchRatio" | "speedLock" | "driveFileId" | "importStatus" | "importError">>
   ): Promise<Video | null> {
     this.throwIfReadOnly();
     const index = this.videos.findIndex((v) => v.id === id);

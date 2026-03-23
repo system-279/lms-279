@@ -101,7 +101,8 @@ export interface NotificationPolicyFilter {
 // 動画関連
 // ========================================
 
-export type VideoSourceType = "gcs" | "external_url";
+export type VideoSourceType = "gcs" | "external_url" | "google_drive";
+export type VideoImportStatus = "pending" | "importing" | "completed" | "error";
 
 export interface Video {
   id: string;
@@ -109,7 +110,10 @@ export interface Video {
   courseId: string;
   sourceType: VideoSourceType;
   sourceUrl?: string;       // sourceType=external_url時
-  gcsPath?: string;         // sourceType=gcs時
+  gcsPath?: string;         // sourceType=gcs or google_drive(コピー後)時
+  driveFileId?: string;     // sourceType=google_drive時: 元のDriveファイルID
+  importStatus?: VideoImportStatus; // google_drive: pending→importing→completed|error
+  importError?: string;     // importStatus=error時のエラーメッセージ
   durationSec: number;
   requiredWatchRatio: number; // default 0.95
   speedLock: boolean;         // default true
