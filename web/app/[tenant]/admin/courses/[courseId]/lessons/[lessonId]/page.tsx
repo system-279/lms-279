@@ -857,6 +857,13 @@ export default function LessonDetailPage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // Google Drive import state
+  const [videoSourceMode, setVideoSourceMode] = useState<"upload" | "google_drive">("upload");
+  const [driveUrl, setDriveUrl] = useState("");
+  const [driveDurationSec, setDriveDurationSec] = useState("");
+  const [driveImporting, setDriveImporting] = useState(false);
+  const [driveImportStatus, setDriveImportStatus] = useState<string | null>(null);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -994,6 +1001,63 @@ export default function LessonDetailPage() {
     }
   };
 
+  const handleDriveImport = async () => {
+    if (!driveUrl) return;
+    setDriveImporting(true);
+    setUploadError(null);
+    setDriveImportStatus("pending");
+
+    try {
+      const data = await authFetch<{ video: { id: string } }>(
+        `/api/v1/admin/videos/import-from-drive`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            driveUrl,
+            lessonId,
+            durationSec: driveDurationSec ? Number(driveDurationSec) : 0,
+          }),
+        },
+      );
+
+      setDriveImportStatus("importing");
+
+      // ポーリング
+      const maxAttempts = 120;
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          const status = await authFetch<{
+            importStatus: string | null;
+            importError: string | null;
+          }>(`/api/v1/admin/videos/${data.video.id}/import-status`);
+
+          setDriveImportStatus(status.importStatus ?? "unknown");
+
+          if (status.importStatus === "completed") {
+            setDriveUrl("");
+            setDriveDurationSec("");
+            fetchData();
+            return;
+          }
+          if (status.importStatus === "error") {
+            setUploadError(status.importError ?? "インポートに失敗しました");
+            return;
+          }
+        } catch {
+          // ポーリングエラーは無視
+        }
+      }
+      setUploadError("インポートがタイムアウトしました");
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : "インポートに失敗しました");
+    } finally {
+      setDriveImporting(false);
+      setDriveImportStatus(null);
+    }
+  };
+
   const lesson = lessonDetail?.lesson;
   const video = lessonDetail?.video;
 
@@ -1086,53 +1150,119 @@ export default function LessonDetailPage() {
               /* No video — show upload form */
               <div className="space-y-4">
                 <p className="text-sm text-muted-foreground">
-                  動画がまだ登録されていません。ファイルを選択してアップロードしてください。
+                  動画がまだ登録されていません。
                 </p>
 
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">動画ファイル</label>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="video/*"
-                    onChange={handleFileChange}
-                    disabled={uploading}
-                    className="block text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 disabled:opacity-50"
-                  />
+                {/* Source mode tabs */}
+                <div className="flex gap-2 border-b">
+                  <button
+                    className={`px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                      videoSourceMode === "upload"
+                        ? "border-primary text-primary"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    }`}
+                    onClick={() => setVideoSourceMode("upload")}
+                  >
+                    ファイルアップロード
+                  </button>
+                  <button
+                    className={`px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                      videoSourceMode === "google_drive"
+                        ? "border-primary text-primary"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    }`}
+                    onClick={() => setVideoSourceMode("google_drive")}
+                  >
+                    Google Drive
+                  </button>
                 </div>
 
-                {selectedFile && (
-                  <p className="text-sm text-muted-foreground">
-                    {selectedFile.name}{" "}
-                    {durationSec != null && `(${durationSec} 秒)`}
-                  </p>
-                )}
-
-                {uploading && (
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between text-sm text-muted-foreground">
-                      <span>アップロード中...</span>
-                      <span>{uploadProgress}%</span>
-                    </div>
-                    <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-                      <div
-                        className="h-full bg-primary transition-all duration-200"
-                        style={{ width: `${uploadProgress}%` }}
+                {videoSourceMode === "upload" ? (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">動画ファイル</label>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="video/*"
+                        onChange={handleFileChange}
+                        disabled={uploading}
+                        className="block text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 disabled:opacity-50"
                       />
                     </div>
-                  </div>
+
+                    {selectedFile && (
+                      <p className="text-sm text-muted-foreground">
+                        {selectedFile.name}{" "}
+                        {durationSec != null && `(${durationSec} 秒)`}
+                      </p>
+                    )}
+
+                    {uploading && (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-sm text-muted-foreground">
+                          <span>アップロード中...</span>
+                          <span>{uploadProgress}%</span>
+                        </div>
+                        <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                          <div
+                            className="h-full bg-primary transition-all duration-200"
+                            style={{ width: `${uploadProgress}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <Button
+                      onClick={handleUpload}
+                      disabled={!selectedFile || uploading}
+                    >
+                      {uploading ? "アップロード中..." : "アップロード"}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Google Drive URL</label>
+                      <Input
+                        value={driveUrl}
+                        onChange={(e) => setDriveUrl(e.target.value)}
+                        placeholder="https://drive.google.com/file/d/.../view"
+                        disabled={driveImporting}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">再生時間（秒）</label>
+                      <Input
+                        type="number"
+                        value={driveDurationSec}
+                        onChange={(e) => setDriveDurationSec(e.target.value)}
+                        placeholder="例: 300"
+                        disabled={driveImporting}
+                      />
+                    </div>
+
+                    {driveImportStatus && (
+                      <div className="text-sm text-muted-foreground">
+                        {driveImportStatus === "importing" && "インポート中...GCSへコピーしています"}
+                        {driveImportStatus === "pending" && "待機中..."}
+                        {driveImportStatus === "completed" && "インポート完了"}
+                      </div>
+                    )}
+
+                    <Button
+                      onClick={handleDriveImport}
+                      disabled={!driveUrl || driveImporting}
+                    >
+                      {driveImporting ? "インポート中..." : "Google Driveからインポート"}
+                    </Button>
+                  </>
                 )}
 
                 {uploadError && (
                   <div className="text-sm text-destructive">{uploadError}</div>
                 )}
-
-                <Button
-                  onClick={handleUpload}
-                  disabled={!selectedFile || uploading}
-                >
-                  {uploading ? "アップロード中..." : "アップロード"}
-                </Button>
               </div>
             )}
           </section>

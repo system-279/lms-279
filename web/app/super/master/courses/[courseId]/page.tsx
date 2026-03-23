@@ -125,15 +125,19 @@ export default function MasterCourseDetailPage() {
     Record<
       string,
       {
-        sourceType: "gcs" | "external_url";
+        sourceType: "gcs" | "external_url" | "google_drive";
         gcsPath: string;
         sourceUrl: string;
+        driveUrl: string;
         durationSec: string;
       }
     >
   >({});
   const [videoSaving, setVideoSaving] = useState<string | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [importStatus, setImportStatus] = useState<
+    Record<string, { status: string; error?: string | null }>
+  >({});
 
   // Quiz form state (per lesson, tracked by lessonId)
   const [quizForms, setQuizForms] = useState<
@@ -260,6 +264,7 @@ export default function MasterCourseDetailPage() {
       sourceType: "gcs" as const,
       gcsPath: "",
       sourceUrl: "",
+      driveUrl: "",
       durationSec: "",
     };
 
@@ -273,11 +278,67 @@ export default function MasterCourseDetailPage() {
     }));
   };
 
+  const pollImportStatus = async (videoId: string, lessonId: string) => {
+    const maxAttempts = 120; // 最大10分（5秒間隔）
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((r) => setTimeout(r, 5000));
+      try {
+        const data = await superFetch<{
+          videoId: string;
+          importStatus: string | null;
+          importError: string | null;
+        }>(`/api/v2/super/master/videos/${videoId}/import-status`);
+
+        setImportStatus((prev) => ({
+          ...prev,
+          [lessonId]: { status: data.importStatus ?? "unknown", error: data.importError },
+        }));
+
+        if (data.importStatus === "completed") {
+          fetchData();
+          return;
+        }
+        if (data.importStatus === "error") {
+          setVideoError(data.importError ?? "インポートに失敗しました");
+          return;
+        }
+      } catch {
+        // ポーリングエラーは無視して次の試行へ
+      }
+    }
+    setVideoError("インポートがタイムアウトしました");
+  };
+
   const handleSaveVideo = async (lessonId: string) => {
     const form = getVideoForm(lessonId);
     setVideoSaving(lessonId);
     setVideoError(null);
     try {
+      if (form.sourceType === "google_drive") {
+        // Google Driveインポート
+        const body = {
+          driveUrl: form.driveUrl,
+          lessonId,
+          durationSec: form.durationSec ? Number(form.durationSec) : 0,
+        };
+        const data = await superFetch<{ video: { id: string } }>(
+          `/api/v2/super/master/videos/import-from-drive`,
+          {
+            method: "POST",
+            body: JSON.stringify(body),
+          },
+        );
+        setImportStatus((prev) => ({
+          ...prev,
+          [lessonId]: { status: "importing" },
+        }));
+        setVideoSaving(null);
+        // バックグラウンドでポーリング
+        pollImportStatus(data.video.id, lessonId);
+        return;
+      }
+
+      // GCS / 外部URL
       const body: Record<string, unknown> = {
         sourceType: form.sourceType,
       };
@@ -599,7 +660,7 @@ export default function MasterCourseDetailPage() {
                                 value={vForm.sourceType}
                                 onValueChange={(v) =>
                                   updateVideoForm(lesson.id, {
-                                    sourceType: v as "gcs" | "external_url",
+                                    sourceType: v as "gcs" | "external_url" | "google_drive",
                                   })
                                 }
                               >
@@ -610,6 +671,9 @@ export default function MasterCourseDetailPage() {
                                   <SelectItem value="gcs">GCS</SelectItem>
                                   <SelectItem value="external_url">
                                     外部URL
+                                  </SelectItem>
+                                  <SelectItem value="google_drive">
+                                    Google Drive
                                   </SelectItem>
                                 </SelectContent>
                               </Select>
@@ -644,6 +708,34 @@ export default function MasterCourseDetailPage() {
                                 }
                                 placeholder="例: videos/course1/lesson1.mp4"
                               />
+                            </div>
+                          ) : vForm.sourceType === "google_drive" ? (
+                            <div className="space-y-1">
+                              <label className="text-sm font-medium">
+                                Google Drive URL
+                              </label>
+                              <Input
+                                value={vForm.driveUrl}
+                                onChange={(e) =>
+                                  updateVideoForm(lesson.id, {
+                                    driveUrl: e.target.value,
+                                  })
+                                }
+                                placeholder="https://drive.google.com/file/d/.../view"
+                              />
+                              {importStatus[lesson.id] && (
+                                <div className={`text-sm mt-1 ${
+                                  importStatus[lesson.id].status === "error"
+                                    ? "text-destructive"
+                                    : "text-muted-foreground"
+                                }`}>
+                                  {importStatus[lesson.id].status === "importing" && "インポート中..."}
+                                  {importStatus[lesson.id].status === "pending" && "待機中..."}
+                                  {importStatus[lesson.id].status === "completed" && "インポート完了"}
+                                  {importStatus[lesson.id].status === "error" &&
+                                    `エラー: ${importStatus[lesson.id].error}`}
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <div className="space-y-1">

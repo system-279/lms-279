@@ -128,7 +128,7 @@ export interface DataSource {
   getVideoById(id: string): Promise<Video | null>;
   getVideoByLessonId(lessonId: string): Promise<Video | null>;
   createVideo(data: Omit<Video, "id" | "createdAt" | "updatedAt">): Promise<Video>;
-  updateVideo(id: string, data: Partial<Pick<Video, "sourceType" | "sourceUrl" | "gcsPath" | "durationSec" | "requiredWatchRatio" | "speedLock">>): Promise<Video | null>;
+  updateVideo(id: string, data: Partial<Pick<Video, "sourceType" | "sourceUrl" | "gcsPath" | "durationSec" | "requiredWatchRatio" | "speedLock" | "driveFileId" | "importStatus" | "importError">>): Promise<Video | null>;
   deleteVideo(id: string): Promise<boolean>;
 
   // Video Events

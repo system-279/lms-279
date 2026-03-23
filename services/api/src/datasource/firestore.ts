@@ -561,7 +561,7 @@ export class FirestoreDataSource implements DataSource {
 
   async updateVideo(
     id: string,
-    data: Partial<Pick<Video, "sourceType" | "sourceUrl" | "gcsPath" | "durationSec" | "requiredWatchRatio" | "speedLock">>
+    data: Partial<Pick<Video, "sourceType" | "sourceUrl" | "gcsPath" | "durationSec" | "requiredWatchRatio" | "speedLock" | "driveFileId" | "importStatus" | "importError">>
   ): Promise<Video | null> {
     const docRef = this.collection("videos").doc(id);
     const doc = await docRef.get();
@@ -592,6 +592,9 @@ export class FirestoreDataSource implements DataSource {
       sourceType: data.sourceType,
       sourceUrl: data.sourceUrl,
       gcsPath: data.gcsPath,
+      driveFileId: data.driveFileId,
+      importStatus: data.importStatus,
+      importError: data.importError,
       durationSec: data.durationSec ?? 0,
       requiredWatchRatio: data.requiredWatchRatio ?? 0.95,
       speedLock: data.speedLock ?? true,
