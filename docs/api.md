@@ -93,6 +93,14 @@
 | GET | `/courses/:courseId` | コース詳細+レッスン一覧+進捗 | Student |
 | GET | `/courses/:courseId/lessons/:lessonId` | レッスン詳細 | Student |
 
+### 出席管理（セッション）
+
+| メソッド | パス | 説明 | 権限 |
+|---------|------|------|------|
+| POST | `/lesson-sessions` | セッション作成（入室打刻） | Student |
+| GET | `/lesson-sessions/active?lessonId=X` | アクティブセッション取得 | Student |
+| PATCH | `/lesson-sessions/:sessionId/force-exit` | 強制退室 | Student |
+
 ### 分析（Admin）
 
 | メソッド | パス | 説明 |
@@ -102,6 +110,8 @@
 | GET | `/admin/analytics/videos/:videoId/stats` | 動画視聴統計 |
 | GET | `/admin/analytics/quizzes/:quizId/stats` | クイズ統計 |
 | GET | `/admin/analytics/suspicious-viewing` | 不審視聴一覧 |
+| GET | `/admin/analytics/attendance/courses/:courseId` | コース出席管理 |
+| GET | `/admin/analytics/attendance/export/courses/:courseId` | 出席CSVエクスポート |
 
 ### マスターコンテンツ管理（Super Admin）
 

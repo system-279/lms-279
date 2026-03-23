@@ -141,3 +141,23 @@ questions配列の各要素:
 | progressRatio | number | 進捗率（0-1） |
 | isCompleted | boolean | コース完了 |
 | updatedAt | Timestamp | 最終更新 |
+
+#### lesson_sessions/{id}（出席管理）
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| userId | string | ユーザーID |
+| lessonId | string | レッスンID |
+| courseId | string | コースID |
+| videoId | string | 動画ID |
+| sessionToken | string | video_eventsとの紐付けトークン |
+| status | string | active / completed / force_exited / abandoned |
+| entryAt | Timestamp | 入室打刻（動画再生開始時） |
+| exitAt | Timestamp? | 退室打刻（テスト送信 or 強制退室時） |
+| exitReason | string? | quiz_submitted / pause_timeout / time_limit / browser_close |
+| deadlineAt | Timestamp | entryAt + 2時間（事前計算） |
+| pauseStartedAt | Timestamp? | 現在の一時停止開始時刻 |
+| longestPauseSec | number | セッション中の最長一時停止秒数 |
+| sessionVideoCompleted | boolean | セッション内で動画完了したか |
+| quizAttemptId | string? | 完了時のクイズattempt ID |
+| createdAt | Timestamp | 作成日時 |
+| updatedAt | Timestamp | 更新日時 |

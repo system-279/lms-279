@@ -376,4 +376,124 @@ router.get(
   }
 );
 
+// ============================================================
+// 7. 出席管理
+// GET /admin/analytics/attendance/courses/:courseId
+// ============================================================
+
+router.get(
+  "/admin/analytics/attendance/courses/:courseId",
+  requireAdmin,
+  async (req: Request, res: Response) => {
+    const ds = req.dataSource!;
+    const courseId = req.params.courseId as string;
+
+    const course = await ds.getCourseById(courseId);
+    if (!course) {
+      res.status(404).json({ error: "not_found", message: "Course not found" });
+      return;
+    }
+
+    const sessions = await ds.getLessonSessionsByCourse(courseId);
+    const users = await ds.getUsers();
+    const lessons = await ds.getLessons({ courseId });
+
+    const userMap = new Map(users.map((u) => [u.id, u]));
+    const lessonMap = new Map(lessons.map((l) => [l.id, l]));
+
+    const records = sessions.map((s) => {
+      const user = userMap.get(s.userId);
+      const lesson = lessonMap.get(s.lessonId);
+      const durationMs = s.exitAt
+        ? new Date(s.exitAt).getTime() - new Date(s.entryAt).getTime()
+        : Date.now() - new Date(s.entryAt).getTime();
+
+      return {
+        sessionId: s.id,
+        userId: s.userId,
+        userName: user?.name ?? user?.email ?? s.userId,
+        userEmail: user?.email ?? "",
+        lessonId: s.lessonId,
+        lessonTitle: lesson?.title ?? s.lessonId,
+        status: s.status,
+        entryAt: s.entryAt,
+        exitAt: s.exitAt,
+        exitReason: s.exitReason,
+        durationMin: Math.round(durationMs / 60000),
+      };
+    });
+
+    res.json({
+      courseId,
+      courseName: course.name,
+      totalSessions: records.length,
+      completedSessions: records.filter((r) => r.status === "completed").length,
+      forceExitedSessions: records.filter((r) => r.status === "force_exited").length,
+      records,
+    });
+  }
+);
+
+// ============================================================
+// 8. 出席CSVエクスポート
+// GET /admin/analytics/attendance/export/courses/:courseId
+// ============================================================
+
+router.get(
+  "/admin/analytics/attendance/export/courses/:courseId",
+  requireAdmin,
+  async (req: Request, res: Response) => {
+    const ds = req.dataSource!;
+    const courseId = req.params.courseId as string;
+
+    const course = await ds.getCourseById(courseId);
+    if (!course) {
+      res.status(404).json({ error: "not_found", message: "Course not found" });
+      return;
+    }
+
+    const sessions = await ds.getLessonSessionsByCourse(courseId);
+    const users = await ds.getUsers();
+    const lessons = await ds.getLessons({ courseId });
+
+    const userMap = new Map(users.map((u) => [u.id, u]));
+    const lessonMap = new Map(lessons.map((l) => [l.id, l]));
+
+    const header = "ユーザー名,メール,レッスン,入室時刻,退室時刻,ステータス,退室理由,所要時間（分）\n";
+    const rows = sessions
+      .map((s) => {
+        const user = userMap.get(s.userId);
+        const lesson = lessonMap.get(s.lessonId);
+        const durationMs = s.exitAt
+          ? new Date(s.exitAt).getTime() - new Date(s.entryAt).getTime()
+          : 0;
+        const durationMin = Math.round(durationMs / 60000);
+
+        return [
+          user?.name ?? "",
+          user?.email ?? "",
+          lesson?.title ?? "",
+          s.entryAt,
+          s.exitAt ?? "",
+          s.status,
+          s.exitReason ?? "",
+          String(durationMin),
+        ]
+          .map((v) => `"${v.replace(/"/g, '""')}"`)
+          .join(",");
+      })
+      .join("\n");
+
+    const bom = "\uFEFF";
+    const csv = bom + header + rows;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="attendance-${courseId}.csv"`
+    );
+    res.send(csv);
+  }
+);
+
 export const analyticsRouter = router;
