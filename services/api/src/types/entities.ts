@@ -278,6 +278,7 @@ export interface CourseProgress {
 // 出席管理（レッスンセッション）
 // ========================================
 
+// TODO: "abandoned" はブラウザ終了検出（beforeunload/sendBeacon）で設定予定
 export type LessonSessionStatus = "active" | "completed" | "force_exited" | "abandoned";
 export type SessionExitReason = "quiz_submitted" | "pause_timeout" | "time_limit" | "browser_close";
 
@@ -293,9 +294,9 @@ export interface LessonSession {
   exitAt: string | null;                  // 退室打刻（テスト送信 or 強制退室時）
   exitReason: SessionExitReason | null;
   deadlineAt: string;                     // entryAt + 2時間
-  pauseStartedAt: string | null;
-  longestPauseSec: number;
-  sessionVideoCompleted: boolean;
+  pauseStartedAt: string | null;        // TODO: video-eventsルート拡張で更新予定
+  longestPauseSec: number;              // TODO: pause検知サーバーサイドで更新予定
+  sessionVideoCompleted: boolean;       // TODO: video-eventsルートでセッション内完了判定時に更新予定
   quizAttemptId: string | null;
   createdAt: string;
   updatedAt: string;

@@ -5,6 +5,7 @@
 
 import { Router, Request, Response } from "express";
 import { requireUser } from "../../middleware/auth.js";
+import type { LessonSession } from "../../types/entities.js";
 import {
   createSession,
   getOrCreateSession,
@@ -131,7 +132,7 @@ router.patch("/lesson-sessions/:sessionId/force-exit", requireUser, async (req: 
   res.json({ session: formatSession(exited) });
 });
 
-function formatSession(session: import("../../types/entities.js").LessonSession) {
+function formatSession(session: LessonSession) {
   const remainingMs = Math.max(0, new Date(session.deadlineAt).getTime() - Date.now());
   return {
     id: session.id,
