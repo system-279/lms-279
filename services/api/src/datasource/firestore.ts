@@ -550,8 +550,12 @@ export class FirestoreDataSource implements DataSource {
   async createVideo(data: Omit<Video, "id" | "createdAt" | "updatedAt">): Promise<Video> {
     const docRef = this.collection("videos").doc();
     const now = FieldValue.serverTimestamp();
+    // undefinedフィールドをnullに変換（Firestoreはundefinedを拒否する）
+    const sanitized = Object.fromEntries(
+      Object.entries(data).map(([k, v]) => [k, v ?? null])
+    );
     await docRef.set({
-      ...data,
+      ...sanitized,
       createdAt: now,
       updatedAt: now,
     });
@@ -567,8 +571,12 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
     if (!doc.exists) return null;
 
+    // undefinedフィールドを除外（Firestoreはundefinedを拒否する）
+    const sanitized = Object.fromEntries(
+      Object.entries(data).filter(([, v]) => v !== undefined)
+    );
     await docRef.update({
-      ...data,
+      ...sanitized,
       updatedAt: FieldValue.serverTimestamp(),
     });
     const updated = await docRef.get();

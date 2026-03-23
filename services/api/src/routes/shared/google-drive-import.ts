@@ -98,17 +98,18 @@ router.post("/admin/videos/import-from-drive", requireAdmin, async (req: Request
     speedLock: speedLock ?? true,
   });
 
-  await ds.updateLesson(lessonId, { hasVideo: true });
-
   // 非同期でDrive→GCSコピー開始
+  // hasVideoはインポート完了後に設定（エラー時は巻き戻し不要にする）
   (async () => {
     try {
       await ds.updateVideo(video.id, { importStatus: "importing" });
-      const { gcsPath } = await copyDriveFileToGCS(fileId, tenantId);
+      const { gcsPath } = await copyDriveFileToGCS(fileId, tenantId, metadata);
       await ds.updateVideo(video.id, {
         gcsPath,
         importStatus: "completed",
       });
+      // インポート完了後にhasVideoをtrueに設定
+      await ds.updateLesson(lessonId, { hasVideo: true });
     } catch (error) {
       // エラーハンドラ: 状態復旧を最優先
       const message = error instanceof Error ? error.message : "Unknown import error";

@@ -483,23 +483,27 @@ router.post("/master/videos/import-from-drive", async (req: Request, res: Respon
     speedLock: speedLock ?? true,
   });
 
-  await ds.updateLesson(lessonId, { hasVideo: true });
-
   // 非同期でDrive→GCSコピー（マスターは_masterテナント）
+  // hasVideoはインポート完了後に設定
   (async () => {
     try {
       await ds.updateVideo(video.id, { importStatus: "importing" });
-      const { gcsPath } = await copyDriveFileToGCS(fileId, "_master");
+      const { gcsPath } = await copyDriveFileToGCS(fileId, "_master", metadata);
       await ds.updateVideo(video.id, {
         gcsPath,
         importStatus: "completed",
       });
+      await ds.updateLesson(lessonId, { hasVideo: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown import error";
       console.error(`Drive import failed for master video ${video.id}:`, message);
       try {
+        // transient/permanent分類
+        const isTransient = error instanceof Error &&
+          ("status" in error && [429, 503].includes((error as { status: number }).status));
+
         await ds.updateVideo(video.id, {
-          importStatus: "error",
+          importStatus: isTransient ? "pending" : "error",
           importError: message,
         });
       } catch (updateError) {

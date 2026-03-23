@@ -9,7 +9,16 @@ import { getDocsClient } from "./google-auth.js";
  *   - https://docs.google.com/document/d/{docId}
  */
 export function parseDocsUrl(url: string): string {
-  if (!url || !url.includes("docs.google.com/document")) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== "docs.google.com") {
+      throw new Error("Invalid Google Docs URL");
+    }
+  } catch {
+    throw new Error("Invalid Google Docs URL");
+  }
+
+  if (!url.includes("/document/")) {
     throw new Error("Invalid Google Docs URL");
   }
 

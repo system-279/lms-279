@@ -17,7 +17,12 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
  *   - https://drive.google.com/open?id={fileId}
  */
 export function parseDriveUrl(url: string): string {
-  if (!url || !url.includes("drive.google.com")) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== "drive.google.com") {
+      throw new Error("Invalid Google Drive URL");
+    }
+  } catch {
     throw new Error("Invalid Google Drive URL");
   }
 
@@ -93,13 +98,16 @@ export async function getDriveFileMetadata(fileId: string): Promise<{
  */
 export async function copyDriveFileToGCS(
   fileId: string,
-  tenantId: string
+  tenantId: string,
+  preloadedMetadata?: { name: string; mimeType: string; size: string }
 ): Promise<{ gcsPath: string; fileName: string }> {
   const drive = getDriveClient();
 
-  // メタデータ取得 & 検証
-  const metadata = await getDriveFileMetadata(fileId);
-  validateDriveFileMetadata(metadata);
+  // メタデータ取得 & 検証（事前取得済みの場合はスキップ）
+  const metadata = preloadedMetadata ?? await getDriveFileMetadata(fileId);
+  if (!preloadedMetadata) {
+    validateDriveFileMetadata(metadata);
+  }
 
   // Drive からストリーム取得
   const response = await drive.files.get(
