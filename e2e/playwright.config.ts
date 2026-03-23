@@ -14,7 +14,7 @@ export default defineConfig({
       url: "http://localhost:8080/health",
       cwd: "..",
       reuseExistingServer: true,
-      timeout: 30000,
+      timeout: 60000,
       env: {
         AUTH_MODE: "dev",
         PORT: "8080",

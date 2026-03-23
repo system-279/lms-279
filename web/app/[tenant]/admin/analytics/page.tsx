@@ -107,6 +107,51 @@ type SuspiciousViewingData = {
   records: SuspiciousViewingRecord[];
 };
 
+type AttendanceStatus = "completed" | "force_exited" | "active" | "abandoned";
+type ExitReason = "quiz_submitted" | "pause_timeout" | "time_limit" | "browser_close";
+
+const ATTENDANCE_STATUS_LABELS: Record<AttendanceStatus, string> = {
+  completed: "完了",
+  force_exited: "強制退室",
+  active: "出席中",
+  abandoned: "放棄",
+};
+
+const ATTENDANCE_STATUS_VARIANT: Record<AttendanceStatus, "default" | "destructive" | "secondary" | "outline"> = {
+  completed: "default",
+  force_exited: "destructive",
+  active: "secondary",
+  abandoned: "outline",
+};
+
+const EXIT_REASON_LABELS: Record<ExitReason, string> = {
+  quiz_submitted: "テスト送信",
+  pause_timeout: "一時停止超過",
+  time_limit: "時間超過",
+  browser_close: "ブラウザ終了",
+};
+
+type AttendanceRecord = {
+  sessionId: string;
+  userName: string;
+  userEmail: string;
+  lessonTitle: string;
+  status: AttendanceStatus;
+  entryAt: string;
+  exitAt: string | null;
+  exitReason: ExitReason | null;
+  durationMin: number;
+};
+
+type AttendanceData = {
+  courseId: string;
+  courseName: string;
+  totalSessions: number;
+  completedSessions: number;
+  forceExitedSessions: number;
+  records: AttendanceRecord[];
+};
+
 // ─── 汎用コンポーネント ──────────────────────────────────────────
 
 function LoadingState() {
@@ -605,12 +650,220 @@ function SuspiciousViewingTab() {
   );
 }
 
+// ─── タブ4: 出席管理 ──────────────────────────────────────────────
+
+function AttendanceTab() {
+  const { authFetch } = useAuthenticatedFetch();
+
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [coursesLoading, setCoursesLoading] = useState(true);
+  const [coursesError, setCoursesError] = useState<string | null>(null);
+
+  const [selectedCourseId, setSelectedCourseId] = useState<string>("");
+  const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceError, setAttendanceError] = useState<string | null>(null);
+
+  const [exportLoading, setExportLoading] = useState(false);
+
+  // コース一覧取得
+  useEffect(() => {
+    let cancelled = false;
+    setCoursesLoading(true);
+    setCoursesError(null);
+    authFetch<{ courses: Course[] }>("/api/v1/admin/courses")
+      .then((data) => {
+        if (!cancelled) setCourses(data.courses ?? []);
+      })
+      .catch((e) => {
+        if (!cancelled)
+          setCoursesError(e instanceof Error ? e.message : "コースの取得に失敗しました");
+      })
+      .finally(() => {
+        if (!cancelled) setCoursesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authFetch]);
+
+  // コース選択時に出席データ取得
+  const fetchAttendance = useCallback(
+    async (courseId: string) => {
+      if (!courseId) return;
+      setAttendanceLoading(true);
+      setAttendanceError(null);
+      setAttendanceData(null);
+      try {
+        const data = await authFetch<AttendanceData>(
+          `/api/v1/admin/analytics/attendance/courses/${courseId}`
+        );
+        setAttendanceData(data);
+      } catch (e) {
+        setAttendanceError(e instanceof Error ? e.message : "出席データの取得に失敗しました");
+      } finally {
+        setAttendanceLoading(false);
+      }
+    },
+    [authFetch]
+  );
+
+  const handleCourseChange = (courseId: string) => {
+    setSelectedCourseId(courseId);
+    fetchAttendance(courseId);
+  };
+
+  // CSV エクスポート（認証付きblobダウンロード）
+  const handleExport = useCallback(async () => {
+    if (!selectedCourseId) return;
+    setExportLoading(true);
+    try {
+      const blob = await authFetch<Blob>(
+        `/api/v1/admin/analytics/attendance/export/courses/${selectedCourseId}`,
+        { headers: { Accept: "text/csv" } }
+      );
+      const url = URL.createObjectURL(blob instanceof Blob ? blob : new Blob([JSON.stringify(blob)]));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "attendance.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("CSVエクスポートに失敗しました", e);
+    } finally {
+      setExportLoading(false);
+    }
+  }, [authFetch, selectedCourseId]);
+
+  const formatDateTime = (iso: string | null) => {
+    if (!iso) return "-";
+    const d = new Date(iso);
+    return d.toLocaleString("ja-JP", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* コース選択 */}
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="w-72">
+          {coursesLoading ? (
+            <LoadingState />
+          ) : coursesError ? (
+            <ErrorState message={coursesError} />
+          ) : (
+            <Select value={selectedCourseId} onValueChange={handleCourseChange}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="コースを選択してください" />
+              </SelectTrigger>
+              <SelectContent>
+                {courses.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+        {selectedCourseId && attendanceData && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExport}
+            disabled={exportLoading}
+          >
+            {exportLoading ? "エクスポート中..." : "CSVエクスポート"}
+          </Button>
+        )}
+      </div>
+
+      {/* 出席データ */}
+      {!selectedCourseId ? (
+        <EmptyState message="コースを選択すると出席記録が表示されます" />
+      ) : attendanceLoading ? (
+        <LoadingState />
+      ) : attendanceError ? (
+        <ErrorState message={attendanceError} />
+      ) : attendanceData ? (
+        <div className="space-y-6">
+          {/* サマリーカード */}
+          <div className="grid grid-cols-3 gap-4">
+            <div className="rounded-md border p-4 space-y-1">
+              <p className="text-xs text-muted-foreground">総セッション数</p>
+              <p className="text-2xl font-bold">{attendanceData.totalSessions}</p>
+            </div>
+            <div className="rounded-md border p-4 space-y-1">
+              <p className="text-xs text-muted-foreground">完了</p>
+              <p className="text-2xl font-bold">{attendanceData.completedSessions}</p>
+            </div>
+            <div className="rounded-md border p-4 space-y-1">
+              <p className="text-xs text-muted-foreground">強制退室</p>
+              <p className="text-2xl font-bold">{attendanceData.forceExitedSessions}</p>
+            </div>
+          </div>
+
+          {/* 出席テーブル */}
+          {attendanceData.records.length === 0 ? (
+            <EmptyState message="出席記録がありません" />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>受講者名</TableHead>
+                  <TableHead>レッスン</TableHead>
+                  <TableHead>入室時刻</TableHead>
+                  <TableHead>退室時刻</TableHead>
+                  <TableHead>ステータス</TableHead>
+                  <TableHead>退室理由</TableHead>
+                  <TableHead>所要時間</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {attendanceData.records.map((rec) => (
+                  <TableRow key={rec.sessionId}>
+                    <TableCell className="font-medium">
+                      <div className="space-y-0.5">
+                        <p className="text-sm">{rec.userName}</p>
+                        <p className="text-xs text-muted-foreground">{rec.userEmail}</p>
+                      </div>
+                    </TableCell>
+                    <TableCell>{rec.lessonTitle}</TableCell>
+                    <TableCell className="text-sm">{formatDateTime(rec.entryAt)}</TableCell>
+                    <TableCell className="text-sm">{formatDateTime(rec.exitAt)}</TableCell>
+                    <TableCell>
+                      <Badge variant={ATTENDANCE_STATUS_VARIANT[rec.status]}>
+                        {ATTENDANCE_STATUS_LABELS[rec.status] ?? rec.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {rec.exitReason
+                        ? EXIT_REASON_LABELS[rec.exitReason] ?? rec.exitReason
+                        : "-"}
+                    </TableCell>
+                    <TableCell className="text-sm">{rec.durationMin}分</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ─── メインページ ────────────────────────────────────────────────
 
 const TAB_ITEMS = [
   { value: "course-progress", label: "コース別進捗" },
   { value: "user-progress", label: "ユーザー別進捗" },
   { value: "suspicious-viewing", label: "不審視聴" },
+  { value: "attendance", label: "出席管理" },
 ] as const;
 
 type TabValue = (typeof TAB_ITEMS)[number]["value"];
@@ -660,6 +913,10 @@ export default function AnalyticsPage() {
 
         <Tabs.Content value="suspicious-viewing" className="focus-visible:outline-none">
           <SuspiciousViewingTab />
+        </Tabs.Content>
+
+        <Tabs.Content value="attendance" className="focus-visible:outline-none">
+          <AttendanceTab />
         </Tabs.Content>
       </Tabs.Root>
     </div>

@@ -34,6 +34,7 @@ import type {
   QuizAttemptFilter,
   UserProgress,
   CourseProgress,
+  LessonSession,
 } from "../types/entities.js";
 
 // Firestore Timestampを Date に変換
@@ -1021,6 +1022,93 @@ export class FirestoreDataSource implements DataSource {
       totalLessons: data.totalLessons ?? 0,
       progressRatio: data.progressRatio ?? 0,
       isCompleted: data.isCompleted ?? false,
+      updatedAt: toDate(data.updatedAt).toISOString(),
+    };
+  }
+
+  // ========================================
+  // Lesson Sessions
+  // ========================================
+
+  async createLessonSession(data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">): Promise<LessonSession> {
+    const docRef = this.collection("lesson_sessions").doc();
+    const now = FieldValue.serverTimestamp();
+    const sanitized = Object.fromEntries(
+      Object.entries(data).map(([k, v]) => [k, v ?? null])
+    );
+    await docRef.set({
+      ...sanitized,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const doc = await docRef.get();
+    return this.toLessonSession(doc.id, doc.data()!);
+  }
+
+  async getLessonSession(sessionId: string): Promise<LessonSession | null> {
+    const doc = await this.collection("lesson_sessions").doc(sessionId).get();
+    if (!doc.exists) return null;
+    return this.toLessonSession(doc.id, doc.data()!);
+  }
+
+  async getActiveLessonSession(userId: string, lessonId: string): Promise<LessonSession | null> {
+    const snapshot = await this.collection("lesson_sessions")
+      .where("userId", "==", userId)
+      .where("lessonId", "==", lessonId)
+      .where("status", "==", "active")
+      .limit(1)
+      .get();
+    if (snapshot.empty) return null;
+    const doc = snapshot.docs[0];
+    return this.toLessonSession(doc.id, doc.data());
+  }
+
+  async updateLessonSession(
+    sessionId: string,
+    data: Partial<Omit<LessonSession, "id" | "createdAt">>
+  ): Promise<LessonSession | null> {
+    const docRef = this.collection("lesson_sessions").doc(sessionId);
+    const doc = await docRef.get();
+    if (!doc.exists) return null;
+
+    const sanitized = Object.fromEntries(
+      Object.entries(data).filter(([, v]) => v !== undefined)
+    );
+    await docRef.update({
+      ...sanitized,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    const updated = await docRef.get();
+    return this.toLessonSession(updated.id, updated.data()!);
+  }
+
+  async getLessonSessionsByCourse(courseId: string): Promise<LessonSession[]> {
+    const snapshot = await this.collection("lesson_sessions")
+      .where("courseId", "==", courseId)
+      .orderBy("entryAt", "desc")
+      .get();
+    return snapshot.docs.map((doc) => this.toLessonSession(doc.id, doc.data()));
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toLessonSession(id: string, data: any): LessonSession {
+    return {
+      id,
+      userId: data.userId,
+      lessonId: data.lessonId,
+      courseId: data.courseId,
+      videoId: data.videoId,
+      sessionToken: data.sessionToken,
+      status: data.status,
+      entryAt: toDate(data.entryAt).toISOString(),
+      exitAt: data.exitAt ? toDate(data.exitAt).toISOString() : null,
+      exitReason: data.exitReason ?? null,
+      deadlineAt: toDate(data.deadlineAt).toISOString(),
+      pauseStartedAt: data.pauseStartedAt ? toDate(data.pauseStartedAt).toISOString() : null,
+      longestPauseSec: data.longestPauseSec ?? 0,
+      sessionVideoCompleted: data.sessionVideoCompleted ?? false,
+      quizAttemptId: data.quizAttemptId ?? null,
+      createdAt: toDate(data.createdAt).toISOString(),
       updatedAt: toDate(data.updatedAt).toISOString(),
     };
   }

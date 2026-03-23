@@ -8,6 +8,11 @@ import { Router, Request, Response } from "express";
 import { requireUser } from "../../middleware/auth.js";
 import { gradeQuiz, stripCorrectAnswers, randomizeQuiz } from "../../services/quiz-grading.js";
 import { updateLessonProgress } from "../../services/progress.js";
+import {
+  validateSessionDeadline,
+  forceExitSession,
+  completeSession,
+} from "../../services/lesson-session.js";
 
 const router = Router();
 
@@ -265,6 +270,19 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
   const now = new Date();
   const answers: Record<string, string[]> = req.body.answers ?? {};
 
+  // セッション制限チェック（出席管理）
+  const activeSession = await ds.getActiveLessonSession(userId, quiz.lessonId);
+  if (activeSession) {
+    if (!validateSessionDeadline(activeSession)) {
+      await forceExitSession(ds, activeSession.id, "time_limit");
+      res.status(403).json({
+        error: "session_time_exceeded",
+        message: "入室から2時間が経過したため、セッションが終了しました",
+      });
+      return;
+    }
+  }
+
   // 制限時間チェック
   if (quiz.timeLimitSec !== null) {
     const startedAt = new Date(attempt.startedAt);
@@ -309,6 +327,16 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
         quizPassed: true,
         quizBestScore: gradingResult.score,
       });
+    }
+  }
+
+  // セッション完了（退室打刻）
+  if (activeSession) {
+    try {
+      await completeSession(ds, activeSession.id, updated!.id);
+    } catch {
+      // セッション完了失敗はクイズ提出自体をブロックしない
+      console.error(`Failed to complete session for attempt ${attemptId}`);
     }
   }
 

@@ -273,3 +273,37 @@ export interface CourseProgress {
   isCompleted: boolean;
   updatedAt: string;
 }
+
+// ========================================
+// 出席管理（レッスンセッション）
+// ========================================
+
+export type LessonSessionStatus = "active" | "completed" | "force_exited" | "abandoned";
+export type SessionExitReason = "quiz_submitted" | "pause_timeout" | "time_limit" | "browser_close";
+
+export interface LessonSession {
+  id: string;
+  userId: string;
+  lessonId: string;
+  courseId: string;
+  videoId: string;
+  sessionToken: string;
+  status: LessonSessionStatus;
+  entryAt: string;                        // 入室打刻（動画再生開始時）
+  exitAt: string | null;                  // 退室打刻（テスト送信 or 強制退室時）
+  exitReason: SessionExitReason | null;
+  deadlineAt: string;                     // entryAt + 2時間
+  pauseStartedAt: string | null;
+  longestPauseSec: number;
+  sessionVideoCompleted: boolean;
+  quizAttemptId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LessonSessionFilter {
+  userId?: string;
+  lessonId?: string;
+  courseId?: string;
+  status?: LessonSessionStatus;
+}
