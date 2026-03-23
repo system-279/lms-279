@@ -34,6 +34,7 @@ import type {
   QuizAttemptFilter,
   UserProgress,
   CourseProgress,
+  LessonSession,
 } from "../types/entities.js";
 
 // デモ用初期データ
@@ -195,6 +196,7 @@ export class InMemoryDataSource implements DataSource {
 
   private userProgress: Map<string, UserProgress> = new Map();
   private courseProgress: Map<string, CourseProgress> = new Map();
+  private lessonSessions: LessonSession[] = [];
 
   private readonly readOnly: boolean;
 
@@ -897,5 +899,48 @@ export class InMemoryDataSource implements DataSource {
       }
     }
     return result;
+  }
+
+  // Lesson Sessions
+  async createLessonSession(data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">): Promise<LessonSession> {
+    this.throwIfReadOnly();
+    const now = new Date().toISOString();
+    const session: LessonSession = {
+      ...data,
+      id: `session-${Date.now()}`,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.lessonSessions.push(session);
+    return session;
+  }
+
+  async getLessonSession(sessionId: string): Promise<LessonSession | null> {
+    return this.lessonSessions.find((s) => s.id === sessionId) ?? null;
+  }
+
+  async getActiveLessonSession(userId: string, lessonId: string): Promise<LessonSession | null> {
+    return this.lessonSessions.find(
+      (s) => s.userId === userId && s.lessonId === lessonId && s.status === "active"
+    ) ?? null;
+  }
+
+  async updateLessonSession(
+    sessionId: string,
+    data: Partial<Omit<LessonSession, "id" | "createdAt">>
+  ): Promise<LessonSession | null> {
+    this.throwIfReadOnly();
+    const index = this.lessonSessions.findIndex((s) => s.id === sessionId);
+    if (index === -1) return null;
+    this.lessonSessions[index] = {
+      ...this.lessonSessions[index],
+      ...data,
+      updatedAt: new Date().toISOString(),
+    };
+    return this.lessonSessions[index];
+  }
+
+  async getLessonSessionsByCourse(courseId: string): Promise<LessonSession[]> {
+    return this.lessonSessions.filter((s) => s.courseId === courseId);
   }
 }

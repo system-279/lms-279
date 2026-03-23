@@ -24,11 +24,14 @@ import type {
   QuizAttemptFilter,
   UserProgress,
   CourseProgress,
+  LessonSession,
 } from "../types/entities.js";
 
 export type { CourseFilter, LessonFilter, Video, VideoEvent, VideoAnalytics, VideoFilter, VideoEventFilter, WatchedRange, SuspiciousFlag } from "../types/entities.js";
 export type { Quiz, QuizAttempt, QuizFilter, QuizAttemptFilter, QuizQuestion, QuizOption, QuestionType, QuizAttemptStatus } from "../types/entities.js";
 export type { UserProgress, CourseProgress } from "../types/entities.js";
+export type { LessonSession, LessonSessionFilter, LessonSessionStatus, SessionExitReason } from "../types/entities.js";
+// LessonSessionFilter is exported for consumers even if unused here
 
 export interface NotificationPolicyFilter {
   scope?: "global" | "course" | "user";
@@ -165,6 +168,13 @@ export interface DataSource {
   upsertCourseProgress(userId: string, courseId: string, data: Partial<Omit<CourseProgress, "id" | "userId" | "courseId">>): Promise<CourseProgress>;
   getCourseProgressByUser(userId: string): Promise<CourseProgress[]>;
   getCourseProgressByCourseId(courseId: string): Promise<CourseProgress[]>;
+
+  // Lesson Sessions (Attendance)
+  createLessonSession(data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">): Promise<LessonSession>;
+  getLessonSession(sessionId: string): Promise<LessonSession | null>;
+  getActiveLessonSession(userId: string, lessonId: string): Promise<LessonSession | null>;
+  updateLessonSession(sessionId: string, data: Partial<Omit<LessonSession, "id" | "createdAt">>): Promise<LessonSession | null>;
+  getLessonSessionsByCourse(courseId: string): Promise<LessonSession[]>;
 }
 
 /**
