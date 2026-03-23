@@ -123,6 +123,14 @@ function QuizSection({ lessonId }: { lessonId: string }) {
   const [deleteQuizLoading, setDeleteQuizLoading] = useState(false);
   const [deleteQuizError, setDeleteQuizError] = useState<string | null>(null);
 
+  // Quiz generation from Google Docs
+  const [quizGenDialogOpen, setQuizGenDialogOpen] = useState(false);
+  const [quizGenDocsUrl, setQuizGenDocsUrl] = useState("");
+  const [quizGenCount, setQuizGenCount] = useState("10");
+  const [quizGenDifficulty, setQuizGenDifficulty] = useState("medium");
+  const [quizGenerating, setQuizGenerating] = useState(false);
+  const [quizGenError, setQuizGenError] = useState<string | null>(null);
+
   // Question dialog
   const [questionDialogOpen, setQuestionDialogOpen] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<QuizQuestion | null>(null);
@@ -157,6 +165,47 @@ function QuizSection({ lessonId }: { lessonId: string }) {
   }, [fetchQuiz]);
 
   // ── Quiz create/edit dialog helpers ──────────────────────────────────────
+
+  const handleGenerateQuiz = async () => {
+    setQuizGenerating(true);
+    setQuizGenError(null);
+    try {
+      const data = await authFetch<{
+        generatedQuestions: QuizQuestion[];
+        suggestedTitle: string;
+      }>(`/api/v1/admin/lessons/${lessonId}/quiz/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          docsUrl: quizGenDocsUrl,
+          questionCount: Number(quizGenCount) || 10,
+          difficulty: quizGenDifficulty,
+          language: "ja",
+        }),
+      });
+
+      // 生成結果でクイズ作成ダイアログを開く
+      setQuizGenDialogOpen(false);
+      setQuizGenDocsUrl("");
+      setIsEditingQuiz(false);
+      setQuizForm({
+        ...defaultQuizForm,
+        title: data.suggestedTitle,
+      });
+      // 生成された問題をセット
+      setQuiz({
+        ...quiz!,
+        questions: data.generatedQuestions,
+      } as Quiz);
+      setQuizDialogOpen(true);
+    } catch (e) {
+      setQuizGenError(
+        e instanceof Error ? e.message : "クイズ生成に失敗しました",
+      );
+    } finally {
+      setQuizGenerating(false);
+    }
+  };
 
   const openCreateQuizDialog = () => {
     setIsEditingQuiz(false);
@@ -401,7 +450,19 @@ function QuizSection({ lessonId }: { lessonId: string }) {
           <p className="text-sm text-muted-foreground">
             このレッスンにはまだテストが作成されていません。
           </p>
-          <Button onClick={openCreateQuizDialog}>テストを作成</Button>
+          <div className="flex gap-2">
+            <Button onClick={openCreateQuizDialog}>テストを作成</Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setQuizGenDialogOpen(true);
+                setQuizGenDocsUrl("");
+                setQuizGenError(null);
+              }}
+            >
+              Google Docsから生成
+            </Button>
+          </div>
         </div>
       ) : (
         /* ── Quiz exists ── */
@@ -823,6 +884,74 @@ function QuizSection({ lessonId }: { lessonId: string }) {
             </Button>
             <Button onClick={handleSaveQuestion} disabled={questionSaving}>
               {questionSaving ? "保存中..." : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quiz Generation Dialog */}
+      <Dialog open={quizGenDialogOpen} onOpenChange={(open) => !open && setQuizGenDialogOpen(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Google Docsからクイズを生成</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <Label>Google Docs URL</Label>
+              <Input
+                value={quizGenDocsUrl}
+                onChange={(e) => setQuizGenDocsUrl(e.target.value)}
+                placeholder="https://docs.google.com/document/d/.../edit"
+                disabled={quizGenerating}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>問題数</Label>
+                <Input
+                  type="number"
+                  value={quizGenCount}
+                  onChange={(e) => setQuizGenCount(e.target.value)}
+                  min={1}
+                  max={50}
+                  disabled={quizGenerating}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>難易度</Label>
+                <Select
+                  value={quizGenDifficulty}
+                  onValueChange={setQuizGenDifficulty}
+                  disabled={quizGenerating}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="easy">基礎</SelectItem>
+                    <SelectItem value="medium">標準</SelectItem>
+                    <SelectItem value="hard">応用</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {quizGenError && (
+              <div className="text-sm text-destructive">{quizGenError}</div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setQuizGenDialogOpen(false)}
+              disabled={quizGenerating}
+            >
+              キャンセル
+            </Button>
+            <Button
+              onClick={handleGenerateQuiz}
+              disabled={!quizGenDocsUrl || quizGenerating}
+            >
+              {quizGenerating ? "生成中..." : "生成"}
             </Button>
           </DialogFooter>
         </DialogContent>

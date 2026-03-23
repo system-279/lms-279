@@ -17,6 +17,8 @@ import {
   validateDriveFileMetadata,
   copyDriveFileToGCS,
 } from "../services/google-drive.js";
+import { parseDocsUrl, getDocumentContent } from "../services/google-docs.js";
+import { generateQuizQuestions } from "../services/quiz-generator.js";
 import { serializeCourse } from "./shared/courses.js";
 
 const router = Router();
@@ -530,6 +532,76 @@ router.get("/master/videos/:videoId/import-status", async (req: Request, res: Re
     importError: video.importError ?? null,
     gcsPath: video.gcsPath ?? null,
   });
+});
+
+// ============================================================
+// Google Docsクイズ自動生成
+// ============================================================
+
+/**
+ * マスターレッスン用クイズをGoogle Docsから自動生成（プレビュー用）
+ * POST /master/lessons/:lessonId/quiz/generate
+ */
+router.post("/master/lessons/:lessonId/quiz/generate", async (req: Request, res: Response) => {
+  if (!isWorkspaceIntegrationAvailable()) {
+    res.status(503).json({
+      error: "workspace_not_configured",
+      message: "Google Workspace integration is not configured",
+    });
+    return;
+  }
+
+  const ds = getMasterDS();
+  const lessonId = req.params.lessonId as string;
+  const { docsUrl, questionCount, language, difficulty } = req.body;
+
+  if (!docsUrl || typeof docsUrl !== "string") {
+    res.status(400).json({ error: "invalid_docsUrl", message: "docsUrl is required" });
+    return;
+  }
+
+  let documentId: string;
+  try {
+    documentId = parseDocsUrl(docsUrl);
+  } catch {
+    res.status(400).json({ error: "invalid_docsUrl", message: "Invalid Google Docs URL format" });
+    return;
+  }
+
+  const lesson = await ds.getLessonById(lessonId);
+  if (!lesson) {
+    res.status(404).json({ error: "not_found", message: "レッスンが見つかりません。" });
+    return;
+  }
+
+  let docTitle: string;
+  let docContent: string;
+  try {
+    const doc = await getDocumentContent(documentId);
+    docTitle = doc.title;
+    docContent = doc.content;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "ドキュメントの読み取りに失敗しました";
+    res.status(400).json({ error: "docs_read_failed", message });
+    return;
+  }
+
+  try {
+    const questions = await generateQuizQuestions(docContent, {
+      questionCount: typeof questionCount === "number" ? questionCount : undefined,
+      language: language === "en" ? "en" : "ja",
+      difficulty: ["easy", "medium", "hard"].includes(difficulty) ? difficulty : undefined,
+    });
+
+    res.json({
+      generatedQuestions: questions,
+      documentTitle: docTitle,
+      suggestedTitle: `${docTitle} - テスト`,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "クイズ生成に失敗しました";
+    res.status(500).json({ error: "quiz_generation_failed", message });
+  }
 });
 
 // ============================================================

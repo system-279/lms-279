@@ -16,6 +16,7 @@ import { quizAttemptsRouter } from "./quiz-attempts.js";
 import { progressRouter } from "./progress.js";
 import { analyticsRouter } from "./analytics.js";
 import { googleDriveImportRouter } from "./google-drive-import.js";
+import { quizGenerationRouter } from "./quiz-generation.js";
 
 /**
  * 全ての共通ルーターを統合したルーター
@@ -37,6 +38,7 @@ export function createSharedRouter(): Router {
   router.use(progressRouter);
   router.use(analyticsRouter);
   router.use(googleDriveImportRouter);
+  router.use(quizGenerationRouter);
 
   return router;
 }
@@ -54,3 +56,4 @@ export { quizAttemptsRouter } from "./quiz-attempts.js";
 export { progressRouter } from "./progress.js";
 export { analyticsRouter } from "./analytics.js";
 export { googleDriveImportRouter } from "./google-drive-import.js";
+export { quizGenerationRouter } from "./quiz-generation.js";
