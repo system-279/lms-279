@@ -47,9 +47,12 @@
 |-----------|------|------|
 | lessonId | string | 所属レッスンID |
 | courseId | string | 所属コースID |
-| sourceType | string | gcs / external_url |
+| sourceType | string | gcs / external_url / google_drive |
 | sourceUrl | string | 外部URL（sourceType=external_url時） |
-| gcsPath | string | GCSパス（sourceType=gcs時） |
+| gcsPath | string | GCSパス（sourceType=gcs or google_drive時） |
+| driveFileId | string? | Google DriveファイルID（sourceType=google_drive時） |
+| importStatus | string? | pending / importing / completed / error（google_drive時） |
+| importError | string? | インポートエラーメッセージ |
 | durationSec | number | 動画長（秒） |
 | requiredWatchRatio | number | 完了判定比率（default 0.95） |
 | speedLock | boolean | 倍速禁止（default true） |
