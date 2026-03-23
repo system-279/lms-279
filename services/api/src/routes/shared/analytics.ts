@@ -377,6 +377,58 @@ router.get(
 );
 
 // ============================================================
+// 出席管理ヘルパー
+// ============================================================
+
+interface AttendanceRecord {
+  sessionId: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  lessonId: string;
+  lessonTitle: string;
+  status: string;
+  entryAt: string;
+  exitAt: string | null;
+  exitReason: string | null;
+  durationMin: number;
+}
+
+async function buildAttendanceRecords(
+  ds: import("../../datasource/interface.js").DataSource,
+  courseId: string
+): Promise<AttendanceRecord[]> {
+  const sessions = await ds.getLessonSessionsByCourse(courseId);
+  const users = await ds.getUsers();
+  const lessons = await ds.getLessons({ courseId });
+
+  const userMap = new Map(users.map((u) => [u.id, u]));
+  const lessonMap = new Map(lessons.map((l) => [l.id, l]));
+
+  return sessions.map((s) => {
+    const user = userMap.get(s.userId);
+    const lesson = lessonMap.get(s.lessonId);
+    const durationMs = s.exitAt
+      ? new Date(s.exitAt).getTime() - new Date(s.entryAt).getTime()
+      : Date.now() - new Date(s.entryAt).getTime();
+
+    return {
+      sessionId: s.id,
+      userId: s.userId,
+      userName: user?.name ?? user?.email ?? s.userId,
+      userEmail: user?.email ?? "",
+      lessonId: s.lessonId,
+      lessonTitle: lesson?.title ?? s.lessonId,
+      status: s.status,
+      entryAt: s.entryAt,
+      exitAt: s.exitAt,
+      exitReason: s.exitReason,
+      durationMin: Math.round(durationMs / 60000),
+    };
+  });
+}
+
+// ============================================================
 // 7. 出席管理
 // GET /admin/analytics/attendance/courses/:courseId
 // ============================================================
@@ -394,34 +446,7 @@ router.get(
       return;
     }
 
-    const sessions = await ds.getLessonSessionsByCourse(courseId);
-    const users = await ds.getUsers();
-    const lessons = await ds.getLessons({ courseId });
-
-    const userMap = new Map(users.map((u) => [u.id, u]));
-    const lessonMap = new Map(lessons.map((l) => [l.id, l]));
-
-    const records = sessions.map((s) => {
-      const user = userMap.get(s.userId);
-      const lesson = lessonMap.get(s.lessonId);
-      const durationMs = s.exitAt
-        ? new Date(s.exitAt).getTime() - new Date(s.entryAt).getTime()
-        : Date.now() - new Date(s.entryAt).getTime();
-
-      return {
-        sessionId: s.id,
-        userId: s.userId,
-        userName: user?.name ?? user?.email ?? s.userId,
-        userEmail: user?.email ?? "",
-        lessonId: s.lessonId,
-        lessonTitle: lesson?.title ?? s.lessonId,
-        status: s.status,
-        entryAt: s.entryAt,
-        exitAt: s.exitAt,
-        exitReason: s.exitReason,
-        durationMin: Math.round(durationMs / 60000),
-      };
-    });
+    const records = await buildAttendanceRecords(ds, courseId);
 
     res.json({
       courseId,
@@ -452,36 +477,24 @@ router.get(
       return;
     }
 
-    const sessions = await ds.getLessonSessionsByCourse(courseId);
-    const users = await ds.getUsers();
-    const lessons = await ds.getLessons({ courseId });
-
-    const userMap = new Map(users.map((u) => [u.id, u]));
-    const lessonMap = new Map(lessons.map((l) => [l.id, l]));
+    const records = await buildAttendanceRecords(ds, courseId);
 
     const header = "ユーザー名,メール,レッスン,入室時刻,退室時刻,ステータス,退室理由,所要時間（分）\n";
-    const rows = sessions
-      .map((s) => {
-        const user = userMap.get(s.userId);
-        const lesson = lessonMap.get(s.lessonId);
-        const durationMs = s.exitAt
-          ? new Date(s.exitAt).getTime() - new Date(s.entryAt).getTime()
-          : 0;
-        const durationMin = Math.round(durationMs / 60000);
-
-        return [
-          user?.name ?? "",
-          user?.email ?? "",
-          lesson?.title ?? "",
-          s.entryAt,
-          s.exitAt ?? "",
-          s.status,
-          s.exitReason ?? "",
-          String(durationMin),
+    const rows = records
+      .map((r) =>
+        [
+          r.userName,
+          r.userEmail,
+          r.lessonTitle,
+          r.entryAt,
+          r.exitAt ?? "",
+          r.status,
+          r.exitReason ?? "",
+          String(r.durationMin),
         ]
           .map((v) => `"${v.replace(/"/g, '""')}"`)
-          .join(",");
-      })
+          .join(",")
+      )
       .join("\n");
 
     const bom = "\uFEFF";

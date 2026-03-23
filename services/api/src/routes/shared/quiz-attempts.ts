@@ -271,6 +271,8 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
   const answers: Record<string, string[]> = req.body.answers ?? {};
 
   // セッション制限チェック（出席管理）
+  // 設計上、セッション未作成（activeSession=null）の場合はクイズ提出を許可する。
+  // これにより出席管理導入前の受講者や、セッション機能未使用時の後方互換性を維持する。
   const activeSession = await ds.getActiveLessonSession(userId, quiz.lessonId);
   if (activeSession) {
     if (!validateSessionDeadline(activeSession)) {
