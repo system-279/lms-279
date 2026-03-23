@@ -69,6 +69,8 @@
 | GET | `/videos/:videoId/playback-url` | 署名付き再生URL取得 | Student |
 | POST | `/videos/:videoId/events` | イベントバッチ送信 | Student |
 | GET | `/videos/:videoId/analytics` | 自分の視聴状況 | Student |
+| POST | `/admin/videos/import-from-drive` | Google Driveから動画インポート | Admin |
+| GET | `/admin/videos/:videoId/import-status` | インポート状況確認 | Admin |
 
 ### クイズ
 
@@ -81,6 +83,7 @@
 | POST | `/quizzes/:quizId/attempts` | クイズ開始 | Student |
 | PATCH | `/quiz-attempts/:attemptId` | クイズ提出 | Student |
 | GET | `/quiz-attempts/:attemptId/result` | 結果取得 | Student |
+| POST | `/admin/lessons/:lessonId/quiz/generate` | Google DocsからAIクイズ生成 | Admin |
 
 ### 進捗
 

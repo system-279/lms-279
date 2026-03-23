@@ -12,11 +12,10 @@ import type { Lesson, CourseStatus } from "../types/entities.js";
 import { distributeCourseToTenant } from "../services/course-distributor.js";
 import { isWorkspaceIntegrationAvailable } from "../services/google-auth.js";
 import {
-  parseDriveUrl,
-  getDriveFileMetadata,
-  validateDriveFileMetadata,
-  copyDriveFileToGCS,
-} from "../services/google-drive.js";
+  prepareDriveImport,
+  isValidationError,
+  startAsyncDriveCopy,
+} from "../services/drive-import.js";
 import { parseDocsUrl, getDocumentContent } from "../services/google-docs.js";
 import { generateQuizQuestions } from "../services/quiz-generator.js";
 import { serializeCourse } from "./shared/courses.js";
@@ -430,87 +429,15 @@ router.post("/master/videos/import-from-drive", async (req: Request, res: Respon
   }
 
   const ds = getMasterDS();
-  const { driveUrl, lessonId, durationSec, requiredWatchRatio, speedLock } = req.body;
 
-  if (!driveUrl || typeof driveUrl !== "string") {
-    res.status(400).json({ error: "invalid_driveUrl", message: "driveUrl is required" });
-    return;
-  }
-  if (!lessonId || typeof lessonId !== "string") {
-    res.status(400).json({ error: "invalid_lessonId", message: "lessonId is required" });
+  const result = await prepareDriveImport(ds, req.body, { replaceExisting: true });
+  if (isValidationError(result)) {
+    res.status(result.status).json({ error: result.error, message: result.message });
     return;
   }
 
-  let fileId: string;
-  try {
-    fileId = parseDriveUrl(driveUrl);
-  } catch {
-    res.status(400).json({ error: "invalid_driveUrl", message: "Invalid Google Drive URL format" });
-    return;
-  }
-
-  const lesson = await ds.getLessonById(lessonId);
-  if (!lesson) {
-    res.status(404).json({ error: "not_found", message: "レッスンが見つかりません。" });
-    return;
-  }
-
-  // 既存動画があれば削除
-  const existingVideo = await ds.getVideoByLessonId(lessonId);
-  if (existingVideo) {
-    await ds.deleteVideo(existingVideo.id);
-  }
-
-  // Driveファイルメタデータ検証
-  let metadata: { name: string; mimeType: string; size: string };
-  try {
-    metadata = await getDriveFileMetadata(fileId);
-    validateDriveFileMetadata(metadata);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to validate Drive file";
-    res.status(400).json({ error: "drive_file_invalid", message });
-    return;
-  }
-
-  const video = await ds.createVideo({
-    lessonId,
-    courseId: lesson.courseId,
-    sourceType: "google_drive",
-    driveFileId: fileId,
-    importStatus: "pending",
-    durationSec: durationSec ?? 0,
-    requiredWatchRatio: requiredWatchRatio ?? 0.95,
-    speedLock: speedLock ?? true,
-  });
-
-  // 非同期でDrive→GCSコピー（マスターは_masterテナント）
-  // hasVideoはインポート完了後に設定
-  (async () => {
-    try {
-      await ds.updateVideo(video.id, { importStatus: "importing" });
-      const { gcsPath } = await copyDriveFileToGCS(fileId, "_master", metadata);
-      await ds.updateVideo(video.id, {
-        gcsPath,
-        importStatus: "completed",
-      });
-      await ds.updateLesson(lessonId, { hasVideo: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown import error";
-      console.error(`Drive import failed for master video ${video.id}:`, message);
-      try {
-        // transient/permanent分類
-        const isTransient = error instanceof Error &&
-          ("status" in error && [429, 503].includes((error as { status: number }).status));
-
-        await ds.updateVideo(video.id, {
-          importStatus: isTransient ? "pending" : "error",
-          importError: message,
-        });
-      } catch (updateError) {
-        console.error(`Failed to update import status for master video ${video.id}:`, updateError);
-      }
-    }
-  })();
+  const { video, metadata, fileId } = result;
+  startAsyncDriveCopy(ds, video.id, video.lessonId, fileId, "_master", metadata);
 
   res.status(202).json({ video });
 });
