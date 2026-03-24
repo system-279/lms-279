@@ -28,7 +28,7 @@ export interface DriveImportValidationError {
 
 export interface DriveImportResult {
   video: Video;
-  metadata: { name: string; mimeType: string; size: string };
+  metadata: { name: string; mimeType: string; size: string; durationSec: number | null };
   fileId: string;
 }
 
@@ -79,7 +79,7 @@ export async function prepareDriveImport(
   }
 
   // Driveファイルメタデータ検証
-  let metadata: { name: string; mimeType: string; size: string };
+  let metadata: { name: string; mimeType: string; size: string; durationSec: number | null };
   try {
     metadata = await getDriveFileMetadata(fileId);
     validateDriveFileMetadata(metadata);
@@ -95,7 +95,7 @@ export async function prepareDriveImport(
     sourceType: "google_drive",
     driveFileId: fileId,
     importStatus: "pending",
-    durationSec: durationSec ?? 0,
+    durationSec: durationSec ?? metadata.durationSec ?? 0,
     requiredWatchRatio: requiredWatchRatio ?? 0.95,
     speedLock: speedLock ?? true,
   });
@@ -122,7 +122,7 @@ export function startAsyncDriveCopy(
   lessonId: string,
   fileId: string,
   tenantId: string,
-  metadata: { name: string; mimeType: string; size: string }
+  metadata: { name: string; mimeType: string; size: string; durationSec: number | null }
 ): void {
   (async () => {
     try {

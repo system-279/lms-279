@@ -402,7 +402,6 @@ export default function MasterCourseDetailPage() {
       const body = {
         driveUrl: form.driveUrl,
         lessonId,
-        durationSec: form.durationSec ? Number(form.durationSec) : 0,
       };
       const data = await superFetch<{ video: { id: string } }>(
         `/api/v2/super/master/videos/import-from-drive`,
@@ -820,17 +819,9 @@ export default function MasterCourseDetailPage() {
                                   placeholder="https://drive.google.com/file/d/.../view"
                                 />
                               </div>
-                              <div className="space-y-1">
-                                <label className="text-sm font-medium">再生時間（秒）</label>
-                                <Input
-                                  type="number"
-                                  value={vForm.durationSec}
-                                  onChange={(e) =>
-                                    updateVideoForm(lesson.id, { durationSec: e.target.value })
-                                  }
-                                  placeholder="例: 300"
-                                />
-                              </div>
+                              <p className="text-xs text-muted-foreground">
+                                再生時間は動画ファイルから自動取得されます
+                              </p>
                               {importStatus[lesson.id] && (
                                 <div className={`text-sm ${
                                   importStatus[lesson.id].status === "error"
