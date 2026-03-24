@@ -106,7 +106,7 @@ npm run test
 Firestore: `tenants/{tenantId}/` 配下に全データ。
 詳細は`docs/data-model.md`を参照。
 
-主要コレクション: courses, lessons, videos, video_events, video_analytics, quizzes, quiz_attempts, user_progress, course_progress
+主要コレクション: courses, lessons, videos, video_events, video_analytics, quizzes, quiz_attempts, user_progress, course_progress, lesson_sessions
 
 ## ドキュメント更新ルール
 
@@ -129,3 +129,5 @@ Firestore: `tenants/{tenantId}/` 配下に全データ。
 | 7 | 可観測性（構造化ログ, Error Reporting, ヘルスチェック） | 完了 |
 | 8 | E2Eテスト + CI強化（Playwright, テストジョブ） | 完了 |
 | 9 | パフォーマンス + 本番仕上げ（キャッシュ, シャットダウン） | 完了 |
+| 10 | Google Workspace連携（Drive動画インポート, Docsクイズ生成） | 完了 |
+| 11 | 出席管理システム（入退室打刻 + セッション管理） | 完了 |
