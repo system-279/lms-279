@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
+import { Button } from "@/components/ui/button";
 
 export default function SuperAdminLayout({
   children,
@@ -10,6 +12,7 @@ export default function SuperAdminLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const { user, loading, signInWithGoogle, signOut } = useAuth();
 
   const navItems = [
     { href: "/super/master/courses", label: "マスターコース" },
@@ -17,17 +20,51 @@ export default function SuperAdminLayout({
     { href: "/super/settings", label: "設定" },
   ];
 
+  // Firebase認証の読み込み中
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-muted-foreground">読み込み中...</p>
+      </div>
+    );
+  }
+
+  // 未ログイン → サインイン画面
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <h1 className="text-2xl font-bold">スーパー管理</h1>
+          <p className="text-muted-foreground">
+            管理者アカウントでサインインしてください
+          </p>
+          <Button onClick={signInWithGoogle}>
+            Googleでサインイン
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen">
       <div className="border-b">
         <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
           <h1 className="text-lg font-bold">スーパー管理</h1>
-          <Link
-            href="/"
-            className="text-sm text-muted-foreground hover:text-foreground"
-          >
-            トップへ戻る
-          </Link>
+          <div className="flex items-center gap-4">
+            <span className="text-sm text-muted-foreground">
+              {user.email}
+            </span>
+            <Button variant="ghost" size="sm" onClick={signOut}>
+              ログアウト
+            </Button>
+            <Link
+              href="/"
+              className="text-sm text-muted-foreground hover:text-foreground"
+            >
+              トップへ戻る
+            </Link>
+          </div>
         </div>
       </div>
       <div className="mx-auto max-w-7xl px-4 py-4 space-y-4">
