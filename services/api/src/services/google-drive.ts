@@ -79,6 +79,7 @@ export async function getDriveFileMetadata(fileId: string): Promise<{
   const response = await drive.files.get({
     fileId,
     fields: "name,mimeType,size,videoMediaMetadata",
+    supportsAllDrives: true,
   });
 
   const { name, mimeType, size, videoMediaMetadata } = response.data;
@@ -115,7 +116,7 @@ export async function copyDriveFileToGCS(
 
   // Drive からストリーム取得
   const response = await drive.files.get(
-    { fileId, alt: "media" },
+    { fileId, alt: "media", supportsAllDrives: true },
     { responseType: "stream" }
   );
 
