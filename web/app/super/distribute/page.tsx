@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -38,6 +38,8 @@ type DistributionResult = {
 
 export default function DistributePage() {
   const { superFetch } = useSuperAdminFetch();
+  const superFetchRef = useRef(superFetch);
+  superFetchRef.current = superFetch;
 
   const [courses, setCourses] = useState<Course[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -59,8 +61,8 @@ export default function DistributePage() {
     setError(null);
     try {
       const [coursesData, tenantsData] = await Promise.all([
-        superFetch<{ courses: Course[] }>("/api/v2/super/master/courses"),
-        superFetch<{ tenants: Tenant[] }>("/api/v2/super/tenants"),
+        superFetchRef.current<{ courses: Course[] }>("/api/v2/super/master/courses"),
+        superFetchRef.current<{ tenants: Tenant[] }>("/api/v2/super/tenants"),
       ]);
       setCourses(coursesData.courses);
       setTenants(tenantsData.tenants);
@@ -69,7 +71,7 @@ export default function DistributePage() {
     } finally {
       setLoading(false);
     }
-  }, [superFetch]);
+  }, []);
 
   useEffect(() => {
     fetchData();

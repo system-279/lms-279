@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,8 @@ type SuperAdmin = {
 
 export default function SuperAdminSettingsPage() {
   const { superFetch } = useSuperAdminFetch();
+  const superFetchRef = useRef(superFetch);
+  superFetchRef.current = superFetch;
 
   const [admins, setAdmins] = useState<SuperAdmin[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,7 +32,7 @@ export default function SuperAdminSettingsPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await superFetch<{ admins: SuperAdmin[] }>(
+      const data = await superFetchRef.current<{ admins: SuperAdmin[] }>(
         "/api/v2/super/admins"
       );
       setAdmins(data.admins);
@@ -39,7 +41,7 @@ export default function SuperAdminSettingsPage() {
     } finally {
       setLoading(false);
     }
-  }, [superFetch]);
+  }, []);
 
   useEffect(() => {
     fetchAdmins();
