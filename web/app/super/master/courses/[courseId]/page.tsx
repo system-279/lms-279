@@ -125,9 +125,6 @@ export default function MasterCourseDetailPage() {
     Record<
       string,
       {
-        sourceType: "gcs" | "external_url" | "google_drive";
-        gcsPath: string;
-        sourceUrl: string;
         driveUrl: string;
         durationSec: string;
       }
@@ -269,9 +266,6 @@ export default function MasterCourseDetailPage() {
 
   const getVideoForm = (lessonId: string) =>
     videoForms[lessonId] ?? {
-      sourceType: "gcs" as const,
-      gcsPath: "",
-      sourceUrl: "",
       driveUrl: "",
       durationSec: "",
     };
@@ -322,55 +316,28 @@ export default function MasterCourseDetailPage() {
     setVideoSaving(lessonId);
     setVideoError(null);
     try {
-      if (form.sourceType === "google_drive") {
-        // Google Driveインポート
-        const body = {
-          driveUrl: form.driveUrl,
-          lessonId,
-          durationSec: form.durationSec ? Number(form.durationSec) : 0,
-        };
-        const data = await superFetch<{ video: { id: string } }>(
-          `/api/v2/super/master/videos/import-from-drive`,
-          {
-            method: "POST",
-            body: JSON.stringify(body),
-          },
-        );
-        setImportStatus((prev) => ({
-          ...prev,
-          [lessonId]: { status: "importing" },
-        }));
-        setVideoSaving(null);
-        // バックグラウンドでポーリング
-        pollImportStatus(data.video.id, lessonId);
-        return;
-      }
-
-      // GCS / 外部URL
-      const body: Record<string, unknown> = {
-        sourceType: form.sourceType,
+      const body = {
+        driveUrl: form.driveUrl,
+        lessonId,
+        durationSec: form.durationSec ? Number(form.durationSec) : 0,
       };
-      if (form.sourceType === "gcs") {
-        body.gcsPath = form.gcsPath;
-      } else {
-        body.sourceUrl = form.sourceUrl;
-      }
-      if (form.durationSec) {
-        body.durationSec = Number(form.durationSec);
-      }
-      await superFetch(
-        `/api/v2/super/master/lessons/${lessonId}/video`,
+      const data = await superFetch<{ video: { id: string } }>(
+        `/api/v2/super/master/videos/import-from-drive`,
         {
           method: "POST",
           body: JSON.stringify(body),
         },
       );
-      fetchData();
+      setImportStatus((prev) => ({
+        ...prev,
+        [lessonId]: { status: "importing" },
+      }));
+      setVideoSaving(null);
+      pollImportStatus(data.video.id, lessonId);
     } catch (e) {
       setVideoError(
         e instanceof Error ? e.message : "動画の保存に失敗しました",
       );
-    } finally {
       setVideoSaving(null);
     }
   };
@@ -694,116 +661,56 @@ export default function MasterCourseDetailPage() {
                         </div>
                       ) : (
                         <div className="space-y-3">
-                          <div className="grid grid-cols-2 gap-3">
-                            <div className="space-y-1">
-                              <label className="text-sm font-medium">
-                                ソースタイプ
-                              </label>
-                              <Select
-                                value={vForm.sourceType}
-                                onValueChange={(v) =>
-                                  updateVideoForm(lesson.id, {
-                                    sourceType: v as "gcs" | "external_url" | "google_drive",
-                                  })
-                                }
-                              >
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="gcs">GCS</SelectItem>
-                                  <SelectItem value="external_url">
-                                    外部URL
-                                  </SelectItem>
-                                  <SelectItem value="google_drive">
-                                    Google Drive
-                                  </SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-sm font-medium">
-                                再生時間（秒）
-                              </label>
-                              <Input
-                                type="number"
-                                value={vForm.durationSec}
-                                onChange={(e) =>
-                                  updateVideoForm(lesson.id, {
-                                    durationSec: e.target.value,
-                                  })
-                                }
-                                placeholder="例: 300"
-                              />
-                            </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium">
+                              Google Drive URL
+                            </label>
+                            <Input
+                              value={vForm.driveUrl}
+                              onChange={(e) =>
+                                updateVideoForm(lesson.id, {
+                                  driveUrl: e.target.value,
+                                })
+                              }
+                              placeholder="https://drive.google.com/file/d/.../view"
+                            />
                           </div>
-                          {vForm.sourceType === "gcs" ? (
-                            <div className="space-y-1">
-                              <label className="text-sm font-medium">
-                                GCSパス
-                              </label>
-                              <Input
-                                value={vForm.gcsPath}
-                                onChange={(e) =>
-                                  updateVideoForm(lesson.id, {
-                                    gcsPath: e.target.value,
-                                  })
-                                }
-                                placeholder="例: videos/course1/lesson1.mp4"
-                              />
-                            </div>
-                          ) : vForm.sourceType === "google_drive" ? (
-                            <div className="space-y-1">
-                              <label className="text-sm font-medium">
-                                Google Drive URL
-                              </label>
-                              <Input
-                                value={vForm.driveUrl}
-                                onChange={(e) =>
-                                  updateVideoForm(lesson.id, {
-                                    driveUrl: e.target.value,
-                                  })
-                                }
-                                placeholder="https://drive.google.com/file/d/.../view"
-                              />
-                              {importStatus[lesson.id] && (
-                                <div className={`text-sm mt-1 ${
-                                  importStatus[lesson.id].status === "error"
-                                    ? "text-destructive"
-                                    : "text-muted-foreground"
-                                }`}>
-                                  {importStatus[lesson.id].status === "importing" && "インポート中..."}
-                                  {importStatus[lesson.id].status === "pending" && "待機中..."}
-                                  {importStatus[lesson.id].status === "completed" && "インポート完了"}
-                                  {importStatus[lesson.id].status === "error" &&
-                                    `エラー: ${importStatus[lesson.id].error}`}
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="space-y-1">
-                              <label className="text-sm font-medium">
-                                外部URL
-                              </label>
-                              <Input
-                                value={vForm.sourceUrl}
-                                onChange={(e) =>
-                                  updateVideoForm(lesson.id, {
-                                    sourceUrl: e.target.value,
-                                  })
-                                }
-                                placeholder="https://..."
-                              />
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium">
+                              再生時間（秒）
+                            </label>
+                            <Input
+                              type="number"
+                              value={vForm.durationSec}
+                              onChange={(e) =>
+                                updateVideoForm(lesson.id, {
+                                  durationSec: e.target.value,
+                                })
+                              }
+                              placeholder="例: 300"
+                            />
+                          </div>
+                          {importStatus[lesson.id] && (
+                            <div className={`text-sm ${
+                              importStatus[lesson.id].status === "error"
+                                ? "text-destructive"
+                                : "text-muted-foreground"
+                            }`}>
+                              {importStatus[lesson.id].status === "importing" && "インポート中..."}
+                              {importStatus[lesson.id].status === "pending" && "待機中..."}
+                              {importStatus[lesson.id].status === "completed" && "インポート完了"}
+                              {importStatus[lesson.id].status === "error" &&
+                                `エラー: ${importStatus[lesson.id].error}`}
                             </div>
                           )}
                           <Button
                             size="sm"
                             onClick={() => handleSaveVideo(lesson.id)}
-                            disabled={videoSaving === lesson.id}
+                            disabled={videoSaving === lesson.id || !vForm.driveUrl}
                           >
                             {videoSaving === lesson.id
-                              ? "保存中..."
-                              : "動画を登録"}
+                              ? "インポート中..."
+                              : "Google Driveからインポート"}
                           </Button>
                         </div>
                       )}
