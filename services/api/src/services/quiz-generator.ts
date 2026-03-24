@@ -3,7 +3,7 @@ import type { QuizQuestion, QuizOption } from "../types/entities.js";
 
 const PROJECT_ID = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "lms-279";
 const LOCATION = process.env.VERTEX_AI_LOCATION || "asia-northeast1";
-const MODEL = "gemini-2.0-flash";
+const MODEL = "gemini-2.5-flash";
 
 export interface GenerateQuizOptions {
   questionCount?: number;  // default 10, max 50
