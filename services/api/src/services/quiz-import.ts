@@ -137,8 +137,8 @@ export async function importQuizFromDocument(
 - 問題文・選択肢のテキストは原文のまま。一文字も変更・要約・言い換えしない
 - 問題を追加・削除・統合しない。文書にある問題だけを出力する
 - 選択肢の順序を変えない
-- [BOLD]タグで囲まれた選択肢は isCorrect: true とする
-- [UNDERLINE]や[COLOR:...]タグで囲まれた選択肢も正解の可能性がある。文脈から判断してisCorrectを設定する
+- 選択肢の行にある[BOLD]タグは isCorrect: true とする。問題文の行にある[BOLD]は強調表示であり正解判定に使わない
+- 選択肢の行にある[UNDERLINE]や[COLOR:...]タグも正解の可能性がある。文脈から判断してisCorrectを設定する
 - 書式タグがない選択肢で、正解が判別できない場合は isCorrect: null とする
 - explanationは必ず空文字""にする（解説を創作しない）
 - 出力は${langLabel}で行う
@@ -161,6 +161,8 @@ export async function importQuizFromDocument(
 
 ## テスト文書
 ${formattedContent.slice(0, 30000)}`;
+
+  const contentTruncated = formattedContent.length > 30000;
 
   const ai = getVertexAI();
   const model = ai.getGenerativeModel({
@@ -186,14 +188,30 @@ ${formattedContent.slice(0, 30000)}`;
     throw new Error("Failed to parse Gemini response as JSON");
   }
 
-  if (!Array.isArray(parsed)) {
-    throw new Error("Gemini response is not an array");
+  // Geminiが {questions: [...]} 形式で返した場合のアンラップ
+  let questionsArray: unknown[];
+  if (Array.isArray(parsed)) {
+    questionsArray = parsed;
+  } else if (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    Array.isArray((parsed as Record<string, unknown>).questions)
+  ) {
+    questionsArray = (parsed as Record<string, unknown>).questions as unknown[];
+  } else {
+    throw new Error("ドキュメントの形式が認識できませんでした。問題・選択肢の書式を確認してください。");
   }
 
-  const questions = validateImportedQuestions(parsed);
+  const questions = validateImportedQuestions(questionsArray);
 
   // 警告生成
   const warnings: string[] = [];
+
+  if (contentTruncated) {
+    warnings.push(
+      "ドキュメントが長すぎるため、先頭30,000文字のみを処理しました。問題数をご確認ください。"
+    );
+  }
   const unknownCorrectCount = questions.filter((q) =>
     q.options.every((o) => o.isCorrect === null)
   ).length;
@@ -257,6 +275,9 @@ export async function resolveAndImportQuiz(
 
     if (testTab) {
       resolvedTabId = testTab.id;
+    } else if (tabs.length === 1) {
+      // タブが1つしかない場合は自動選択
+      resolvedTabId = tabs[0].id;
     } else {
       return { action: "select_tab", tabs, documentTitle: docTitle };
     }
