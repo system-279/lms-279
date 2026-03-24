@@ -1,21 +1,47 @@
 import { google, type drive_v3, type docs_v1 } from "googleapis";
+import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 
 const SCOPES = [
   "https://www.googleapis.com/auth/drive.readonly",
   "https://www.googleapis.com/auth/documents.readonly",
 ];
 
+const GCP_PROJECT_ID = "lms-279";
+const DWD_SECRET_NAME = `projects/${GCP_PROJECT_ID}/secrets/dwd-workspace-key/versions/latest`;
+
 // シングルトンインスタンス
-let authClient: InstanceType<typeof google.auth.GoogleAuth> | null = null;
+let authClient: InstanceType<typeof google.auth.JWT> | null = null;
 let driveClient: drive_v3.Drive | null = null;
 let docsClient: docs_v1.Docs | null = null;
 let cachedAdminEmail: string | null = null;
+let secretManagerClient: SecretManagerServiceClient | null = null;
+
+/**
+ * Secret Managerからサービスアカウントキーを取得
+ */
+async function getDwdKeyFromSecretManager(): Promise<{
+  client_email: string;
+  private_key: string;
+}> {
+  if (!secretManagerClient) {
+    secretManagerClient = new SecretManagerServiceClient();
+  }
+  const [version] = await secretManagerClient.accessSecretVersion({
+    name: DWD_SECRET_NAME,
+  });
+  const payload = version.payload?.data;
+  if (!payload) {
+    throw new Error("DWD service account key not found in Secret Manager");
+  }
+  const keyData = typeof payload === "string" ? payload : payload.toString();
+  return JSON.parse(keyData);
+}
 
 /**
  * Domain-Wide Delegation 用の認証クライアント（シングルトン）
- * 環境変数はリクエスト時に読み取る（Cloud Runのコンテナ再利用に対応）
+ * Secret ManagerからDWD専用SAキーを取得し、subject指定でJWT認証
  */
-function getAuthClient() {
+async function getAuthClient(): Promise<InstanceType<typeof google.auth.JWT>> {
   const email = process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL;
 
   if (!email) {
@@ -26,12 +52,13 @@ function getAuthClient() {
 
   // メールが変わった場合はクライアントを再作成
   if (!authClient || cachedAdminEmail !== email) {
+    const keyData = await getDwdKeyFromSecretManager();
     cachedAdminEmail = email;
-    authClient = new google.auth.GoogleAuth({
+    authClient = new google.auth.JWT({
+      email: keyData.client_email,
+      key: keyData.private_key,
       scopes: SCOPES,
-      clientOptions: {
-        subject: email,
-      },
+      subject: email,
     });
     // 認証が変わったのでAPIクライアントもリセット
     driveClient = null;
@@ -43,9 +70,10 @@ function getAuthClient() {
 /**
  * Google Drive API クライアント（シングルトン）
  */
-export function getDriveClient(): drive_v3.Drive {
+export async function getDriveClient(): Promise<drive_v3.Drive> {
   if (!driveClient) {
-    driveClient = google.drive({ version: "v3", auth: getAuthClient() });
+    const auth = await getAuthClient();
+    driveClient = google.drive({ version: "v3", auth });
   }
   return driveClient;
 }
@@ -53,9 +81,10 @@ export function getDriveClient(): drive_v3.Drive {
 /**
  * Google Docs API クライアント（シングルトン）
  */
-export function getDocsClient(): docs_v1.Docs {
+export async function getDocsClient(): Promise<docs_v1.Docs> {
   if (!docsClient) {
-    docsClient = google.docs({ version: "v1", auth: getAuthClient() });
+    const auth = await getAuthClient();
+    docsClient = google.docs({ version: "v1", auth });
   }
   return docsClient;
 }

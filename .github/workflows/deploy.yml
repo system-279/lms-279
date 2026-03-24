@@ -81,7 +81,7 @@ jobs:
       - name: Deploy API to Cloud Run
         run: |
           # Build env vars string
-          ENV_VARS="DEMO_ENABLED=true,AUTH_MODE=firebase,CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app"
+          ENV_VARS="DEMO_ENABLED=true,AUTH_MODE=firebase,CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net"
           if [ -n "${{ secrets.SUPER_ADMIN_EMAILS }}" ]; then
             ENV_VARS="${ENV_VARS},SUPER_ADMIN_EMAILS=${{ secrets.SUPER_ADMIN_EMAILS }}"
           fi

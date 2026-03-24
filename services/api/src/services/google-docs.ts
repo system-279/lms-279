@@ -36,7 +36,7 @@ export function parseDocsUrl(url: string): string {
 export async function getDocumentContent(
   documentId: string
 ): Promise<{ title: string; content: string }> {
-  const docs = getDocsClient();
+  const docs = await getDocsClient();
   const response = await docs.documents.get({ documentId });
 
   const doc = response.data;
