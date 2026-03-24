@@ -5,32 +5,37 @@ const SCOPES = [
   "https://www.googleapis.com/auth/documents.readonly",
 ];
 
-const WORKSPACE_ADMIN_EMAIL = process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL;
-
 // シングルトンインスタンス
 let authClient: InstanceType<typeof google.auth.GoogleAuth> | null = null;
 let driveClient: drive_v3.Drive | null = null;
 let docsClient: docs_v1.Docs | null = null;
+let cachedAdminEmail: string | null = null;
 
 /**
  * Domain-Wide Delegation 用の認証クライアント（シングルトン）
- * サービスアカウントが WORKSPACE_ADMIN_EMAIL を impersonate して
- * 279279.net ドメイン内のファイルにアクセスする
+ * 環境変数はリクエスト時に読み取る（Cloud Runのコンテナ再利用に対応）
  */
 function getAuthClient() {
-  if (!authClient) {
-    if (!WORKSPACE_ADMIN_EMAIL) {
-      throw new Error(
-        "GOOGLE_WORKSPACE_ADMIN_EMAIL is required for Google Workspace integration"
-      );
-    }
+  const email = process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL;
 
+  if (!email) {
+    throw new Error(
+      "GOOGLE_WORKSPACE_ADMIN_EMAIL is required for Google Workspace integration"
+    );
+  }
+
+  // メールが変わった場合はクライアントを再作成
+  if (!authClient || cachedAdminEmail !== email) {
+    cachedAdminEmail = email;
     authClient = new google.auth.GoogleAuth({
       scopes: SCOPES,
       clientOptions: {
-        subject: WORKSPACE_ADMIN_EMAIL,
+        subject: email,
       },
     });
+    // 認証が変わったのでAPIクライアントもリセット
+    driveClient = null;
+    docsClient = null;
   }
   return authClient;
 }
@@ -57,7 +62,8 @@ export function getDocsClient(): docs_v1.Docs {
 
 /**
  * Google Workspace 連携が利用可能か確認
+ * リクエスト時に環境変数を読み取る
  */
 export function isWorkspaceIntegrationAvailable(): boolean {
-  return !!WORKSPACE_ADMIN_EMAIL;
+  return !!process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL;
 }
