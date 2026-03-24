@@ -14,6 +14,7 @@ export default function SuperAdminLayout({
   const navItems = [
     { href: "/super/master/courses", label: "マスターコース" },
     { href: "/super/distribute", label: "テナント配信" },
+    { href: "/super/settings", label: "設定" },
   ];
 
   return (
