@@ -136,6 +136,13 @@ export default function MasterCourseDetailPage() {
     Record<string, { status: string; error?: string | null }>
   >({});
 
+  // Video source mode per lesson (upload or google_drive)
+  const [videoSourceMode, setVideoSourceMode] = useState<Record<string, "upload" | "google_drive">>({});
+  // File upload state
+  const [selectedFiles, setSelectedFiles] = useState<Record<string, File | null>>({});
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
+  const [uploadDurations, setUploadDurations] = useState<Record<string, number | null>>({});
+
   // Quiz form state (per lesson, tracked by lessonId)
   const [quizForms, setQuizForms] = useState<
     Record<string, { title: string; questions: Question[] }>
@@ -309,6 +316,82 @@ export default function MasterCourseDetailPage() {
       }
     }
     setVideoError("インポートがタイムアウトしました");
+  };
+
+  const handleFileChange = (lessonId: string, file: File | null) => {
+    setSelectedFiles((prev) => ({ ...prev, [lessonId]: file }));
+    setUploadDurations((prev) => ({ ...prev, [lessonId]: null }));
+    if (file) {
+      const url = URL.createObjectURL(file);
+      const vid = document.createElement("video");
+      vid.preload = "metadata";
+      vid.onloadedmetadata = () => {
+        setUploadDurations((prev) => ({ ...prev, [lessonId]: Math.floor(vid.duration) }));
+        URL.revokeObjectURL(url);
+      };
+      vid.src = url;
+    }
+  };
+
+  const handleFileUpload = async (lessonId: string) => {
+    const file = selectedFiles[lessonId];
+    if (!file) return;
+    setVideoSaving(lessonId);
+    setVideoError(null);
+    setUploadProgress((prev) => ({ ...prev, [lessonId]: 0 }));
+
+    try {
+      // Step 1: 署名付きアップロードURL取得
+      const { uploadUrl, gcsPath } = await superFetch<{
+        uploadUrl: string;
+        gcsPath: string;
+      }>("/api/v2/super/master/videos/upload-url", {
+        method: "POST",
+        body: JSON.stringify({
+          fileName: file.name,
+          contentType: file.type,
+        }),
+      });
+
+      // Step 2: GCSに直接アップロード
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            setUploadProgress((prev) => ({
+              ...prev,
+              [lessonId]: Math.round((event.loaded / event.total) * 100),
+            }));
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else reject(new Error(`アップロード失敗 (${xhr.status})`));
+        };
+        xhr.onerror = () => reject(new Error("ネットワークエラー"));
+        xhr.open("PUT", uploadUrl);
+        xhr.setRequestHeader("Content-Type", file.type);
+        xhr.send(file);
+      });
+
+      // Step 3: 動画メタデータ登録
+      await superFetch(`/api/v2/super/master/lessons/${lessonId}/video`, {
+        method: "POST",
+        body: JSON.stringify({
+          gcsPath,
+          sourceType: "gcs",
+          durationSec: uploadDurations[lessonId] ?? 0,
+        }),
+      });
+
+      setSelectedFiles((prev) => ({ ...prev, [lessonId]: null }));
+      setUploadProgress((prev) => ({ ...prev, [lessonId]: 0 }));
+      fetchData();
+    } catch (e) {
+      setVideoError(e instanceof Error ? e.message : "アップロードに失敗しました");
+    } finally {
+      setVideoSaving(null);
+    }
   };
 
   const handleSaveVideo = async (lessonId: string) => {
@@ -661,57 +744,117 @@ export default function MasterCourseDetailPage() {
                         </div>
                       ) : (
                         <div className="space-y-3">
-                          <div className="space-y-1">
-                            <label className="text-sm font-medium">
-                              Google Drive URL
-                            </label>
-                            <Input
-                              value={vForm.driveUrl}
-                              onChange={(e) =>
-                                updateVideoForm(lesson.id, {
-                                  driveUrl: e.target.value,
-                                })
-                              }
-                              placeholder="https://drive.google.com/file/d/.../view"
-                            />
+                          {/* Source mode tabs */}
+                          <div className="flex gap-2 border-b">
+                            <button
+                              className={`px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                                (videoSourceMode[lesson.id] ?? "upload") === "upload"
+                                  ? "border-primary text-primary"
+                                  : "border-transparent text-muted-foreground hover:text-foreground"
+                              }`}
+                              onClick={() => setVideoSourceMode((prev) => ({ ...prev, [lesson.id]: "upload" }))}
+                            >
+                              ファイルアップロード
+                            </button>
+                            <button
+                              className={`px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                                videoSourceMode[lesson.id] === "google_drive"
+                                  ? "border-primary text-primary"
+                                  : "border-transparent text-muted-foreground hover:text-foreground"
+                              }`}
+                              onClick={() => setVideoSourceMode((prev) => ({ ...prev, [lesson.id]: "google_drive" }))}
+                            >
+                              Google Drive
+                            </button>
                           </div>
-                          <div className="space-y-1">
-                            <label className="text-sm font-medium">
-                              再生時間（秒）
-                            </label>
-                            <Input
-                              type="number"
-                              value={vForm.durationSec}
-                              onChange={(e) =>
-                                updateVideoForm(lesson.id, {
-                                  durationSec: e.target.value,
-                                })
-                              }
-                              placeholder="例: 300"
-                            />
-                          </div>
-                          {importStatus[lesson.id] && (
-                            <div className={`text-sm ${
-                              importStatus[lesson.id].status === "error"
-                                ? "text-destructive"
-                                : "text-muted-foreground"
-                            }`}>
-                              {importStatus[lesson.id].status === "importing" && "インポート中..."}
-                              {importStatus[lesson.id].status === "pending" && "待機中..."}
-                              {importStatus[lesson.id].status === "completed" && "インポート完了"}
-                              {importStatus[lesson.id].status === "error" &&
-                                `エラー: ${importStatus[lesson.id].error}`}
-                            </div>
+
+                          {(videoSourceMode[lesson.id] ?? "upload") === "upload" ? (
+                            <>
+                              <div className="space-y-2">
+                                <label className="text-sm font-medium">動画ファイル</label>
+                                <input
+                                  type="file"
+                                  accept="video/*"
+                                  onChange={(e) => handleFileChange(lesson.id, e.target.files?.[0] ?? null)}
+                                  disabled={videoSaving === lesson.id}
+                                  className="block text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 disabled:opacity-50"
+                                />
+                              </div>
+                              {selectedFiles[lesson.id] && (
+                                <p className="text-sm text-muted-foreground">
+                                  {selectedFiles[lesson.id]!.name}
+                                  {uploadDurations[lesson.id] != null && ` (${uploadDurations[lesson.id]} 秒)`}
+                                </p>
+                              )}
+                              {videoSaving === lesson.id && (uploadProgress[lesson.id] ?? 0) > 0 && (
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between text-sm text-muted-foreground">
+                                    <span>アップロード中...</span>
+                                    <span>{uploadProgress[lesson.id]}%</span>
+                                  </div>
+                                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                                    <div
+                                      className="h-full bg-primary transition-all duration-200"
+                                      style={{ width: `${uploadProgress[lesson.id]}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              )}
+                              <Button
+                                size="sm"
+                                onClick={() => handleFileUpload(lesson.id)}
+                                disabled={!selectedFiles[lesson.id] || videoSaving === lesson.id}
+                              >
+                                {videoSaving === lesson.id ? "アップロード中..." : "アップロード"}
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <div className="space-y-1">
+                                <label className="text-sm font-medium">Google Drive URL</label>
+                                <Input
+                                  value={vForm.driveUrl}
+                                  onChange={(e) =>
+                                    updateVideoForm(lesson.id, { driveUrl: e.target.value })
+                                  }
+                                  placeholder="https://drive.google.com/file/d/.../view"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-sm font-medium">再生時間（秒）</label>
+                                <Input
+                                  type="number"
+                                  value={vForm.durationSec}
+                                  onChange={(e) =>
+                                    updateVideoForm(lesson.id, { durationSec: e.target.value })
+                                  }
+                                  placeholder="例: 300"
+                                />
+                              </div>
+                              {importStatus[lesson.id] && (
+                                <div className={`text-sm ${
+                                  importStatus[lesson.id].status === "error"
+                                    ? "text-destructive"
+                                    : "text-muted-foreground"
+                                }`}>
+                                  {importStatus[lesson.id].status === "importing" && "インポート中..."}
+                                  {importStatus[lesson.id].status === "pending" && "待機中..."}
+                                  {importStatus[lesson.id].status === "completed" && "インポート完了"}
+                                  {importStatus[lesson.id].status === "error" &&
+                                    `エラー: ${importStatus[lesson.id].error}`}
+                                </div>
+                              )}
+                              <Button
+                                size="sm"
+                                onClick={() => handleSaveVideo(lesson.id)}
+                                disabled={videoSaving === lesson.id || !vForm.driveUrl}
+                              >
+                                {videoSaving === lesson.id
+                                  ? "インポート中..."
+                                  : "Google Driveからインポート"}
+                              </Button>
+                            </>
                           )}
-                          <Button
-                            size="sm"
-                            onClick={() => handleSaveVideo(lesson.id)}
-                            disabled={videoSaving === lesson.id || !vForm.driveUrl}
-                          >
-                            {videoSaving === lesson.id
-                              ? "インポート中..."
-                              : "Google Driveからインポート"}
-                          </Button>
                         </div>
                       )}
                       {videoError && videoSaving === null && (

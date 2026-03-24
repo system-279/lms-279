@@ -10,6 +10,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { FirestoreDataSource } from "../datasource/firestore.js";
 import type { Lesson, CourseStatus } from "../types/entities.js";
 import { distributeCourseToTenant } from "../services/course-distributor.js";
+import { generateUploadUrl } from "../services/gcs.js";
 import { isWorkspaceIntegrationAvailable } from "../services/google-auth.js";
 import {
   prepareDriveImport,
@@ -296,6 +297,30 @@ router.delete("/master/lessons/:id", async (req: Request, res: Response) => {
   await ds.deleteLesson(id);
 
   res.status(204).send();
+});
+
+// ============================================================
+// 動画アップロード
+// ============================================================
+
+/**
+ * マスター動画アップロード用の署名付きURL発行
+ * POST /master/videos/upload-url
+ */
+router.post("/master/videos/upload-url", async (req: Request, res: Response) => {
+  const { fileName, contentType } = req.body;
+
+  if (!fileName || typeof fileName !== "string" || fileName.trim() === "") {
+    res.status(400).json({ error: "invalid_fileName", message: "fileName is required" });
+    return;
+  }
+  if (!contentType || typeof contentType !== "string" || contentType.trim() === "") {
+    res.status(400).json({ error: "invalid_contentType", message: "contentType is required" });
+    return;
+  }
+
+  const { uploadUrl, gcsPath } = await generateUploadUrl(fileName.trim(), contentType.trim(), "_master");
+  res.status(200).json({ uploadUrl, gcsPath });
 });
 
 // ============================================================
