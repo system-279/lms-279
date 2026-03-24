@@ -73,19 +73,24 @@ export async function getDriveFileMetadata(fileId: string): Promise<{
   name: string;
   mimeType: string;
   size: string;
+  durationSec: number | null;
 }> {
   const drive = getDriveClient();
   const response = await drive.files.get({
     fileId,
-    fields: "name,mimeType,size",
+    fields: "name,mimeType,size,videoMediaMetadata",
   });
 
-  const { name, mimeType, size } = response.data;
+  const { name, mimeType, size, videoMediaMetadata } = response.data;
   if (!name || !mimeType || !size) {
     throw new Error("Failed to retrieve file metadata from Google Drive");
   }
 
-  return { name, mimeType, size };
+  // Drive APIはvideoMediaMetadata.durationMillisで動画長を返す
+  const durationMs = videoMediaMetadata?.durationMillis;
+  const durationSec = durationMs ? Math.round(Number(durationMs) / 1000) : null;
+
+  return { name, mimeType, size, durationSec };
 }
 
 /**
@@ -99,7 +104,7 @@ export async function getDriveFileMetadata(fileId: string): Promise<{
 export async function copyDriveFileToGCS(
   fileId: string,
   tenantId: string,
-  preloadedMetadata?: { name: string; mimeType: string; size: string }
+  preloadedMetadata?: { name: string; mimeType: string; size: string; durationSec: number | null }
 ): Promise<{ gcsPath: string; fileName: string }> {
   const drive = getDriveClient();
 

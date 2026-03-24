@@ -989,7 +989,6 @@ export default function LessonDetailPage() {
   // Google Drive import state
   const [videoSourceMode, setVideoSourceMode] = useState<"upload" | "google_drive">("upload");
   const [driveUrl, setDriveUrl] = useState("");
-  const [driveDurationSec, setDriveDurationSec] = useState("");
   const [driveImporting, setDriveImporting] = useState(false);
   const [driveImportStatus, setDriveImportStatus] = useState<string | null>(null);
 
@@ -1145,7 +1144,6 @@ export default function LessonDetailPage() {
           body: JSON.stringify({
             driveUrl,
             lessonId,
-            durationSec: driveDurationSec ? Number(driveDurationSec) : 0,
           }),
         },
       );
@@ -1166,7 +1164,6 @@ export default function LessonDetailPage() {
 
           if (status.importStatus === "completed") {
             setDriveUrl("");
-            setDriveDurationSec("");
             fetchData();
             return;
           }
@@ -1361,16 +1358,9 @@ export default function LessonDetailPage() {
                       />
                     </div>
 
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">再生時間（秒）</label>
-                      <Input
-                        type="number"
-                        value={driveDurationSec}
-                        onChange={(e) => setDriveDurationSec(e.target.value)}
-                        placeholder="例: 300"
-                        disabled={driveImporting}
-                      />
-                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      再生時間は動画ファイルから自動取得されます
+                    </p>
 
                     {driveImportStatus && (
                       <div className="text-sm text-muted-foreground">
