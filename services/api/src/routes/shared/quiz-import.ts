@@ -6,15 +6,8 @@
 import { Router, Request, Response } from "express";
 import { requireAdmin } from "../../middleware/auth.js";
 import { isWorkspaceIntegrationAvailable } from "../../services/google-auth.js";
-import {
-  parseDocsUrl,
-  getDocumentTabs,
-  getDocumentTabContentFormatted,
-} from "../../services/google-docs.js";
-import {
-  importQuizFromDocument,
-  buildFormattedContentMarkup,
-} from "../../services/quiz-import.js";
+import { parseDocsUrl } from "../../services/google-docs.js";
+import { resolveAndImportQuiz } from "../../services/quiz-import.js";
 
 const router = Router();
 
@@ -46,120 +39,42 @@ router.post(
     const lessonId = req.params.lessonId as string;
     const { docsUrl, tabId } = req.body;
 
-    // バリデーション
     if (!docsUrl || typeof docsUrl !== "string") {
-      res
-        .status(400)
-        .json({ error: "invalid_docsUrl", message: "docsUrl is required" });
+      res.status(400).json({ error: "invalid_docsUrl", message: "docsUrl is required" });
       return;
     }
 
-    // Docs URL解析
     let documentId: string;
     try {
       documentId = parseDocsUrl(docsUrl);
     } catch {
-      res.status(400).json({
-        error: "invalid_docsUrl",
-        message: "Invalid Google Docs URL format",
-      });
+      res.status(400).json({ error: "invalid_docsUrl", message: "Invalid Google Docs URL format" });
       return;
     }
 
-    // レッスン存在チェック
     const lesson = await ds.getLessonById(lessonId);
     if (!lesson) {
-      res
-        .status(404)
-        .json({ error: "not_found", message: "Lesson not found" });
+      res.status(404).json({ error: "not_found", message: "Lesson not found" });
       return;
     }
 
-    // タブ解決
-    let resolvedTabId = typeof tabId === "string" ? tabId : null;
-
-    if (!resolvedTabId) {
-      // テストタブを自動検出
-      let docTitle: string;
-      let tabs: { id: string; title: string }[];
-      try {
-        const result = await getDocumentTabs(documentId);
-        docTitle = result.title;
-        tabs = result.tabs;
-      } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : "Failed to read document tabs";
-        res.status(400).json({ error: "docs_read_failed", message });
-        return;
-      }
-
-      // 「テスト」を含むタブを検索（大文字小文字無視）
-      const testTab = tabs.find((t) =>
-        t.title.toLowerCase().includes("テスト")
-      );
-
-      if (testTab) {
-        resolvedTabId = testTab.id;
-      } else {
-        // テストタブが見つからない → タブ一覧を返却
-        res.json({
-          action: "select_tab" as const,
-          tabs,
-          documentTitle: docTitle,
-        });
-        return;
-      }
-    }
-
-    // 書式付きコンテンツ取得
-    let docTitle: string;
-    let formattedMarkup: string;
     try {
-      const result = await getDocumentTabContentFormatted(
+      const result = await resolveAndImportQuiz(
         documentId,
-        resolvedTabId
-      );
-      docTitle = result.title;
-      formattedMarkup = buildFormattedContentMarkup(result.formattedContent);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to read tab content";
-      const isTabNotFound =
-        error instanceof Error && error.message.includes("Tab not found");
-      res.status(isTabNotFound ? 400 : 500).json({
-        error: isTabNotFound ? "tab_not_found" : "docs_read_failed",
-        message,
-      });
-      return;
-    }
-
-    // Geminiでパース
-    try {
-      const { questions, warnings } = await importQuizFromDocument(
-        formattedMarkup,
+        typeof tabId === "string" ? tabId : null,
         { language: "ja" }
       );
-
-      res.json({
-        action: "imported" as const,
-        importedQuestions: questions,
-        documentTitle: docTitle,
-        suggestedTitle: `${docTitle} - 確認テスト`,
-        warnings,
-      });
+      res.json(result);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Quiz import failed";
-
+      const message = error instanceof Error ? error.message : "Quiz import failed";
+      const isTabNotFound = error instanceof Error && error.message.includes("Tab not found");
       const isTransient =
         error instanceof Error &&
         "status" in error &&
         [429, 503].includes((error as { status: number }).status);
 
-      res.status(isTransient ? 503 : 500).json({
-        error: "quiz_import_failed",
+      res.status(isTabNotFound ? 400 : isTransient ? 503 : 500).json({
+        error: isTabNotFound ? "tab_not_found" : "quiz_import_failed",
         message,
       });
     }

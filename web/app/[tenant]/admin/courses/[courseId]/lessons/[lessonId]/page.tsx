@@ -257,10 +257,15 @@ function QuizSection({ lessonId }: { lessonId: string }) {
           title: data.suggestedTitle ?? "",
         });
         // API options → UI choices にマッピング、isCorrect: null → false
-        const questions = data.importedQuestions.map((q: Record<string, unknown>) => ({
-          ...q,
-          choices: ((q.options ?? q.choices) as { id: string; text: string; isCorrect: boolean | null }[]).map((o) => ({
-            ...o,
+        const questions = data.importedQuestions.map((q: { text: string; type: string; options: { id: string; text: string; isCorrect: boolean | null }[]; id: string; points: number; explanation: string }) => ({
+          id: q.id,
+          text: q.text,
+          type: q.type as "single" | "multi",
+          points: q.points,
+          explanation: q.explanation,
+          choices: q.options.map((o) => ({
+            id: o.id,
+            text: o.text,
             isCorrect: o.isCorrect ?? false,
           })),
         }));

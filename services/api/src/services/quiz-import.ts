@@ -1,5 +1,10 @@
+import crypto from "node:crypto";
 import { VertexAI } from "@google-cloud/vertexai";
 import type { FormattedParagraph } from "./google-docs.js";
+import {
+  getDocumentTabs,
+  getDocumentTabContentFormatted,
+} from "./google-docs.js";
 
 const PROJECT_ID = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "lms-279";
 const LOCATION = process.env.VERTEX_AI_LOCATION || "asia-northeast1";
@@ -76,8 +81,7 @@ export function validateImportedQuestions(
     throw new Error("Imported questions exceed the 50 question limit");
   }
 
-  let idCounter = 0;
-  const genId = () => `imp_${Date.now()}_${++idCounter}`;
+  const genId = () => crypto.randomUUID();
 
   return rawQuestions.map((q, i) => {
     if (!q.text || typeof q.text !== "string") {
@@ -212,4 +216,66 @@ ${formattedContent.slice(0, 30000)}`;
   }
 
   return { questions, warnings };
+}
+
+// ============================================================
+// ルートハンドラ用: タブ解決 → インポートの統合フロー
+// ============================================================
+
+export type QuizImportResult =
+  | {
+      action: "select_tab";
+      tabs: { id: string; title: string }[];
+      documentTitle: string;
+    }
+  | {
+      action: "imported";
+      importedQuestions: ImportedQuizQuestion[];
+      documentTitle: string;
+      suggestedTitle: string;
+      warnings: string[];
+    };
+
+/**
+ * Google Docsのタブ解決 → 書式付き取得 → Geminiパースを一括実行
+ * ルートハンドラはこの関数を呼び出すだけで済む
+ */
+export async function resolveAndImportQuiz(
+  documentId: string,
+  tabId: string | null,
+  options: { language?: "ja" | "en" } = {}
+): Promise<QuizImportResult> {
+  let resolvedTabId = tabId;
+
+  if (!resolvedTabId) {
+    const { title: docTitle, tabs } = await getDocumentTabs(documentId);
+
+    // 「テスト」を含むタブを検索
+    const testTab = tabs.find((t) =>
+      t.title.toLowerCase().includes("テスト")
+    );
+
+    if (testTab) {
+      resolvedTabId = testTab.id;
+    } else {
+      return { action: "select_tab", tabs, documentTitle: docTitle };
+    }
+  }
+
+  const { title: docTitle, formattedContent } =
+    await getDocumentTabContentFormatted(documentId, resolvedTabId);
+
+  const formattedMarkup = buildFormattedContentMarkup(formattedContent);
+  const { questions, warnings } = await importQuizFromDocument(
+    formattedMarkup,
+    options
+  );
+
+  return {
+    action: "imported",
+    importedQuestions: questions,
+    documentTitle: docTitle,
+    suggestedTitle: `${docTitle} - 確認テスト`,
+    warnings,
+  };
 }
