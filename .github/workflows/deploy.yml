@@ -121,7 +121,7 @@ jobs:
         working-directory: web
         run: |
           docker build \
-            --build-arg NEXT_PUBLIC_API_URL=https://api-1034821634012.asia-northeast1.run.app \
+            --build-arg NEXT_PUBLIC_API_URL=https://api-3zcica5euq-an.a.run.app \
             --build-arg NEXT_PUBLIC_AUTH_MODE=firebase \
             --build-arg NEXT_PUBLIC_FIREBASE_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }} \
             --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }} \
