@@ -92,6 +92,11 @@ npm run test
 - **認証**: Firebase Authentication + Googleソーシャルログイン（ADR-005）
 - **マルチテナント**: Firestoreパスベース分離（ADR-007）
 - **エラーレスポンス**: フラット形式 { error: "code", message: "..." }（ADR-010改訂済み）
+- **Classroom/Forms不使用**: 再生制御・視聴追跡が不可のため自前実装（ADR-023）
+- **マスターコンテンツ配信**: 深コピーでテナントに配信（ADR-024）
+- **セキュリティ強化**: Helmet, レート制限, CORS（ADR-025）
+- **Google Workspace連携**: DWDでDrive動画インポート + Docsクイズ生成（ADR-026）
+- **出席管理**: lesson_sessionsで入退室打刻、15分一時停止/2時間制限で強制退室（ADR-027）
 
 全ADRは`docs/adr/`を参照。
 
