@@ -5,7 +5,7 @@ vi.mock("googleapis", () => {
   const mockDrive = { files: { get: vi.fn(), list: vi.fn() } };
   const mockDocs = { documents: { get: vi.fn() } };
 
-  class MockGoogleAuth {
+  class MockJWT {
     constructor(_opts: unknown) {
       // no-op
     }
@@ -14,11 +14,27 @@ vi.mock("googleapis", () => {
   return {
     google: {
       auth: {
-        GoogleAuth: MockGoogleAuth,
+        JWT: MockJWT,
       },
       drive: vi.fn().mockReturnValue(mockDrive),
       docs: vi.fn().mockReturnValue(mockDocs),
     },
+  };
+});
+
+// Secret Managerをモック
+vi.mock("@google-cloud/secret-manager", () => {
+  const mockKeyData = JSON.stringify({
+    client_email: "dwd@test.iam.gserviceaccount.com",
+    private_key: "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
+  });
+  class MockSecretManagerServiceClient {
+    async accessSecretVersion() {
+      return [{ payload: { data: Buffer.from(mockKeyData) } }];
+    }
+  }
+  return {
+    SecretManagerServiceClient: MockSecretManagerServiceClient,
   };
 });
 
@@ -45,14 +61,14 @@ describe("google-auth service", () => {
 
   it("getDriveClient returns a Drive client", async () => {
     const { getDriveClient } = await import("../../services/google-auth.js");
-    const client = getDriveClient();
+    const client = await getDriveClient();
     expect(client).toBeDefined();
     expect(client.files).toBeDefined();
   });
 
   it("getDocsClient returns a Docs client", async () => {
     const { getDocsClient } = await import("../../services/google-auth.js");
-    const client = getDocsClient();
+    const client = await getDocsClient();
     expect(client).toBeDefined();
     expect(client.documents).toBeDefined();
   });
@@ -60,7 +76,7 @@ describe("google-auth service", () => {
   it("getDriveClient throws when GOOGLE_WORKSPACE_ADMIN_EMAIL is unset", async () => {
     delete process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL;
     const { getDriveClient } = await import("../../services/google-auth.js");
-    expect(() => getDriveClient()).toThrow(
+    await expect(getDriveClient()).rejects.toThrow(
       "GOOGLE_WORKSPACE_ADMIN_EMAIL is required"
     );
   });

@@ -75,7 +75,7 @@ export async function getDriveFileMetadata(fileId: string): Promise<{
   size: string;
   durationSec: number | null;
 }> {
-  const drive = getDriveClient();
+  const drive = await getDriveClient();
   const response = await drive.files.get({
     fileId,
     fields: "name,mimeType,size,videoMediaMetadata",
@@ -105,7 +105,7 @@ export async function copyDriveFileToGCS(
   tenantId: string,
   preloadedMetadata?: { name: string; mimeType: string; size: string; durationSec: number | null }
 ): Promise<{ gcsPath: string; fileName: string }> {
-  const drive = getDriveClient();
+  const drive = await getDriveClient();
 
   // メタデータ取得 & 検証（事前取得済みの場合はスキップ）
   const metadata = preloadedMetadata ?? await getDriveFileMetadata(fileId);
