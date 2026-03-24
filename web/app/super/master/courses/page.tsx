@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -64,6 +64,8 @@ function StatusBadge({ status }: { status: CourseStatus }) {
 
 export default function MasterCoursesPage() {
   const { superFetch } = useSuperAdminFetch();
+  const superFetchRef = useRef(superFetch);
+  superFetchRef.current = superFetch;
 
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
@@ -96,7 +98,7 @@ export default function MasterCoursesPage() {
     setError(null);
     try {
       const query = statusFilter !== "all" ? `?status=${statusFilter}` : "";
-      const data = await superFetch<{ courses: Course[] }>(
+      const data = await superFetchRef.current<{ courses: Course[] }>(
         `/api/v2/super/master/courses${query}`,
       );
       setCourses(data.courses);
@@ -107,7 +109,7 @@ export default function MasterCoursesPage() {
     } finally {
       setLoading(false);
     }
-  }, [superFetch, statusFilter]);
+  }, [statusFilter]);
 
   useEffect(() => {
     fetchCourses();

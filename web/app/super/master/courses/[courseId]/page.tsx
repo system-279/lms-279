@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -90,6 +90,8 @@ export default function MasterCourseDetailPage() {
   const params = useParams();
   const courseId = params.courseId as string;
   const { superFetch } = useSuperAdminFetch();
+  const superFetchRef = useRef(superFetch);
+  superFetchRef.current = superFetch;
 
   const [course, setCourse] = useState<Course | null>(null);
   const [lessons, setLessons] = useState<Lesson[]>([]);
@@ -162,7 +164,7 @@ export default function MasterCourseDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await superFetch<{ course: Course; lessons: Lesson[] }>(
+      const data = await superFetchRef.current<{ course: Course; lessons: Lesson[] }>(
         `/api/v2/super/master/courses/${courseId}`,
       );
       setCourse(data.course);
@@ -173,7 +175,7 @@ export default function MasterCourseDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [superFetch, courseId]);
+  }, [courseId]);
 
   useEffect(() => {
     fetchData();
