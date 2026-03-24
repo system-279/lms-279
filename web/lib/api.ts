@@ -1,5 +1,5 @@
 // 本番環境のAPI URL（Cloud Run）
-const PRODUCTION_API_URL = "https://api-102013220292.asia-northeast1.run.app";
+const PRODUCTION_API_URL = "https://api-3zcica5euq-an.a.run.app";
 
 // 環境変数またはデフォルト値を使用
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ||
