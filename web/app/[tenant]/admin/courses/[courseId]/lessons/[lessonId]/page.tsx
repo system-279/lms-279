@@ -131,6 +131,15 @@ function QuizSection({ lessonId }: { lessonId: string }) {
   const [quizGenerating, setQuizGenerating] = useState(false);
   const [quizGenError, setQuizGenError] = useState<string | null>(null);
 
+  // Quiz import from Google Docs
+  const [quizImportDialogOpen, setQuizImportDialogOpen] = useState(false);
+  const [quizImportDocsUrl, setQuizImportDocsUrl] = useState("");
+  const [quizImporting, setQuizImporting] = useState(false);
+  const [quizImportError, setQuizImportError] = useState<string | null>(null);
+  const [quizImportTabs, setQuizImportTabs] = useState<{ id: string; title: string }[] | null>(null);
+  const [quizImportSelectedTab, setQuizImportSelectedTab] = useState<string | null>(null);
+  const [quizImportWarnings, setQuizImportWarnings] = useState<string[]>([]);
+
   // Question dialog
   const [questionDialogOpen, setQuestionDialogOpen] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<QuizQuestion | null>(null);
@@ -204,6 +213,66 @@ function QuizSection({ lessonId }: { lessonId: string }) {
       );
     } finally {
       setQuizGenerating(false);
+    }
+  };
+
+  const handleImportQuiz = async () => {
+    setQuizImporting(true);
+    setQuizImportError(null);
+    try {
+      const body: Record<string, unknown> = { docsUrl: quizImportDocsUrl };
+      if (quizImportSelectedTab) {
+        body.tabId = quizImportSelectedTab;
+      }
+
+      const data = await authFetch<{
+        action: "select_tab" | "imported";
+        tabs?: { id: string; title: string }[];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        importedQuestions?: any[];
+        suggestedTitle?: string;
+        documentTitle?: string;
+        warnings?: string[];
+      }>(`/api/v1/admin/lessons/${lessonId}/quiz/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (data.action === "select_tab" && data.tabs) {
+        setQuizImportTabs(data.tabs);
+        return;
+      }
+
+      if (data.action === "imported" && data.importedQuestions) {
+        // インポート結果でクイズ作成ダイアログを開く
+        setQuizImportDialogOpen(false);
+        setQuizImportDocsUrl("");
+        setQuizImportTabs(null);
+        setQuizImportSelectedTab(null);
+        setQuizImportWarnings(data.warnings ?? []);
+        setIsEditingQuiz(false);
+        setQuizForm({
+          ...defaultQuizForm,
+          title: data.suggestedTitle ?? "",
+        });
+        // API options → UI choices にマッピング、isCorrect: null → false
+        const questions = data.importedQuestions.map((q: Record<string, unknown>) => ({
+          ...q,
+          choices: ((q.options ?? q.choices) as { id: string; text: string; isCorrect: boolean | null }[]).map((o) => ({
+            ...o,
+            isCorrect: o.isCorrect ?? false,
+          })),
+        }));
+        setQuiz({ ...quiz!, questions } as Quiz);
+        setQuizDialogOpen(true);
+      }
+    } catch (e) {
+      setQuizImportError(
+        e instanceof Error ? e.message : "インポートに失敗しました",
+      );
+    } finally {
+      setQuizImporting(false);
     }
   };
 
@@ -461,6 +530,18 @@ function QuizSection({ lessonId }: { lessonId: string }) {
               }}
             >
               Google Docsから生成
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setQuizImportDialogOpen(true);
+                setQuizImportDocsUrl("");
+                setQuizImportError(null);
+                setQuizImportTabs(null);
+                setQuizImportSelectedTab(null);
+              }}
+            >
+              Docsからインポート
             </Button>
           </div>
         </div>
@@ -884,6 +965,82 @@ function QuizSection({ lessonId }: { lessonId: string }) {
             </Button>
             <Button onClick={handleSaveQuestion} disabled={questionSaving}>
               {questionSaving ? "保存中..." : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quiz Import Warnings Banner */}
+      {quizImportWarnings.length > 0 && quizDialogOpen && (
+        <div className="mb-4 rounded-md bg-yellow-50 border border-yellow-200 p-3">
+          {quizImportWarnings.map((w, i) => (
+            <p key={i} className="text-sm text-yellow-800">{w}</p>
+          ))}
+        </div>
+      )}
+
+      {/* Quiz Import Dialog */}
+      <Dialog open={quizImportDialogOpen} onOpenChange={(open) => !open && setQuizImportDialogOpen(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Google Docsからインポート</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <Label>Google Docs URL</Label>
+              <Input
+                value={quizImportDocsUrl}
+                onChange={(e) => {
+                  setQuizImportDocsUrl(e.target.value);
+                  // URL変更時はタブ選択をリセット
+                  setQuizImportTabs(null);
+                  setQuizImportSelectedTab(null);
+                }}
+                placeholder="https://docs.google.com/document/d/.../edit"
+                disabled={quizImporting}
+              />
+            </div>
+
+            {/* Tab selection (shown when no test tab found) */}
+            {quizImportTabs && (
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  「テスト」タブが見つかりませんでした。インポート元のタブを選択してください。
+                </p>
+                <div className="space-y-1">
+                  {quizImportTabs.map((tab) => (
+                    <label key={tab.id} className="flex items-center gap-2 cursor-pointer p-2 rounded hover:bg-muted">
+                      <input
+                        type="radio"
+                        name="quizImportTab"
+                        value={tab.id}
+                        checked={quizImportSelectedTab === tab.id}
+                        onChange={() => setQuizImportSelectedTab(tab.id)}
+                      />
+                      <span className="text-sm">{tab.title}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {quizImportError && (
+              <div className="text-sm text-destructive">{quizImportError}</div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setQuizImportDialogOpen(false)}
+              disabled={quizImporting}
+            >
+              キャンセル
+            </Button>
+            <Button
+              onClick={handleImportQuiz}
+              disabled={!quizImportDocsUrl || quizImporting || (quizImportTabs !== null && !quizImportSelectedTab)}
+            >
+              {quizImporting ? "インポート中..." : quizImportTabs ? "選択してインポート" : "インポート"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -17,8 +17,17 @@ import {
   isValidationError,
   startAsyncDriveCopy,
 } from "../services/drive-import.js";
-import { parseDocsUrl, getDocumentContent } from "../services/google-docs.js";
+import {
+  parseDocsUrl,
+  getDocumentContent,
+  getDocumentTabs,
+  getDocumentTabContentFormatted,
+} from "../services/google-docs.js";
 import { generateQuizQuestions } from "../services/quiz-generator.js";
+import {
+  importQuizFromDocument,
+  buildFormattedContentMarkup,
+} from "../services/quiz-import.js";
 import { serializeCourse } from "./shared/courses.js";
 
 const router = Router();
@@ -557,6 +566,99 @@ router.post("/master/lessons/:lessonId/quiz/generate", async (req: Request, res:
   } catch (error) {
     const message = error instanceof Error ? error.message : "クイズ生成に失敗しました";
     res.status(500).json({ error: "quiz_generation_failed", message });
+  }
+});
+
+/**
+ * マスターレッスン用クイズをGoogle Docsテストタブからインポート（プレビュー用）
+ * POST /master/lessons/:lessonId/quiz/import
+ */
+router.post("/master/lessons/:lessonId/quiz/import", async (req: Request, res: Response) => {
+  if (!isWorkspaceIntegrationAvailable()) {
+    res.status(503).json({
+      error: "workspace_not_configured",
+      message: "Google Workspace integration is not configured",
+    });
+    return;
+  }
+
+  const ds = getMasterDS();
+  const lessonId = req.params.lessonId as string;
+  const { docsUrl, tabId } = req.body;
+
+  if (!docsUrl || typeof docsUrl !== "string") {
+    res.status(400).json({ error: "invalid_docsUrl", message: "docsUrl is required" });
+    return;
+  }
+
+  let documentId: string;
+  try {
+    documentId = parseDocsUrl(docsUrl);
+  } catch {
+    res.status(400).json({ error: "invalid_docsUrl", message: "Invalid Google Docs URL format" });
+    return;
+  }
+
+  const lesson = await ds.getLessonById(lessonId);
+  if (!lesson) {
+    res.status(404).json({ error: "not_found", message: "レッスンが見つかりません。" });
+    return;
+  }
+
+  // タブ解決
+  let resolvedTabId = typeof tabId === "string" ? tabId : null;
+
+  if (!resolvedTabId) {
+    let docTitle: string;
+    let tabs: { id: string; title: string }[];
+    try {
+      const result = await getDocumentTabs(documentId);
+      docTitle = result.title;
+      tabs = result.tabs;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "ドキュメントの読み取りに失敗しました";
+      res.status(400).json({ error: "docs_read_failed", message });
+      return;
+    }
+
+    const testTab = tabs.find((t) => t.title.toLowerCase().includes("テスト"));
+    if (testTab) {
+      resolvedTabId = testTab.id;
+    } else {
+      res.json({ action: "select_tab" as const, tabs, documentTitle: docTitle });
+      return;
+    }
+  }
+
+  let docTitle: string;
+  let formattedMarkup: string;
+  try {
+    const result = await getDocumentTabContentFormatted(documentId, resolvedTabId);
+    docTitle = result.title;
+    formattedMarkup = buildFormattedContentMarkup(result.formattedContent);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "タブの読み取りに失敗しました";
+    const isTabNotFound = error instanceof Error && error.message.includes("Tab not found");
+    res.status(isTabNotFound ? 400 : 500).json({
+      error: isTabNotFound ? "tab_not_found" : "docs_read_failed",
+      message,
+    });
+    return;
+  }
+
+  try {
+    const { questions, warnings } = await importQuizFromDocument(formattedMarkup, { language: "ja" });
+
+    res.json({
+      action: "imported" as const,
+      importedQuestions: questions,
+      documentTitle: docTitle,
+      suggestedTitle: `${docTitle} - 確認テスト`,
+      warnings,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "クイズインポートに失敗しました";
+    res.status(500).json({ error: "quiz_import_failed", message });
   }
 });
 
