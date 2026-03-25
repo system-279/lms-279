@@ -199,11 +199,8 @@ export default function MasterCoursesPage() {
   const handlePublish = async (course: Course) => {
     try {
       await superFetch(
-        `/api/v2/super/master/courses/${course.id}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ status: "published" }),
-        },
+        `/api/v2/super/master/courses/${course.id}/publish`,
+        { method: "PATCH" },
       );
       fetchCourses();
     } catch (e) {
@@ -214,11 +211,8 @@ export default function MasterCoursesPage() {
   const handleArchive = async (course: Course) => {
     try {
       await superFetch(
-        `/api/v2/super/master/courses/${course.id}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ status: "archived" }),
-        },
+        `/api/v2/super/master/courses/${course.id}/archive`,
+        { method: "PATCH" },
       );
       fetchCourses();
     } catch (e) {

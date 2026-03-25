@@ -148,6 +148,57 @@ router.patch("/master/courses/:id", async (req: Request, res: Response) => {
 });
 
 /**
+ * マスターコース公開
+ * PATCH /master/courses/:id/publish
+ */
+router.patch("/master/courses/:id/publish", async (req: Request, res: Response) => {
+  const ds = getMasterDS();
+  const id = req.params.id as string;
+
+  const existing = await ds.getCourseById(id);
+  if (!existing) {
+    res.status(404).json({ error: "not_found", message: "マスターコースが見つかりません。" });
+    return;
+  }
+
+  if (existing.status === "published") {
+    res.status(409).json({ error: "already_published", message: "このコースは既に公開されています。" });
+    return;
+  }
+
+  if (existing.status === "archived") {
+    res.status(409).json({ error: "cannot_publish_archived", message: "アーカイブ済みのコースは公開できません。" });
+    return;
+  }
+
+  const course = await ds.updateCourse(id, { status: "published" });
+  res.json({ course: serializeCourse(course!) });
+});
+
+/**
+ * マスターコースアーカイブ
+ * PATCH /master/courses/:id/archive
+ */
+router.patch("/master/courses/:id/archive", async (req: Request, res: Response) => {
+  const ds = getMasterDS();
+  const id = req.params.id as string;
+
+  const existing = await ds.getCourseById(id);
+  if (!existing) {
+    res.status(404).json({ error: "not_found", message: "マスターコースが見つかりません。" });
+    return;
+  }
+
+  if (existing.status === "archived") {
+    res.status(409).json({ error: "already_archived", message: "このコースは既にアーカイブされています。" });
+    return;
+  }
+
+  const course = await ds.updateCourse(id, { status: "archived" });
+  res.json({ course: serializeCourse(course!) });
+});
+
+/**
  * マスターコース削除（関連レッスン・動画・クイズも削除）
  * DELETE /master/courses/:id
  */
