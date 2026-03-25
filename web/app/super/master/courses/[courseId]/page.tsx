@@ -186,6 +186,10 @@ export default function MasterCourseDetailPage() {
   const [quizImportSelectedTab, setQuizImportSelectedTab] = useState<string | null>(null);
   const [quizImportWarnings, setQuizImportWarnings] = useState<string[]>([]);
 
+  // Quiz edit state
+  const [editingQuizLessonId, setEditingQuizLessonId] = useState<string | null>(null);
+  const [quizLoadingLessonId, setQuizLoadingLessonId] = useState<string | null>(null);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -564,16 +568,33 @@ export default function MasterCourseDetailPage() {
     setQuizSaving(lessonId);
     setQuizError(null);
     try {
-      await superFetch(
-        `/api/v2/super/master/lessons/${lessonId}/quiz`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            title: form.title.trim(),
-            questions: form.questions,
-          }),
-        },
-      );
+      const existingQuiz = quizSummaries.find((q) => q.lessonId === lessonId);
+      if (existingQuiz) {
+        // 編集: PATCH
+        await superFetch(
+          `/api/v2/super/master/quizzes/${existingQuiz.id}`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({
+              title: form.title.trim(),
+              questions: form.questions,
+            }),
+          },
+        );
+        setEditingQuizLessonId(null);
+      } else {
+        // 新規作成: POST
+        await superFetch(
+          `/api/v2/super/master/lessons/${lessonId}/quiz`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              title: form.title.trim(),
+              questions: form.questions,
+            }),
+          },
+        );
+      }
       fetchData();
     } catch (e) {
       setQuizError(
@@ -581,6 +602,34 @@ export default function MasterCourseDetailPage() {
       );
     } finally {
       setQuizSaving(null);
+    }
+  };
+
+  const handleEditQuiz = async (lessonId: string) => {
+    const quiz = quizSummaries.find((q) => q.lessonId === lessonId);
+    if (!quiz) return;
+    setQuizLoadingLessonId(lessonId);
+    try {
+      const data = await superFetch<{ quiz: { title: string; questions: Question[] } }>(
+        `/api/v2/super/master/quizzes/${quiz.id}`,
+      );
+      updateQuizForm(lessonId, {
+        title: data.quiz.title,
+        questions: data.quiz.questions.map((q: Question) => ({
+          ...q,
+          options: q.options.map((o: QuestionOption) => ({
+            ...o,
+            isCorrect: o.isCorrect ?? false,
+          })),
+        })),
+      });
+      setEditingQuizLessonId(lessonId);
+    } catch (e) {
+      setQuizError(
+        e instanceof Error ? e.message : "テストの取得に失敗しました",
+      );
+    } finally {
+      setQuizLoadingLessonId(null);
     }
   };
 
@@ -961,7 +1010,7 @@ export default function MasterCourseDetailPage() {
                     {/* Quiz section */}
                     <div className="space-y-3">
                       <h3 className="text-sm font-semibold">テスト設定</h3>
-                      {lesson.hasQuiz ? (
+                      {lesson.hasQuiz && editingQuizLessonId !== lesson.id ? (
                         <div className="space-y-2">
                           <div className="flex items-center gap-3">
                             <Badge className="bg-purple-100 text-purple-800 border-purple-200">
@@ -976,6 +1025,16 @@ export default function MasterCourseDetailPage() {
                                 </span>
                               );
                             })()}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleEditQuiz(lesson.id)}
+                              disabled={quizLoadingLessonId === lesson.id}
+                            >
+                              {quizLoadingLessonId === lesson.id
+                                ? "読込中..."
+                                : "テストを編集"}
+                            </Button>
                             <Button
                               variant="destructive"
                               size="sm"
@@ -1200,18 +1259,38 @@ export default function MasterCourseDetailPage() {
                             </Button>
                           </div>
 
-                          <Button
-                            size="sm"
-                            onClick={() => handleSaveQuiz(lesson.id)}
-                            disabled={
-                              quizSaving === lesson.id ||
-                              !qForm.title.trim()
-                            }
-                          >
-                            {quizSaving === lesson.id
-                              ? "保存中..."
-                              : "テストを登録"}
-                          </Button>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => handleSaveQuiz(lesson.id)}
+                              disabled={
+                                quizSaving === lesson.id ||
+                                !qForm.title.trim()
+                              }
+                            >
+                              {quizSaving === lesson.id
+                                ? "保存中..."
+                                : editingQuizLessonId === lesson.id
+                                  ? "テストを更新"
+                                  : "テストを登録"}
+                            </Button>
+                            {editingQuizLessonId === lesson.id && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setEditingQuizLessonId(null);
+                                  setQuizForms((prev) => {
+                                    const next = { ...prev };
+                                    delete next[lesson.id];
+                                    return next;
+                                  });
+                                }}
+                              >
+                                キャンセル
+                              </Button>
+                            )}
+                          </div>
                         </div>
                       )}
                       {quizError && quizSaving === null && (

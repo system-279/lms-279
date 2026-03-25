@@ -215,6 +215,31 @@ describe("Master Media API", () => {
     });
   });
 
+  describe("GET /master/quizzes/:id", () => {
+    it("テストをquestions含めて取得して200を返す", async () => {
+      const created = await request
+        .post(`/master/lessons/${lessonId}/quiz`)
+        .send({ title: "取得テスト", questions: sampleQuestions });
+      const quizId = created.body.quiz.id;
+
+      const res = await request.get(`/master/quizzes/${quizId}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.quiz.id).toBe(quizId);
+      expect(res.body.quiz.title).toBe("取得テスト");
+      expect(res.body.quiz.questions).toHaveLength(1);
+      expect(res.body.quiz.questions[0].text).toBe("テスト問題1");
+      expect(res.body.quiz.lessonId).toBe(lessonId);
+    });
+
+    it("存在しないIDで404を返す", async () => {
+      const res = await request.get("/master/quizzes/xxx");
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("not_found");
+    });
+  });
+
   describe("PATCH /master/quizzes/:id", () => {
     it("テストを更新して200を返す", async () => {
       const created = await request
