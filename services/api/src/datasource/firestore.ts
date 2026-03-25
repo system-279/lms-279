@@ -45,6 +45,19 @@ function toDate(timestamp: Timestamp | Date | null | undefined): Date {
   return new Date();
 }
 
+/**
+ * スプレッド構文を避けてupdate用データを構築するヘルパー
+ * Firestore SDK 8.x では update() にスプレッド構文で FieldValue.serverTimestamp() を
+ * 含むオブジェクトを渡すとシリアライズエラーが発生する場合がある
+ */
+function buildUpdateData(data: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
+  for (const [key, value] of Object.entries(data)) {
+    if (value !== undefined) result[key] = value;
+  }
+  return result;
+}
+
 export class FirestoreDataSource implements DataSource {
   private db: Firestore;
   private tenantPath: string;
@@ -104,11 +117,7 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
     if (!doc.exists) return null;
 
-    const updateData: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
-    for (const [key, value] of Object.entries(data)) {
-      if (value !== undefined) updateData[key] = value;
-    }
-    await docRef.update(updateData);
+    await docRef.update(buildUpdateData(data as Record<string, unknown>));
     const updated = await docRef.get();
     return this.toCourse(updated.id, updated.data()!);
   }
@@ -173,10 +182,7 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
     if (!doc.exists) return null;
 
-    await docRef.update({
-      ...data,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    await docRef.update(buildUpdateData(data as Record<string, unknown>));
     const updated = await docRef.get();
     return this.toLesson(updated.id, updated.data()!);
   }
@@ -275,10 +281,7 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
     if (!doc.exists) return null;
 
-    await docRef.update({
-      ...data,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    await docRef.update(buildUpdateData(data as Record<string, unknown>));
     const updated = await docRef.get();
     return this.toUser(updated.id, updated.data()!);
   }
@@ -401,10 +404,7 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
     if (!doc.exists) return null;
 
-    await docRef.update({
-      ...data,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    await docRef.update(buildUpdateData(data as Record<string, unknown>));
     const updated = await docRef.get();
     return this.toNotificationPolicy(updated.id, updated.data()!);
   }
@@ -492,10 +492,7 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
 
     if (doc.exists) {
-      await docRef.update({
-        ...data,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+      await docRef.update(buildUpdateData(data as Record<string, unknown>));
     } else {
       await docRef.set({
         notificationEnabled: data.notificationEnabled ?? true,
@@ -573,14 +570,8 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
     if (!doc.exists) return null;
 
-    // undefinedフィールドを除外（Firestoreはundefinedを拒否する）
-    const sanitized = Object.fromEntries(
-      Object.entries(data).filter(([, v]) => v !== undefined)
-    );
-    await docRef.update({
-      ...sanitized,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    // undefinedフィールドを除外（buildUpdateData内でundefinedスキップ済み）
+    await docRef.update(buildUpdateData(data as Record<string, unknown>));
     const updated = await docRef.get();
     return this.toVideo(updated.id, updated.data()!);
   }
@@ -696,10 +687,7 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
 
     if (doc.exists) {
-      await docRef.update({
-        ...data,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+      await docRef.update(buildUpdateData(data as Record<string, unknown>));
     } else {
       await docRef.set({
         videoId,
@@ -792,10 +780,7 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
     if (!doc.exists) return null;
 
-    await docRef.update({
-      ...data,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    await docRef.update(buildUpdateData(data as Record<string, unknown>));
     const updated = await docRef.get();
     return this.toQuiz(updated.id, updated.data()!);
   }
@@ -923,10 +908,7 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
 
     if (doc.exists) {
-      await docRef.update({
-        ...data,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+      await docRef.update(buildUpdateData(data as Record<string, unknown>));
     } else {
       await docRef.set({
         userId,
@@ -978,10 +960,7 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
 
     if (doc.exists) {
-      await docRef.update({
-        ...data,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+      await docRef.update(buildUpdateData(data as Record<string, unknown>));
     } else {
       await docRef.set({
         userId,
@@ -1072,13 +1051,7 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
     if (!doc.exists) return null;
 
-    const sanitized = Object.fromEntries(
-      Object.entries(data).filter(([, v]) => v !== undefined)
-    );
-    await docRef.update({
-      ...sanitized,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    await docRef.update(buildUpdateData(data as Record<string, unknown>));
     const updated = await docRef.get();
     return this.toLessonSession(updated.id, updated.data()!);
   }
