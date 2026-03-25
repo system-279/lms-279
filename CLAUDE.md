@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## プロジェクト概要
 
-動画視聴管理・クイズ機能を統合したLMS（Learning Management System）。参考プロジェクト `classroom-check-in` のマルチテナント基盤を継承し、動画プレイヤーとクイズ機能を中核として新規構築。
+動画視聴管理・テスト機能を統合したLMS（Learning Management System）。参考プロジェクト `classroom-check-in` のマルチテナント基盤を継承し、動画プレイヤーとテスト機能を中核として新規構築。
 
 **参考プロジェクトとの主な違い**:
 - 動画プレイヤー（カスタムHTML5 Video API）が中核機能
-- クイズ自動採点システム
+- テスト自動採点システム
 - 進捗トラッキング（非正規化）
 - GCS動画ホスティング + 署名付きURL
 
@@ -49,7 +49,7 @@ npm run test
 
 | サービス | 役割 |
 |---------|------|
-| `services/api` | REST API（認証、講座管理、動画管理、クイズ、進捗） |
+| `services/api` | REST API（認証、講座管理、動画管理、テスト、進捗） |
 | `services/notification` | 通知送信 |
 | `web` | Next.js App Router（受講者/管理画面） |
 
@@ -83,9 +83,9 @@ npm run test
 - **動画配信**: GCS + 署名付きURL（2時間有効）（ADR-013）
 - **視聴分析**: クライアント→生イベント送信、サーバー→集計（ADR-014）
 - **倍速禁止**: クライアント即時リセット + サーバー違反記録（ADR-015）
-- **クイズ**: 問題埋め込み（上限50問）、サーバーサイド採点（ADR-016, ADR-017）
+- **テスト**: 問題埋め込み（上限50問）、サーバーサイド採点（ADR-016, ADR-017）
 - **コンテンツ階層**: Course → Lessons → Video + Quiz（ADR-018）
-- **動画→クイズゲート**: video完了後にクイズアクセス許可（ADR-019）
+- **動画→テストゲート**: video完了後にテストアクセス許可（ADR-019）
 - **進捗**: user_progress + course_progress 非正規化（ADR-020）
 - **イベント送信**: 5秒間隔バッチ、最大50件/リクエスト（ADR-021）
 - **不審検出**: サーバーサイドヒューリスティクス（ADR-022）
@@ -95,7 +95,7 @@ npm run test
 - **Classroom/Forms不使用**: 再生制御・視聴追跡が不可のため自前実装（ADR-023）
 - **マスターコンテンツ配信**: 深コピーでテナントに配信（ADR-024）
 - **セキュリティ強化**: Helmet, レート制限, CORS（ADR-025）
-- **Google Workspace連携**: DWDでDrive動画インポート + Docsクイズ生成（ADR-026）
+- **Google Workspace連携**: DWDでDrive動画インポート + Docsテスト生成（ADR-026）
 - **出席管理**: lesson_sessionsで入退室打刻、15分一時停止/2時間制限で強制退室（ADR-027）
 
 全ADRは`docs/adr/`を参照。
@@ -127,12 +127,12 @@ Firestore: `tenants/{tenantId}/` 配下に全データ。
 |-------|------|------|
 | 1 | 基盤構築（API, Web, Auth, CRUD, CI/CD） | 完了 |
 | 2 | 動画プレイヤー + 分析 | 完了 |
-| 3 | クイズシステム（動画完了ゲート付き） | 完了 |
+| 3 | テストシステム（動画完了ゲート付き） | 完了 |
 | 4 | 進捗トラッキング | 完了 |
 | 5 | 管理ダッシュボード + 分析 + CSVエクスポート | 完了 |
 | 6 | APIセキュリティ強化（Helmet, レート制限） | 完了 |
 | 7 | 可観測性（構造化ログ, Error Reporting, ヘルスチェック） | 完了 |
 | 8 | E2Eテスト + CI強化（Playwright, テストジョブ） | 完了 |
 | 9 | パフォーマンス + 本番仕上げ（キャッシュ, シャットダウン） | 完了 |
-| 10 | Google Workspace連携（Drive動画インポート, Docsクイズ生成） | 完了 |
+| 10 | Google Workspace連携（Drive動画インポート, Docsテスト生成） | 完了 |
 | 11 | 出席管理システム（入退室打刻 + セッション管理） | 完了 |

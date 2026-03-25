@@ -1,5 +1,5 @@
 /**
- * マスター動画・クイズCRUD 統合テスト
+ * マスター動画・テストCRUD 統合テスト
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -142,7 +142,7 @@ describe("Master Media API", () => {
   });
 
   // ============================================================
-  // クイズCRUD
+  // テストCRUD
   // ============================================================
 
   const sampleQuestions = [
@@ -159,22 +159,22 @@ describe("Master Media API", () => {
   ];
 
   describe("POST /master/lessons/:lessonId/quiz", () => {
-    it("クイズを作成して201を返す", async () => {
+    it("テストを作成して201を返す", async () => {
       const res = await request
         .post(`/master/lessons/${lessonId}/quiz`)
-        .send({ title: "テストクイズ", questions: sampleQuestions });
+        .send({ title: "テスト問題集", questions: sampleQuestions });
 
       expect(res.status).toBe(201);
       expect(res.body.quiz).toBeDefined();
-      expect(res.body.quiz.title).toBe("テストクイズ");
+      expect(res.body.quiz.title).toBe("テスト問題集");
       expect(res.body.quiz.lessonId).toBe(lessonId);
       expect(res.body.quiz.questions).toHaveLength(1);
     });
 
-    it("クイズ作成後にレッスンのhasQuizがtrueになる", async () => {
+    it("テスト作成後にレッスンのhasQuizがtrueになる", async () => {
       await request
         .post(`/master/lessons/${lessonId}/quiz`)
-        .send({ title: "テストクイズ", questions: sampleQuestions });
+        .send({ title: "テスト問題集", questions: sampleQuestions });
 
       const courseRes = await request.get(`/master/courses/${courseId}`);
       const lesson = courseRes.body.lessons.find((l: { id: string }) => l.id === lessonId);
@@ -199,7 +199,7 @@ describe("Master Media API", () => {
 
       const res = await request
         .post(`/master/lessons/${lessonId}/quiz`)
-        .send({ title: "複数問題クイズ", questions: multiQuestions });
+        .send({ title: "複数問題テスト", questions: multiQuestions });
 
       expect(res.status).toBe(201);
       expect(res.body.quiz.questions).toHaveLength(2);
@@ -216,27 +216,27 @@ describe("Master Media API", () => {
   });
 
   describe("PATCH /master/quizzes/:id", () => {
-    it("クイズを更新して200を返す", async () => {
+    it("テストを更新して200を返す", async () => {
       const created = await request
         .post(`/master/lessons/${lessonId}/quiz`)
-        .send({ title: "更新前クイズ", questions: sampleQuestions });
+        .send({ title: "更新前テスト", questions: sampleQuestions });
       const quizId = created.body.quiz.id;
 
       const res = await request
         .patch(`/master/quizzes/${quizId}`)
-        .send({ title: "更新後クイズ", passThreshold: 80 });
+        .send({ title: "更新後テスト", passThreshold: 80 });
 
       expect(res.status).toBe(200);
-      expect(res.body.quiz.title).toBe("更新後クイズ");
+      expect(res.body.quiz.title).toBe("更新後テスト");
       expect(res.body.quiz.passThreshold).toBe(80);
     });
   });
 
   describe("DELETE /master/quizzes/:id", () => {
-    it("クイズを削除して204を返し、レッスンのhasQuizがfalseになる", async () => {
+    it("テストを削除して204を返し、レッスンのhasQuizがfalseになる", async () => {
       const created = await request
         .post(`/master/lessons/${lessonId}/quiz`)
-        .send({ title: "削除クイズ", questions: sampleQuestions });
+        .send({ title: "削除テスト", questions: sampleQuestions });
       const quizId = created.body.quiz.id;
 
       const res = await request.delete(`/master/quizzes/${quizId}`);
@@ -257,10 +257,10 @@ describe("Master Media API", () => {
   });
 
   describe("DELETE /master/lessons/:lessonId/quiz", () => {
-    it("レッスンIDからクイズを削除して204を返し、hasQuizがfalseになる", async () => {
+    it("レッスンIDからテストを削除して204を返し、hasQuizがfalseになる", async () => {
       await request
         .post(`/master/lessons/${lessonId}/quiz`)
-        .send({ title: "削除クイズ2", questions: sampleQuestions });
+        .send({ title: "削除テスト2", questions: sampleQuestions });
 
       const res = await request.delete(`/master/lessons/${lessonId}/quiz`);
       expect(res.status).toBe(204);

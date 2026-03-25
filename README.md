@@ -1,6 +1,6 @@
 # LMS-279
 
-動画視聴管理・クイズ機能を統合したLMS（Learning Management System）。
+動画視聴管理・テスト機能を統合したLMS（Learning Management System）。
 
 ## リンク
 

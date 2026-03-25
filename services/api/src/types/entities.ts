@@ -185,7 +185,7 @@ export interface VideoEventFilter {
 }
 
 // ========================================
-// クイズ関連
+// テスト関連
 // ========================================
 
 export type QuestionType = "single" | "multi";

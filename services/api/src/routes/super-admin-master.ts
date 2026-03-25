@@ -1,6 +1,6 @@
 /**
  * マスターコンテンツ管理API
- * _master 疑似テナント配下のコース・レッスン・動画・クイズのCRUDおよび配信
+ * _master 疑似テナント配下のコース・レッスン・動画・テストのCRUDおよび配信
  *
  * 認証: 親ルーター(super-admin.ts)の superAdminAuthMiddleware で保護済み
  */
@@ -217,7 +217,7 @@ router.patch("/master/courses/:id/archive", async (req: Request, res: Response) 
 });
 
 /**
- * マスターコース削除（関連レッスン・動画・クイズも削除）
+ * マスターコース削除（関連レッスン・動画・テストも削除）
  * DELETE /master/courses/:id
  */
 router.delete("/master/courses/:id", async (req: Request, res: Response) => {
@@ -337,7 +337,7 @@ router.patch("/master/lessons/:id", async (req: Request, res: Response) => {
 });
 
 /**
- * マスターレッスン削除（動画・クイズも削除、コースのlessonOrderからも除去）
+ * マスターレッスン削除（動画・テストも削除、コースのlessonOrderからも除去）
  * DELETE /master/lessons/:id
  */
 router.delete("/master/lessons/:id", async (req: Request, res: Response) => {
@@ -350,7 +350,7 @@ router.delete("/master/lessons/:id", async (req: Request, res: Response) => {
     return;
   }
 
-  // 関連動画・クイズ・コースを並列取得
+  // 関連動画・テスト・コースを並列取得
   const [video, quiz, course] = await Promise.all([
     ds.getVideoByLessonId(id),
     ds.getQuizByLessonId(id),
@@ -561,11 +561,11 @@ router.get("/master/videos/:videoId/import-status", async (req: Request, res: Re
 });
 
 // ============================================================
-// Google Docsクイズ自動生成
+// Google Docsテスト自動生成
 // ============================================================
 
 /**
- * マスターレッスン用クイズをGoogle Docsから自動生成（プレビュー用）
+ * マスターレッスン用テストをGoogle Docsから自動生成（プレビュー用）
  * POST /master/lessons/:lessonId/quiz/generate
  */
 router.post("/master/lessons/:lessonId/quiz/generate", async (req: Request, res: Response) => {
@@ -625,13 +625,13 @@ router.post("/master/lessons/:lessonId/quiz/generate", async (req: Request, res:
       suggestedTitle: `${docTitle} - テスト`,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "クイズ生成に失敗しました";
+    const message = error instanceof Error ? error.message : "テスト生成に失敗しました";
     res.status(500).json({ error: "quiz_generation_failed", message });
   }
 });
 
 /**
- * マスターレッスン用クイズをGoogle Docsテストタブからインポート（プレビュー用）
+ * マスターレッスン用テストをGoogle Docsテストタブからインポート（プレビュー用）
  * POST /master/lessons/:lessonId/quiz/import
  */
 router.post("/master/lessons/:lessonId/quiz/import", async (req: Request, res: Response) => {
@@ -674,7 +674,7 @@ router.post("/master/lessons/:lessonId/quiz/import", async (req: Request, res: R
     );
     res.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "クイズインポートに失敗しました";
+    const message = error instanceof Error ? error.message : "テストインポートに失敗しました";
     const isTabNotFound = error instanceof Error && error.message.includes("Tab not found");
     const isTransient =
       error instanceof Error &&
@@ -689,11 +689,11 @@ router.post("/master/lessons/:lessonId/quiz/import", async (req: Request, res: R
 });
 
 // ============================================================
-// クイズCRUD
+// テストCRUD
 // ============================================================
 
 /**
- * マスターレッスンにクイズを作成/置換
+ * マスターレッスンにテストを作成/置換
  * POST /master/lessons/:lessonId/quiz
  */
 router.post("/master/lessons/:lessonId/quiz", async (req: Request, res: Response) => {
@@ -727,7 +727,7 @@ router.post("/master/lessons/:lessonId/quiz", async (req: Request, res: Response
     return;
   }
 
-  // 既存のクイズがあれば削除
+  // 既存のテストがあれば削除
   const existingQuiz = await ds.getQuizByLessonId(lessonId);
   if (existingQuiz) {
     await ds.deleteQuiz(existingQuiz.id);
@@ -753,7 +753,7 @@ router.post("/master/lessons/:lessonId/quiz", async (req: Request, res: Response
 });
 
 /**
- * マスタークイズ更新
+ * マスターテスト更新
  * PATCH /master/quizzes/:id
  */
 router.patch("/master/quizzes/:id", async (req: Request, res: Response) => {
@@ -762,7 +762,7 @@ router.patch("/master/quizzes/:id", async (req: Request, res: Response) => {
 
   const existing = await ds.getQuizById(id);
   if (!existing) {
-    res.status(404).json({ error: "not_found", message: "クイズが見つかりません。" });
+    res.status(404).json({ error: "not_found", message: "テストが見つかりません。" });
     return;
   }
 
@@ -792,7 +792,7 @@ router.patch("/master/quizzes/:id", async (req: Request, res: Response) => {
 });
 
 /**
- * マスタークイズ削除
+ * マスターテスト削除
  * DELETE /master/quizzes/:id
  */
 router.delete("/master/quizzes/:id", async (req: Request, res: Response) => {
@@ -801,7 +801,7 @@ router.delete("/master/quizzes/:id", async (req: Request, res: Response) => {
 
   const existing = await ds.getQuizById(id);
   if (!existing) {
-    res.status(404).json({ error: "not_found", message: "クイズが見つかりません。" });
+    res.status(404).json({ error: "not_found", message: "テストが見つかりません。" });
     return;
   }
 
@@ -814,7 +814,7 @@ router.delete("/master/quizzes/:id", async (req: Request, res: Response) => {
 });
 
 /**
- * レッスンIDからクイズを削除
+ * レッスンIDからテストを削除
  * DELETE /master/lessons/:lessonId/quiz
  */
 router.delete("/master/lessons/:lessonId/quiz", async (req: Request, res: Response) => {
@@ -823,7 +823,7 @@ router.delete("/master/lessons/:lessonId/quiz", async (req: Request, res: Respon
 
   const quiz = await ds.getQuizByLessonId(lessonId);
   if (!quiz) {
-    res.status(404).json({ error: "not_found", message: "クイズが見つかりません。" });
+    res.status(404).json({ error: "not_found", message: "テストが見つかりません。" });
     return;
   }
 

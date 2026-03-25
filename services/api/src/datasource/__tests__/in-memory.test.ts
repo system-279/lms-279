@@ -282,7 +282,7 @@ describe("InMemoryDataSource", () => {
     const baseQuizData = {
       lessonId: "lesson-q1",
       courseId: "course-q1",
-      title: "テストクイズ",
+      title: "テスト問題集",
       passThreshold: 70,
       maxAttempts: 3,
       timeLimitSec: null as null,
@@ -308,18 +308,18 @@ describe("InMemoryDataSource", () => {
       ds = new InMemoryDataSource({ readOnly: false });
     });
 
-    it("create: クイズを作成してgetByIdで取得できる", async () => {
+    it("create: テストを作成してgetByIdで取得できる", async () => {
       const created = await ds.createQuiz(baseQuizData);
 
       expect(created.id).toMatch(/^quiz-/);
-      expect(created.title).toBe("テストクイズ");
+      expect(created.title).toBe("テスト問題集");
 
       const fetched = await ds.getQuizById(created.id);
       expect(fetched).not.toBeNull();
       expect(fetched!.id).toBe(created.id);
     });
 
-    it("getByLessonId: lessonIdでクイズを取得できる", async () => {
+    it("getByLessonId: lessonIdでテストを取得できる", async () => {
       const created = await ds.createQuiz(baseQuizData);
 
       const fetched = await ds.getQuizByLessonId("lesson-q1");
@@ -345,7 +345,7 @@ describe("InMemoryDataSource", () => {
       expect(updated!.title).toBe("更新後タイトル");
     });
 
-    it("delete: クイズを削除できる", async () => {
+    it("delete: テストを削除できる", async () => {
       const created = await ds.createQuiz(baseQuizData);
 
       const deleted = await ds.deleteQuiz(created.id);
@@ -434,7 +434,7 @@ describe("InMemoryDataSource", () => {
       expect(inProgress.every((a) => a.status === "in_progress")).toBe(true);
     });
 
-    it("filter by quizId: 特定クイズの受験記録を取得できる", async () => {
+    it("filter by quizId: 特定テストの受験記録を取得できる", async () => {
       await ds.createQuizAttempt({ ...baseAttemptData, quizId: "quiz-X" });
       await ds.createQuizAttempt({ ...baseAttemptData, quizId: "quiz-Y" });
 

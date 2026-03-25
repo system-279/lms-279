@@ -1,5 +1,5 @@
 /**
- * クイズ受験の共通ルーター
+ * テスト受験の共通ルーター
  * ADR-017: サーバーサイド採点、正解はsubmit後まで非公開
  * ADR-019: 動画完了ゲート
  */
@@ -43,7 +43,7 @@ async function checkVideoCompletionGate(
   if (!analytics || !analytics.isComplete) {
     res.status(403).json({
       error: "video_not_completed",
-      message: "動画の視聴を完了してからクイズに挑戦してください",
+      message: "動画の視聴を完了してからテストに挑戦してください",
     });
     return true;
   }
@@ -56,11 +56,11 @@ async function checkVideoCompletionGate(
 // ============================================================
 
 /**
- * 受講者向け: lessonIdによるクイズ取得（正解なし）
+ * 受講者向け: lessonIdによるテスト取得（正解なし）
  * GET /quizzes/by-lesson/:lessonId
  *
  * lessonId から quizId を解決するために使用。
- * 動画完了ゲートを適用した上でクイズ情報と userAttemptCount を返す。
+ * 動画完了ゲートを適用した上でテスト情報と userAttemptCount を返す。
  */
 router.get("/quizzes/by-lesson/:lessonId", requireUser, async (req: Request, res: Response) => {
   const ds = req.dataSource!;
@@ -119,7 +119,7 @@ router.get("/quizzes/by-lesson/:lessonId", requireUser, async (req: Request, res
 });
 
 /**
- * 受講者向け: クイズ取得（正解なし）
+ * 受講者向け: テスト取得（正解なし）
  * GET /quizzes/:quizId
  */
 router.get("/quizzes/:quizId", requireUser, async (req: Request, res: Response) => {
@@ -165,7 +165,7 @@ router.get("/quizzes/:quizId", requireUser, async (req: Request, res: Response) 
 });
 
 /**
- * 受講者向け: クイズ開始（attempt作成）
+ * 受講者向け: テスト開始（attempt作成）
  * POST /quizzes/:quizId/attempts
  */
 router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: Response) => {
@@ -200,7 +200,7 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
   if (inProgress) {
     res.status(409).json({
       error: "attempt_in_progress",
-      message: "現在進行中のクイズがあります。先に提出してください",
+      message: "現在進行中のテストがあります。先に提出してください",
     });
     return;
   }
@@ -232,7 +232,7 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
 });
 
 /**
- * 受講者向け: クイズ提出（採点）
+ * 受講者向け: テスト提出（採点）
  * PATCH /quiz-attempts/:attemptId
  */
 router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res: Response) => {
@@ -271,7 +271,7 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
   const answers: Record<string, string[]> = req.body.answers ?? {};
 
   // セッション制限チェック（出席管理）
-  // 設計上、セッション未作成（activeSession=null）の場合はクイズ提出を許可する。
+  // 設計上、セッション未作成（activeSession=null）の場合はテスト提出を許可する。
   // これにより出席管理導入前の受講者や、セッション機能未使用時の後方互換性を維持する。
   const activeSession = await ds.getActiveLessonSession(userId, quiz.lessonId);
   if (activeSession) {
@@ -337,7 +337,7 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
     try {
       await completeSession(ds, activeSession.id, updated!.id);
     } catch {
-      // セッション完了失敗はクイズ提出自体をブロックしない
+      // セッション完了失敗はテスト提出自体をブロックしない
       console.error(`Failed to complete session for attempt ${attemptId}`);
     }
   }
@@ -378,7 +378,7 @@ router.get("/quiz-attempts/:attemptId/result", requireUser, async (req: Request,
   if (attempt.status !== "submitted" && attempt.status !== "timed_out") {
     res.status(400).json({
       error: "attempt_not_submitted",
-      message: "クイズはまだ提出されていません",
+      message: "テストはまだ提出されていません",
     });
     return;
   }

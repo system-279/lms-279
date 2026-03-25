@@ -85,7 +85,7 @@ export function validateGeneratedQuestions(
 }
 
 /**
- * ドキュメント内容からクイズ問題を自動生成
+ * ドキュメント内容からテスト問題を自動生成
  */
 export async function generateQuizQuestions(
   content: string,
@@ -106,7 +106,7 @@ export async function generateQuizQuestions(
     hard: "応用的",
   }[difficulty];
 
-  const prompt = `あなたは教育クイズ設計の専門家です。以下のドキュメント内容に基づいて、${clampedCount}問のクイズ問題を${langLabel}で作成してください。
+  const prompt = `あなたは教育テスト設計の専門家です。以下のドキュメント内容に基づいて、${clampedCount}問のテスト問題を${langLabel}で作成してください。
 
 ## 要件
 - 難易度: ${difficultyLabel}

@@ -193,7 +193,7 @@ function QuizSection({ lessonId }: { lessonId: string }) {
         }),
       });
 
-      // 生成結果でクイズ作成ダイアログを開く
+      // 生成結果でテスト作成ダイアログを開く
       setQuizGenDialogOpen(false);
       setQuizGenDocsUrl("");
       setIsEditingQuiz(false);
@@ -209,7 +209,7 @@ function QuizSection({ lessonId }: { lessonId: string }) {
       setQuizDialogOpen(true);
     } catch (e) {
       setQuizGenError(
-        e instanceof Error ? e.message : "クイズ生成に失敗しました",
+        e instanceof Error ? e.message : "テスト生成に失敗しました",
       );
     } finally {
       setQuizGenerating(false);
@@ -245,7 +245,7 @@ function QuizSection({ lessonId }: { lessonId: string }) {
       }
 
       if (data.action === "imported" && data.importedQuestions) {
-        // インポート結果でクイズ作成ダイアログを開く
+        // インポート結果でテスト作成ダイアログを開く
         setQuizImportDialogOpen(false);
         setQuizImportDocsUrl("");
         setQuizImportTabs(null);
@@ -1055,7 +1055,7 @@ function QuizSection({ lessonId }: { lessonId: string }) {
       <Dialog open={quizGenDialogOpen} onOpenChange={(open) => !open && setQuizGenDialogOpen(false)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Google Docsからクイズを生成</DialogTitle>
+            <DialogTitle>Google Docsからテストを生成</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1">

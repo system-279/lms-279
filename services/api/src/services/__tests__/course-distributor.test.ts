@@ -190,7 +190,7 @@ describe("distributeCourseToTenant", () => {
   // -------------------------------------------
   // 正常系: ディープコピーが正しく行われる
   // -------------------------------------------
-  it("コース・レッスン・動画・クイズがディープコピーされ、新しいIDが生成される", async () => {
+  it("コース・レッスン・動画・テストがディープコピーされ、新しいIDが生成される", async () => {
     const masterCourse = makeMasterCourse();
     const lessons = makeLessons();
     const videos = makeVideos();
@@ -264,7 +264,7 @@ describe("distributeCourseToTenant", () => {
     expect(videoData2.lessonId).not.toBe("lesson-2");
     expect(videoData2.sourceUrl).toBe("https://example.com/video2.mp4");
 
-    // クイズドキュメントの検証: lessonId, courseIdがリマップ + questionsは保持
+    // テストドキュメントの検証: lessonId, courseIdがリマップ + questionsは保持
     const quizCall = batchSet.mock.calls[5];
     const quizData = quizCall[1];
     expect(quizData.courseId).toBe(result.courseId);

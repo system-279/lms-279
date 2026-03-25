@@ -118,7 +118,7 @@ export function validateImportedQuestions(
 }
 
 /**
- * ドキュメントの書式付きコンテンツからクイズ問題を抽出（生成ではなくパース）
+ * ドキュメントの書式付きコンテンツからテスト問題を抽出（生成ではなくパース）
  */
 export async function importQuizFromDocument(
   formattedContent: string,
@@ -130,7 +130,7 @@ export async function importQuizFromDocument(
   const { language = "ja" } = options;
   const langLabel = language === "ja" ? "日本語" : "English";
 
-  const prompt = `あなたはドキュメントパーサーです。クイズ設計者やコンテンツクリエーターではありません。
+  const prompt = `あなたはドキュメントパーサーです。テスト設計者やコンテンツクリエーターではありません。
 以下のテスト文書から、問題・選択肢・正解を**そのまま抽出**してJSON化してください。
 
 ## 絶対厳守ルール

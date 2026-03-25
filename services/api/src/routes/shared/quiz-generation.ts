@@ -1,6 +1,6 @@
 /**
- * Google Docsからのクイズ自動生成ルーター
- * ドキュメント内容を読み取り、Gemini(Vertex AI)でクイズ問題を生成
+ * Google Docsからのテスト自動生成ルーター
+ * ドキュメント内容を読み取り、Gemini(Vertex AI)でテスト問題を生成
  * プレビュー用（保存はしない）
  */
 
@@ -13,7 +13,7 @@ import { generateQuizQuestions } from "../../services/quiz-generator.js";
 const router = Router();
 
 /**
- * Google Docsからクイズ問題を自動生成（プレビュー用）
+ * Google Docsからテスト問題を自動生成（プレビュー用）
  * POST /admin/lessons/:lessonId/quiz/generate
  * ボディ:
  *   - docsUrl: string (必須) Google DocsのURL
@@ -69,7 +69,7 @@ router.post("/admin/lessons/:lessonId/quiz/generate", requireAdmin, async (req: 
     return;
   }
 
-  // クイズ生成
+  // テスト生成
   try {
     const questions = await generateQuizQuestions(docContent, {
       questionCount: typeof questionCount === "number" ? questionCount : undefined,

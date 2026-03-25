@@ -26,7 +26,7 @@ export async function updateLessonProgress(
     : current?.quizBestScore ?? null;
 
   // 3. レッスン完了判定: videoCompleted && quizPassed
-  //    クイズなしレッスンは呼び出し元で quizPassed=true を渡す
+  //    テストなしレッスンは呼び出し元で quizPassed=true を渡す
   const lessonCompleted = videoCompleted && quizPassed;
 
   // 4. user_progress upsert

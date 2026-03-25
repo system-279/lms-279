@@ -72,18 +72,18 @@
 | POST | `/admin/videos/import-from-drive` | Google Driveから動画インポート | Admin |
 | GET | `/admin/videos/:videoId/import-status` | インポート状況確認 | Admin |
 
-### クイズ
+### テスト
 
 | メソッド | パス | 説明 | 権限 |
 |---------|------|------|------|
-| POST | `/admin/lessons/:lessonId/quiz` | クイズ作成 | Admin |
-| PATCH | `/admin/lessons/:lessonId/quiz` | クイズ更新 | Admin |
-| DELETE | `/admin/lessons/:lessonId/quiz` | クイズ削除 | Admin |
-| GET | `/quizzes/:quizId` | クイズ取得（正解なし） | Student |
-| POST | `/quizzes/:quizId/attempts` | クイズ開始 | Student |
-| PATCH | `/quiz-attempts/:attemptId` | クイズ提出 | Student |
+| POST | `/admin/lessons/:lessonId/quiz` | テスト作成 | Admin |
+| PATCH | `/admin/lessons/:lessonId/quiz` | テスト更新 | Admin |
+| DELETE | `/admin/lessons/:lessonId/quiz` | テスト削除 | Admin |
+| GET | `/quizzes/:quizId` | テスト取得（正解なし） | Student |
+| POST | `/quizzes/:quizId/attempts` | テスト開始 | Student |
+| PATCH | `/quiz-attempts/:attemptId` | テスト提出 | Student |
 | GET | `/quiz-attempts/:attemptId/result` | 結果取得 | Student |
-| POST | `/admin/lessons/:lessonId/quiz/generate` | Google DocsからAIクイズ生成 | Admin |
+| POST | `/admin/lessons/:lessonId/quiz/generate` | Google DocsからAIテスト生成 | Admin |
 
 ### 進捗
 
@@ -108,7 +108,7 @@
 | GET | `/admin/analytics/courses/:courseId/progress` | コース別進捗 |
 | GET | `/admin/analytics/users/:userId/progress` | ユーザー別進捗 |
 | GET | `/admin/analytics/videos/:videoId/stats` | 動画視聴統計 |
-| GET | `/admin/analytics/quizzes/:quizId/stats` | クイズ統計 |
+| GET | `/admin/analytics/quizzes/:quizId/stats` | テスト統計 |
 | GET | `/admin/analytics/suspicious-viewing` | 不審視聴一覧 |
 | GET | `/admin/analytics/attendance/courses/:courseId` | コース出席管理 |
 | GET | `/admin/analytics/attendance/export/courses/:courseId` | 出席CSVエクスポート |
@@ -154,7 +154,7 @@
 | GET | `/master/courses/:courseId/lessons` | レッスン一覧 |
 | POST | `/master/courses/:courseId/lessons` | レッスン作成 |
 | PATCH | `/master/lessons/:id` | レッスン更新 |
-| DELETE | `/master/lessons/:id` | レッスン削除（動画・クイズ含む） |
+| DELETE | `/master/lessons/:id` | レッスン削除（動画・テスト含む） |
 
 ```json
 // POST /master/courses/:courseId/lessons リクエスト
@@ -206,14 +206,14 @@
 }
 ```
 
-#### クイズCRUD
+#### テストCRUD
 
 | メソッド | パス | 説明 |
 |---------|------|------|
-| POST | `/master/lessons/:lessonId/quiz` | クイズ作成/置換 |
-| PATCH | `/master/quizzes/:id` | クイズ更新 |
-| DELETE | `/master/quizzes/:id` | クイズ削除（IDで） |
-| DELETE | `/master/lessons/:lessonId/quiz` | クイズ削除（レッスンIDで） |
+| POST | `/master/lessons/:lessonId/quiz` | テスト作成/置換 |
+| PATCH | `/master/quizzes/:id` | テスト更新 |
+| DELETE | `/master/quizzes/:id` | テスト削除（IDで） |
+| DELETE | `/master/lessons/:lessonId/quiz` | テスト削除（レッスンIDで） |
 
 ```json
 // POST /master/lessons/:lessonId/quiz リクエスト

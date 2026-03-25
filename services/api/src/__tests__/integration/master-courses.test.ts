@@ -143,7 +143,7 @@ describe("Master Courses API", () => {
 
   describe("DELETE /master/courses/:id", () => {
     it("マスターコースと関連データを削除する", async () => {
-      // コース → レッスン → 動画・クイズを作成
+      // コース → レッスン → 動画・テストを作成
       const created = await request
         .post("/master/courses")
         .send({ name: "削除テスト" });
@@ -160,7 +160,7 @@ describe("Master Courses API", () => {
       await request
         .post(`/master/lessons/${lessonId}/quiz`)
         .send({
-          title: "削除クイズ",
+          title: "削除テスト",
           questions: [{ id: "q1", text: "Q", type: "single", options: [{ id: "a", text: "A", isCorrect: true }], points: 10 }],
         });
 
