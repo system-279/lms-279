@@ -46,7 +46,7 @@ async function commitInBatches(
 /**
  * マスターコースを対象テナントにディープコピーする
  *
- * マスターテナント（_master）のコース・レッスン・動画・クイズを
+ * マスターテナント（_master）のコース・レッスン・動画・テストを
  * 新しいドキュメントIDで対象テナントにコピーする。
  * GCSパスは共有のためそのまま保持する。
  *
@@ -223,7 +223,7 @@ export async function distributeCourseToTenant(
     });
   }
 
-  // クイズドキュメント
+  // テストドキュメント
   for (const quiz of quizzes) {
     const newLessonId = lessonIdMap.get(quiz.lessonId);
     if (!newLessonId) continue;

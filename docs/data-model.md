@@ -37,7 +37,7 @@
 | title | string | レッスンタイトル |
 | order | number | 表示順 |
 | hasVideo | boolean | 動画あり |
-| hasQuiz | boolean | クイズあり |
+| hasQuiz | boolean | テストあり |
 | videoUnlocksPrior | boolean | 前レッスン完了必須 |
 | createdAt | Timestamp | 作成日時 |
 | updatedAt | Timestamp | 更新日時 |
@@ -92,7 +92,7 @@
 |-----------|------|------|
 | lessonId | string | 所属レッスンID |
 | courseId | string | 所属コースID |
-| title | string | クイズタイトル |
+| title | string | テストタイトル |
 | passThreshold | number | 合格基準（default 70%） |
 | maxAttempts | number | 最大受験回数（default 3） |
 | timeLimitSec | number | 制限時間（秒、null=無制限） |
@@ -114,7 +114,7 @@ questions配列の各要素:
 #### quiz_attempts/{id}
 | フィールド | 型 | 説明 |
 |-----------|------|------|
-| quizId | string | クイズID |
+| quizId | string | テストID |
 | userId | string | ユーザーID |
 | attemptNumber | number | 受験回数 |
 | status | string | in_progress / submitted / timed_out |
@@ -128,8 +128,8 @@ questions配列の各要素:
 | フィールド | 型 | 説明 |
 |-----------|------|------|
 | videoCompleted | boolean | 動画完了 |
-| quizPassed | boolean | クイズ合格 |
-| quizBestScore | number | クイズ最高得点 |
+| quizPassed | boolean | テスト合格 |
+| quizBestScore | number | テスト最高得点 |
 | lessonCompleted | boolean | レッスン完了 |
 | updatedAt | Timestamp | 最終更新 |
 
@@ -158,6 +158,6 @@ questions配列の各要素:
 | pauseStartedAt | Timestamp? | 現在の一時停止開始時刻 |
 | longestPauseSec | number | セッション中の最長一時停止秒数 |
 | sessionVideoCompleted | boolean | セッション内で動画完了したか |
-| quizAttemptId | string? | 完了時のクイズattempt ID |
+| quizAttemptId | string? | 完了時のテストattempt ID |
 | createdAt | Timestamp | 作成日時 |
 | updatedAt | Timestamp | 更新日時 |

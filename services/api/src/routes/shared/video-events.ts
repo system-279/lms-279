@@ -167,7 +167,7 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
   if (isComplete) {
     const lesson = await ds.getLessonById(video.lessonId);
     if (lesson) {
-      // クイズなしレッスンの場合、quizPassed=trueとして完了扱い
+      // テストなしレッスンの場合、quizPassed=trueとして完了扱い
       const quizPassed = !lesson.hasQuiz;
       await updateLessonProgress(ds, userId, lesson.id, lesson.courseId, {
         videoCompleted: true,

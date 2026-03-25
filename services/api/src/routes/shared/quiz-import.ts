@@ -1,5 +1,5 @@
 /**
- * Google Docsテストタブからのクイズインポートルーター
+ * Google Docsテストタブからのテストインポートルーター
  * テスト文書を書式情報付きで読み取り、Geminiで構造パースしてプレビュー返却
  */
 
@@ -12,7 +12,7 @@ import { resolveAndImportQuiz } from "../../services/quiz-import.js";
 const router = Router();
 
 /**
- * Google Docsテストタブからクイズをインポート（プレビュー用）
+ * Google Docsテストタブからテストをインポート（プレビュー用）
  * POST /admin/lessons/:lessonId/quiz/import
  *
  * ボディ:
@@ -21,7 +21,7 @@ const router = Router();
  *
  * レスポンス:
  *   action: "select_tab" → タブ一覧を返却（テストタブ未検出時）
- *   action: "imported" → パース済みクイズを返却
+ *   action: "imported" → パース済みテストを返却
  */
 router.post(
   "/admin/lessons/:lessonId/quiz/import",

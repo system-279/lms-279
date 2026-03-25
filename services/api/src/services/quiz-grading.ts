@@ -1,5 +1,5 @@
 /**
- * クイズ採点サービス
+ * テスト採点サービス
  * ADR-017: サーバーサイド採点、正解はsubmit後まで非公開
  */
 
@@ -23,8 +23,8 @@ interface QuestionResult {
 }
 
 /**
- * クイズを採点する
- * @param questions クイズの問題配列（正解付き）
+ * テストを採点する
+ * @param questions テストの問題配列（正解付き）
  * @param answers ユーザーの回答 { questionId: selectedOptionIds[] }
  * @param passThreshold 合格基準（パーセント）
  */
@@ -101,7 +101,7 @@ export function randomizeQuiz(
 }
 
 /**
- * クイズデータから正解を除去（受講者向け）
+ * テストデータから正解を除去（受講者向け）
  * ADR-017: 正解はsubmit後まで非公開
  */
 export function stripCorrectAnswers(

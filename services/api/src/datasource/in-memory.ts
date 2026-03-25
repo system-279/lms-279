@@ -231,7 +231,7 @@ export class InMemoryDataSource implements DataSource {
       },
     ];
 
-    // デモ用クイズシードデータ
+    // デモ用テストシードデータ
     this.quizzes = [
       {
         id: "demo-quiz-1",

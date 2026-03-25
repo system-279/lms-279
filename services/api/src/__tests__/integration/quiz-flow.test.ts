@@ -1,5 +1,5 @@
 /**
- * クイズ受験フローの統合テスト
+ * テスト受験フローの統合テスト
  * attempt作成 → 回答提出 → 採点 → 結果取得の完全フロー
  */
 
@@ -8,7 +8,7 @@ import supertest from "supertest";
 import { createTestApp } from "../helpers/create-app.js";
 import type { InMemoryDataSource } from "../../datasource/in-memory.js";
 
-// 共通のクイズ問題セット（全問正解版）
+// 共通のテスト問題セット（全問正解版）
 const testQuestions = [
   {
     id: "q1",
@@ -53,13 +53,13 @@ describe("Quiz Flow (complete flow)", () => {
     // 1. コース作成
     const courseRes = await adminRequest
       .post("/admin/courses")
-      .send({ name: "クイズフローテストコース", description: "テスト" });
+      .send({ name: "テストフローテストコース", description: "テスト" });
     const courseId = courseRes.body.course.id;
 
     // 2. レッスン作成
     const lessonRes = await adminRequest
       .post(`/admin/courses/${courseId}/lessons`)
-      .send({ title: "クイズフローレッスン", hasVideo: true, hasQuiz: true });
+      .send({ title: "テストフローレッスン", hasVideo: true, hasQuiz: true });
     const lessonId = lessonRes.body.lesson.id;
 
     // 3. 動画をDataSourceに直接注入
@@ -74,11 +74,11 @@ describe("Quiz Flow (complete flow)", () => {
     });
     videoId = video.id;
 
-    // 4. クイズ作成（requireVideoCompletion=true, maxAttempts=2）
+    // 4. テスト作成（requireVideoCompletion=true, maxAttempts=2）
     const quizRes = await adminRequest
       .post(`/admin/lessons/${lessonId}/quiz`)
       .send({
-        title: "クイズフローテスト",
+        title: "テストフローテスト",
         questions: testQuestions,
         passThreshold: 70,
         maxAttempts: 2,

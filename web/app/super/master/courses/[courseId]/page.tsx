@@ -619,7 +619,7 @@ export default function MasterCourseDetailPage() {
         }),
       });
 
-      // 生成結果をクイズフォームにセット
+      // 生成結果をテストフォームにセット
       updateQuizForm(lessonId, {
         title: data.suggestedTitle,
         questions: data.generatedQuestions,
@@ -630,7 +630,7 @@ export default function MasterCourseDetailPage() {
       setQuizGenDocsUrl("");
     } catch (e) {
       setQuizGenError(
-        e instanceof Error ? e.message : "クイズ生成に失敗しました",
+        e instanceof Error ? e.message : "テスト生成に失敗しました",
       );
     } finally {
       setQuizGenerating(false);
@@ -1399,7 +1399,7 @@ export default function MasterCourseDetailPage() {
       <Dialog open={quizGenDialog !== null} onOpenChange={(open) => !open && setQuizGenDialog(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Google Docsからクイズを生成</DialogTitle>
+            <DialogTitle>Google Docsからテストを生成</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1">

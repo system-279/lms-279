@@ -78,7 +78,7 @@ describe("updateLessonProgress", () => {
     expect(progress!.quizBestScore).toBe(80);
   });
 
-  it("videoCompleted=trueのみ → lessonCompleted=false（クイズあり前提）", async () => {
+  it("videoCompleted=trueのみ → lessonCompleted=false（テストあり前提）", async () => {
     await updateLessonProgress(ds, USER_ID, LESSON_ID, COURSE_ID, {
       videoCompleted: true,
       quizPassed: false,

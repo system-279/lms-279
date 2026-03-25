@@ -164,7 +164,7 @@ export const helpSections: HelpSection[] = [
     id: "student-quiz",
     title: "テストを受ける",
     roles: ["student"],
-    keywords: ["テスト", "クイズ", "問題", "採点", "結果", "合格"],
+    keywords: ["テスト", "問題", "採点", "結果", "合格"],
     description: "テストの受験方法と結果の確認方法を説明します。",
     screenshots: [
       {

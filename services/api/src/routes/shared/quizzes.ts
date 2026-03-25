@@ -1,5 +1,5 @@
 /**
- * クイズ管理の共通ルーター
+ * テスト管理の共通ルーター
  * DataSourceを使用してデモ/本番両対応
  */
 
@@ -95,7 +95,7 @@ function validateQuestions(questions: unknown[]): { valid: true; data: QuizQuest
 // ============================================================
 
 /**
- * 管理者向け: クイズ作成
+ * 管理者向け: テスト作成
  * POST /admin/lessons/:lessonId/quiz
  */
 router.post("/admin/lessons/:lessonId/quiz", requireAdmin, async (req: Request, res: Response) => {
@@ -119,7 +119,7 @@ router.post("/admin/lessons/:lessonId/quiz", requireAdmin, async (req: Request, 
     return;
   }
 
-  // 既存クイズチェック
+  // 既存テストチェック
   const existing = await ds.getQuizByLessonId(lessonId);
   if (existing) {
     res.status(409).json({ error: "quiz_already_exists", message: "A quiz already exists for this lesson" });
@@ -164,7 +164,7 @@ router.post("/admin/lessons/:lessonId/quiz", requireAdmin, async (req: Request, 
 });
 
 /**
- * 管理者向け: クイズ更新
+ * 管理者向け: テスト更新
  * PATCH /admin/lessons/:lessonId/quiz
  */
 router.patch("/admin/lessons/:lessonId/quiz", requireAdmin, async (req: Request, res: Response) => {
@@ -181,7 +181,7 @@ router.patch("/admin/lessons/:lessonId/quiz", requireAdmin, async (req: Request,
     requireVideoCompletion,
   } = req.body;
 
-  // クイズ存在チェック
+  // テスト存在チェック
   const quiz = await ds.getQuizByLessonId(lessonId);
   if (!quiz) {
     res.status(404).json({ error: "not_found", message: "Quiz not found for this lesson" });
@@ -224,14 +224,14 @@ router.patch("/admin/lessons/:lessonId/quiz", requireAdmin, async (req: Request,
 });
 
 /**
- * 管理者向け: クイズ削除
+ * 管理者向け: テスト削除
  * DELETE /admin/lessons/:lessonId/quiz
  */
 router.delete("/admin/lessons/:lessonId/quiz", requireAdmin, async (req: Request, res: Response) => {
   const ds = req.dataSource!;
   const lessonId = req.params.lessonId as string;
 
-  // クイズ存在チェック
+  // テスト存在チェック
   const quiz = await ds.getQuizByLessonId(lessonId);
   if (!quiz) {
     res.status(404).json({ error: "not_found", message: "Quiz not found for this lesson" });
@@ -247,7 +247,7 @@ router.delete("/admin/lessons/:lessonId/quiz", requireAdmin, async (req: Request
 });
 
 /**
- * 管理者向け: クイズ詳細取得（正解付き）
+ * 管理者向け: テスト詳細取得（正解付き）
  * GET /admin/lessons/:lessonId/quiz
  */
 router.get("/admin/lessons/:lessonId/quiz", requireAdmin, async (req: Request, res: Response) => {

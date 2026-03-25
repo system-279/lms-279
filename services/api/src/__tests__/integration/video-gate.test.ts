@@ -1,6 +1,6 @@
 /**
  * 動画完了ゲートの統合テスト（ADR-019）
- * 動画視聴完了前はクイズにアクセスできないことを確認する
+ * 動画視聴完了前はテストにアクセスできないことを確認する
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
@@ -16,7 +16,7 @@ describe("Video Completion Gate (ADR-019)", () => {
   const studentUserId = "test-student-1";
 
   beforeEach(async () => {
-    // 管理者用アプリでコース・レッスン・動画・クイズをセットアップ
+    // 管理者用アプリでコース・レッスン・動画・テストをセットアップ
     const { app: adminApp, ds: adminDs } = createTestApp();
     const adminRequest = supertest(adminApp);
 
@@ -48,11 +48,11 @@ describe("Video Completion Gate (ADR-019)", () => {
     });
     videoId = video.id;
 
-    // 4. クイズ作成（requireVideoCompletion=true）
+    // 4. テスト作成（requireVideoCompletion=true）
     const quizRes = await adminRequest
       .post(`/admin/lessons/${lessonId}/quiz`)
       .send({
-        title: "動画ゲートテストクイズ",
+        title: "動画ゲートテスト",
         questions: [
           {
             id: "q1",
@@ -120,7 +120,7 @@ describe("Video Completion Gate (ADR-019)", () => {
       });
     });
 
-    it("GET /quizzes/:quizId → 200（正解なし版クイズ取得成功）", async () => {
+    it("GET /quizzes/:quizId → 200（正解なし版テスト取得成功）", async () => {
       const res = await studentRequest.get(`/quizzes/${quizId}`);
 
       expect(res.status).toBe(200);
