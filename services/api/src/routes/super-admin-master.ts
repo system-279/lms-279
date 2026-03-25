@@ -753,6 +753,23 @@ router.post("/master/lessons/:lessonId/quiz", async (req: Request, res: Response
 });
 
 /**
+ * マスターテスト個別取得
+ * GET /master/quizzes/:id
+ */
+router.get("/master/quizzes/:id", async (req: Request, res: Response) => {
+  const ds = getMasterDS();
+  const id = req.params.id as string;
+
+  const quiz = await ds.getQuizById(id);
+  if (!quiz) {
+    res.status(404).json({ error: "not_found", message: "テストが見つかりません。" });
+    return;
+  }
+
+  res.json({ quiz });
+});
+
+/**
  * マスターテスト更新
  * PATCH /master/quizzes/:id
  */
