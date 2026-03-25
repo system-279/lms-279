@@ -47,6 +47,21 @@ type Lesson = {
   hasQuiz: boolean;
 };
 
+type VideoSummary = {
+  id: string;
+  lessonId: string;
+  sourceType: string;
+  durationSec: number;
+};
+
+type QuizSummary = {
+  id: string;
+  lessonId: string;
+  title: string;
+  questionCount: number;
+  passThreshold: number;
+};
+
 type QuestionOption = {
   id: string;
   text: string;
@@ -95,6 +110,8 @@ export default function MasterCourseDetailPage() {
 
   const [course, setCourse] = useState<Course | null>(null);
   const [lessons, setLessons] = useState<Lesson[]>([]);
+  const [videoSummaries, setVideoSummaries] = useState<VideoSummary[]>([]);
+  const [quizSummaries, setQuizSummaries] = useState<QuizSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -173,12 +190,19 @@ export default function MasterCourseDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await superFetchRef.current<{ course: Course; lessons: Lesson[] }>(
+      const data = await superFetchRef.current<{
+        course: Course;
+        lessons: Lesson[];
+        videos: VideoSummary[];
+        quizzes: QuizSummary[];
+      }>(
         `/api/v2/super/master/courses/${courseId}`,
       );
       setCourse(data.course);
       const sorted = [...data.lessons].sort((a, b) => a.order - b.order);
       setLessons(sorted);
+      setVideoSummaries(data.videos ?? []);
+      setQuizSummaries(data.quizzes ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "データの取得に失敗しました");
     } finally {
@@ -793,20 +817,32 @@ export default function MasterCourseDetailPage() {
                     <div className="space-y-3">
                       <h3 className="text-sm font-semibold">動画設定</h3>
                       {lesson.hasVideo ? (
-                        <div className="flex items-center gap-3">
-                          <Badge className="bg-blue-100 text-blue-800 border-blue-200">
-                            登録済み
-                          </Badge>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => handleDeleteVideo(lesson.id)}
-                            disabled={videoSaving === lesson.id}
-                          >
-                            {videoSaving === lesson.id
-                              ? "削除中..."
-                              : "動画を削除"}
-                          </Button>
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-3">
+                            <Badge className="bg-blue-100 text-blue-800 border-blue-200">
+                              登録済み
+                            </Badge>
+                            {(() => {
+                              const video = videoSummaries.find((v) => v.lessonId === lesson.id);
+                              if (!video) return null;
+                              return (
+                                <span className="text-sm text-muted-foreground">
+                                  {video.sourceType === "drive" ? "Drive" : "アップロード"}
+                                  {video.durationSec > 0 && ` / ${Math.floor(video.durationSec / 60)}分${video.durationSec % 60}秒`}
+                                </span>
+                              );
+                            })()}
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              onClick={() => handleDeleteVideo(lesson.id)}
+                              disabled={videoSaving === lesson.id}
+                            >
+                              {videoSaving === lesson.id
+                                ? "削除中..."
+                                : "動画を削除"}
+                            </Button>
+                          </div>
                         </div>
                       ) : (
                         <div className="space-y-3">
@@ -926,20 +962,31 @@ export default function MasterCourseDetailPage() {
                     <div className="space-y-3">
                       <h3 className="text-sm font-semibold">テスト設定</h3>
                       {lesson.hasQuiz ? (
-                        <div className="flex items-center gap-3">
-                          <Badge className="bg-purple-100 text-purple-800 border-purple-200">
-                            登録済み
-                          </Badge>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => handleDeleteQuiz(lesson.id)}
-                            disabled={quizSaving === lesson.id}
-                          >
-                            {quizSaving === lesson.id
-                              ? "削除中..."
-                              : "テストを削除"}
-                          </Button>
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-3">
+                            <Badge className="bg-purple-100 text-purple-800 border-purple-200">
+                              登録済み
+                            </Badge>
+                            {(() => {
+                              const quiz = quizSummaries.find((q) => q.lessonId === lesson.id);
+                              if (!quiz) return null;
+                              return (
+                                <span className="text-sm text-muted-foreground">
+                                  {quiz.title} / {quiz.questionCount}問 / 合格{quiz.passThreshold}%
+                                </span>
+                              );
+                            })()}
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              onClick={() => handleDeleteQuiz(lesson.id)}
+                              disabled={quizSaving === lesson.id}
+                            >
+                              {quizSaving === lesson.id
+                                ? "削除中..."
+                                : "テストを削除"}
+                            </Button>
+                          </div>
                         </div>
                       ) : (
                         <div className="space-y-4">

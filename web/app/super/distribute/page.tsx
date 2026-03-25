@@ -55,6 +55,7 @@ export default function DistributePage() {
 
   const [distributing, setDistributing] = useState(false);
   const [results, setResults] = useState<DistributionResult[] | null>(null);
+  const [forceRedistribute, setForceRedistribute] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -132,6 +133,7 @@ export default function DistributePage() {
           body: JSON.stringify({
             courseIds: Array.from(selectedCourses),
             tenantIds: Array.from(selectedTenants),
+            force: forceRedistribute,
           }),
         },
       );
@@ -251,6 +253,17 @@ export default function DistributePage() {
             {selectedTenants.size} 件選択中
           </p>
         </div>
+      </div>
+
+      {/* Options */}
+      <div className="flex items-center justify-center gap-3 pt-2">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <Checkbox
+            checked={forceRedistribute}
+            onCheckedChange={(checked) => setForceRedistribute(!!checked)}
+          />
+          <span className="text-sm">再配信（配信済みコースを上書き更新）</span>
+        </label>
       </div>
 
       {/* Distribute button */}

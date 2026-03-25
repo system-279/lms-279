@@ -115,11 +115,29 @@ router.get("/master/courses/:id", async (req: Request, res: Response) => {
     return;
   }
 
-  const lessons = await ds.getLessons({ courseId: id });
+  const [lessons, videos, quizzes] = await Promise.all([
+    ds.getLessons({ courseId: id }),
+    ds.getVideos({ courseId: id }),
+    ds.getQuizzes({ courseId: id }),
+  ]);
 
   res.json({
     course: serializeCourse(course),
     lessons: lessons.map(serializeLesson),
+    videos: videos.map((v) => ({
+      id: v.id,
+      lessonId: v.lessonId,
+      sourceType: v.sourceType,
+      durationSec: v.durationSec,
+      gcsPath: v.gcsPath ?? null,
+    })),
+    quizzes: quizzes.map((q) => ({
+      id: q.id,
+      lessonId: q.lessonId,
+      title: q.title,
+      questionCount: q.questions.length,
+      passThreshold: q.passThreshold,
+    })),
   });
 });
 
@@ -824,7 +842,7 @@ router.delete("/master/lessons/:lessonId/quiz", async (req: Request, res: Respon
  * POST /master/distribute
  */
 router.post("/master/distribute", async (req: Request, res: Response) => {
-  const { courseIds, tenantIds } = req.body;
+  const { courseIds, tenantIds, force } = req.body;
 
   if (!Array.isArray(courseIds) || courseIds.length === 0 || !courseIds.every((id: unknown) => typeof id === "string")) {
     res.status(400).json({
@@ -851,7 +869,7 @@ router.post("/master/distribute", async (req: Request, res: Response) => {
 
   const results = await Promise.all(
     pairs.map(({ courseId, tenantId }) =>
-      distributeCourseToTenant(db, courseId, tenantId, distributedBy),
+      distributeCourseToTenant(db, courseId, tenantId, distributedBy, { force: !!force }),
     ),
   );
 

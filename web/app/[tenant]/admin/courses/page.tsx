@@ -292,6 +292,8 @@ export default function CoursesPage() {
                       variant="destructive"
                       size="sm"
                       onClick={() => openDelete(course)}
+                      disabled={course.status === "published"}
+                      title={course.status === "published" ? "公開中のコースは先にアーカイブしてから削除してください" : undefined}
                     >
                       削除
                     </Button>

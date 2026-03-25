@@ -61,6 +61,7 @@ export async function distributeCourseToTenant(
   masterCourseId: string,
   targetTenantId: string,
   distributedBy: string,
+  options: { force?: boolean } = {},
 ): Promise<DistributionResult> {
   const errorResult = (reason: string): DistributionResult => ({
     tenantId: targetTenantId,
@@ -105,16 +106,33 @@ export async function distributeCourseToTenant(
   }
 
   if (!existingSnap.empty) {
-    return {
-      tenantId: targetTenantId,
-      courseId: existingSnap.docs[0].id,
-      masterCourseId,
-      status: "skipped",
-      reason: "already distributed",
-      lessonsCount: 0,
-      videosCount: 0,
-      quizzesCount: 0,
-    };
+    if (!options.force) {
+      return {
+        tenantId: targetTenantId,
+        courseId: existingSnap.docs[0].id,
+        masterCourseId,
+        status: "skipped",
+        reason: "already distributed",
+        lessonsCount: 0,
+        videosCount: 0,
+        quizzesCount: 0,
+      };
+    }
+
+    // force=true: 既存の配信済みデータを削除して再配信
+    const existingCourseId = existingSnap.docs[0].id;
+    const targetDs = new FirestoreDataSource(db, targetTenantId);
+    const [existingLessons, existingVideos, existingQuizzes] = await Promise.all([
+      targetDs.getLessons({ courseId: existingCourseId }),
+      targetDs.getVideos({ courseId: existingCourseId }),
+      targetDs.getQuizzes({ courseId: existingCourseId }),
+    ]);
+    await Promise.all([
+      ...existingVideos.map((v) => targetDs.deleteVideo(v.id)),
+      ...existingQuizzes.map((q) => targetDs.deleteQuiz(q.id)),
+      ...existingLessons.map((l) => targetDs.deleteLesson(l.id)),
+    ]);
+    await targetDs.deleteCourse(existingCourseId);
   }
 
   // 3. マスターテナントから関連データを取得
