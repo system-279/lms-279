@@ -26,6 +26,8 @@ type Screen = {
   url: string;
   description: string;
   icon: React.ReactNode;
+  /** true if url is a real path (no {id}/{tenant} placeholders) */
+  linkable?: boolean;
 };
 
 type ScreenSection = {
@@ -67,6 +69,7 @@ const screenSections: ScreenSection[] = [
         url: "/super/master/courses",
         description: "コース・レッスン・動画・テストの管理",
         icon: <BookOpen className="size-4" />,
+        linkable: true,
       },
       {
         name: "マスターコース詳細",
@@ -79,12 +82,14 @@ const screenSections: ScreenSection[] = [
         url: "/super/distribute",
         description: "マスターコースをテナントに配信・再配信",
         icon: <Send className="size-4" />,
+        linkable: true,
       },
       {
         name: "設定",
         url: "/super/settings",
         description: "テナント管理",
         icon: <Settings className="size-4" />,
+        linkable: true,
       },
     ],
   },
@@ -396,25 +401,33 @@ export default function InternalPortalPage() {
                   {section.title}
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {section.screens.map((screen) => (
-                    <div
-                      key={screen.name}
-                      className={`rounded-lg border p-4 ${section.bgColor} ${section.borderColor}`}
-                    >
-                      <div className="flex items-center gap-2 mb-1">
-                        {screen.icon}
-                        <span className="font-medium text-sm">
-                          {screen.name}
-                        </span>
+                  {section.screens.map((screen) => {
+                    const card = (
+                      <div
+                        className={`rounded-lg border p-4 ${section.bgColor} ${section.borderColor} ${screen.linkable ? "hover:shadow-md transition-shadow" : ""}`}
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          {screen.icon}
+                          <span className="font-medium text-sm">
+                            {screen.name}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mb-2">
+                          {screen.description}
+                        </p>
+                        <code className="text-xs bg-white/60 rounded px-1.5 py-0.5">
+                          {screen.url}
+                        </code>
                       </div>
-                      <p className="text-xs text-muted-foreground mb-2">
-                        {screen.description}
-                      </p>
-                      <code className="text-xs bg-white/60 rounded px-1.5 py-0.5">
-                        {screen.url}
-                      </code>
-                    </div>
-                  ))}
+                    );
+                    return screen.linkable ? (
+                      <Link key={screen.name} href={screen.url} target="_blank">
+                        {card}
+                      </Link>
+                    ) : (
+                      <div key={screen.name}>{card}</div>
+                    );
+                  })}
                 </div>
               </div>
             ))}
