@@ -65,6 +65,7 @@ describe("Master Distribute API", () => {
         "course-1",
         "tenant-1",
         "super@test.com", // distributedBy = req.superAdmin.email
+        { force: false },
       );
     });
 
