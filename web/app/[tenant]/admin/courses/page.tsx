@@ -194,7 +194,7 @@ export default function CoursesPage() {
       });
       fetchCourses();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "公開に失敗しました");
+      setError(e instanceof Error ? e.message : String(e ?? "公開に失敗しました"));
     }
   };
 
@@ -205,7 +205,7 @@ export default function CoursesPage() {
       });
       fetchCourses();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "アーカイブに失敗しました");
+      setError(e instanceof Error ? e.message : String(e ?? "アーカイブに失敗しました"));
     }
   };
 

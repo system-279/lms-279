@@ -104,10 +104,11 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
     if (!doc.exists) return null;
 
-    await docRef.update({
-      ...data,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    const updateData: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) updateData[key] = value;
+    }
+    await docRef.update(updateData);
     const updated = await docRef.get();
     return this.toCourse(updated.id, updated.data()!);
   }
