@@ -878,6 +878,12 @@ export default function MasterCourseDetailPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    <Link
+                      href={`/super/master/courses/${courseId}/preview/lessons/${lesson.id}`}
+                      className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-9 px-3"
+                    >
+                      受講者プレビュー
+                    </Link>
                     <Button
                       variant="outline"
                       size="sm"

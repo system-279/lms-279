@@ -24,6 +24,11 @@ vi.mock("../../services/course-distributor.js", () => ({
   distributeCourseToTenant: vi.fn(),
 }));
 
+vi.mock("../../services/gcs.js", () => ({
+  generateUploadUrl: vi.fn().mockResolvedValue({ uploadUrl: "https://example.com/upload", gcsPath: "test/path.mp4" }),
+  generatePlaybackUrl: vi.fn().mockResolvedValue("https://storage.googleapis.com/signed-url"),
+}));
+
 const { createSuperAdminApp } = await import("../helpers/create-super-admin-app.js");
 
 describe("Master Media API", () => {
@@ -275,6 +280,49 @@ describe("Master Media API", () => {
 
     it("存在しないIDで404を返す", async () => {
       const res = await request.delete("/master/quizzes/xxx");
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("not_found");
+    });
+  });
+
+  describe("GET /master/lessons/:lessonId", () => {
+    it("レッスンを取得して200を返す", async () => {
+      const res = await request.get(`/master/lessons/${lessonId}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.lesson.id).toBe(lessonId);
+      expect(res.body.lesson.title).toBeDefined();
+      expect(res.body.lesson.hasVideo).toBeDefined();
+      expect(res.body.lesson.hasQuiz).toBeDefined();
+    });
+
+    it("存在しないIDで404を返す", async () => {
+      const res = await request.get("/master/lessons/xxx");
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("not_found");
+    });
+  });
+
+  describe("GET /master/videos/:videoId/playback-url", () => {
+    it("動画の再生URLを取得して200を返す", async () => {
+      // 動画を先に作成
+      const videoRes = await request
+        .post(`/master/lessons/${lessonId}/video`)
+        .send({ durationSec: 120, gcsPath: "test/video.mp4", sourceType: "gcs" });
+      const videoId = videoRes.body.video.id;
+
+      const res = await request.get(`/master/videos/${videoId}/playback-url`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.playbackUrl).toBeDefined();
+      expect(res.body.video).toBeDefined();
+      expect(res.body.video.id).toBe(videoId);
+    });
+
+    it("存在しないIDで404を返す", async () => {
+      const res = await request.get("/master/videos/xxx/playback-url");
 
       expect(res.status).toBe(404);
       expect(res.body.error).toBe("not_found");
