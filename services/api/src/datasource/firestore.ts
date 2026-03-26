@@ -853,7 +853,7 @@ export class FirestoreDataSource implements DataSource {
     const doc = await docRef.get();
     if (!doc.exists) return null;
 
-    await docRef.update({ ...data });
+    await applyUpdate(docRef, data as Record<string, unknown>);
     const updated = await docRef.get();
     return this.toQuizAttempt(updated.id, updated.data()!);
   }
