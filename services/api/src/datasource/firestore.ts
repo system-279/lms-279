@@ -46,20 +46,18 @@ function toDate(timestamp: Timestamp | Date | null | undefined): Date {
 }
 
 /**
- * Firestore update() 用のフィールドパス/値ペア配列を構築するヘルパー
- * Firestore SDK 8.x では update() にオブジェクトリテラルで FieldValue.serverTimestamp() を
- * 渡すとシリアライズエラーが発生するため、update(field, value, field, value, ...) 形式を使用
+ * Firestore set(merge:true) でドキュメントを部分更新するヘルパー
+ * Firestore SDK 8.x では update() に FieldValue.serverTimestamp() を渡すと
+ * ServerTimestampTransform シリアライズエラーが発生するため、
+ * set() + merge:true を使用する（こちらはFieldValueを正しくシリアライズする）
  */
 function applyUpdate(docRef: FirebaseFirestore.DocumentReference, data: Record<string, unknown>): Promise<FirebaseFirestore.WriteResult> {
-  const args: unknown[] = [];
+  const updateFields: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
-    if (value !== undefined) {
-      args.push(key, value);
-    }
+    if (value !== undefined) updateFields[key] = value;
   }
-  args.push("updatedAt", FieldValue.serverTimestamp());
-  // update(field, value, ...moreFieldsAndValues) 形式で呼び出し
-  return docRef.update(args[0] as string, args[1], ...args.slice(2));
+  updateFields.updatedAt = FieldValue.serverTimestamp();
+  return docRef.set(updateFields, { merge: true });
 }
 
 export class FirestoreDataSource implements DataSource {
