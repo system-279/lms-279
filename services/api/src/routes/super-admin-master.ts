@@ -760,8 +760,7 @@ router.get("/master/lessons/:lessonId", async (req: Request, res: Response) => {
   const ds = getMasterDS();
   const lessonId = req.params.lessonId as string;
 
-  const lessons = await ds.getLessons();
-  const lesson = lessons.find((l) => l.id === lessonId);
+  const lesson = await ds.getLessonById(lessonId);
   if (!lesson) {
     res.status(404).json({ error: "not_found", message: "レッスンが見つかりません。" });
     return;

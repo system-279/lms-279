@@ -182,6 +182,8 @@ function QuizSection({
   const [loadingSubmit, setLoadingSubmit] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const answersRef = useRef(answers);
+  answersRef.current = answers;
 
   // テスト情報取得
   const fetchQuiz = useCallback(async () => {
@@ -282,7 +284,7 @@ function QuizSection({
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ answers }),
+          body: JSON.stringify({ answers: answersRef.current }),
         }
       );
       // 結果取得

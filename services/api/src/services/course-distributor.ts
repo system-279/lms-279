@@ -5,7 +5,6 @@
 
 import {
   Firestore,
-  FieldValue,
   type DocumentReference,
 } from "firebase-admin/firestore";
 import { FirestoreDataSource } from "../datasource/firestore.js";
@@ -177,8 +176,8 @@ export async function distributeCourseToTenant(
       createdBy: distributedBy,
       sourceMasterCourseId: masterCourseId,
       copiedAt: new Date(),
-      createdAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
     },
   });
 
@@ -194,8 +193,8 @@ export async function distributeCourseToTenant(
         hasVideo: lesson.hasVideo,
         hasQuiz: lesson.hasQuiz,
         videoUnlocksPrior: lesson.videoUnlocksPrior,
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
     });
   }
@@ -217,8 +216,8 @@ export async function distributeCourseToTenant(
         durationSec: video.durationSec,
         requiredWatchRatio: video.requiredWatchRatio,
         speedLock: video.speedLock,
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
     });
   }
@@ -242,8 +241,8 @@ export async function distributeCourseToTenant(
         randomizeAnswers: quiz.randomizeAnswers,
         requireVideoCompletion: quiz.requireVideoCompletion,
         questions: quiz.questions,
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
     });
   }

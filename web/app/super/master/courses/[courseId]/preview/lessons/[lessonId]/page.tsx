@@ -90,6 +90,8 @@ export default function LessonPreviewPage() {
   const [gradeResult, setGradeResult] = useState<GradeResult | null>(null);
   const [remainingSec, setRemainingSec] = useState<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const answersRef = useRef(answers);
+  answersRef.current = answers;
 
   // Course name for breadcrumb
   const [courseName, setCourseName] = useState<string>("");
@@ -198,11 +200,12 @@ export default function LessonPreviewPage() {
     if (timerRef.current) clearInterval(timerRef.current);
     if (!quiz) return;
 
+    const currentAnswers = answersRef.current;
     let score = 0;
     let maxScore = 0;
     const details = quiz.questions.map((q) => {
       const correctIds = q.options.filter((o) => o.isCorrect).map((o) => o.id).sort();
-      const selectedIds = (answers[q.id] ?? []).sort();
+      const selectedIds = (currentAnswers[q.id] ?? []).sort();
       const isCorrect = !timedOut && correctIds.length === selectedIds.length && correctIds.every((id, i) => id === selectedIds[i]);
       maxScore += q.points;
       if (isCorrect) score += q.points;

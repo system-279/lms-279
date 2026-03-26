@@ -270,6 +270,16 @@ router.delete(
       return;
     }
 
+    // 紐づく動画・テストも削除（孤立防止）
+    const [video, quiz] = await Promise.all([
+      ds.getVideoByLessonId(lessonId),
+      ds.getQuizByLessonId(lessonId),
+    ]);
+    await Promise.all([
+      video ? ds.deleteVideo(video.id) : Promise.resolve(false),
+      quiz ? ds.deleteQuiz(quiz.id) : Promise.resolve(false),
+    ]);
+
     await ds.deleteLesson(lessonId);
 
     // courseのlessonOrderからも削除

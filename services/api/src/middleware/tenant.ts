@@ -19,6 +19,9 @@ declare global {
 // デモテナントID
 const DEMO_TENANT_ID = "demo";
 
+// 予約済みテナントID（一般アクセス禁止）
+const RESERVED_TENANT_IDS = new Set(["_master"]);
+
 // テナントID検証用正規表現（英数字、ハイフン、アンダースコアのみ）
 const TENANT_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
 const TENANT_ID_MAX_LENGTH = 64;
@@ -59,6 +62,15 @@ export function tenantMiddleware(req: Request, res: Response, next: NextFunction
     res.status(400).json({
       error: "invalid_tenant_id",
       message: "Invalid tenant ID. Must be 1-64 alphanumeric characters, hyphens, or underscores.",
+    });
+    return;
+  }
+
+  // 予約済みテナントID（_master等）への一般アクセスを禁止
+  if (RESERVED_TENANT_IDS.has(tenantId)) {
+    res.status(403).json({
+      error: "reserved_tenant",
+      message: "This tenant ID is reserved for internal use.",
     });
     return;
   }
