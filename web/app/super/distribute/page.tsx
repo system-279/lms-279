@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -242,6 +243,13 @@ export default function DistributePage() {
                     onCheckedChange={() => toggleTenant(tenant.id)}
                   />
                   <span className="flex-1 text-sm">{tenant.name}</span>
+                  <Link
+                    href={`/${tenant.id}/admin/courses`}
+                    className="text-xs text-blue-600 hover:underline"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    管理画面
+                  </Link>
                   <span className="text-xs text-muted-foreground">
                     {tenant.id}
                   </span>
