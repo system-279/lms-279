@@ -158,6 +158,9 @@ router.post("/admin/lessons/:lessonId/quiz", requireAdmin, async (req: Request, 
   });
 
   // lesson.hasQuiz = true に更新
+  // 注意: 既にvideoCompleted+quizPassed=trueで完了扱いの受講者がいる場合、
+  // テスト追加後もlessonCompleted=trueのまま残る（#94）。
+  // 全ユーザー進捗のリセットが必要な場合は管理者操作で対応すること。
   await ds.updateLesson(lessonId, { hasQuiz: true });
 
   res.status(201).json({ quiz });

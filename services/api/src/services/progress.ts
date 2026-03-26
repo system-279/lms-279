@@ -59,7 +59,19 @@ export async function updateCourseProgress(
 
   // ユーザーの全レッスン進捗取得
   const progresses = await ds.getUserProgressByCourse(userId, courseId);
-  const completedLessons = progresses.filter((p) => p.lessonCompleted).length;
+
+  // 動画もテストもないレッスンは自動的に完了扱い
+  const lessons = await ds.getLessons({ courseId });
+  const lessonMap = new Map(lessons.map((l) => [l.id, l]));
+  let completedLessons = progresses.filter((p) => p.lessonCompleted).length;
+  for (const lessonId of course.lessonOrder) {
+    const lesson = lessonMap.get(lessonId);
+    if (lesson && !lesson.hasVideo && !lesson.hasQuiz) {
+      // 進捗レコードがない or 未完了の場合でも、コンテンツがないので完了扱い
+      const hasProgress = progresses.some((p) => p.lessonId === lessonId && p.lessonCompleted);
+      if (!hasProgress) completedLessons++;
+    }
+  }
   const progressRatio = completedLessons / totalLessons;
   const isCompleted = completedLessons >= totalLessons;
 

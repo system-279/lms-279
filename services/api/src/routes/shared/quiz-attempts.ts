@@ -198,11 +198,21 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
   // 進行中のattemptチェック（同時受験禁止）
   const inProgress = attempts.find((a) => a.status === "in_progress");
   if (inProgress) {
-    res.status(409).json({
-      error: "attempt_in_progress",
-      message: "現在進行中のテストがあります。先に提出してください",
-    });
-    return;
+    // タイムアウト済みのin_progressは自動クリア
+    const isTimedOut = quiz.timeLimitSec && inProgress.startedAt &&
+      (Date.now() - new Date(inProgress.startedAt).getTime()) > quiz.timeLimitSec * 1000;
+    if (isTimedOut) {
+      await ds.updateQuizAttempt(inProgress.id, {
+        status: "timed_out" as "in_progress" | "submitted" | "timed_out",
+        submittedAt: new Date().toISOString(),
+      });
+    } else {
+      res.status(409).json({
+        error: "attempt_in_progress",
+        message: "現在進行中のテストがあります。先に提出してください",
+      });
+      return;
+    }
   }
 
   const attemptNumber = attempts.length + 1;

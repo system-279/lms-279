@@ -107,6 +107,27 @@ describe("Master Distribute API", () => {
       expect(res.body.error).toBe("invalid_tenant_ids");
       expect(mockDistribute).not.toHaveBeenCalled();
     });
+
+    it("予約済みテナントID(_master)を含む場合400を返す", async () => {
+      const res = await request
+        .post("/master/distribute")
+        .send({ courseIds: ["course-1"], tenantIds: ["_master"] });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_tenant_ids");
+      expect(res.body.message).toContain("_master");
+      expect(mockDistribute).not.toHaveBeenCalled();
+    });
+
+    it("不正な形式のテナントIDを含む場合400を返す", async () => {
+      const res = await request
+        .post("/master/distribute")
+        .send({ courseIds: ["course-1"], tenantIds: ["valid-tenant", "invalid tenant!"] });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_tenant_ids");
+      expect(mockDistribute).not.toHaveBeenCalled();
+    });
   });
 
   describe("GET /master/courses/:id/distributions", () => {

@@ -21,6 +21,7 @@ import { parseDocsUrl, getDocumentContent } from "../services/google-docs.js";
 import { generateQuizQuestions } from "../services/quiz-generator.js";
 import { resolveAndImportQuiz } from "../services/quiz-import.js";
 import { serializeCourse } from "./shared/courses.js";
+import { validateTenantId, RESERVED_TENANT_IDS } from "../middleware/tenant.js";
 
 const router = Router();
 
@@ -925,6 +926,18 @@ router.post("/master/distribute", async (req: Request, res: Response) => {
     res.status(400).json({
       error: "invalid_tenant_ids",
       message: "tenantIdsは空でない文字列配列を指定してください。",
+    });
+    return;
+  }
+
+  // テナントIDの形式・予約語チェック
+  const invalidTenants = (tenantIds as string[]).filter(
+    (id) => !validateTenantId(id) || RESERVED_TENANT_IDS.has(id),
+  );
+  if (invalidTenants.length > 0) {
+    res.status(400).json({
+      error: "invalid_tenant_ids",
+      message: `無効または予約済みのテナントIDが含まれています: ${invalidTenants.join(", ")}`,
     });
     return;
   }
