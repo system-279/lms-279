@@ -47,16 +47,16 @@ function toDate(timestamp: Timestamp | Date | null | undefined): Date {
 
 /**
  * Firestoreドキュメントを部分更新するヘルパー
- * Firestore SDK 8.x では Timestamp.now() がシリアライズエラーを
- * 起こすため（update/set両方で発生）、Timestamp.now() を使用する。
- * Cloud Run上ではサーバー時刻が正確なため、実質的な差異はない。
+ * FieldValue.serverTimestamp() / Timestamp.now() はSDKバージョン不整合で
+ * シリアライズエラーを起こすため、new Date() を使用する。
+ * FirestoreはDateをTimestampに自動変換する。
  */
 function applyUpdate(docRef: FirebaseFirestore.DocumentReference, data: Record<string, unknown>): Promise<FirebaseFirestore.WriteResult> {
   const updateFields: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
     if (value !== undefined) updateFields[key] = value;
   }
-  updateFields.updatedAt = Timestamp.now();
+  updateFields.updatedAt = new Date();
   return docRef.set(updateFields, { merge: true });
 }
 
@@ -104,7 +104,7 @@ export class FirestoreDataSource implements DataSource {
 
   async createCourse(data: Omit<Course, "id" | "createdAt" | "updatedAt">): Promise<Course> {
     const docRef = this.collection("courses").doc();
-    const now = Timestamp.now();
+    const now = new Date();
     await docRef.set({
       ...data,
       createdAt: now,
@@ -169,7 +169,7 @@ export class FirestoreDataSource implements DataSource {
 
   async createLesson(data: Omit<Lesson, "id" | "createdAt" | "updatedAt">): Promise<Lesson> {
     const docRef = this.collection("lessons").doc();
-    const now = Timestamp.now();
+    const now = new Date();
     await docRef.set({
       ...data,
       createdAt: now,
@@ -205,7 +205,7 @@ export class FirestoreDataSource implements DataSource {
       const lessonRef = this.collection("lessons").doc(lessonId);
       batch.update(lessonRef, {
         order: index,
-        updatedAt: Timestamp.now(),
+        updatedAt: new Date(),
       });
     });
 
@@ -213,7 +213,7 @@ export class FirestoreDataSource implements DataSource {
     const courseRef = this.collection("courses").doc(courseId);
     batch.update(courseRef, {
       lessonOrder: lessonIds,
-      updatedAt: Timestamp.now(),
+      updatedAt: new Date(),
     });
 
     await batch.commit();
@@ -268,7 +268,7 @@ export class FirestoreDataSource implements DataSource {
 
   async createUser(data: Omit<User, "id" | "createdAt" | "updatedAt">): Promise<User> {
     const docRef = this.collection("users").doc();
-    const now = Timestamp.now();
+    const now = new Date();
     await docRef.set({
       ...data,
       createdAt: now,
@@ -333,7 +333,7 @@ export class FirestoreDataSource implements DataSource {
     const docRef = this.collection("allowed_emails").doc();
     await docRef.set({
       ...data,
-      createdAt: Timestamp.now(),
+      createdAt: new Date(),
     });
     const doc = await docRef.get();
     return this.toAllowedEmail(doc.id, doc.data()!);
@@ -388,7 +388,7 @@ export class FirestoreDataSource implements DataSource {
     data: Omit<NotificationPolicy, "id" | "createdAt" | "updatedAt">
   ): Promise<NotificationPolicy> {
     const docRef = this.collection("notification_policies").doc();
-    const now = Timestamp.now();
+    const now = new Date();
     await docRef.set({
       ...data,
       createdAt: now,
@@ -499,7 +499,7 @@ export class FirestoreDataSource implements DataSource {
       await docRef.set({
         notificationEnabled: data.notificationEnabled ?? true,
         timezone: data.timezone ?? "Asia/Tokyo",
-        updatedAt: Timestamp.now(),
+        updatedAt: new Date(),
       });
     }
 
@@ -550,7 +550,7 @@ export class FirestoreDataSource implements DataSource {
 
   async createVideo(data: Omit<Video, "id" | "createdAt" | "updatedAt">): Promise<Video> {
     const docRef = this.collection("videos").doc();
-    const now = Timestamp.now();
+    const now = new Date();
     // undefinedフィールドをnullに変換（Firestoreはundefinedを拒否する）
     const sanitized = Object.fromEntries(
       Object.entries(data).map(([k, v]) => [k, v ?? null])
@@ -610,7 +610,7 @@ export class FirestoreDataSource implements DataSource {
   async createVideoEvents(events: Omit<VideoEvent, "id" | "timestamp">[]): Promise<VideoEvent[]> {
     const batch = this.db.batch();
     const docRefs = events.map(() => this.collection("video_events").doc());
-    const now = Timestamp.now();
+    const now = new Date();
 
     docRefs.forEach((docRef, index) => {
       batch.set(docRef, {
@@ -704,7 +704,7 @@ export class FirestoreDataSource implements DataSource {
         speedViolationCount: 0,
         suspiciousFlags: [],
         ...data,
-        updatedAt: Timestamp.now(),
+        updatedAt: new Date(),
       });
     }
 
@@ -764,7 +764,7 @@ export class FirestoreDataSource implements DataSource {
 
   async createQuiz(data: Omit<Quiz, "id" | "createdAt" | "updatedAt">): Promise<Quiz> {
     const docRef = this.collection("quizzes").doc();
-    const now = Timestamp.now();
+    const now = new Date();
     await docRef.set({
       ...data,
       createdAt: now,
@@ -921,7 +921,7 @@ export class FirestoreDataSource implements DataSource {
         quizBestScore: data.quizBestScore ?? null,
         lessonCompleted: data.lessonCompleted ?? false,
         ...data,
-        updatedAt: Timestamp.now(),
+        updatedAt: new Date(),
       });
     }
 
@@ -972,7 +972,7 @@ export class FirestoreDataSource implements DataSource {
         progressRatio: data.progressRatio ?? 0,
         isCompleted: data.isCompleted ?? false,
         ...data,
-        updatedAt: Timestamp.now(),
+        updatedAt: new Date(),
       });
     }
 
@@ -1014,7 +1014,7 @@ export class FirestoreDataSource implements DataSource {
 
   async createLessonSession(data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">): Promise<LessonSession> {
     const docRef = this.collection("lesson_sessions").doc();
-    const now = Timestamp.now();
+    const now = new Date();
     const sanitized = Object.fromEntries(
       Object.entries(data).map(([k, v]) => [k, v ?? null])
     );
