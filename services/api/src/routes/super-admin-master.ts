@@ -10,7 +10,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { FirestoreDataSource } from "../datasource/firestore.js";
 import type { Lesson, CourseStatus } from "../types/entities.js";
 import { distributeCourseToTenant } from "../services/course-distributor.js";
-import { generateUploadUrl } from "../services/gcs.js";
+import { generateUploadUrl, generatePlaybackUrl } from "../services/gcs.js";
 import { isWorkspaceIntegrationAvailable } from "../services/google-auth.js";
 import {
   prepareDriveImport,
@@ -750,6 +750,59 @@ router.post("/master/lessons/:lessonId/quiz", async (req: Request, res: Response
   await ds.updateLesson(lessonId, { hasQuiz: true });
 
   res.status(201).json({ quiz });
+});
+
+/**
+ * マスターレッスン個別取得
+ * GET /master/lessons/:lessonId
+ */
+router.get("/master/lessons/:lessonId", async (req: Request, res: Response) => {
+  const ds = getMasterDS();
+  const lessonId = req.params.lessonId as string;
+
+  const lessons = await ds.getLessons();
+  const lesson = lessons.find((l) => l.id === lessonId);
+  if (!lesson) {
+    res.status(404).json({ error: "not_found", message: "レッスンが見つかりません。" });
+    return;
+  }
+
+  res.json({ lesson });
+});
+
+/**
+ * マスター動画の署名付き再生URL取得
+ * GET /master/videos/:videoId/playback-url
+ */
+router.get("/master/videos/:videoId/playback-url", async (req: Request, res: Response) => {
+  const ds = getMasterDS();
+  const videoId = req.params.videoId as string;
+
+  const video = await ds.getVideoById(videoId);
+  if (!video) {
+    res.status(404).json({ error: "not_found", message: "動画が見つかりません。" });
+    return;
+  }
+
+  let playbackUrl: string;
+  if (video.sourceType === "external_url" && video.sourceUrl) {
+    playbackUrl = video.sourceUrl;
+  } else if (video.gcsPath) {
+    playbackUrl = await generatePlaybackUrl(video.gcsPath);
+  } else {
+    res.status(404).json({ error: "no_playback_source", message: "再生可能なソースがありません。" });
+    return;
+  }
+
+  res.json({
+    playbackUrl,
+    video: {
+      id: video.id,
+      durationSec: video.durationSec,
+      requiredWatchRatio: video.requiredWatchRatio ?? 0.95,
+      speedLock: video.speedLock ?? true,
+    },
+  });
 });
 
 /**
