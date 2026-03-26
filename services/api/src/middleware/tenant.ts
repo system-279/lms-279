@@ -20,7 +20,7 @@ declare global {
 const DEMO_TENANT_ID = "demo";
 
 // 予約済みテナントID（一般アクセス禁止）
-const RESERVED_TENANT_IDS = new Set(["_master"]);
+export const RESERVED_TENANT_IDS = new Set(["_master"]);
 
 // テナントID検証用正規表現（英数字、ハイフン、アンダースコアのみ）
 const TENANT_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
@@ -30,7 +30,7 @@ const TENANT_ID_MIN_LENGTH = 1;
 /**
  * テナントIDの検証
  */
-function validateTenantId(tenantId: unknown): string | null {
+export function validateTenantId(tenantId: unknown): string | null {
   // 配列の場合は最初の要素を使用（Express 5対応）
   const normalizedId = Array.isArray(tenantId) ? tenantId[0] : tenantId;
 

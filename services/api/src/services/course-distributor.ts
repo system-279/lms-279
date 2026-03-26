@@ -104,34 +104,19 @@ export async function distributeCourseToTenant(
     );
   }
 
-  if (!existingSnap.empty) {
-    if (!options.force) {
-      return {
-        tenantId: targetTenantId,
-        courseId: existingSnap.docs[0].id,
-        masterCourseId,
-        status: "skipped",
-        reason: "already distributed",
-        lessonsCount: 0,
-        videosCount: 0,
-        quizzesCount: 0,
-      };
-    }
-
-    // force=true: 既存の配信済みデータを削除して再配信
-    const existingCourseId = existingSnap.docs[0].id;
-    const targetDs = new FirestoreDataSource(db, targetTenantId);
-    const [existingLessons, existingVideos, existingQuizzes] = await Promise.all([
-      targetDs.getLessons({ courseId: existingCourseId }),
-      targetDs.getVideos({ courseId: existingCourseId }),
-      targetDs.getQuizzes({ courseId: existingCourseId }),
-    ]);
-    await Promise.all([
-      ...existingVideos.map((v) => targetDs.deleteVideo(v.id)),
-      ...existingQuizzes.map((q) => targetDs.deleteQuiz(q.id)),
-      ...existingLessons.map((l) => targetDs.deleteLesson(l.id)),
-    ]);
-    await targetDs.deleteCourse(existingCourseId);
+  // force=false で既に配信済みならスキップ
+  const existingCourseId = !existingSnap.empty ? existingSnap.docs[0].id : null;
+  if (existingCourseId && !options.force) {
+    return {
+      tenantId: targetTenantId,
+      courseId: existingCourseId,
+      masterCourseId,
+      status: "skipped",
+      reason: "already distributed",
+      lessonsCount: 0,
+      videosCount: 0,
+      quizzesCount: 0,
+    };
   }
 
   // 3. マスターテナントから関連データを取得
@@ -254,6 +239,27 @@ export async function distributeCourseToTenant(
     return errorResult(
       `Firestore書き込みに失敗しました: ${e instanceof Error ? e.message : String(e)}`,
     );
+  }
+
+  // 7. force=true: 新データ書き込み成功後に旧データを削除（書き込み前に削除しないことでデータ消失を防止）
+  if (existingCourseId) {
+    try {
+      const targetDs = new FirestoreDataSource(db, targetTenantId);
+      const [existingLessons, existingVideos, existingQuizzes] = await Promise.all([
+        targetDs.getLessons({ courseId: existingCourseId }),
+        targetDs.getVideos({ courseId: existingCourseId }),
+        targetDs.getQuizzes({ courseId: existingCourseId }),
+      ]);
+      await Promise.all([
+        ...existingVideos.map((v) => targetDs.deleteVideo(v.id)),
+        ...existingQuizzes.map((q) => targetDs.deleteQuiz(q.id)),
+        ...existingLessons.map((l) => targetDs.deleteLesson(l.id)),
+      ]);
+      await targetDs.deleteCourse(existingCourseId);
+    } catch (e) {
+      // 旧データ削除失敗は致命的でない（新データは既に書き込み済み）
+      console.error(`旧コース(${existingCourseId})の削除に失敗: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   return {
