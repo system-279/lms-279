@@ -190,6 +190,13 @@ export default function MasterCourseDetailPage() {
   const [editingQuizLessonId, setEditingQuizLessonId] = useState<string | null>(null);
   const [quizLoadingLessonId, setQuizLoadingLessonId] = useState<string | null>(null);
 
+  // Quiz preview state
+  const [previewQuiz, setPreviewQuiz] = useState<{ title: string; passThreshold: number; questions: Question[] } | null>(null);
+  const [previewAnswers, setPreviewAnswers] = useState<Record<string, string[]>>({});
+  const [previewState, setPreviewState] = useState<"taking" | "result">("taking");
+  const [previewResult, setPreviewResult] = useState<{ score: number; maxScore: number; percent: number; passed: boolean; details: { questionId: string; isCorrect: boolean; correctOptionIds: string[]; selectedOptionIds: string[] }[] } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -651,6 +658,42 @@ export default function MasterCourseDetailPage() {
     }
   };
 
+  const handlePreviewQuiz = async (lessonId: string) => {
+    const quiz = quizSummaries.find((q) => q.lessonId === lessonId);
+    if (!quiz) return;
+    setPreviewLoading(true);
+    try {
+      const data = await superFetch<{ quiz: { title: string; passThreshold: number; questions: Question[] } }>(
+        `/api/v2/super/master/quizzes/${quiz.id}`,
+      );
+      setPreviewQuiz(data.quiz);
+      setPreviewAnswers({});
+      setPreviewState("taking");
+      setPreviewResult(null);
+    } catch (e) {
+      setQuizError(e instanceof Error ? e.message : "テストの取得に失敗しました");
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const gradePreview = () => {
+    if (!previewQuiz) return;
+    let score = 0;
+    let maxScore = 0;
+    const details = previewQuiz.questions.map((q) => {
+      const correctIds = q.options.filter((o) => o.isCorrect).map((o) => o.id).sort();
+      const selectedIds = (previewAnswers[q.id] ?? []).sort();
+      const isCorrect = correctIds.length === selectedIds.length && correctIds.every((id, i) => id === selectedIds[i]);
+      maxScore += q.points;
+      if (isCorrect) score += q.points;
+      return { questionId: q.id, isCorrect, correctOptionIds: correctIds, selectedOptionIds: selectedIds };
+    });
+    const percent = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
+    setPreviewResult({ score, maxScore, percent, passed: percent >= previewQuiz.passThreshold, details });
+    setPreviewState("result");
+  };
+
   const handleGenerateQuiz = async (lessonId: string) => {
     setQuizGenerating(true);
     setQuizGenError(null);
@@ -1034,6 +1077,14 @@ export default function MasterCourseDetailPage() {
                               {quizLoadingLessonId === lesson.id
                                 ? "読込中..."
                                 : "テストを編集"}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handlePreviewQuiz(lesson.id)}
+                              disabled={previewLoading}
+                            >
+                              {previewLoading ? "読込中..." : "プレビュー"}
                             </Button>
                             <Button
                               variant="destructive"
@@ -1539,6 +1590,145 @@ export default function MasterCourseDetailPage() {
               {quizGenerating ? "生成中..." : "生成"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quiz Preview Dialog */}
+      <Dialog open={previewQuiz !== null} onOpenChange={(open) => { if (!open) { setPreviewQuiz(null); setPreviewAnswers({}); setPreviewResult(null); setPreviewState("taking"); } }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>テストプレビュー: {previewQuiz?.title}</DialogTitle>
+            {previewQuiz && (
+              <p className="text-sm text-muted-foreground">
+                合格基準: {previewQuiz.passThreshold}% / {previewQuiz.questions.length}問
+              </p>
+            )}
+          </DialogHeader>
+
+          {previewQuiz && previewState === "taking" && (
+            <div className="space-y-6">
+              <p className="text-sm text-muted-foreground">
+                回答済み: {Object.keys(previewAnswers).filter((k) => (previewAnswers[k]?.length ?? 0) > 0).length} / {previewQuiz.questions.length}問
+              </p>
+              {previewQuiz.questions.map((q, qIdx) => (
+                <div key={q.id} className="border rounded-lg p-4 space-y-3">
+                  <div className="flex items-start gap-2">
+                    <span className="text-sm font-bold bg-muted rounded-full w-7 h-7 flex items-center justify-center shrink-0">
+                      {qIdx + 1}
+                    </span>
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">{q.text}</p>
+                      {q.type === "multi" && (
+                        <p className="text-xs text-muted-foreground">複数選択可</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-2 ml-9">
+                    {q.options.map((opt) => {
+                      const selected = previewAnswers[q.id]?.includes(opt.id) ?? false;
+                      return (
+                        <label
+                          key={opt.id}
+                          className={`flex items-center gap-3 p-2 rounded-md border cursor-pointer transition-colors ${selected ? "bg-blue-50 border-blue-300" : "hover:bg-muted/50"}`}
+                        >
+                          <input
+                            type={q.type === "single" ? "radio" : "checkbox"}
+                            name={`preview-${q.id}`}
+                            checked={selected}
+                            onChange={() => {
+                              setPreviewAnswers((prev) => {
+                                if (q.type === "single") {
+                                  return { ...prev, [q.id]: [opt.id] };
+                                }
+                                const current = prev[q.id] ?? [];
+                                return {
+                                  ...prev,
+                                  [q.id]: selected
+                                    ? current.filter((id) => id !== opt.id)
+                                    : [...current, opt.id],
+                                };
+                              });
+                            }}
+                            className="shrink-0"
+                          />
+                          <span className="text-sm">{opt.text}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { setPreviewQuiz(null); setPreviewAnswers({}); }}>
+                  閉じる
+                </Button>
+                <Button onClick={gradePreview}>
+                  採点する
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+
+          {previewQuiz && previewState === "result" && previewResult && (
+            <div className="space-y-6">
+              <div className={`text-center p-4 rounded-lg ${previewResult.passed ? "bg-green-50 border border-green-200" : "bg-red-50 border border-red-200"}`}>
+                <p className="text-2xl font-bold">
+                  {previewResult.percent}%
+                </p>
+                <p className="text-sm">
+                  {previewResult.score} / {previewResult.maxScore} 点
+                </p>
+                <Badge className={previewResult.passed ? "bg-green-100 text-green-800 border-green-300" : "bg-red-100 text-red-800 border-red-300"}>
+                  {previewResult.passed ? "合格" : "不合格"}
+                </Badge>
+              </div>
+
+              {previewQuiz.questions.map((q, qIdx) => {
+                const detail = previewResult.details.find((d) => d.questionId === q.id);
+                if (!detail) return null;
+                return (
+                  <div key={q.id} className={`border rounded-lg p-4 space-y-2 ${detail.isCorrect ? "border-green-200 bg-green-50/50" : "border-red-200 bg-red-50/50"}`}>
+                    <div className="flex items-start gap-2">
+                      <span className={`text-sm font-bold rounded-full w-7 h-7 flex items-center justify-center shrink-0 ${detail.isCorrect ? "bg-green-200 text-green-800" : "bg-red-200 text-red-800"}`}>
+                        {detail.isCorrect ? "○" : "×"}
+                      </span>
+                      <p className="text-sm font-medium">問{qIdx + 1}. {q.text}</p>
+                    </div>
+                    <div className="space-y-1 ml-9">
+                      {q.options.map((opt) => {
+                        const isCorrect = detail.correctOptionIds.includes(opt.id);
+                        const isSelected = detail.selectedOptionIds.includes(opt.id);
+                        return (
+                          <div
+                            key={opt.id}
+                            className={`text-sm p-1.5 rounded ${isCorrect && isSelected ? "text-green-800 font-medium" : isCorrect ? "text-green-700" : isSelected ? "text-red-700 line-through" : "text-muted-foreground"}`}
+                          >
+                            {isCorrect ? "✓ " : isSelected ? "✗ " : "  "}
+                            {opt.text}
+                            {isCorrect && !isSelected && " (正解)"}
+                          </div>
+                        );
+                      })}
+                      {q.explanation && (
+                        <p className="text-xs text-muted-foreground mt-2 p-2 bg-muted rounded">
+                          解説: {q.explanation}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { setPreviewQuiz(null); setPreviewAnswers({}); setPreviewResult(null); setPreviewState("taking"); }}>
+                  閉じる
+                </Button>
+                <Button onClick={() => { setPreviewAnswers({}); setPreviewResult(null); setPreviewState("taking"); }}>
+                  もう一度
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
