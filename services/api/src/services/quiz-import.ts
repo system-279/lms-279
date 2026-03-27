@@ -154,12 +154,17 @@ export function parseQuizDeterministic(
   //   "1." "2)" "第1問" "問1" "問題1" "Q1" 等で始まる行を問題開始とする
   // 選択肢:
   //   "a)" "A." "A:" "A）" "ア)" "①" 等で始まる行
+  // 全角数字→半角変換
+  function normalizeDigits(s: string): string {
+    return s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30));
+  }
+
   const questionPatterns = [
-    /^\s*(\d+)\s*[.)．）]\s*(.+)/,                  // 1. / 1) / 1．
-    /^\s*第\s*(\d+)\s*問\s*(.+)/,                   // 第1問
-    /^\s*問\s*(\d+)\s*[.)．:：]?\s*(.+)/,           // 問1 / 問1.
-    /^\s*問題\s*(\d+)\s*[.)．:：]?\s*(.+)/,         // 問題1
-    /^\s*Q\s*(\d+)\s*[.)．:：]?\s*/i,               // Q1 / q1
+    /^\s*(\d+)\s*[.)．）]\s*(.*)/,                   // 1. / 1) / 1．
+    /^\s*第\s*(\d+)\s*問\s*(.*)/,                    // 第1問
+    /^\s*問\s*(\d+)\s*[.)．:：]?\s*(.*)/,            // 問1 / 問1.
+    /^\s*問題\s*(\d+)\s*[.)．:：]?\s*(.*)/,          // 問題1
+    /^\s*Q\s*(\d+)\s*[.)．:：]?\s*(.*)/i,            // Q1 / q1
   ];
   const optionPattern = /^\s*([a-zA-Zアイウエオカキクケコ①②③④⑤⑥⑦⑧⑨⑩])\s*[.)）．:：]\s*(.+)/;
 
@@ -173,8 +178,8 @@ export function parseQuizDeterministic(
   let collectingQuestionText = false;
 
   for (const line of lines) {
-    // 書式タグを除去してからパターンマッチ（[BOLD]a) テキスト[/BOLD] 対応）
-    const strippedLine = stripTags(line);
+    // 書式タグ除去+全角数字正規化してからパターンマッチ
+    const strippedLine = normalizeDigits(stripTags(line));
     const oMatch = strippedLine.match(optionPattern);
     // 複数の問題パターンを順に試行
     let qMatch: RegExpMatchArray | null = null;
@@ -237,7 +242,9 @@ export async function importQuizFromDocument(
   warnings: string[];
 }> {
   // まず確定的パーサーを試行（Geminiの不安定さを回避）
+  console.log(`[quiz-import] formattedContent length=${formattedContent.length}, first 500 chars:`, formattedContent.slice(0, 500));
   const deterministicResult = parseQuizDeterministic(formattedContent);
+  console.log(`[quiz-import] deterministic result: ${deterministicResult ? deterministicResult.length + " questions" : "null (fallback to Gemini)"}`);
   if (deterministicResult && deterministicResult.length > 0) {
     const warnings: string[] = [];
     const unknownCorrectCount = deterministicResult.filter((q) =>
