@@ -118,6 +118,99 @@ export function validateImportedQuestions(
 }
 
 /**
+ * 書式タグを除去してプレーンテキストにする
+ */
+function stripTags(text: string): string {
+  return text
+    .replace(/\[(BOLD|UNDERLINE|\/BOLD|\/UNDERLINE)\]/g, "")
+    .replace(/\[COLOR:#[0-9A-Fa-f]+\]/g, "")
+    .replace(/\[\/COLOR\]/g, "")
+    .trim();
+}
+
+/**
+ * 選択肢行に書式タグがあるかチェックしてisCorrectを判定
+ */
+function detectCorrect(rawLine: string): boolean | null {
+  if (/\[BOLD\]/.test(rawLine)) return true;
+  if (/\[UNDERLINE\]/.test(rawLine) || /\[COLOR:#/.test(rawLine)) return true;
+  return null; // 書式なし → 正解不明
+}
+
+/**
+ * 正規表現ベースの確定的パーサー
+ * 番号付き問題 + a)/b)/c) 形式の選択肢を認識する
+ * パース不能な場合はnullを返す（Geminiフォールバック用）
+ */
+export function parseQuizDeterministic(
+  formattedContent: string
+): ImportedQuizQuestion[] | null {
+  const genId = () => crypto.randomUUID();
+
+  // 行に分割（空行も保持）
+  const lines = formattedContent.split("\n");
+
+  // 問題ブロックを抽出: "数字." または "数字)" で始まる行を問題開始とする
+  // 選択肢: "a)" "b)" "A)" "B)" "ア)" "①" 等で始まる行
+  const questionPattern = /^\s*(\d+)\s*[.)．]\s*(.+)/;
+  const optionPattern = /^\s*([a-zA-Zアイウエオカキクケコ①②③④⑤⑥⑦⑧⑨⑩])\s*[)）]\s*(.+)/;
+
+  interface RawQuestion {
+    textLines: string[]; // 問題文（複数行の可能性）
+    options: { rawLine: string; text: string }[];
+  }
+
+  const questions: RawQuestion[] = [];
+  let current: RawQuestion | null = null;
+  let collectingQuestionText = false;
+
+  for (const line of lines) {
+    // 書式タグを除去してからパターンマッチ（[BOLD]a) テキスト[/BOLD] 対応）
+    const strippedLine = stripTags(line);
+    const qMatch = strippedLine.match(questionPattern);
+    const oMatch = strippedLine.match(optionPattern);
+
+    if (qMatch && !oMatch) {
+      // 新しい問題開始
+      if (current) questions.push(current);
+      current = { textLines: [qMatch[2].trim()], options: [] };
+      collectingQuestionText = true;
+    } else if (oMatch && current) {
+      // 選択肢
+      collectingQuestionText = false;
+      current.options.push({ rawLine: line, text: oMatch[2].trim() }); // rawLineは書式タグ付き原文、textはタグ除去済み
+    } else if (current && collectingQuestionText && line.trim()) {
+      // 問題文の続き（選択肢が始まるまでの非空行）
+      current.textLines.push(line.trim());
+    }
+  }
+  if (current) questions.push(current);
+
+  // パース結果の検証: 問題が3問以上あり、各問題に選択肢が2つ以上あること
+  if (questions.length < 2) return null;
+  const validQuestions = questions.filter((q) => q.options.length >= 2);
+  if (validQuestions.length < questions.length * 0.5) return null; // 半数以上がパース失敗ならGeminiに委譲
+
+  return validQuestions.map((q) => {
+    const questionText = stripTags(q.textLines.join(" "));
+    const options: ImportedQuizOption[] = q.options.map((opt) => ({
+      id: genId(),
+      text: stripTags(opt.text),
+      isCorrect: detectCorrect(opt.rawLine),
+    }));
+
+    return {
+      id: genId(),
+      text: questionText,
+      type: "single" as const,
+      options,
+      points: 1,
+      explanation: "",
+    };
+  });
+}
+
+/**
  * ドキュメントの書式付きコンテンツからテスト問題を抽出（生成ではなくパース）
  */
 export async function importQuizFromDocument(
@@ -127,6 +220,22 @@ export async function importQuizFromDocument(
   questions: ImportedQuizQuestion[];
   warnings: string[];
 }> {
+  // まず確定的パーサーを試行（Geminiの不安定さを回避）
+  const deterministicResult = parseQuizDeterministic(formattedContent);
+  if (deterministicResult && deterministicResult.length > 0) {
+    const warnings: string[] = [];
+    const unknownCorrectCount = deterministicResult.filter((q) =>
+      q.options.every((o) => o.isCorrect === null)
+    ).length;
+    if (unknownCorrectCount > 0) {
+      warnings.push(
+        `${deterministicResult.length}問中${unknownCorrectCount}問で正解が検出できませんでした。手動で正解を設定してください。`
+      );
+    }
+    return { questions: deterministicResult, warnings };
+  }
+
+  // 確定的パーサーで認識できない場合はGeminiフォールバック
   const { language = "ja" } = options;
   const langLabel = language === "ja" ? "日本語" : "English";
 
