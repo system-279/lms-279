@@ -346,7 +346,7 @@ export default function LessonPreviewPage() {
                 </div>
                 <div>
                   <span className="text-muted-foreground">最大受験回数: </span>
-                  <span className="font-medium">{quiz.maxAttempts}回</span>
+                  <span className="font-medium">{quiz.maxAttempts === 0 ? "無制限" : `${quiz.maxAttempts}回`}</span>
                 </div>
                 <div>
                   <span className="text-muted-foreground">制限時間: </span>

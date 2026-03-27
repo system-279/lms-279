@@ -739,7 +739,7 @@ router.post("/master/lessons/:lessonId/quiz", async (req: Request, res: Response
     courseId: lesson.courseId,
     title: title.trim(),
     passThreshold: passThreshold ?? 70,
-    maxAttempts: maxAttempts ?? 3,
+    maxAttempts: maxAttempts ?? 0,
     timeLimitSec: timeLimitSec ?? null,
     randomizeQuestions: randomizeQuestions ?? false,
     randomizeAnswers: randomizeAnswers ?? false,

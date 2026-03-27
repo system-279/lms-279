@@ -211,7 +211,7 @@ export interface Quiz {
   courseId: string;
   title: string;
   passThreshold: number;      // default 70 (%)
-  maxAttempts: number;         // default 3
+  maxAttempts: number;         // default 0 (0 = 無制限)
   timeLimitSec: number | null; // null = 無制限
   randomizeQuestions: boolean;
   randomizeAnswers: boolean;

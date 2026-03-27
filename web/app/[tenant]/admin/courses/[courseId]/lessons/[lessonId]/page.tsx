@@ -96,7 +96,7 @@ function newQuestion(): QuizQuestion {
 const defaultQuizForm = {
   title: "",
   passingScore: 70,
-  maxAttempts: 3,
+  maxAttempts: 0,
   timeLimitSec: "" as string, // empty = unlimited
   requireVideoCompletion: true,
   shuffleQuestions: false,
@@ -577,7 +577,7 @@ function QuizSection({ lessonId }: { lessonId: string }) {
               <dd>{quiz.passingScore}%</dd>
 
               <dt className="text-muted-foreground">最大受験回数</dt>
-              <dd>{quiz.maxAttempts} 回</dd>
+              <dd>{quiz.maxAttempts === 0 ? "無制限" : `${quiz.maxAttempts} 回`}</dd>
 
               <dt className="text-muted-foreground">制限時間</dt>
               <dd>{quiz.timeLimitSec != null ? `${quiz.timeLimitSec} 秒` : "無制限"}</dd>
@@ -728,11 +728,11 @@ function QuizSection({ lessonId }: { lessonId: string }) {
                 />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="quiz-attempts">最大受験回数</Label>
+                <Label htmlFor="quiz-attempts">最大受験回数（0 = 無制限）</Label>
                 <Input
                   id="quiz-attempts"
                   type="number"
-                  min={1}
+                  min={0}
                   value={quizForm.maxAttempts}
                   onChange={(e) =>
                     setQuizForm((p) => ({
