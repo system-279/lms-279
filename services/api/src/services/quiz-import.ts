@@ -242,7 +242,7 @@ export async function importQuizFromDocument(
   warnings: string[];
 }> {
   // まず確定的パーサーを試行（Geminiの不安定さを回避）
-  console.log(`[quiz-import] formattedContent length=${formattedContent.length}, first 500 chars:`, formattedContent.slice(0, 500));
+  console.log(`[quiz-import] formattedContent length=${formattedContent.length}, full content:`, formattedContent);
   const deterministicResult = parseQuizDeterministic(formattedContent);
   console.log(`[quiz-import] deterministic result: ${deterministicResult ? deterministicResult.length + " questions" : "null (fallback to Gemini)"}`);
   if (deterministicResult && deterministicResult.length > 0) {
