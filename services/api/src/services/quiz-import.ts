@@ -412,18 +412,17 @@ export async function resolveAndImportQuiz(
   if (!resolvedTabId) {
     const { title: docTitle, tabs } = await getDocumentTabs(documentId);
 
-    // 「テスト」タブを検索: 完全一致 > 部分一致（親タブの「...テスト問題」より子タブの「テスト」を優先）
-    const testTab =
-      tabs.find((t) => t.title === "テスト") ??
-      tabs.find((t) => t.title.includes("テスト") && !t.title.includes("問題")) ??
-      tabs.find((t) => t.title.includes("テスト"));
+    // 「テスト」を含むタブを検索
+    const testTabs = tabs.filter((t) => t.title.includes("テスト"));
 
-    if (testTab) {
-      resolvedTabId = testTab.id;
+    if (testTabs.length === 1) {
+      // 一意に特定できる場合は自動選択
+      resolvedTabId = testTabs[0].id;
     } else if (tabs.length === 1) {
       // タブが1つしかない場合は自動選択
       resolvedTabId = tabs[0].id;
     } else {
+      // 複数候補 or 候補なし → ユーザーに選択させる
       return { action: "select_tab", tabs, documentTitle: docTitle };
     }
   }
