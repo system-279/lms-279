@@ -147,8 +147,9 @@ export function parseQuizDeterministic(
 ): ImportedQuizQuestion[] | null {
   const genId = () => crypto.randomUUID();
 
-  // 行に分割（空行も保持）
-  const lines = formattedContent.split("\n");
+  // 行に分割（\nに加え、Google Docsの段落内改行 垂直タブ も分割）
+  // eslint-disable-next-line no-control-regex
+  const lines = formattedContent.split(/[\n\x0B]/);
 
   // 問題ブロックを抽出:
   //   "1." "2)" "第1問" "問1" "問題1" "Q1" 等で始まる行を問題開始とする
