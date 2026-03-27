@@ -106,6 +106,40 @@ b) 選択肢2`;
     expect(result![0].text).toContain("紹介されたものは何ですか？");
   });
 
+  it("第N問 + A./B./C. 形式をパースし太字正解を検出する", () => {
+    const content = `第1問 Googleワークスペースはどのように説明されていますか？
+A. 写真や動画編集に特化したプロフェッショナル向けソフトウェア。
+B. Googleが開発した単一のウェブブラウザ。
+[BOLD]C. Microsoft Officeのような、様々なツールが1つのセットになったサービス。[/BOLD]
+
+第2問 Google ChromeとGoogleワークスペースの最も適切な関係性は何ですか？
+A. Microsoft Edgeブラウザと機能的に同じであり、どちらを使っても違いはない。
+[BOLD]B. Googleワークスペースの性能を最大限に引き出す、推奨される「相棒」である。[/BOLD]
+C. 全く関係なく、独立して使用される。
+
+第3問 Googleワークスペースを活用する主なメリットとして何が挙げられていますか？
+A. 文書の編集は一度に一人しか行えず、共同作業には不向きである。
+[BOLD]B. データがオンライン上のクラウドに保存され、ペーパーレス化やBCP対策に有効である。[/BOLD]
+C. 全てのデータを物理的な書類として保管する。`;
+
+    const result = parseQuizDeterministic(content);
+
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(3);
+
+    // 問題1: C.が太字（正解）
+    expect(result![0].text).toContain("Googleワークスペースはどのように説明されていますか");
+    expect(result![0].options).toHaveLength(3);
+    expect(result![0].options[0].isCorrect).toBeNull(); // A
+    expect(result![0].options[1].isCorrect).toBeNull(); // B
+    expect(result![0].options[2].isCorrect).toBe(true);  // C (太字)
+
+    // 問題2: B.が太字（正解）
+    expect(result![1].options[0].isCorrect).toBeNull(); // A
+    expect(result![1].options[1].isCorrect).toBe(true);  // B (太字)
+    expect(result![1].options[2].isCorrect).toBeNull(); // C
+  });
+
   it("パースできない形式の場合はnullを返す", () => {
     const content = `これはテスト形式ではない普通の文章です。
 問題のような構造がないためパースできません。`;
