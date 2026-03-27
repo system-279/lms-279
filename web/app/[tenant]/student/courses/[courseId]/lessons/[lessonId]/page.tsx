@@ -336,7 +336,8 @@ function QuizSection({
 
   if (!quiz) return null;
 
-  const remainingAttempts = quiz.maxAttempts - userAttemptCount;
+  const isUnlimited = quiz.maxAttempts === 0;
+  const remainingAttempts = isUnlimited ? Infinity : quiz.maxAttempts - userAttemptCount;
 
   // ============================================================
   // 状態1: テスト未開始
@@ -351,7 +352,11 @@ function QuizSection({
             {quiz.timeLimitSec != null && (
               <span>制限時間: {formatTime(quiz.timeLimitSec)}</span>
             )}
-            <span>残り受験回数: {remainingAttempts}/{quiz.maxAttempts}回</span>
+            {isUnlimited ? (
+              <span>受験回数: 無制限</span>
+            ) : (
+              <span>残り受験回数: {remainingAttempts}/{quiz.maxAttempts}回</span>
+            )}
           </div>
         </div>
 
@@ -659,7 +664,7 @@ function QuizSection({
               onClick={handleRetry}
               className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-secondary"
             >
-              もう一度挑戦 (残り{remainingAttempts}回)
+              もう一度挑戦{isUnlimited ? "" : ` (残り${remainingAttempts}回)`}
             </button>
           ) : (
             <span className="text-sm text-muted-foreground">

@@ -239,7 +239,7 @@ export class InMemoryDataSource implements DataSource {
         courseId: "demo-course-1",
         title: "変数とデータ型 確認テスト",
         passThreshold: 70,
-        maxAttempts: 3,
+        maxAttempts: 0,
         timeLimitSec: 300,
         randomizeQuestions: false,
         randomizeAnswers: false,

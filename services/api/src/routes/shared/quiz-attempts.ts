@@ -185,9 +185,9 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
     if (blocked) return;
   }
 
-  // 受験回数チェック
+  // 受験回数チェック（maxAttempts=0は無制限）
   const attempts = await ds.getQuizAttempts({ quizId, userId });
-  if (attempts.length >= quiz.maxAttempts) {
+  if (quiz.maxAttempts > 0 && attempts.length >= quiz.maxAttempts) {
     res.status(403).json({
       error: "max_attempts_exceeded",
       message: "受験可能な回数の上限に達しています",

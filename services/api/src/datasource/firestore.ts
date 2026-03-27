@@ -803,7 +803,7 @@ export class FirestoreDataSource implements DataSource {
       courseId: data.courseId,
       title: data.title,
       passThreshold: data.passThreshold ?? 70,
-      maxAttempts: data.maxAttempts ?? 3,
+      maxAttempts: data.maxAttempts ?? 0,
       timeLimitSec: data.timeLimitSec ?? null,
       randomizeQuestions: data.randomizeQuestions ?? false,
       randomizeAnswers: data.randomizeAnswers ?? false,
