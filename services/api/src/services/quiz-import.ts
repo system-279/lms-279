@@ -243,10 +243,7 @@ export async function importQuizFromDocument(
   warnings: string[];
 }> {
   // まず確定的パーサーを試行（Geminiの不安定さを回避）
-  // 構造化ログでCloud Loggingの切り詰めを回避
-  console.log(JSON.stringify({ _quiz_debug: true, len: formattedContent.length, content: formattedContent.slice(0, 2000) }));
   const deterministicResult = parseQuizDeterministic(formattedContent);
-  console.log(JSON.stringify({ _quiz_debug: true, parser: deterministicResult ? `${deterministicResult.length} questions` : "null" }));
   if (deterministicResult && deterministicResult.length > 0) {
     const warnings: string[] = [];
     const unknownCorrectCount = deterministicResult.filter((q) =>
