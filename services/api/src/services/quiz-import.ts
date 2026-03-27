@@ -150,10 +150,18 @@ export function parseQuizDeterministic(
   // 行に分割（空行も保持）
   const lines = formattedContent.split("\n");
 
-  // 問題ブロックを抽出: "数字." または "数字)" で始まる行を問題開始とする
-  // 選択肢: "a)" "b)" "A)" "B)" "ア)" "①" 等で始まる行
-  const questionPattern = /^\s*(\d+)\s*[.)．]\s*(.+)/;
-  const optionPattern = /^\s*([a-zA-Zアイウエオカキクケコ①②③④⑤⑥⑦⑧⑨⑩])\s*[)）]\s*(.+)/;
+  // 問題ブロックを抽出:
+  //   "1." "2)" "第1問" "問1" "問題1" "Q1" 等で始まる行を問題開始とする
+  // 選択肢:
+  //   "a)" "A." "A:" "A）" "ア)" "①" 等で始まる行
+  const questionPatterns = [
+    /^\s*(\d+)\s*[.)．）]\s*(.+)/,                  // 1. / 1) / 1．
+    /^\s*第\s*(\d+)\s*問\s*(.+)/,                   // 第1問
+    /^\s*問\s*(\d+)\s*[.)．:：]?\s*(.+)/,           // 問1 / 問1.
+    /^\s*問題\s*(\d+)\s*[.)．:：]?\s*(.+)/,         // 問題1
+    /^\s*Q\s*(\d+)\s*[.)．:：]?\s*/i,               // Q1 / q1
+  ];
+  const optionPattern = /^\s*([a-zA-Zアイウエオカキクケコ①②③④⑤⑥⑦⑧⑨⑩])\s*[.)）．:：]\s*(.+)/;
 
   interface RawQuestion {
     textLines: string[]; // 問題文（複数行の可能性）
@@ -167,13 +175,21 @@ export function parseQuizDeterministic(
   for (const line of lines) {
     // 書式タグを除去してからパターンマッチ（[BOLD]a) テキスト[/BOLD] 対応）
     const strippedLine = stripTags(line);
-    const qMatch = strippedLine.match(questionPattern);
     const oMatch = strippedLine.match(optionPattern);
+    // 複数の問題パターンを順に試行
+    let qMatch: RegExpMatchArray | null = null;
+    if (!oMatch) {
+      for (const qp of questionPatterns) {
+        qMatch = strippedLine.match(qp);
+        if (qMatch) break;
+      }
+    }
 
     if (qMatch && !oMatch) {
       // 新しい問題開始
       if (current) questions.push(current);
-      current = { textLines: [qMatch[2].trim()], options: [] };
+      const questionText = (qMatch[2] ?? "").trim();
+      current = { textLines: questionText ? [questionText] : [], options: [] };
       collectingQuestionText = true;
     } else if (oMatch && current) {
       // 選択肢
