@@ -398,6 +398,7 @@ export type QuizImportResult =
       documentTitle: string;
       suggestedTitle: string;
       warnings: string[];
+      _debug?: { formattedMarkupLength: number; formattedMarkup: string };
     };
 
 /**
@@ -444,5 +445,6 @@ export async function resolveAndImportQuiz(
     documentTitle: docTitle,
     suggestedTitle: `${docTitle} - 確認テスト`,
     warnings,
+    _debug: { formattedMarkupLength: formattedMarkup.length, formattedMarkup: formattedMarkup.slice(0, 5000) },
   };
 }
