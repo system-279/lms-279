@@ -242,9 +242,7 @@ export async function importQuizFromDocument(
   warnings: string[];
 }> {
   // まず確定的パーサーを試行（Geminiの不安定さを回避）
-  console.log(`[quiz-import] formattedContent length=${formattedContent.length}, full content:`, formattedContent);
   const deterministicResult = parseQuizDeterministic(formattedContent);
-  console.log(`[quiz-import] deterministic result: ${deterministicResult ? deterministicResult.length + " questions" : "null (fallback to Gemini)"}`);
   if (deterministicResult && deterministicResult.length > 0) {
     const warnings: string[] = [];
     const unknownCorrectCount = deterministicResult.filter((q) =>
@@ -398,7 +396,6 @@ export type QuizImportResult =
       documentTitle: string;
       suggestedTitle: string;
       warnings: string[];
-      _debug?: { formattedMarkupLength: number; formattedMarkup: string };
     };
 
 /**
@@ -415,10 +412,11 @@ export async function resolveAndImportQuiz(
   if (!resolvedTabId) {
     const { title: docTitle, tabs } = await getDocumentTabs(documentId);
 
-    // 「テスト」を含むタブを検索
-    const testTab = tabs.find((t) =>
-      t.title.toLowerCase().includes("テスト")
-    );
+    // 「テスト」タブを検索: 完全一致 > 部分一致（親タブの「...テスト問題」より子タブの「テスト」を優先）
+    const testTab =
+      tabs.find((t) => t.title === "テスト") ??
+      tabs.find((t) => t.title.includes("テスト") && !t.title.includes("問題")) ??
+      tabs.find((t) => t.title.includes("テスト"));
 
     if (testTab) {
       resolvedTabId = testTab.id;
@@ -445,6 +443,5 @@ export async function resolveAndImportQuiz(
     documentTitle: docTitle,
     suggestedTitle: `${docTitle} - 確認テスト`,
     warnings,
-    _debug: { formattedMarkupLength: formattedMarkup.length, formattedMarkup: formattedMarkup.slice(0, 5000) },
   };
 }
