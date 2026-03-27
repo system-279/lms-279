@@ -132,8 +132,11 @@ function stripTags(text: string): string {
  * 選択肢行に書式タグがあるかチェックしてisCorrectを判定
  */
 function detectCorrect(rawLine: string): boolean | null {
-  if (/\[BOLD\]/.test(rawLine)) return true;
-  if (/\[UNDERLINE\]/.test(rawLine) || /\[COLOR:#/.test(rawLine)) return true;
+  // 開始タグのみ検出（[/BOLD]閉じタグは前の行の残りなので除外）
+  // [BOLD] の直後に [/BOLD] が来ない位置を探す
+  const withoutCloseTags = rawLine.replace(/\[\/BOLD\]/g, "").replace(/\[\/UNDERLINE\]/g, "");
+  if (/\[BOLD\]/.test(withoutCloseTags)) return true;
+  if (/\[UNDERLINE\]/.test(withoutCloseTags)) return true;
   return null; // 書式なし → 正解不明
 }
 
