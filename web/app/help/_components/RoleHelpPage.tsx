@@ -10,9 +10,11 @@ import { FeatureSection } from "./FeatureSection";
 export function RoleHelpPage({
   roleName,
   sections,
+  appLink,
 }: {
   roleName: string;
   sections: HelpSection[];
+  appLink?: { href: string; label: string };
 }) {
   const [search, setSearch] = useState("");
 
@@ -49,12 +51,14 @@ export function RoleHelpPage({
             <span className="font-semibold">{roleName}</span>
           </div>
           <div className="flex items-center gap-4">
-            <Link
-              href="/super/master/courses"
-              className="text-sm text-muted-foreground hover:text-foreground transition"
-            >
-              スーパー管理
-            </Link>
+            {appLink && (
+              <Link
+                href={appLink.href}
+                className="text-sm text-muted-foreground hover:text-foreground transition"
+              >
+                {appLink.label}
+              </Link>
+            )}
             <Link
               href="/"
               className="text-sm text-muted-foreground hover:text-foreground transition"

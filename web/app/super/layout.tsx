@@ -55,6 +55,12 @@ export default function SuperAdminLayout({
             <span className="text-sm text-muted-foreground">
               {user.email}
             </span>
+            <Link
+              href="/help/super"
+              className="text-sm text-muted-foreground hover:text-foreground"
+            >
+              ヘルプ
+            </Link>
             <Button variant="ghost" size="sm" onClick={signOut}>
               ログアウト
             </Button>

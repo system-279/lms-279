@@ -37,20 +37,12 @@ export default function HelpPage() {
       <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4">
           <span className="font-semibold">LMS 279 ヘルプセンター</span>
-          <div className="flex items-center gap-4">
-            <Link
-              href="/super/master/courses"
-              className="text-sm text-muted-foreground hover:text-foreground transition"
-            >
-              スーパー管理
-            </Link>
-            <Link
-              href="/"
-              className="text-sm text-muted-foreground hover:text-foreground transition"
-            >
-              LMS に戻る
-            </Link>
-          </div>
+          <Link
+            href="/"
+            className="text-sm text-muted-foreground hover:text-foreground transition"
+          >
+            LMS に戻る
+          </Link>
         </div>
       </header>
 

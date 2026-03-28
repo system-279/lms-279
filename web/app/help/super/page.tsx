@@ -9,6 +9,10 @@ export const metadata: Metadata = {
 
 export default function SuperHelpPage() {
   return (
-    <RoleHelpPage roleName="スーパー管理者" sections={superSections} />
+    <RoleHelpPage
+      roleName="スーパー管理者"
+      sections={superSections}
+      appLink={{ href: "/super/master/courses", label: "スーパー管理画面へ" }}
+    />
   );
 }
