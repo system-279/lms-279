@@ -4,7 +4,7 @@ import { superSections } from "../_data/super-sections";
 
 export const metadata: Metadata = {
   title: "スーパー管理者ヘルプ - LMS 279",
-  description: "ス���パー管理者向けの使い��ガイド",
+  description: "スーパー管理者向けの使い方ガイド",
 };
 
 export default function SuperHelpPage() {

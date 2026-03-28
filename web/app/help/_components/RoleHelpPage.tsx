@@ -93,7 +93,7 @@ export function RoleHelpPage({
 
           {filtered.length === 0 && (
             <p className="py-12 text-center text-muted-foreground">
-              該当するセクション��見つかりません。
+              該当するセクションが見つかりません。
             </p>
           )}
 
