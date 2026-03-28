@@ -48,12 +48,20 @@ export function RoleHelpPage({
             <span className="text-muted-foreground">/</span>
             <span className="font-semibold">{roleName}</span>
           </div>
-          <Link
-            href="/"
-            className="text-sm text-muted-foreground hover:text-foreground transition"
-          >
-            LMS に戻る
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link
+              href="/super/master/courses"
+              className="text-sm text-muted-foreground hover:text-foreground transition"
+            >
+              スーパー管理
+            </Link>
+            <Link
+              href="/"
+              className="text-sm text-muted-foreground hover:text-foreground transition"
+            >
+              LMS に戻る
+            </Link>
+          </div>
         </div>
       </header>
 
