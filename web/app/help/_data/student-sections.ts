@@ -165,18 +165,7 @@ export const studentSections: HelpSection[] = [
       "制限時間",
     ],
     description: "テストの受験方法と結果の確認方法を説明します。",
-    screenshots: [
-      {
-        src: "/help/screenshots/student-quiz-taking.png",
-        alt: "テスト受験画面",
-        caption: "テストの問題に回答します",
-      },
-      {
-        src: "/help/screenshots/student-quiz-results.png",
-        alt: "テスト結果画面",
-        caption: "テストの採点結果が表示されます",
-      },
-    ],
+    screenshots: [],
     steps: [
       {
         title: "動画を視聴完了する",

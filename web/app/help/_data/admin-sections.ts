@@ -87,13 +87,7 @@ export const adminSections: HelpSection[] = [
     ],
     description:
       "レッスンの動画登録・テスト作成方法を説明します。動画はファイルアップロードとGoogle Driveインポートに対応。テストは手動作成・AI生成・Googleドキュメントインポートが可能です。",
-    screenshots: [
-      {
-        src: "/help/screenshots/admin-lesson-editor.png",
-        alt: "レッスン編集ページ",
-        caption: "動画とテストを設定するレッスン編集画面です",
-      },
-    ],
+    screenshots: [],
     steps: [
       {
         title: "講座詳細からレッスンを選択",

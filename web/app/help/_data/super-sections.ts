@@ -15,18 +15,7 @@ export const superSections: HelpSection[] = [
     ],
     description:
       "マスター講座（テンプレート）の作成・編集・プレビュー方法を説明します。",
-    screenshots: [
-      {
-        src: "/help/screenshots/super-master-courses.png",
-        alt: "マスター講座一覧",
-        caption: "マスター講座の管理画面です",
-      },
-      {
-        src: "/help/screenshots/super-course-editor.png",
-        alt: "マスター講座編集",
-        caption: "マスター講座の編集画面です",
-      },
-    ],
+    screenshots: [],
     steps: [
       {
         title: "マスターコース管理を開く",
@@ -64,13 +53,7 @@ export const superSections: HelpSection[] = [
     keywords: ["配信", "テナント", "コピー", "一括", "再配信"],
     description:
       "マスター講座を各テナントに配信する方法を説明します。初回配信と再配信（上書き更新）に対応しています。",
-    screenshots: [
-      {
-        src: "/help/screenshots/super-distribute.png",
-        alt: "テナント配信画面",
-        caption: "マスター講座をテナントに配信する画面です",
-      },
-    ],
+    screenshots: [],
     steps: [
       {
         title: "テナント配信ページを開く",
