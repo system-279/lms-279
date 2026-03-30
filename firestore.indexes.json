@@ -140,6 +140,14 @@
       ]
     },
     {
+      "collectionGroup": "user_progress",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "userId", "order": "ASCENDING" },
+        { "fieldPath": "lessonId", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "course_progress",
       "queryScope": "COLLECTION",
       "fields": [

@@ -1066,7 +1066,7 @@ export class FirestoreDataSource implements DataSource {
     return snapshot.docs.map((doc) => this.toLessonSession(doc.id, doc.data()));
   }
 
-  async resetLessonDataForUser(userId: string, lessonId: string, courseId: string): Promise<void> {
+  async resetLessonDataForUser(userId: string, lessonId: string, _courseId: string): Promise<void> {
     // 削除対象ドキュメントを収集
     const docsToDelete: FirebaseFirestore.DocumentReference[] = [];
 
@@ -1121,19 +1121,6 @@ export class FirestoreDataSource implements DataSource {
       }
       await batch.commit();
     }
-
-    // 5. course_progress: 再計算（バッチ外で実行 — 読み取りが必要）
-    const allProgress = await this.getUserProgressByCourse(userId, courseId);
-    const completedCount = allProgress.filter((p) => p.quizPassed).length;
-    const courseLessons = await this.getLessons({ courseId });
-    const totalLessons = courseLessons.length;
-    const progressRatio = totalLessons > 0 ? completedCount / totalLessons : 0;
-    await this.upsertCourseProgress(userId, courseId, {
-      completedLessons: completedCount,
-      totalLessons,
-      progressRatio,
-      isCompleted: totalLessons > 0 && completedCount >= totalLessons,
-    });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

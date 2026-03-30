@@ -5,6 +5,7 @@
 
 import type { DataSource } from "../datasource/interface.js";
 import type { LessonSession, SessionExitReason } from "../types/entities.js";
+import { updateCourseProgress } from "./progress.js";
 
 const SESSION_DURATION_MS = 2 * 60 * 60 * 1000; // 2時間
 
@@ -82,6 +83,9 @@ export async function forceExitSession(
 
   // レッスンの学習データを完全リセット
   await ds.resetLessonDataForUser(session.userId, session.lessonId, session.courseId);
+
+  // コース進捗を再計算（通常ロジックと同一のupdateCourseProgressを使用）
+  await updateCourseProgress(ds, session.userId, session.courseId);
 
   return updated!;
 }
