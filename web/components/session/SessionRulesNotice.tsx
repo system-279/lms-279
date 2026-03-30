@@ -24,10 +24,14 @@ export function SessionRulesNotice({ session }: SessionRulesNoticeProps) {
       <h3 className="font-semibold">受講ルール</h3>
       <ul className="list-disc list-inside space-y-1 text-muted-foreground">
         <li>動画の再生を開始すると「入室」として記録されます</li>
-        <li>テストに合格すると「退室」として記録されます</li>
+        <li className="font-medium text-foreground">
+          動画は途中をスキップせず、最初から最後まで視聴してください。スキップした区間は視聴完了にカウントされず、テストを受けられません
+        </li>
+        <li>テストに合格すると「退室」（出席完了）として記録されます</li>
+        <li>テストに不合格の場合は退室となりません。合格するまで再受験できます</li>
         <li>動画を15分以上一時停止すると、強制退室となります</li>
         <li>
-          入室から2時間以内にテストを提出してください（超過すると強制退室となり、最初からやり直しです）
+          入室から2時間以内にテストに合格してください。超過すると強制退室となり、新しいセッションで再入室が必要です（視聴履歴・テスト回答は保持されます）
         </li>
       </ul>
       {session && (
