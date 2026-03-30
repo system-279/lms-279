@@ -36,6 +36,8 @@ export const requireAdmin = (req: Request, res: Response, next: NextFunction) =>
       userId: req.user.id,
       email: req.user.email,
       role: req.user.role,
+      isSuperAdminAccess: req.isSuperAdminAccess ?? false,
+      tenantId: req.tenantContext?.tenantId ?? "unknown",
       path: req.originalUrl,
     });
     res.status(403).json({ error: "forbidden" });
