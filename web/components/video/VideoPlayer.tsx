@@ -217,8 +217,11 @@ export function VideoPlayer({
         playsInline
         preload="metadata"
         onClick={handlePlayPause}
+        onContextMenu={(e) => e.preventDefault()}
         // ブラウザデフォルトのコントロールを非表示にしてカスタムUIを使用
         controls={false}
+        controlsList="nodownload noplaybackrate"
+        disablePictureInPicture
       />
 
       {/* カスタムコントロール */}

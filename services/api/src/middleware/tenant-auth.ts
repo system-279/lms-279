@@ -109,14 +109,22 @@ async function findOrCreateTenantUser(
   const ds = req.dataSource!;
   const { uid, email } = decodedToken;
 
+  // スーパー管理者チェック（既存ユーザーのroleに関係なくadminを付与するため先に判定）
+  const superAdminAccess = await isSuperAdmin(email);
+
   // firebaseUidでユーザーを検索（テナント内の既存ユーザーは常に許可）
   const existingByUid = await ds.getUserByFirebaseUid(uid);
   if (existingByUid) {
+    const role = superAdminAccess ? "admin" : existingByUid.role;
+    if (superAdminAccess) {
+      req.isSuperAdminAccess = true;
+    }
     return {
       id: existingByUid.id,
-      role: existingByUid.role,
+      role,
       email: existingByUid.email ?? undefined,
       firebaseUid: uid,
+      ...(superAdminAccess && { isSuperAdminAccess: true }),
     };
   }
 
@@ -126,18 +134,19 @@ async function findOrCreateTenantUser(
     if (existingByEmail) {
       // firebaseUidを設定
       await ds.updateUser(existingByEmail.id, { firebaseUid: uid });
+      const role = superAdminAccess ? "admin" : existingByEmail.role;
+      if (superAdminAccess) {
+        req.isSuperAdminAccess = true;
+      }
       return {
         id: existingByEmail.id,
-        role: existingByEmail.role,
+        role,
         email: existingByEmail.email ?? undefined,
         firebaseUid: uid,
+        ...(superAdminAccess && { isSuperAdminAccess: true }),
       };
     }
   }
-
-  // スーパー管理者チェック（テナント内にユーザーがいない場合のみ）
-  // スーパー管理者はテナント内ユーザーとして存在しなくても管理者としてアクセス可能
-  const superAdminAccess = await isSuperAdmin(email);
   if (superAdminAccess) {
     req.isSuperAdminAccess = true;
     return {
@@ -188,18 +197,23 @@ async function findOrCreateDevUser(
 ): Promise<(AuthUser & { isSuperAdminAccess?: boolean }) | null> {
   const ds = req.dataSource!;
 
+  // スーパー管理者チェック（既存ユーザーのroleに関係なくadminを付与するため先に判定）
+  const superAdminAccess = await isSuperAdmin(email);
+
   // メールアドレスで既存ユーザーを検索（テナント内にユーザーがいれば優先）
   const existingByEmail = await ds.getUserByEmail(email);
   if (existingByEmail) {
+    const role = superAdminAccess ? "admin" : existingByEmail.role;
+    if (superAdminAccess) {
+      req.isSuperAdminAccess = true;
+    }
     return {
       id: existingByEmail.id,
-      role: existingByEmail.role,
+      role,
       email: existingByEmail.email ?? undefined,
+      ...(superAdminAccess && { isSuperAdminAccess: true }),
     };
   }
-
-  // スーパー管理者チェック（テナント内にユーザーがいない場合のみ）
-  const superAdminAccess = await isSuperAdmin(email);
   if (superAdminAccess) {
     req.isSuperAdminAccess = true;
     return {
