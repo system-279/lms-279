@@ -8,10 +8,10 @@ import { useAuthenticatedFetch } from "@/lib/hooks/use-authenticated-fetch";
 import { useTenant } from "@/lib/tenant-context";
 
 type CourseProgress = {
-  completedLessonCount: number;
-  totalLessonCount: number;
+  completedLessons: number;
+  totalLessons: number;
   progressRatio: number;
-  courseCompleted: boolean;
+  isCompleted: boolean;
 };
 
 type Course = {
@@ -73,14 +73,14 @@ export default function StudentCoursesPage() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {courses.map((course) => {
             const progress = course.progress ?? null;
-            const completedCount = progress?.completedLessonCount ?? 0;
-            const totalCount = progress?.totalLessonCount ?? course.lessonCount ?? course.lessonOrder?.length ?? 0;
+            const completedCount = progress?.completedLessons ?? 0;
+            const totalCount = progress?.totalLessons ?? course.lessonOrder?.length ?? 0;
             const progressPercent = progress
               ? Math.round(progress.progressRatio * 100)
               : totalCount > 0
               ? Math.round((completedCount / totalCount) * 100)
               : 0;
-            const isCourseCompleted = progress?.courseCompleted ?? false;
+            const isCourseCompleted = progress?.isCompleted ?? false;
 
             return (
               <Link

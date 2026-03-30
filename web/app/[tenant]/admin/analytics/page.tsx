@@ -35,45 +35,44 @@ type User = {
   email: string;
 };
 
-type CourseProgressEnrollment = {
+type CourseProgressStudent = {
   userId: string;
-  name: string;
+  userName: string;
   email: string;
   completedLessons: number;
   totalLessons: number;
-  progressRate: number; // 0〜100
-  completed: boolean;
+  progressRatio: number; // 0-1
+  isCompleted: boolean;
 };
 
 type CourseProgressData = {
-  courseId: string;
-  courseTitle: string;
-  totalEnrollments: number;
-  completedCount: number;
-  averageProgressRate: number;
-  enrollments: CourseProgressEnrollment[];
+  course: { id: string; name: string };
+  totalStudents: number;
+  completedStudents: number;
+  avgProgressRatio: number;
+  students: CourseProgressStudent[];
 };
 
 type LessonProgress = {
   lessonId: string;
-  lessonTitle: string;
+  lessonTitle: string | null;
   videoCompleted: boolean;
   quizPassed: boolean;
+  lessonCompleted: boolean;
 };
 
 type UserCourseProgress = {
   courseId: string;
-  courseTitle: string;
+  courseName: string | null;
   completedLessons: number;
   totalLessons: number;
-  progressRate: number;
-  completed: boolean;
-  lessons?: LessonProgress[];
+  progressRatio: number; // 0-1
+  isCompleted: boolean;
+  lessonProgresses?: LessonProgress[];
 };
 
 type UserProgressData = {
-  userId: string;
-  userName: string;
+  user: { id: string; name: string; email: string };
   courses: UserCourseProgress[];
 };
 
@@ -327,22 +326,22 @@ function CourseProgressTab() {
           <div className="grid grid-cols-3 gap-4">
             <div className="rounded-md border p-4 space-y-1">
               <p className="text-xs text-muted-foreground">受講者数</p>
-              <p className="text-2xl font-bold">{progressData.totalEnrollments}</p>
+              <p className="text-2xl font-bold">{progressData.totalStudents}</p>
             </div>
             <div className="rounded-md border p-4 space-y-1">
               <p className="text-xs text-muted-foreground">完了者数</p>
-              <p className="text-2xl font-bold">{progressData.completedCount}</p>
+              <p className="text-2xl font-bold">{progressData.completedStudents}</p>
             </div>
             <div className="rounded-md border p-4 space-y-1">
               <p className="text-xs text-muted-foreground">平均進捗率</p>
               <p className="text-2xl font-bold">
-                {Math.round(progressData.averageProgressRate)}%
+                {Math.round(progressData.avgProgressRatio * 100)}%
               </p>
             </div>
           </div>
 
           {/* 受講者テーブル */}
-          {progressData.enrollments.length === 0 ? (
+          {progressData.students.length === 0 ? (
             <EmptyState message="受講者がいません" />
           ) : (
             <Table>
@@ -356,18 +355,18 @@ function CourseProgressTab() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {progressData.enrollments.map((e) => (
+                {progressData.students.map((e) => (
                   <TableRow key={e.userId}>
-                    <TableCell className="font-medium">{e.name}</TableCell>
+                    <TableCell className="font-medium">{e.userName}</TableCell>
                     <TableCell>{e.email}</TableCell>
                     <TableCell>
                       {e.completedLessons} / {e.totalLessons}
                     </TableCell>
                     <TableCell>
-                      <ProgressBar value={e.progressRate} />
+                      <ProgressBar value={e.progressRatio * 100} />
                     </TableCell>
                     <TableCell>
-                      {e.completed ? (
+                      {e.isCompleted ? (
                         <Badge variant="default">完了</Badge>
                       ) : (
                         <Badge variant="secondary">受講中</Badge>
@@ -506,22 +505,22 @@ function UserProgressTab() {
               {progressData.courses.map((course) => (
                 <Fragment key={course.courseId}>
                   <TableRow>
-                    <TableCell className="font-medium">{course.courseTitle}</TableCell>
+                    <TableCell className="font-medium">{course.courseName}</TableCell>
                     <TableCell>
                       {course.completedLessons} / {course.totalLessons}
                     </TableCell>
                     <TableCell>
-                      <ProgressBar value={course.progressRate} />
+                      <ProgressBar value={course.progressRatio * 100} />
                     </TableCell>
                     <TableCell>
-                      {course.completed ? (
+                      {course.isCompleted ? (
                         <Badge variant="default">完了</Badge>
                       ) : (
                         <Badge variant="secondary">受講中</Badge>
                       )}
                     </TableCell>
                     <TableCell>
-                      {course.lessons && course.lessons.length > 0 && (
+                      {course.lessonProgresses && course.lessonProgresses.length > 0 && (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -535,7 +534,7 @@ function UserProgressTab() {
 
                   {/* レッスン詳細行（展開時） */}
                   {expandedCourseIds.has(course.courseId) &&
-                    course.lessons?.map((lesson) => (
+                    course.lessonProgresses?.map((lesson) => (
                       <TableRow
                         key={`${course.courseId}-${lesson.lessonId}`}
                         className="bg-muted/30"
