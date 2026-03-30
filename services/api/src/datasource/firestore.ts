@@ -1066,6 +1066,76 @@ export class FirestoreDataSource implements DataSource {
     return snapshot.docs.map((doc) => this.toLessonSession(doc.id, doc.data()));
   }
 
+  async resetLessonDataForUser(userId: string, lessonId: string, courseId: string): Promise<void> {
+    // 削除対象ドキュメントを収集
+    const docsToDelete: FirebaseFirestore.DocumentReference[] = [];
+
+    // 1. video_analytics + video_events
+    const video = await this.getVideoByLessonId(lessonId);
+    if (video) {
+      const analyticsSnap = await this.collection("video_analytics")
+        .where("userId", "==", userId)
+        .where("videoId", "==", video.id)
+        .get();
+      for (const doc of analyticsSnap.docs) {
+        docsToDelete.push(doc.ref);
+      }
+
+      const eventsSnap = await this.collection("video_events")
+        .where("userId", "==", userId)
+        .where("videoId", "==", video.id)
+        .get();
+      for (const doc of eventsSnap.docs) {
+        docsToDelete.push(doc.ref);
+      }
+    }
+
+    // 2. quiz_attempts
+    const quiz = await this.getQuizByLessonId(lessonId);
+    if (quiz) {
+      const attemptsSnap = await this.collection("quiz_attempts")
+        .where("userId", "==", userId)
+        .where("quizId", "==", quiz.id)
+        .get();
+      for (const doc of attemptsSnap.docs) {
+        docsToDelete.push(doc.ref);
+      }
+    }
+
+    // 3. user_progress
+    const progressSnap = await this.collection("user_progress")
+      .where("userId", "==", userId)
+      .where("lessonId", "==", lessonId)
+      .get();
+    for (const doc of progressSnap.docs) {
+      docsToDelete.push(doc.ref);
+    }
+
+    // 500件ずつバッチに分割して削除（Firestore上限対応）
+    const BATCH_LIMIT = 500;
+    for (let i = 0; i < docsToDelete.length; i += BATCH_LIMIT) {
+      const chunk = docsToDelete.slice(i, i + BATCH_LIMIT);
+      const batch = this.db.batch();
+      for (const ref of chunk) {
+        batch.delete(ref);
+      }
+      await batch.commit();
+    }
+
+    // 5. course_progress: 再計算（バッチ外で実行 — 読み取りが必要）
+    const allProgress = await this.getUserProgressByCourse(userId, courseId);
+    const completedCount = allProgress.filter((p) => p.quizPassed).length;
+    const courseLessons = await this.getLessons({ courseId });
+    const totalLessons = courseLessons.length;
+    const progressRatio = totalLessons > 0 ? completedCount / totalLessons : 0;
+    await this.upsertCourseProgress(userId, courseId, {
+      completedLessons: completedCount,
+      totalLessons,
+      progressRatio,
+      isCompleted: totalLessons > 0 && completedCount >= totalLessons,
+    });
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private toLessonSession(id: string, data: any): LessonSession {
     return {

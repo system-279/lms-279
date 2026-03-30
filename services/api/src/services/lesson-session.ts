@@ -60,22 +60,30 @@ export async function getOrCreateSession(
 }
 
 /**
- * セッションを強制退室にする
+ * セッションを強制退室にし、レッスンの学習データを完全リセットする。
+ * リセット対象: video_analytics, video_events, quiz_attempts, user_progress
+ * （2時間以内に1セッションで完了する要件のため）
  */
 export async function forceExitSession(
   ds: DataSource,
   sessionId: string,
   reason: SessionExitReason
 ): Promise<LessonSession> {
+  const session = await ds.getLessonSession(sessionId);
+  if (!session) {
+    throw new Error(`Session ${sessionId} not found`);
+  }
+
   const updated = await ds.updateLessonSession(sessionId, {
     status: "force_exited",
     exitAt: new Date().toISOString(),
     exitReason: reason,
   });
-  if (!updated) {
-    throw new Error(`Session ${sessionId} not found`);
-  }
-  return updated;
+
+  // レッスンの学習データを完全リセット
+  await ds.resetLessonDataForUser(session.userId, session.lessonId, session.courseId);
+
+  return updated!;
 }
 
 /**

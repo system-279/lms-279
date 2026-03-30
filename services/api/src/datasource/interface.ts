@@ -175,6 +175,9 @@ export interface DataSource {
   getActiveLessonSession(userId: string, lessonId: string): Promise<LessonSession | null>;
   updateLessonSession(sessionId: string, data: Partial<Omit<LessonSession, "id" | "createdAt">>): Promise<LessonSession | null>;
   getLessonSessionsByCourse(courseId: string): Promise<LessonSession[]>;
+
+  // Lesson Data Reset (force exit)
+  resetLessonDataForUser(userId: string, lessonId: string, courseId: string): Promise<void>;
 }
 
 /**
