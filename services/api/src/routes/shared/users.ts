@@ -233,4 +233,109 @@ router.patch("/admin/users/:id/settings", requireAdmin, async (req: Request, res
   res.json({ settings });
 });
 
+/**
+ * 管理者向け: CSV一括ユーザーインポート
+ * POST /admin/users/import
+ *
+ * Body: { csv: string } — CSV文字列（ヘッダー行あり、email必須、name/role任意）
+ * 上限: 500行、1MB
+ */
+router.post("/admin/users/import", requireAdmin, async (req: Request, res: Response) => {
+  const ds = req.dataSource!;
+  const { csv } = req.body;
+
+  if (!csv || typeof csv !== "string") {
+    res.status(400).json({ error: "invalid_request", message: "csv field is required" });
+    return;
+  }
+
+  if (csv.length > 1_000_000) {
+    res.status(400).json({ error: "too_large", message: "CSV must be under 1MB" });
+    return;
+  }
+
+  // BOM除去
+  const cleanCsv = csv.replace(/^\uFEFF/, "");
+  const lines = cleanCsv.split(/\r?\n/).filter((line) => line.trim());
+
+  if (lines.length < 2) {
+    res.status(400).json({ error: "invalid_csv", message: "CSV must have a header row and at least one data row" });
+    return;
+  }
+
+  if (lines.length > 501) {
+    res.status(400).json({ error: "too_many_rows", message: "CSV must have 500 rows or fewer (excluding header)" });
+    return;
+  }
+
+  // ヘッダー解析
+  const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
+  const emailIdx = headers.indexOf("email");
+  if (emailIdx === -1) {
+    res.status(400).json({ error: "missing_header", message: "CSV must have an 'email' column" });
+    return;
+  }
+  const nameIdx = headers.indexOf("name");
+  const roleIdx = headers.indexOf("role");
+
+  const results: {
+    created: { email: string; name: string | null; role: string }[];
+    skipped: { email: string; reason: string }[];
+    errors: { line: number; email?: string; reason: string }[];
+  } = { created: [], skipped: [], errors: [] };
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(",").map((c) => c.trim());
+    const email = cols[emailIdx]?.toLowerCase();
+
+    if (!email || !EMAIL_REGEX.test(email)) {
+      results.errors.push({ line: i + 1, email: email || undefined, reason: "invalid_email" });
+      continue;
+    }
+
+    const name = nameIdx !== -1 ? cols[nameIdx] || null : null;
+    const role = roleIdx !== -1 ? cols[roleIdx]?.toLowerCase() || "student" : "student";
+
+    if (!(VALID_ROLES as readonly string[]).includes(role)) {
+      results.errors.push({ line: i + 1, email, reason: `invalid_role: ${role}` });
+      continue;
+    }
+
+    // 重複チェック
+    const existing = await ds.getUserByEmail(email);
+    if (existing) {
+      results.skipped.push({ email, reason: "already_exists" });
+      continue;
+    }
+
+    try {
+      const user = await ds.createUser({
+        email,
+        name,
+        role: role as "admin" | "teacher" | "student",
+      });
+
+      // allowed_emailsにも自動追加
+      const isAllowed = await ds.isEmailAllowed(email);
+      if (!isAllowed) {
+        await ds.createAllowedEmail({ email, note: "CSV import" });
+      }
+
+      results.created.push({ email: user.email!, name: user.name, role: user.role });
+    } catch {
+      results.errors.push({ line: i + 1, email, reason: "creation_failed" });
+    }
+  }
+
+  res.status(200).json({
+    summary: {
+      total: lines.length - 1,
+      created: results.created.length,
+      skipped: results.skipped.length,
+      errors: results.errors.length,
+    },
+    ...results,
+  });
+});
+
 export const usersRouter = router;
