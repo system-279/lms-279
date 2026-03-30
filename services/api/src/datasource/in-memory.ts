@@ -182,6 +182,11 @@ const initialAllowedEmails: AllowedEmail[] = [
 ];
 
 export class InMemoryDataSource implements DataSource {
+  private static idCounter = 0;
+  private static uniqueId(prefix: string): string {
+    return `${prefix}-${Date.now()}-${InMemoryDataSource.idCounter++}`;
+  }
+
   private courses: Course[] = [...initialCourses];
   private lessons: Lesson[] = [...initialLessons];
   private users: User[] = [...initialUsers];
@@ -331,7 +336,7 @@ export class InMemoryDataSource implements DataSource {
     this.throwIfReadOnly();
     const course: Course = {
       ...data,
-      id: `course-${Date.now()}`,
+      id: InMemoryDataSource.uniqueId("course"),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -373,7 +378,7 @@ export class InMemoryDataSource implements DataSource {
     this.throwIfReadOnly();
     const lesson: Lesson = {
       ...data,
-      id: `lesson-${Date.now()}`,
+      id: InMemoryDataSource.uniqueId("lesson"),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -444,7 +449,7 @@ export class InMemoryDataSource implements DataSource {
     this.throwIfReadOnly();
     const user: User = {
       ...data,
-      id: `user-${Date.now()}`,
+      id: InMemoryDataSource.uniqueId("user"),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -485,7 +490,7 @@ export class InMemoryDataSource implements DataSource {
     this.throwIfReadOnly();
     const allowedEmail: AllowedEmail = {
       ...data,
-      id: `allowed-${Date.now()}`,
+      id: InMemoryDataSource.uniqueId("allowed"),
       createdAt: new Date(),
     };
     this.allowedEmails.push(allowedEmail);
@@ -528,7 +533,7 @@ export class InMemoryDataSource implements DataSource {
     this.throwIfReadOnly();
     const policy: NotificationPolicy = {
       ...data,
-      id: `policy-${Date.now()}`,
+      id: InMemoryDataSource.uniqueId("policy"),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -570,7 +575,7 @@ export class InMemoryDataSource implements DataSource {
     // デモモードでは実際には保存しないが、インターフェースに合わせてオブジェクトを返す
     return {
       ...data,
-      id: `auth-error-${Date.now()}`,
+      id: InMemoryDataSource.uniqueId("auth-error"),
     };
   }
 
@@ -617,7 +622,7 @@ export class InMemoryDataSource implements DataSource {
     const now = new Date().toISOString();
     const video: Video = {
       ...data,
-      id: `video-${Date.now()}`,
+      id: InMemoryDataSource.uniqueId("video"),
       createdAt: now,
       updatedAt: now,
     };
@@ -650,7 +655,7 @@ export class InMemoryDataSource implements DataSource {
     const now = new Date().toISOString();
     const created: VideoEvent[] = events.map((event) => ({
       ...event,
-      id: `video-event-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      id: InMemoryDataSource.uniqueId("video-event"),
       timestamp: now,
     }));
     this.videoEvents.push(...created);
@@ -743,7 +748,7 @@ export class InMemoryDataSource implements DataSource {
     const now = new Date().toISOString();
     const quiz: Quiz = {
       ...data,
-      id: `quiz-${Date.now()}`,
+      id: InMemoryDataSource.uniqueId("quiz"),
       createdAt: now,
       updatedAt: now,
     };
@@ -797,7 +802,7 @@ export class InMemoryDataSource implements DataSource {
     this.throwIfReadOnly();
     const attempt: QuizAttempt = {
       ...data,
-      id: `quiz-attempt-${Date.now()}`,
+      id: InMemoryDataSource.uniqueId("quiz-attempt"),
     };
     this.quizAttempts.push(attempt);
     return attempt;
@@ -907,7 +912,7 @@ export class InMemoryDataSource implements DataSource {
     const now = new Date().toISOString();
     const session: LessonSession = {
       ...data,
-      id: `session-${Date.now()}`,
+      id: InMemoryDataSource.uniqueId("session"),
       createdAt: now,
       updatedAt: now,
     };
