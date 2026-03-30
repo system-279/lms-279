@@ -142,7 +142,8 @@ async function findOrCreateTenantUser(
   decodedToken: DecodedIdToken
 ): Promise<AuthUser> {
   const ds = req.dataSource!;
-  const { uid, email } = decodedToken;
+  const uid = decodedToken.uid;
+  const email = decodedToken.email?.toLowerCase();
 
   // firebaseUidでユーザーを検索（テナント内の既存ユーザーは常に許可）
   const existingByUid = await ds.getUserByFirebaseUid(uid);
