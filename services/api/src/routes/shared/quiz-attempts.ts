@@ -332,7 +332,7 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
     submittedAt: now.toISOString(),
   });
 
-  // 進捗更新: 合格した場合
+  // 合格した場合: 進捗更新 + 退室打刻
   if (gradingResult.isPassed) {
     if (quiz) {
       await updateLessonProgress(ds, userId, quiz.lessonId, quiz.courseId, {
@@ -340,15 +340,15 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
         quizBestScore: gradingResult.score,
       });
     }
-  }
 
-  // セッション完了（退室打刻）
-  if (activeSession) {
-    try {
-      await completeSession(ds, activeSession.id, updated!.id);
-    } catch {
-      // セッション完了失敗はテスト提出自体をブロックしない
-      console.error(`Failed to complete session for attempt ${attemptId}`);
+    // セッション完了（退室打刻）— 合格時のみ実行、不合格時は再挑戦可能
+    if (activeSession) {
+      try {
+        await completeSession(ds, activeSession.id, updated!.id);
+      } catch {
+        // セッション完了失敗はテスト提出自体をブロックしない
+        console.error(`Failed to complete session for attempt ${attemptId}`);
+      }
     }
   }
 
