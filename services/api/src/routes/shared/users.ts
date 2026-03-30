@@ -61,7 +61,8 @@ router.get("/admin/users", requireAdmin, async (req: Request, res: Response) => 
  */
 router.post("/admin/users", requireAdmin, async (req: Request, res: Response) => {
   const ds = req.dataSource!;
-  const { email, name, role } = req.body;
+  const { name, role } = req.body;
+  const email = typeof req.body.email === "string" ? req.body.email.toLowerCase().trim() : req.body.email;
 
   if (!email || !EMAIL_REGEX.test(email)) {
     res.status(400).json({ error: "invalid_email", message: "Valid email is required" });
