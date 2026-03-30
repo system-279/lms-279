@@ -102,22 +102,56 @@ async function handleTenantAccessDenied(
  * 許可リストに含まれていない場合はエラー
  * スーパー管理者は許可リストに関係なくアクセス可能
  */
+/**
+ * 既存ユーザーにスーパー管理者オーバーライドを適用してAuthUserを構築
+ */
+function buildAuthUser(
+  req: Request,
+  user: { id: string; role: "admin" | "teacher" | "student"; email?: string | null },
+  superAdminAccess: boolean,
+  extra?: { firebaseUid?: string }
+): AuthUser {
+  if (superAdminAccess) {
+    req.isSuperAdminAccess = true;
+  }
+  return {
+    id: user.id,
+    role: superAdminAccess ? "admin" : user.role,
+    email: user.email ?? undefined,
+    ...extra,
+  };
+}
+
+/**
+ * スーパー管理者チェック（失敗時はfalseを返し、テナントroleで続行）
+ */
+async function checkSuperAdmin(email: string | undefined): Promise<boolean> {
+  try {
+    return await isSuperAdmin(email);
+  } catch (error) {
+    logger.error("Super admin check failed, proceeding with tenant role", {
+      email,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
 async function findOrCreateTenantUser(
   req: Request,
   decodedToken: DecodedIdToken
-): Promise<AuthUser & { isSuperAdminAccess?: boolean }> {
+): Promise<AuthUser> {
   const ds = req.dataSource!;
   const { uid, email } = decodedToken;
 
   // firebaseUidでユーザーを検索（テナント内の既存ユーザーは常に許可）
   const existingByUid = await ds.getUserByFirebaseUid(uid);
   if (existingByUid) {
-    return {
-      id: existingByUid.id,
-      role: existingByUid.role,
-      email: existingByUid.email ?? undefined,
-      firebaseUid: uid,
-    };
+    // 既にadminならスーパー管理者チェック不要
+    const superAdminAccess = existingByUid.role === "admin"
+      ? false
+      : await checkSuperAdmin(email);
+    return buildAuthUser(req, existingByUid, superAdminAccess, { firebaseUid: uid });
   }
 
   // メールアドレスで既存ユーザーを検索（firebaseUidがまだ設定されていない場合）
@@ -126,18 +160,15 @@ async function findOrCreateTenantUser(
     if (existingByEmail) {
       // firebaseUidを設定
       await ds.updateUser(existingByEmail.id, { firebaseUid: uid });
-      return {
-        id: existingByEmail.id,
-        role: existingByEmail.role,
-        email: existingByEmail.email ?? undefined,
-        firebaseUid: uid,
-      };
+      const superAdminAccess = existingByEmail.role === "admin"
+        ? false
+        : await checkSuperAdmin(email);
+      return buildAuthUser(req, existingByEmail, superAdminAccess, { firebaseUid: uid });
     }
   }
 
-  // スーパー管理者チェック（テナント内にユーザーがいない場合のみ）
-  // スーパー管理者はテナント内ユーザーとして存在しなくても管理者としてアクセス可能
-  const superAdminAccess = await isSuperAdmin(email);
+  // テナント内にユーザーが存在しない場合 — スーパー管理者なら仮想adminユーザーとして返す
+  const superAdminAccess = await checkSuperAdmin(email);
   if (superAdminAccess) {
     req.isSuperAdminAccess = true;
     return {
@@ -145,7 +176,6 @@ async function findOrCreateTenantUser(
       role: "admin",
       email: email ?? undefined,
       firebaseUid: uid,
-      isSuperAdminAccess: true,
     };
   }
 
@@ -185,28 +215,27 @@ async function findOrCreateDevUser(
   req: Request,
   email: string,
   requestedRole: "admin" | "teacher" | "student"
-): Promise<(AuthUser & { isSuperAdminAccess?: boolean }) | null> {
+): Promise<AuthUser | null> {
   const ds = req.dataSource!;
 
   // メールアドレスで既存ユーザーを検索（テナント内にユーザーがいれば優先）
   const existingByEmail = await ds.getUserByEmail(email);
   if (existingByEmail) {
-    return {
-      id: existingByEmail.id,
-      role: existingByEmail.role,
-      email: existingByEmail.email ?? undefined,
-    };
+    // 既にadminならスーパー管理者チェック不要
+    const superAdminAccess = existingByEmail.role === "admin"
+      ? false
+      : await checkSuperAdmin(email);
+    return buildAuthUser(req, existingByEmail, superAdminAccess);
   }
 
-  // スーパー管理者チェック（テナント内にユーザーがいない場合のみ）
-  const superAdminAccess = await isSuperAdmin(email);
+  // テナント内にユーザーが存在しない場合 — スーパー管理者なら仮想adminユーザーとして返す
+  const superAdminAccess = await checkSuperAdmin(email);
   if (superAdminAccess) {
     req.isSuperAdminAccess = true;
     return {
       id: `super-admin-dev-${email.replace(/[^a-zA-Z0-9]/g, "-")}`,
       role: "admin",
       email,
-      isSuperAdminAccess: true,
     };
   }
 
