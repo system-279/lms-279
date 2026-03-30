@@ -93,18 +93,19 @@ const FLAG_LABELS: Record<SuspiciousFlag, string> = {
 };
 
 type SuspiciousViewingRecord = {
-  id: string;
+  userId: string;
   userName: string;
-  videoTitle: string;
-  lessonTitle: string;
-  coverageRate: number;
+  videoId: string;
+  lessonTitle: string | null;
+  coverageRatio: number;
   seekCount: number;
   speedViolationCount: number;
-  flags: SuspiciousFlag[];
+  suspiciousFlags: SuspiciousFlag[];
+  updatedAt: string;
 };
 
 type SuspiciousViewingData = {
-  records: SuspiciousViewingRecord[];
+  suspiciousViewings: SuspiciousViewingRecord[];
 };
 
 type AttendanceStatus = "completed" | "force_exited" | "active" | "abandoned";
@@ -601,7 +602,7 @@ function SuspiciousViewingTab() {
 
   if (loading) return <LoadingState />;
   if (error) return <ErrorState message={error} />;
-  if (!data || data.records.length === 0) {
+  if (!data || data.suspiciousViewings.length === 0) {
     return <EmptyState message="不審な視聴パターンは検出されていません" />;
   }
 
@@ -610,7 +611,7 @@ function SuspiciousViewingTab() {
       <TableHeader>
         <TableRow>
           <TableHead>ユーザー名</TableHead>
-          <TableHead>動画 / レッスン名</TableHead>
+          <TableHead>レッスン名</TableHead>
           <TableHead>カバー率</TableHead>
           <TableHead>シーク回数</TableHead>
           <TableHead>倍速違反回数</TableHead>
@@ -618,21 +619,16 @@ function SuspiciousViewingTab() {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {data.records.map((rec) => (
-          <TableRow key={rec.id}>
+        {data.suspiciousViewings.map((rec) => (
+          <TableRow key={`${rec.userId}-${rec.videoId}`}>
             <TableCell className="font-medium">{rec.userName}</TableCell>
-            <TableCell>
-              <div className="space-y-0.5">
-                <p className="text-sm">{rec.videoTitle}</p>
-                <p className="text-xs text-muted-foreground">{rec.lessonTitle}</p>
-              </div>
-            </TableCell>
-            <TableCell>{Math.round(rec.coverageRate)}%</TableCell>
+            <TableCell>{rec.lessonTitle ?? "—"}</TableCell>
+            <TableCell>{Math.round(rec.coverageRatio * 100)}%</TableCell>
             <TableCell>{rec.seekCount}</TableCell>
             <TableCell>{rec.speedViolationCount}</TableCell>
             <TableCell>
               <div className="flex flex-wrap gap-1">
-                {rec.flags.map((flag) => (
+                {rec.suspiciousFlags.map((flag) => (
                   <Badge
                     key={flag}
                     variant="destructive"
