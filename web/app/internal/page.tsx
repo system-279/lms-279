@@ -289,7 +289,7 @@ export default function InternalPortalPage() {
       {/* Header */}
       <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4">
-          <span className="font-semibold">LMS 279 内部ポータル</span>
+          <span className="font-semibold">介護DX college２７９Classroom 内部ポータル</span>
           <Link
             href="/"
             className="text-sm text-muted-foreground hover:text-foreground transition"
@@ -302,7 +302,7 @@ export default function InternalPortalPage() {
       {/* Hero */}
       <section className="border-b bg-card py-10">
         <div className="mx-auto max-w-7xl px-4">
-          <h1 className="text-3xl font-bold">LMS 279 内部ポータル</h1>
+          <h1 className="text-3xl font-bold">介護DX college２７９Classroom 内部ポータル</h1>
           <p className="mt-2 text-muted-foreground">
             システム全体像・画面一覧・運用フロー・主要機能のガイド
           </p>
@@ -563,7 +563,7 @@ export default function InternalPortalPage() {
 
       {/* Footer */}
       <footer className="border-t py-8 text-center text-sm text-muted-foreground">
-        <p>LMS 279 内部ポータル &copy; {new Date().getFullYear()}</p>
+        <p>介護DX college２７９Classroom 内部ポータル &copy; {new Date().getFullYear()}</p>
       </footer>
     </>
   );

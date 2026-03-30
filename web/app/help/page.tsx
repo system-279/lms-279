@@ -54,7 +54,7 @@ export default function HelpPage() {
       {/* Header */}
       <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4">
-          <span className="font-semibold">LMS 279 ヘルプセンター</span>
+          <span className="font-semibold">介護DX college２７９Classroom ヘルプセンター</span>
           <Link
             href="/"
             className="text-sm text-muted-foreground hover:text-foreground transition"
@@ -67,7 +67,7 @@ export default function HelpPage() {
       {/* Hero */}
       <div className="border-b bg-card py-10">
         <div className="mx-auto max-w-7xl px-4">
-          <h1 className="text-3xl font-bold">LMS 279 ヘルプセンター</h1>
+          <h1 className="text-3xl font-bold">介護DX college２７９Classroom ヘルプセンター</h1>
           <p className="mt-2 text-muted-foreground">
             ご利用の役割に応じたヘルプをお選びください。
           </p>
@@ -117,7 +117,7 @@ export default function HelpPage() {
 
       {/* Footer */}
       <footer className="border-t py-8 text-center text-sm text-muted-foreground">
-        <p>LMS 279 &copy; {new Date().getFullYear()}</p>
+        <p>介護DX college２７９Classroom &copy; {new Date().getFullYear()}</p>
       </footer>
     </>
   );

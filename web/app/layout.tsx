@@ -5,7 +5,7 @@ import { AuthFetchProvider } from "../lib/auth-fetch-context";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "LMS 279",
+  title: "介護DX college２７９Classroom",
   description: "株式会社279 つなぐ手 学習管理システム",
   icons: {
     icon: [

@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "内部ポータル - LMS 279",
-  description: "LMS 279 内部向けドキュメント・運用ガイド",
+  title: "内部ポータル - 介護DX college２７９Classroom",
+  description: "介護DX college２７９Classroom 内部向けドキュメント・運用ガイド",
 };
 
 export default function InternalLayout({

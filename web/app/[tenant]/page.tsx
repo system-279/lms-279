@@ -20,7 +20,7 @@ export default function TenantPage() {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
         <div className="rounded-lg border bg-card p-8 text-center max-w-md">
-          <h1 className="text-2xl font-bold mb-4">LMS 279</h1>
+          <h1 className="text-2xl font-bold mb-4">介護DX college２７９Classroom</h1>
           <p className="text-muted-foreground mb-6">
             学習管理システムへようこそ。
           </p>
@@ -53,7 +53,7 @@ export default function TenantPage() {
     <div className="flex min-h-[60vh] items-center justify-center">
       <div className="rounded-lg border bg-card p-8 text-center max-w-md">
         <h1 className="text-2xl font-bold mb-4">
-          LMS 279{isDemo ? " (DEMO)" : ""}
+          介護DX college２７９Classroom{isDemo ? " (DEMO)" : ""}
         </h1>
         <p className="text-muted-foreground mb-6">
           学習管理システムへようこそ。
