@@ -324,6 +324,8 @@ export default function UsersPage() {
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
               CSV形式: <code>email,name,role</code>（ヘッダー行必須、name/roleは任意）
+              <br />
+              <span className="text-xs">※ 値にカンマや改行を含めないでください。上限500行。</span>
             </p>
             <input
               type="file"
