@@ -472,13 +472,19 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
   let sessionsQuery = db.collection(`${basePath}/lesson_sessions`)
     .orderBy("entryAt", "desc") as FirebaseFirestore.Query;
 
+  // 日付フィルタ: JST基準（UTC+9）でUTC境界に変換
+  const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
   const fromStr = typeof from === "string" ? from : undefined;
   const toStr = typeof to === "string" ? to : undefined;
   if (fromStr) {
-    sessionsQuery = sessionsQuery.where("entryAt", ">=", fromStr);
+    // JST日付の開始 = UTC前日15:00
+    const fromUtc = new Date(new Date(`${fromStr}T00:00:00`).getTime() - JST_OFFSET_MS).toISOString();
+    sessionsQuery = sessionsQuery.where("entryAt", ">=", fromUtc);
   }
   if (toStr) {
-    sessionsQuery = sessionsQuery.where("entryAt", "<=", `${toStr}T23:59:59.999Z`);
+    // JST日付の終了 = UTC当日14:59:59.999
+    const toUtc = new Date(new Date(`${toStr}T23:59:59.999`).getTime() - JST_OFFSET_MS).toISOString();
+    sessionsQuery = sessionsQuery.where("entryAt", "<=", toUtc);
   }
 
   const sessionsSnapshot = await sessionsQuery.get();
@@ -555,6 +561,29 @@ router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Requ
   const tenantId = req.params.tenantId as string;
   const sessionId = req.params.sessionId as string;
   const { entryAt, exitAt, quizScore, quizPassed } = req.body;
+
+  // 入力バリデーション
+  const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+  if (entryAt !== undefined && (typeof entryAt !== "string" || !ISO_DATE_REGEX.test(entryAt) || isNaN(Date.parse(entryAt)))) {
+    res.status(400).json({ error: "invalid_entryAt", message: "entryAt must be a valid ISO 8601 UTC datetime" });
+    return;
+  }
+  if (exitAt !== undefined && (typeof exitAt !== "string" || !ISO_DATE_REGEX.test(exitAt) || isNaN(Date.parse(exitAt)))) {
+    res.status(400).json({ error: "invalid_exitAt", message: "exitAt must be a valid ISO 8601 UTC datetime" });
+    return;
+  }
+  if (entryAt !== undefined && exitAt !== undefined && new Date(entryAt) > new Date(exitAt)) {
+    res.status(400).json({ error: "invalid_time_range", message: "entryAt must be before exitAt" });
+    return;
+  }
+  if (quizScore !== undefined && (typeof quizScore !== "number" || !Number.isFinite(quizScore) || quizScore < 0 || quizScore > 100)) {
+    res.status(400).json({ error: "invalid_quizScore", message: "quizScore must be a number between 0 and 100" });
+    return;
+  }
+  if (quizPassed !== undefined && typeof quizPassed !== "boolean") {
+    res.status(400).json({ error: "invalid_quizPassed", message: "quizPassed must be a boolean" });
+    return;
+  }
 
   const basePath = `tenants/${tenantId}`;
   const sessionRef = db.collection(`${basePath}/lesson_sessions`).doc(sessionId);

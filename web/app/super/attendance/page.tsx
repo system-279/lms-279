@@ -58,14 +58,21 @@ type ReportResponse = {
   totalRecords: number;
 };
 
-function formatDateTime(iso: string | null): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString("ja-JP", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+/** ISO UTC文字列をdatetime-local用のローカル時刻文字列に変換 */
+function isoToDatetimeLocal(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${day}T${h}:${min}`;
+}
+
+/** datetime-local値をISO UTC文字列に変換 */
+function datetimeLocalToISO(local: string): string {
+  return new Date(local).toISOString();
 }
 
 function formatTime(iso: string | null): string {
@@ -102,6 +109,7 @@ export default function AttendanceReportPage() {
   const [editScore, setEditScore] = useState("");
   const [editPassed, setEditPassed] = useState("");
   const [editLoading, setEditLoading] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const tableRef = useRef<HTMLDivElement>(null);
 
@@ -134,20 +142,22 @@ export default function AttendanceReportPage() {
 
   const openEdit = (record: AttendanceRecord) => {
     setEditRecord(record);
-    setEditEntryAt(record.entryAt?.slice(0, 16) ?? "");
-    setEditExitAt(record.exitAt?.slice(0, 16) ?? "");
+    setEditEntryAt(isoToDatetimeLocal(record.entryAt));
+    setEditExitAt(isoToDatetimeLocal(record.exitAt));
     setEditScore(record.quizScore?.toString() ?? "");
     setEditPassed(record.quizPassed === null ? "" : record.quizPassed ? "true" : "false");
+    setEditError(null);
     setEditOpen(true);
   };
 
   const handleEdit = async () => {
     if (!editRecord || !selectedTenant) return;
     setEditLoading(true);
+    setEditError(null);
     try {
       const body: Record<string, unknown> = {};
-      if (editEntryAt) body.entryAt = new Date(editEntryAt).toISOString();
-      if (editExitAt) body.exitAt = new Date(editExitAt).toISOString();
+      if (editEntryAt) body.entryAt = datetimeLocalToISO(editEntryAt);
+      if (editExitAt) body.exitAt = datetimeLocalToISO(editExitAt);
       if (editScore !== "") body.quizScore = Number(editScore);
       if (editPassed !== "") body.quizPassed = editPassed === "true";
 
@@ -161,8 +171,8 @@ export default function AttendanceReportPage() {
       );
       setEditOpen(false);
       fetchReport();
-    } catch {
-      // エラーは無視しない
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : "更新に失敗しました");
     } finally {
       setEditLoading(false);
     }
@@ -353,6 +363,9 @@ export default function AttendanceReportPage() {
                   </Select>
                 </div>
               </>
+            )}
+            {editError && (
+              <div className="text-sm text-destructive">{editError}</div>
             )}
           </div>
           <DialogFooter>
