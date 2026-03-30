@@ -128,8 +128,13 @@ router.patch("/lesson-sessions/:sessionId/force-exit", requireUser, async (req: 
     return;
   }
 
-  const exited = await forceExitSession(ds, sessionId, reason);
-  res.json({ session: formatSession(exited) });
+  try {
+    const exited = await forceExitSession(ds, sessionId, reason);
+    res.json({ session: formatSession(exited) });
+  } catch (err) {
+    console.error(`Failed to force-exit session ${sessionId}:`, err);
+    res.status(500).json({ error: "force_exit_failed", message: "セッション終了処理に失敗しました" });
+  }
 });
 
 function formatSession(session: LessonSession) {

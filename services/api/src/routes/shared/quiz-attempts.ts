@@ -286,7 +286,11 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
   const activeSession = await ds.getActiveLessonSession(userId, quiz.lessonId);
   if (activeSession) {
     if (!validateSessionDeadline(activeSession)) {
-      await forceExitSession(ds, activeSession.id, "time_limit");
+      try {
+        await forceExitSession(ds, activeSession.id, "time_limit");
+      } catch (err) {
+        console.error(`Failed to force-exit session (time_limit): ${activeSession.id}`, err);
+      }
       res.status(403).json({
         error: "session_time_exceeded",
         message: "入室から2時間が経過したため、セッションが終了しました",

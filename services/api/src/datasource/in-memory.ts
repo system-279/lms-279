@@ -949,7 +949,7 @@ export class InMemoryDataSource implements DataSource {
     return this.lessonSessions.filter((s) => s.courseId === courseId);
   }
 
-  async resetLessonDataForUser(userId: string, lessonId: string, courseId: string): Promise<void> {
+  async resetLessonDataForUser(userId: string, lessonId: string, _courseId: string): Promise<void> {
     this.throwIfReadOnly();
 
     // 1. video_analytics: lessonId → videoId → 削除
@@ -974,18 +974,5 @@ export class InMemoryDataSource implements DataSource {
     // 4. user_progress: 削除
     const progressKey = `${userId}_${lessonId}`;
     this.userProgress.delete(progressKey);
-
-    // 5. course_progress: 再計算
-    const allLessonProgress = await this.getUserProgressByCourse(userId, courseId);
-    const completedCount = allLessonProgress.filter((p) => p.quizPassed).length;
-    const course = this.courses.find((c) => c.id === courseId);
-    const totalLessons = course?.lessonOrder?.length ?? 0;
-    const progressRatio = totalLessons > 0 ? completedCount / totalLessons : 0;
-    await this.upsertCourseProgress(userId, courseId, {
-      completedLessons: completedCount,
-      totalLessons,
-      progressRatio,
-      isCompleted: totalLessons > 0 && completedCount >= totalLessons,
-    });
   }
 }
