@@ -14,7 +14,8 @@
     "lint:fix": "eslint . --fix",
     "type-check": "npm run type-check --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test -w @lms-279/api -w @lms-279/notification -w @lms-279/web",
+    "test:e2e": "npm run test -w @lms-279/e2e"
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",
