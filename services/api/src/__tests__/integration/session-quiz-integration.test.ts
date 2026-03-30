@@ -298,4 +298,56 @@ describe("Quiz submission × Session integration", () => {
     expect(activeRes.status).toBe(404);
     expect(activeRes.body.error).toBe("session_expired");
   });
+
+  // =========================================================
+  // 8. maxAttempts到達 + 不合格 → セッションが強制退室される
+  // =========================================================
+  it("maxAttempts到達で不合格の場合セッションがforce_exitedになる", async () => {
+    // maxAttempts=1のクイズを作成
+    const quiz1 = await ds.createQuiz({
+      lessonId,
+      courseId: (await ds.getCourses())[0].id,
+      title: "1回限りテスト",
+      passThreshold: 100, // 100点必要（不正解で必ず不合格）
+      maxAttempts: 1,
+      timeLimitSec: null,
+      randomizeQuestions: false,
+      randomizeAnswers: false,
+      requireVideoCompletion: false,
+      questions: testQuestions,
+    });
+
+    // セッション作成
+    const sessionRes = await studentRequest
+      .post("/lesson-sessions")
+      .send({
+        lessonId,
+        videoId: "dummy-video",
+        sessionToken: "test-token-max-attempts",
+      });
+    expect(sessionRes.status).toBe(201);
+    const sessionId = sessionRes.body.session.id;
+
+    // attempt作成
+    const attemptRes = await studentRequest
+      .post(`/quizzes/${quiz1.id}/attempts`)
+      .send({});
+    expect(attemptRes.status).toBe(201);
+
+    // 不正解で提出（passThreshold=100なので不合格）
+    const submitRes = await studentRequest
+      .patch(`/quiz-attempts/${attemptRes.body.attempt.id}`)
+      .send({
+        answers: { q1: ["q1-b"] }, // 不正解を選択
+      });
+
+    expect(submitRes.status).toBe(200);
+    expect(submitRes.body.attempt.isPassed).toBe(false);
+
+    // セッションがforce_exitedになっていることを確認
+    const session = await ds.getLessonSession(sessionId);
+    expect(session?.status).toBe("force_exited");
+    expect(session?.exitReason).toBe("max_attempts_failed");
+    expect(session?.exitAt).toBeTruthy();
+  });
 });
