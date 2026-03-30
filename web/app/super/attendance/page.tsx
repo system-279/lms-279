@@ -88,6 +88,7 @@ const EXIT_REASON_LABELS: Record<string, string> = {
   pause_timeout: "一時停止超過",
   time_limit: "時間制限",
   browser_close: "ブラウザ終了",
+  max_attempts_failed: "受験上限(不合格)",
 };
 
 export default function AttendanceReportPage() {

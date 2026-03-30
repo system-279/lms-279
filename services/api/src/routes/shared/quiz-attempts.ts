@@ -350,6 +350,13 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
         console.error(`Failed to complete session for attempt ${attemptId}`);
       }
     }
+  } else if (activeSession && quiz.maxAttempts > 0 && attempt.attemptNumber >= quiz.maxAttempts) {
+    // 不合格 + 受験上限到達: セッションを強制退室（残留防止）
+    try {
+      await forceExitSession(ds, activeSession.id, "max_attempts_failed");
+    } catch {
+      console.error(`Failed to force-exit session for max attempts: ${attemptId}`);
+    }
   }
 
   res.json({
