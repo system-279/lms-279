@@ -109,7 +109,7 @@ type SuspiciousViewingData = {
 };
 
 type AttendanceStatus = "completed" | "force_exited" | "active" | "abandoned";
-type ExitReason = "quiz_submitted" | "pause_timeout" | "time_limit" | "browser_close";
+type ExitReason = "quiz_submitted" | "pause_timeout" | "time_limit" | "browser_close" | "max_attempts_failed";
 
 const ATTENDANCE_STATUS_LABELS: Record<AttendanceStatus, string> = {
   completed: "完了",
@@ -130,6 +130,7 @@ const EXIT_REASON_LABELS: Record<ExitReason, string> = {
   pause_timeout: "一時停止超過",
   time_limit: "時間超過",
   browser_close: "ブラウザ終了",
+  max_attempts_failed: "受験上限(不合格)",
 };
 
 type AttendanceRecord = {

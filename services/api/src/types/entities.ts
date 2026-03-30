@@ -280,7 +280,7 @@ export interface CourseProgress {
 
 // TODO: "abandoned" はブラウザ終了検出（beforeunload/sendBeacon）で設定予定
 export type LessonSessionStatus = "active" | "completed" | "force_exited" | "abandoned";
-export type SessionExitReason = "quiz_submitted" | "pause_timeout" | "time_limit" | "browser_close";
+export type SessionExitReason = "quiz_submitted" | "pause_timeout" | "time_limit" | "browser_close" | "max_attempts_failed";
 
 export interface LessonSession {
   id: string;
