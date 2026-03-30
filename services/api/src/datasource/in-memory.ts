@@ -948,4 +948,44 @@ export class InMemoryDataSource implements DataSource {
   async getLessonSessionsByCourse(courseId: string): Promise<LessonSession[]> {
     return this.lessonSessions.filter((s) => s.courseId === courseId);
   }
+
+  async resetLessonDataForUser(userId: string, lessonId: string, courseId: string): Promise<void> {
+    this.throwIfReadOnly();
+
+    // 1. video_analytics: lessonId → videoId → 削除
+    const video = await this.getVideoByLessonId(lessonId);
+    if (video) {
+      const analyticsKey = `${userId}_${video.id}`;
+      this.videoAnalytics.delete(analyticsKey);
+      // 2. video_events: 該当ユーザー+動画のイベント削除
+      this.videoEvents = this.videoEvents.filter(
+        (e) => !(e.userId === userId && e.videoId === video.id)
+      );
+    }
+
+    // 3. quiz_attempts: lessonId → quizId → 削除
+    const quiz = await this.getQuizByLessonId(lessonId);
+    if (quiz) {
+      this.quizAttempts = this.quizAttempts.filter(
+        (a) => !(a.userId === userId && a.quizId === quiz.id)
+      );
+    }
+
+    // 4. user_progress: 削除
+    const progressKey = `${userId}_${lessonId}`;
+    this.userProgress.delete(progressKey);
+
+    // 5. course_progress: 再計算
+    const allLessonProgress = await this.getUserProgressByCourse(userId, courseId);
+    const completedCount = allLessonProgress.filter((p) => p.quizPassed).length;
+    const course = this.courses.find((c) => c.id === courseId);
+    const totalLessons = course?.lessonOrder?.length ?? 0;
+    const progressRatio = totalLessons > 0 ? completedCount / totalLessons : 0;
+    await this.upsertCourseProgress(userId, courseId, {
+      completedLessons: completedCount,
+      totalLessons,
+      progressRatio,
+      isCompleted: totalLessons > 0 && completedCount >= totalLessons,
+    });
+  }
 }

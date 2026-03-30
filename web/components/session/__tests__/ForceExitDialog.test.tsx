@@ -50,9 +50,7 @@ describe("ForceExitDialog", () => {
 
     expect(screen.getByText("強制退室")).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "15分以上一時停止したため、強制退室となりました。"
-      )
+      screen.getByText(/15分以上一時停止したため、強制退室となりました。/)
     ).toBeInTheDocument();
   });
 
@@ -61,9 +59,7 @@ describe("ForceExitDialog", () => {
 
     expect(screen.getByText("強制退室")).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "入室から2時間が経過したため、強制退室となりました。"
-      )
+      screen.getByText(/入室から2時間が経過したため、強制退室となりました。/)
     ).toBeInTheDocument();
   });
 

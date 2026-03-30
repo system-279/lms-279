@@ -350,4 +350,105 @@ describe("Quiz submission × Session integration", () => {
     expect(session?.exitReason).toBe("max_attempts_failed");
     expect(session?.exitAt).toBeTruthy();
   });
+
+  // =========================================================
+  // 9. 強制退室で学習データが完全リセットされる
+  // =========================================================
+  it("強制退室後に動画視聴・テスト回答・進捗がリセットされる", async () => {
+    const courseId = (await ds.getCourses())[0].id;
+
+    // 動画視聴実績を作成
+    const video = await ds.getVideoByLessonId(lessonId);
+    expect(video).toBeTruthy();
+    await ds.upsertVideoAnalytics(studentUserId, video!.id, {
+      coverageRatio: 0.8,
+      totalWatchTimeSec: 240,
+      isComplete: false,
+      watchedRanges: [{ start: 0, end: 240 }],
+    });
+
+    // テスト回答を作成
+    const attemptRes = await studentRequest
+      .post(`/quizzes/${quizId}/attempts`)
+      .send({});
+    expect(attemptRes.status).toBe(201);
+
+    // 進捗データを作成
+    await ds.upsertUserProgress(studentUserId, lessonId, {
+      courseId,
+      videoCompleted: false,
+      quizPassed: false,
+      quizBestScore: null,
+    });
+
+    // セッション作成
+    const sessionRes = await studentRequest
+      .post("/lesson-sessions")
+      .send({
+        lessonId,
+        videoId: "dummy-video",
+        sessionToken: "test-token-reset",
+      });
+    expect(sessionRes.status).toBe(201);
+    const sessionId = sessionRes.body.session.id;
+
+    // セッションを期限切れにして強制退室トリガー
+    await ds.updateLessonSession(sessionId, {
+      deadlineAt: new Date(Date.now() - 1000).toISOString(),
+    });
+
+    // テスト提出 → 403（期限切れ）+ 強制退室 + リセット
+    const submitRes = await studentRequest
+      .patch(`/quiz-attempts/${attemptRes.body.attempt.id}`)
+      .send({ answers: { q1: ["q1-a"] } });
+    expect(submitRes.status).toBe(403);
+
+    // 検証: 動画視聴実績がリセットされている
+    const analytics = await ds.getVideoAnalytics(studentUserId, video!.id);
+    expect(analytics).toBeNull();
+
+    // 検証: テスト回答がリセットされている
+    const attempts = await ds.getQuizAttempts({ quizId, userId: studentUserId });
+    expect(attempts).toHaveLength(0);
+
+    // 検証: レッスン進捗がリセットされている
+    const progress = await ds.getUserProgress(studentUserId, lessonId);
+    expect(progress).toBeNull();
+  });
+
+  // =========================================================
+  // 10. 強制退室後に白紙状態から再開できる
+  // =========================================================
+  it("強制退室後に新セッションで白紙状態から再開できる", async () => {
+    // セッション作成 → 即座に期限切れ → 強制退室
+    const sessionRes = await studentRequest
+      .post("/lesson-sessions")
+      .send({
+        lessonId,
+        videoId: "dummy-video",
+        sessionToken: "test-token-restart-1",
+      });
+    expect(sessionRes.status).toBe(201);
+    const sessionId = sessionRes.body.session.id;
+
+    await ds.updateLessonSession(sessionId, {
+      deadlineAt: new Date(Date.now() - 1000).toISOString(),
+    });
+
+    // 期限切れセッションの復帰を試みる → 404（セッション期限切れ）
+    const activeRes = await studentRequest
+      .get(`/lesson-sessions/active?lessonId=${lessonId}`);
+    expect(activeRes.status).toBe(404);
+
+    // 新セッション作成 → 成功
+    const newSessionRes = await studentRequest
+      .post("/lesson-sessions")
+      .send({
+        lessonId,
+        videoId: "dummy-video",
+        sessionToken: "test-token-restart-2",
+      });
+    expect(newSessionRes.status).toBe(201);
+    expect(newSessionRes.body.session.status).toBe("active");
+  });
 });
