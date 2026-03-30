@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isoToDatetimeLocal, datetimeLocalToISO } from "@/lib/tz-helpers";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -58,22 +59,6 @@ type ReportResponse = {
   totalRecords: number;
 };
 
-/** ISO UTC文字列をdatetime-local用のローカル時刻文字列に変換 */
-function isoToDatetimeLocal(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  const h = String(d.getHours()).padStart(2, "0");
-  const min = String(d.getMinutes()).padStart(2, "0");
-  return `${y}-${m}-${day}T${h}:${min}`;
-}
-
-/** datetime-local値をISO UTC文字列に変換 */
-function datetimeLocalToISO(local: string): string {
-  return new Date(local).toISOString();
-}
 
 function formatTime(iso: string | null): string {
   if (!iso) return "—";
