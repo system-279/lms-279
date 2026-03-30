@@ -310,17 +310,17 @@ router.post("/admin/users/import", requireAdmin, async (req: Request, res: Respo
     }
 
     try {
+      // allowed_emailsを先に追加（冪等: 既存なら何もしない）
+      const isAllowed = await ds.isEmailAllowed(email);
+      if (!isAllowed) {
+        await ds.createAllowedEmail({ email, note: "CSV import" });
+      }
+
       const user = await ds.createUser({
         email,
         name,
         role: role as "admin" | "teacher" | "student",
       });
-
-      // allowed_emailsにも自動追加
-      const isAllowed = await ds.isEmailAllowed(email);
-      if (!isAllowed) {
-        await ds.createAllowedEmail({ email, note: "CSV import" });
-      }
 
       results.created.push({ email: user.email!, name: user.name, role: user.role });
     } catch {
