@@ -131,7 +131,7 @@ function TenantLayoutInner({ children }: { children: React.ReactNode }) {
             href={`/${tenantId}`}
             className={`font-semibold ${isDemo ? "text-blue-600" : ""}`}
           >
-            LMS 279{isDemo ? " (DEMO)" : ""}
+            介護DX college２７９Classroom{isDemo ? " (DEMO)" : ""}
           </Link>
           {tenantName && (
             <span className="text-sm text-muted-foreground border-l pl-4">

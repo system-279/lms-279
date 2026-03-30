@@ -299,7 +299,7 @@ export default function RegisterPage() {
         <CardHeader>
           <CardTitle>組織を登録</CardTitle>
           <CardDescription>
-            LMS 279を利用する組織を登録します。
+            介護DX college２７９Classroomを利用する組織を登録します。
             <br />
             登録後、すぐに利用を開始できます。
           </CardDescription>

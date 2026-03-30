@@ -14,6 +14,7 @@ import { errorHandler, notFoundHandler } from "./middleware/error-handler.js";
 import { createSharedRouter } from "./routes/shared/index.js";
 import { tenantsRouter } from "./routes/tenants.js";
 import { superAdminRouter } from "./routes/super-admin.js";
+import { helpRoleRouter } from "./routes/help-role.js";
 import { logger } from "./utils/logger.js";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -122,6 +123,9 @@ app.use("/api/v2/tenants", authLimiter, tenantsRouter);
 
 // スーパー管理者API
 app.use("/api/v2/super", superAdminRouter);
+
+// ヘルプロール判定API（テナントコンテキスト不要）
+app.use("/api/v2/help", helpRoleRouter);
 
 // テナントスコープAPI: /api/v2/:tenant/*
 app.use(

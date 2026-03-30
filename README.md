@@ -1,6 +1,6 @@
-# LMS-279
+# 介護DX college２７９Classroom
 
-動画視聴管理・テスト機能を統合したLMS（Learning Management System）。
+動画視聴管理・テスト機能を統合した学習管理システム。
 
 ## リンク
 

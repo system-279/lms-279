@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "ヘルプセンター - LMS 279",
-  description: "LMS 279の使い方ガイド",
+  title: "ヘルプセンター - 介護DX college２７９Classroom",
+  description: "介護DX college２７９Classroomの使い方ガイド",
 };
 
 export default function HelpLayout({

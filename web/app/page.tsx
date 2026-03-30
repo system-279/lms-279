@@ -27,7 +27,7 @@ export default function HomePage() {
     return (
       <main className="min-h-screen bg-background flex items-center justify-center">
         <section className="rounded-lg border bg-card p-8 text-center max-w-md">
-          <h1 className="text-2xl font-bold mb-4">LMS 279</h1>
+          <h1 className="text-2xl font-bold mb-4">介護DX college２７９Classroom</h1>
           <p className="text-muted-foreground mb-6">
             学習管理システムへようこそ。
           </p>
@@ -69,7 +69,7 @@ export default function HomePage() {
   return (
     <main className="min-h-screen bg-background flex items-center justify-center">
       <section className="rounded-lg border bg-card p-8 text-center max-w-md">
-        <h1 className="text-2xl font-bold mb-4">LMS 279</h1>
+        <h1 className="text-2xl font-bold mb-4">介護DX college２７９Classroom</h1>
         <p className="text-muted-foreground mb-6">
           学習管理システムへようこそ。
         </p>

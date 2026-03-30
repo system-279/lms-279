@@ -6,7 +6,7 @@ export const studentSections: HelpSection[] = [
     title: "はじめに",
     roles: ["student"],
     keywords: ["ログイン", "開始", "Google", "アカウント", "始め方"],
-    description: "LMS 279へのログイン方法と基本的な使い方を説明します。",
+    description: "介護DX college２７９Classroomへのログイン方法と基本的な使い方を説明します。",
     screenshots: [
       {
         src: "/help/screenshots/login.png",
@@ -16,8 +16,8 @@ export const studentSections: HelpSection[] = [
     ],
     steps: [
       {
-        title: "LMS 279にアクセスする",
-        detail: "ブラウザでLMS 279のURLを開きます。",
+        title: "介護DX college２７９Classroomにアクセスする",
+        detail: "ブラウザで介護DX college２７９ClassroomのURLを開きます。",
       },
       {
         title: "「Googleでログイン」をクリック",

@@ -117,7 +117,7 @@ export function RoleHelpPage({
 
       {/* Footer */}
       <footer className="border-t py-8 text-center text-sm text-muted-foreground">
-        <p>LMS 279 &copy; {new Date().getFullYear()}</p>
+        <p>介護DX college２７９Classroom &copy; {new Date().getFullYear()}</p>
       </footer>
     </>
   );
