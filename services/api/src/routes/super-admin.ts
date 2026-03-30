@@ -446,4 +446,142 @@ router.delete("/admins/:email", async (req: Request, res: Response) => {
   });
 });
 
+// ============================================================
+// テナント別出席・テスト結果レポート
+// ============================================================
+
+/**
+ * GET /tenants/:tenantId/attendance-report
+ * テナント内の受講者出席・テスト結果一覧を取得
+ */
+router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Response) => {
+  const db = getFirestore();
+  const tenantId = req.params.tenantId as string;
+  const { from, to } = req.query;
+
+  // テナント存在確認
+  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+  if (!tenantDoc.exists) {
+    res.status(404).json({ error: "not_found", message: "Tenant not found" });
+    return;
+  }
+
+  const basePath = `tenants/${tenantId}`;
+
+  // セッション一覧取得
+  let sessionsQuery = db.collection(`${basePath}/lesson_sessions`)
+    .orderBy("entryAt", "desc") as FirebaseFirestore.Query;
+
+  const fromStr = typeof from === "string" ? from : undefined;
+  const toStr = typeof to === "string" ? to : undefined;
+  if (fromStr) {
+    sessionsQuery = sessionsQuery.where("entryAt", ">=", fromStr);
+  }
+  if (toStr) {
+    sessionsQuery = sessionsQuery.where("entryAt", "<=", `${toStr}T23:59:59.999Z`);
+  }
+
+  const sessionsSnapshot = await sessionsQuery.get();
+
+  // ユーザー情報を一括取得
+  const usersSnapshot = await db.collection(`${basePath}/users`).get();
+  const usersMap = new Map<string, { name: string | null; email: string | null }>();
+  for (const doc of usersSnapshot.docs) {
+    const data = doc.data();
+    usersMap.set(doc.id, { name: data.name ?? null, email: data.email ?? null });
+  }
+
+  // テスト受験結果を一括取得（提出済みのみ）
+  const attemptsSnapshot = await db.collection(`${basePath}/quiz_attempts`)
+    .where("status", "==", "submitted")
+    .get();
+  const attemptsMap = new Map<string, { score: number | null; isPassed: boolean | null; submittedAt: string | null }>();
+  for (const doc of attemptsSnapshot.docs) {
+    const data = doc.data();
+    attemptsMap.set(doc.id, {
+      score: data.score ?? null,
+      isPassed: data.isPassed ?? null,
+      submittedAt: data.submittedAt?.toDate?.().toISOString?.() ?? data.submittedAt ?? null,
+    });
+  }
+
+  // レッスン名を取得
+  const lessonsSnapshot = await db.collection(`${basePath}/lessons`).get();
+  const lessonsMap = new Map<string, string>();
+  for (const doc of lessonsSnapshot.docs) {
+    lessonsMap.set(doc.id, doc.data().title ?? doc.id);
+  }
+
+  // レポート行を構築
+  const records = sessionsSnapshot.docs.map((doc) => {
+    const data = doc.data();
+    const user = usersMap.get(data.userId);
+    const attempt = data.quizAttemptId ? attemptsMap.get(data.quizAttemptId) : null;
+
+    return {
+      id: doc.id,
+      userId: data.userId,
+      userName: user?.name ?? null,
+      userEmail: user?.email ?? null,
+      lessonId: data.lessonId,
+      lessonTitle: lessonsMap.get(data.lessonId) ?? data.lessonId,
+      date: data.entryAt?.toDate?.().toISOString?.()?.split("T")[0]
+        ?? (typeof data.entryAt === "string" ? data.entryAt.split("T")[0] : null),
+      entryAt: data.entryAt?.toDate?.().toISOString?.() ?? data.entryAt ?? null,
+      exitAt: data.exitAt?.toDate?.().toISOString?.() ?? data.exitAt ?? null,
+      exitReason: data.exitReason ?? null,
+      status: data.status,
+      quizAttemptId: data.quizAttemptId ?? null,
+      quizScore: attempt?.score ?? null,
+      quizPassed: attempt?.isPassed ?? null,
+      quizSubmittedAt: attempt?.submittedAt ?? null,
+    };
+  });
+
+  res.json({
+    tenantId,
+    tenantName: tenantDoc.data()?.name ?? tenantId,
+    records,
+    totalRecords: records.length,
+  });
+});
+
+/**
+ * PATCH /tenants/:tenantId/attendance-report/:sessionId
+ * 出席レコードの手動編集（入退室打刻・テスト結果の補正）
+ */
+router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Request, res: Response) => {
+  const db = getFirestore();
+  const tenantId = req.params.tenantId as string;
+  const sessionId = req.params.sessionId as string;
+  const { entryAt, exitAt, quizScore, quizPassed } = req.body;
+
+  const basePath = `tenants/${tenantId}`;
+  const sessionRef = db.collection(`${basePath}/lesson_sessions`).doc(sessionId);
+  const sessionDoc = await sessionRef.get();
+
+  if (!sessionDoc.exists) {
+    res.status(404).json({ error: "not_found", message: "Session not found" });
+    return;
+  }
+
+  // セッション更新
+  const sessionUpdate: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+  if (entryAt !== undefined) sessionUpdate.entryAt = entryAt;
+  if (exitAt !== undefined) sessionUpdate.exitAt = exitAt;
+  await sessionRef.update(sessionUpdate);
+
+  // テスト結果更新（quizAttemptIdがある場合）
+  const quizAttemptId = sessionDoc.data()?.quizAttemptId;
+  if (quizAttemptId && (quizScore !== undefined || quizPassed !== undefined)) {
+    const attemptRef = db.collection(`${basePath}/quiz_attempts`).doc(quizAttemptId);
+    const attemptUpdate: Record<string, unknown> = {};
+    if (quizScore !== undefined) attemptUpdate.score = quizScore;
+    if (quizPassed !== undefined) attemptUpdate.isPassed = quizPassed;
+    await attemptRef.update(attemptUpdate);
+  }
+
+  res.json({ message: "updated" });
+});
+
 export const superAdminRouter = router;
