@@ -63,6 +63,17 @@ export default function UsersPage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // CSV import dialog
+  const [importOpen, setImportOpen] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<{
+    summary: { total: number; created: number; skipped: number; errors: number };
+    created: { email: string; name: string | null; role: string }[];
+    skipped: { email: string; reason: string }[];
+    errors: { line: number; email?: string; reason: string }[];
+  } | null>(null);
+
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -112,6 +123,28 @@ export default function UsersPage() {
     setDeleteOpen(true);
   };
 
+  const handleCsvImport = async (file: File) => {
+    setImportLoading(true);
+    setImportError(null);
+    setImportResult(null);
+    try {
+      const csv = await file.text();
+      const data = await authFetch<typeof importResult>("/api/v1/admin/users/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csv }),
+      });
+      setImportResult(data);
+      if (data && data.summary.created > 0) {
+        fetchUsers();
+      }
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : "インポートに失敗しました");
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!deletingUser) return;
     setDeleteLoading(true);
@@ -134,17 +167,29 @@ export default function UsersPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">ユーザー管理</h1>
-        <Button
-          onClick={() => {
-            setCreateName("");
-            setCreateEmail("");
-            setCreateRole("student");
-            setCreateError(null);
-            setCreateOpen(true);
-          }}
-        >
-          新規作成
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => {
+              setImportError(null);
+              setImportResult(null);
+              setImportOpen(true);
+            }}
+          >
+            CSVインポート
+          </Button>
+          <Button
+            onClick={() => {
+              setCreateName("");
+              setCreateEmail("");
+              setCreateRole("student");
+              setCreateError(null);
+              setCreateOpen(true);
+            }}
+          >
+            新規作成
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -266,6 +311,70 @@ export default function UsersPage() {
             </Button>
             <Button variant="destructive" onClick={handleDelete} disabled={deleteLoading}>
               {deleteLoading ? "削除中..." : "削除"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* CSVインポートダイアログ */}
+      <Dialog open={importOpen} onOpenChange={setImportOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>CSVインポート</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              CSV形式: <code>email,name,role</code>（ヘッダー行必須、name/roleは任意）
+            </p>
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              className="block w-full text-sm file:mr-4 file:rounded file:border-0 file:bg-primary/10 file:px-4 file:py-2 file:text-sm file:font-medium hover:file:bg-primary/20"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleCsvImport(file);
+              }}
+              disabled={importLoading}
+            />
+            {importLoading && (
+              <div className="text-sm text-muted-foreground">インポート中...</div>
+            )}
+            {importError && (
+              <div className="text-sm text-destructive">{importError}</div>
+            )}
+            {importResult && (
+              <div className="space-y-2 text-sm">
+                <div className="rounded-md bg-muted p-3 space-y-1">
+                  <div>合計: {importResult.summary.total}件</div>
+                  <div className="text-green-600">作成: {importResult.summary.created}件</div>
+                  <div className="text-yellow-600">スキップ: {importResult.summary.skipped}件</div>
+                  <div className="text-destructive">エラー: {importResult.summary.errors}件</div>
+                </div>
+                {importResult.errors.length > 0 && (
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-destructive">エラー詳細</summary>
+                    <ul className="mt-1 space-y-0.5 pl-4">
+                      {importResult.errors.map((err, i) => (
+                        <li key={i}>行{err.line}: {err.email ?? "不明"} — {err.reason}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+                {importResult.skipped.length > 0 && (
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-yellow-600">スキップ詳細</summary>
+                    <ul className="mt-1 space-y-0.5 pl-4">
+                      {importResult.skipped.map((s, i) => (
+                        <li key={i}>{s.email} — 既存ユーザー</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setImportOpen(false)}>
+              閉じる
             </Button>
           </DialogFooter>
         </DialogContent>
