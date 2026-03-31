@@ -920,6 +920,19 @@ export class InMemoryDataSource implements DataSource {
     return session;
   }
 
+  async getOrCreateLessonSession(
+    userId: string, lessonId: string,
+    data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">
+  ): Promise<{ session: LessonSession; created: boolean }> {
+    this.throwIfReadOnly();
+    const existing = await this.getActiveLessonSession(userId, lessonId);
+    if (existing) {
+      return { session: existing, created: false };
+    }
+    const session = await this.createLessonSession(data);
+    return { session, created: true };
+  }
+
   async getLessonSession(sessionId: string): Promise<LessonSession | null> {
     return this.lessonSessions.find((s) => s.id === sessionId) ?? null;
   }

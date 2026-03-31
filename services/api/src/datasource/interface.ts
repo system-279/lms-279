@@ -171,6 +171,10 @@ export interface DataSource {
 
   // Lesson Sessions (Attendance)
   createLessonSession(data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">): Promise<LessonSession>;
+  getOrCreateLessonSession(
+    userId: string, lessonId: string,
+    data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">
+  ): Promise<{ session: LessonSession; created: boolean }>;
   getLessonSession(sessionId: string): Promise<LessonSession | null>;
   getActiveLessonSession(userId: string, lessonId: string): Promise<LessonSession | null>;
   updateLessonSession(sessionId: string, data: Partial<Omit<LessonSession, "id" | "createdAt">>): Promise<LessonSession | null>;
