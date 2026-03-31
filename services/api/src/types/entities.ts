@@ -293,9 +293,9 @@ export interface LessonSession {
   exitAt: string | null;                  // 退室打刻（テスト送信 or 強制退室時）
   exitReason: SessionExitReason | null;
   deadlineAt: string;                     // entryAt + 2時間
-  pauseStartedAt: string | null;        // TODO: video-eventsルート拡張で更新予定
-  longestPauseSec: number;              // TODO: pause検知サーバーサイドで更新予定
-  sessionVideoCompleted: boolean;       // TODO: video-eventsルートでセッション内完了判定時に更新予定
+  pauseStartedAt: string | null;
+  longestPauseSec: number;
+  sessionVideoCompleted: boolean;
   quizAttemptId: string | null;
   createdAt: string;
   updatedAt: string;
