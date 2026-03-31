@@ -712,6 +712,50 @@ export class FirestoreDataSource implements DataSource {
     return this.toVideoAnalytics(docId, updated.data()!);
   }
 
+  async computeAndUpsertVideoAnalytics(
+    userId: string, videoId: string,
+    compute: (current: VideoAnalytics | null) => Partial<Omit<VideoAnalytics, "id" | "videoId" | "userId">>
+  ): Promise<VideoAnalytics> {
+    const docId = `${userId}_${videoId}`;
+    const docRef = this.collection("video_analytics").doc(docId);
+
+    return this.db.runTransaction(async (tx) => {
+      const doc = await tx.get(docRef);
+      const current = doc.exists ? this.toVideoAnalytics(docId, doc.data()!) : null;
+      const update = compute(current);
+      const now = new Date();
+
+      if (doc.exists) {
+        // undefinedをフィルタリング（Firestoreはundefined値を拒否するため）
+        const filtered: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(update)) {
+          if (value !== undefined) filtered[key] = value;
+        }
+        filtered.updatedAt = now;
+        tx.set(docRef, filtered, { merge: true });
+        return this.toVideoAnalytics(docId, { ...doc.data()!, ...filtered });
+      } else {
+        const fullData = {
+          videoId,
+          userId,
+          watchedRanges: [],
+          totalWatchTimeSec: 0,
+          coverageRatio: 0,
+          isComplete: false,
+          seekCount: 0,
+          pauseCount: 0,
+          totalPauseDurationSec: 0,
+          speedViolationCount: 0,
+          suspiciousFlags: [],
+          ...update,
+          updatedAt: now,
+        };
+        tx.set(docRef, fullData);
+        return this.toVideoAnalytics(docId, fullData);
+      }
+    });
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private toVideoAnalytics(id: string, data: any): VideoAnalytics {
     return {

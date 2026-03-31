@@ -219,21 +219,28 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
     }
   }
 
-  // 4. 現在のanalytics取得
-  const currentAnalytics = await ds.getVideoAnalytics(userId, videoId);
+  // 4-7. アトミックにanalytics読み取り→集計→書き込み（ロストアップデート防止）
+  let updatedAnalytics;
+  try {
+    updatedAnalytics = await ds.computeAndUpsertVideoAnalytics(userId, videoId, (currentAnalytics) => {
+      const analyticsUpdate = processVideoEvents(savedEvents, currentAnalytics, video.durationSec);
+      const coverageRatio = analyticsUpdate.coverageRatio ?? 0;
+      const isComplete = coverageRatio >= video.requiredWatchRatio;
+      return { ...analyticsUpdate, isComplete };
+    });
+  } catch (err) {
+    logger.error("Failed to update video analytics", {
+      error: err instanceof Error ? err : String(err),
+      userId, videoId, eventCount: savedEvents.length,
+    });
+    res.status(500).json({
+      error: "analytics_update_failed",
+      message: "イベントは保存されましたが、分析データの更新に失敗しました",
+    });
+    return;
+  }
 
-  // 5. processVideoEvents() で集計
-  const analyticsUpdate = processVideoEvents(savedEvents, currentAnalytics, video.durationSec);
-
-  // 6. isComplete判定: coverageRatio >= video.requiredWatchRatio
-  const coverageRatio = analyticsUpdate.coverageRatio ?? 0;
-  const isComplete = coverageRatio >= video.requiredWatchRatio;
-
-  // 7. dataSource.upsertVideoAnalytics() で更新
-  const updatedAnalytics = await ds.upsertVideoAnalytics(userId, videoId, {
-    ...analyticsUpdate,
-    isComplete,
-  });
+  const isComplete = updatedAnalytics.isComplete;
 
   // 8. 進捗更新: isComplete=true になった場合
   if (isComplete) {

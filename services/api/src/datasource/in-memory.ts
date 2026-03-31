@@ -723,6 +723,16 @@ export class InMemoryDataSource implements DataSource {
     return analytics;
   }
 
+  async computeAndUpsertVideoAnalytics(
+    userId: string, videoId: string,
+    compute: (current: VideoAnalytics | null) => Partial<Omit<VideoAnalytics, "id" | "videoId" | "userId">>
+  ): Promise<VideoAnalytics> {
+    this.throwIfReadOnly();
+    const current = await this.getVideoAnalytics(userId, videoId);
+    const update = compute(current);
+    return this.upsertVideoAnalytics(userId, videoId, update);
+  }
+
   // Quizzes
   async getQuizzes(filter?: QuizFilter): Promise<Quiz[]> {
     let result = [...this.quizzes];
