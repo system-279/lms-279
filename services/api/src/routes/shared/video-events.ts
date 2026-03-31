@@ -174,6 +174,12 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
         quizPassed: quizPassed ? true : undefined,
       });
     }
+
+    // セッション内動画視聴完了フラグを更新
+    const activeSession = await ds.getActiveLessonSession(userId, video.lessonId);
+    if (activeSession && !activeSession.sessionVideoCompleted) {
+      await ds.updateLessonSession(activeSession.id, { sessionVideoCompleted: true });
+    }
   }
 
   // 9. レスポンス
