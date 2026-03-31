@@ -5,7 +5,7 @@ import { VideoControls } from "./VideoControls";
 import { VideoEventTracker } from "./VideoEventTracker";
 
 interface VideoPlayerProps {
-  videoId: string;
+  videoId?: string;
   src: string;
   speedLock?: boolean;
   onComplete?: () => void;
@@ -19,6 +19,8 @@ interface VideoPlayerProps {
   fetchFn?: (url: string, options?: RequestInit) => Promise<Response>;
   /** セッショントークン。省略時は内部で生成 */
   sessionToken?: string;
+  /** プレビューモード: イベント送信・タブ離脱検知を無効化 */
+  preview?: boolean;
 }
 
 /** crypto.randomUUID が使えない環境向けフォールバック */
@@ -42,6 +44,7 @@ export function VideoPlayer({
   eventEndpoint,
   fetchFn,
   sessionToken: externalSessionToken,
+  preview = false,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -132,8 +135,9 @@ export function VideoPlayer({
     };
   }, [onComplete, onPlay, onPause]);
 
-  // --- タブ離脱検知 ---
+  // --- タブ離脱検知（プレビューモードでは無効） ---
   useEffect(() => {
+    if (preview) return;
     const handleVisibilityChange = () => {
       if (document.hidden) {
         videoRef.current?.pause();
@@ -143,7 +147,7 @@ export function VideoPlayer({
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, []);
+  }, [preview]);
 
   // --- コントロール自動非表示 ---
   const resetHideTimer = useCallback(() => {
@@ -246,14 +250,16 @@ export function VideoPlayer({
         />
       </div>
 
-      {/* イベントトラッカー（UIなし） */}
-      <VideoEventTracker
-        videoRef={videoRef}
-        videoId={videoId}
-        sessionToken={sessionToken}
-        apiEndpoint={eventEndpoint ?? `/api/v1/videos/${videoId}/events`}
-        fetchFn={fetchFn ?? fetch}
-      />
+      {/* イベントトラッカー（UIなし、プレビューモードでは無効） */}
+      {!preview && videoId && (
+        <VideoEventTracker
+          videoRef={videoRef}
+          videoId={videoId}
+          sessionToken={sessionToken}
+          apiEndpoint={eventEndpoint ?? `/api/v1/videos/${videoId}/events`}
+          fetchFn={fetchFn ?? fetch}
+        />
+      )}
     </div>
   );
 }

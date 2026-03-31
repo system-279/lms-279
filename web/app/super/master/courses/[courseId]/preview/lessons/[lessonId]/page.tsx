@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { VideoPlayer } from "@/components/video/VideoPlayer";
 import { useSuperAdminFetch } from "@/lib/super-api";
 
 // --- Types ---
@@ -81,7 +82,6 @@ export default function LessonPreviewPage() {
   const [videoMeta, setVideoMeta] = useState<VideoMeta | null>(null);
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [videoCompleted, setVideoCompleted] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
 
   // Quiz
   const [quiz, setQuiz] = useState<Quiz | null>(null);
@@ -280,15 +280,12 @@ export default function LessonPreviewPage() {
           <h2 className="text-lg font-semibold">動画</h2>
           {playbackUrl ? (
             <div className="space-y-3">
-              <div className="relative bg-black rounded-lg overflow-hidden aspect-video">
-                <video
-                  ref={videoRef}
-                  src={playbackUrl}
-                  controls
-                  className="w-full h-full"
-                  onEnded={() => setVideoCompleted(true)}
-                />
-              </div>
+              <VideoPlayer
+                src={playbackUrl}
+                preview
+                speedLock={videoMeta?.speedLock ?? true}
+                onComplete={() => setVideoCompleted(true)}
+              />
               {videoMeta && (
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">
