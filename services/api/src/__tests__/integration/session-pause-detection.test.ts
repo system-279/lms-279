@@ -129,15 +129,16 @@ describe("server-side pause detection via video-events", () => {
     it("clears pauseStartedAt and updates longestPauseSec when play event follows pause", async () => {
       const session = await createActiveSession();
 
-      // まずpauseを送信
+      // pauseを送信（サーバー時刻 10:00:00）
       const pauseEvents = makeEvents([
         { type: "pause", position: 10, offsetMs: 10000 },
       ]);
       await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events: pauseEvents });
 
-      // 30秒後にplayを送信
+      // サーバー時刻を30秒進めてplayを送信（サーバー時刻 10:00:30）
+      vi.setSystemTime(new Date("2026-03-31T10:00:30Z"));
       const playEvents = makeEvents([
-        { type: "play", position: 10, offsetMs: 40000 }, // 30秒後
+        { type: "play", position: 10, offsetMs: 40000 },
       ]);
       await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events: playEvents });
 
@@ -149,22 +150,87 @@ describe("server-side pause detection via video-events", () => {
     it("keeps longest pause (does not overwrite with shorter pause)", async () => {
       const session = await createActiveSession();
 
-      // 1回目: 60秒のpause
+      // 1回目: 60秒のpause（サーバー時刻 10:00:00）
       const pause1 = makeEvents([{ type: "pause", position: 10, offsetMs: 10000 }]);
       await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events: pause1 });
 
-      const play1 = makeEvents([{ type: "play", position: 10, offsetMs: 70000 }]); // 60秒後
+      // サーバー時刻を60秒進める（10:01:00）
+      vi.setSystemTime(new Date("2026-03-31T10:01:00Z"));
+      const play1 = makeEvents([{ type: "play", position: 10, offsetMs: 70000 }]);
       await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events: play1 });
 
-      // 2回目: 10秒のpause
+      // 2回目: 10秒のpause（サーバー時刻 10:01:00）
       const pause2 = makeEvents([{ type: "pause", position: 20, offsetMs: 80000 }]);
       await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events: pause2 });
 
-      const play2 = makeEvents([{ type: "play", position: 20, offsetMs: 90000 }]); // 10秒後
+      // サーバー時刻を10秒進める（10:01:10）
+      vi.setSystemTime(new Date("2026-03-31T10:01:10Z"));
+      const play2 = makeEvents([{ type: "play", position: 20, offsetMs: 90000 }]);
       await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events: play2 });
 
       const updated = await ds.getLessonSession(session.id);
       expect(updated!.longestPauseSec).toBeGreaterThanOrEqual(60); // 60秒が保持される
+    });
+
+    it("uses server timestamp for pauseStartedAt, ignoring client timestamp manipulation", async () => {
+      const session = await createActiveSession();
+
+      // クライアントが未来のclientTimestampを送信（改ざん試行）
+      const futureTimestamp = baseTime + 24 * 60 * 60 * 1000; // 24時間後
+      const events = [{
+        eventType: "pause",
+        position: 10,
+        playbackRate: 1,
+        clientTimestamp: futureTimestamp,
+      }];
+
+      await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events });
+
+      const updated = await ds.getLessonSession(session.id);
+      // pauseStartedAtはサーバー時刻（2026-03-31T10:00:00Z）であるべき
+      const pauseTime = new Date(updated!.pauseStartedAt!).getTime();
+      const serverTime = new Date("2026-03-31T10:00:00Z").getTime();
+      expect(Math.abs(pauseTime - serverTime)).toBeLessThan(1000); // 1秒以内の誤差
+    });
+
+    it("uses server time for play-side duration calculation, ignoring client timestamp", async () => {
+      const session = await createActiveSession();
+
+      // pause送信（サーバー時刻 10:00:00）
+      const pauseEvents = makeEvents([
+        { type: "pause", position: 10, offsetMs: 10000 },
+      ]);
+      await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events: pauseEvents });
+
+      // サーバー時刻を120秒進めるが、clientTimestampは2秒後のみ（改ざん試行）
+      vi.setSystemTime(new Date("2026-03-31T10:02:00Z"));
+      const playEvents = [{
+        eventType: "play",
+        position: 10,
+        playbackRate: 1,
+        clientTimestamp: baseTime + 12000, // pauseの2秒後（改ざん: 実際は120秒経過）
+      }];
+      await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events: playEvents });
+
+      const updated = await ds.getLessonSession(session.id);
+      expect(updated!.pauseStartedAt).toBeNull();
+      // サーバー時刻ベースで120秒であるべき（clientTimestampの2秒ではない）
+      expect(updated!.longestPauseSec).toBeGreaterThanOrEqual(120);
+    });
+
+    it("correctly determines pause/play order within a batch by array position", async () => {
+      const session = await createActiveSession();
+
+      // 同一バッチでpause→playの順（配列末尾がplay → pauseStartedAt設定なし）
+      const events = [
+        { eventType: "pause", position: 10, playbackRate: 1, clientTimestamp: baseTime + 10000 },
+        { eventType: "play", position: 10, playbackRate: 1, clientTimestamp: baseTime + 11000 },
+      ];
+      await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events });
+
+      let updated = await ds.getLessonSession(session.id);
+      // playが後 → pauseStartedAtは設定されない（またはnullのまま）
+      expect(updated!.pauseStartedAt).toBeNull();
     });
 
     it("does nothing when no active session exists", async () => {
