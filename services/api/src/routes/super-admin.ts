@@ -11,6 +11,7 @@
 
 import { Router, Request, Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
+import type { SuperAttendanceResponse } from "@lms-279/shared-types";
 import {
   superAdminAuthMiddleware,
   getAllSuperAdmins,
@@ -544,12 +545,13 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
     };
   });
 
-  res.json({
+  const response: SuperAttendanceResponse = {
     tenantId,
     tenantName: tenantDoc.data()?.name ?? tenantId,
     records,
     totalRecords: records.length,
-  });
+  };
+  res.json(response);
 });
 
 /**
