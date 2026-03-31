@@ -485,18 +485,70 @@ describe("Quiz submission × Session integration", () => {
       return session;
     };
 
-    // テスト提出 → 409 session_force_exited
-    const submitRes = await studentRequest
-      .patch(`/quiz-attempts/${attemptId}`)
-      .send({ answers: { q1: ["q1-a"] } });
-    expect(submitRes.status).toBe(409);
-    expect(submitRes.body.error).toBe("session_force_exited");
+    try {
+      // テスト提出 → 409 session_force_exited
+      const submitRes = await studentRequest
+        .patch(`/quiz-attempts/${attemptId}`)
+        .send({ answers: { q1: ["q1-a"] } });
+      expect(submitRes.status).toBe(409);
+      expect(submitRes.body.error).toBe("session_force_exited");
 
-    // モック復元
-    ds.getLessonSession = originalGetLessonSession;
+      // 409レスポンスにattempt情報が含まれることを確認
+      expect(submitRes.body.attempt).toBeDefined();
+      expect(submitRes.body.attempt.id).toBe(attemptId);
+      expect(submitRes.body.attempt.status).toBe("submitted");
+      expect(submitRes.body.attempt.score).toBeDefined();
+      expect(submitRes.body.attempt.isPassed).toBeDefined();
 
-    // user_progressが存在しないことを確認
-    const progress = await ds.getUserProgress(studentUserId, lessonId);
-    expect(progress).toBeNull();
+      // user_progressが存在しないことを確認
+      const progress = await ds.getUserProgress(studentUserId, lessonId);
+      expect(progress).toBeNull();
+    } finally {
+      // モック復元（アサーション失敗時も確実に復元）
+      ds.getLessonSession = originalGetLessonSession;
+    }
+  });
+
+  // =========================================================
+  // 12. レースコンディション: セッションがnull（削除済み）の場合も409
+  // =========================================================
+  it("セッション再確認でnullが返ると409を返す", async () => {
+    // セッション作成（有効期限内）
+    const sessionRes = await studentRequest
+      .post("/lesson-sessions")
+      .send({
+        lessonId,
+        videoId: "dummy-video",
+        sessionToken: "test-token-race-null",
+      });
+    expect(sessionRes.status).toBe(201);
+    const sessionId = sessionRes.body.session.id;
+
+    // attempt作成
+    const attemptRes = await studentRequest
+      .post(`/quizzes/${quizId}/attempts`)
+      .send({});
+    expect(attemptRes.status).toBe(201);
+    const attemptId = attemptRes.body.attempt.id;
+
+    // getLessonSessionをモックしてnullを返す（セッションドキュメント削除をシミュレート）
+    const originalGetLessonSession = ds.getLessonSession.bind(ds);
+    ds.getLessonSession = async (id: string) => {
+      if (id === sessionId) return null;
+      return originalGetLessonSession(id);
+    };
+
+    try {
+      const submitRes = await studentRequest
+        .patch(`/quiz-attempts/${attemptId}`)
+        .send({ answers: { q1: ["q1-a"] } });
+      expect(submitRes.status).toBe(409);
+      expect(submitRes.body.error).toBe("session_force_exited");
+
+      const progress = await ds.getUserProgress(studentUserId, lessonId);
+      expect(progress).toBeNull();
+    } finally {
+      ds.getLessonSession = originalGetLessonSession;
+    }
   });
 });
