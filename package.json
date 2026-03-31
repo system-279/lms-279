@@ -2,6 +2,7 @@
   "name": "lms-279",
   "private": true,
   "workspaces": [
+    "packages/*",
     "services/*",
     "web",
     "e2e"

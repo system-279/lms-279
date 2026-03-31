@@ -5,6 +5,14 @@
 
 import { Router, Request, Response } from "express";
 import { requireAdmin } from "../../middleware/auth.js";
+import type {
+  CourseProgressResponse,
+  UserProgressResponse,
+  VideoStatsResponse,
+  QuizStatsResponse,
+  SuspiciousViewingResponse,
+  AdminAttendanceResponse,
+} from "@lms-279/shared-types";
 
 const router = Router();
 
@@ -58,13 +66,14 @@ router.get(
       };
     });
 
-    res.json({
+    const response: CourseProgressResponse = {
       course: { id: course.id, name: course.name },
       totalStudents,
       completedStudents,
       avgProgressRatio,
       students: studentList,
-    });
+    };
+    res.json(response);
   }
 );
 
@@ -118,10 +127,11 @@ router.get(
       })
     );
 
-    res.json({
+    const response: UserProgressResponse = {
       user: { id: user.id, name: user.name, email: user.email },
       courses,
-    });
+    };
+    res.json(response);
   }
 );
 
@@ -179,7 +189,7 @@ router.get(
       };
     });
 
-    res.json({
+    const response: VideoStatsResponse = {
       video: {
         id: video.id,
         lessonId: video.lessonId,
@@ -190,7 +200,8 @@ router.get(
       avgCoverageRatio,
       avgWatchTimeSec,
       viewers: viewerList,
-    });
+    };
+    res.json(response);
   }
 );
 
@@ -247,7 +258,7 @@ router.get(
       };
     });
 
-    res.json({
+    const response: QuizStatsResponse = {
       quiz: {
         id: quiz.id,
         lessonId: quiz.lessonId,
@@ -259,7 +270,8 @@ router.get(
       passRate,
       avgScore,
       attempts: attemptList,
-    });
+    };
+    res.json(response);
   }
 );
 
@@ -318,7 +330,8 @@ router.get(
       };
     });
 
-    res.json({ suspiciousViewings });
+    const response: SuspiciousViewingResponse = { suspiciousViewings };
+    res.json(response);
   }
 );
 
@@ -380,24 +393,10 @@ router.get(
 // 出席管理ヘルパー
 // ============================================================
 
-interface AttendanceRecord {
-  sessionId: string;
-  userId: string;
-  userName: string;
-  userEmail: string;
-  lessonId: string;
-  lessonTitle: string;
-  status: string;
-  entryAt: string;
-  exitAt: string | null;
-  exitReason: string | null;
-  durationMin: number;
-}
-
 async function buildAttendanceRecords(
   ds: import("../../datasource/interface.js").DataSource,
   courseId: string
-): Promise<AttendanceRecord[]> {
+): Promise<import("@lms-279/shared-types").AdminAttendanceRecord[]> {
   const sessions = await ds.getLessonSessionsByCourse(courseId);
   const users = await ds.getUsers();
   const lessons = await ds.getLessons({ courseId });
@@ -448,14 +447,15 @@ router.get(
 
     const records = await buildAttendanceRecords(ds, courseId);
 
-    res.json({
+    const response: AdminAttendanceResponse = {
       courseId,
       courseName: course.name,
       totalSessions: records.length,
       completedSessions: records.filter((r) => r.status === "completed").length,
       forceExitedSessions: records.filter((r) => r.status === "force_exited").length,
       records,
-    });
+    };
+    res.json(response);
   }
 );
 

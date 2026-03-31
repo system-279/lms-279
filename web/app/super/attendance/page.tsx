@@ -28,35 +28,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useSuperAdminFetch } from "@/lib/super-api";
+import type {
+  SuperAttendanceRecord,
+  SuperAttendanceResponse,
+} from "@lms-279/shared-types";
 
 type Tenant = {
   id: string;
   name: string;
-};
-
-type AttendanceRecord = {
-  id: string;
-  userId: string;
-  userName: string | null;
-  userEmail: string | null;
-  lessonId: string;
-  lessonTitle: string;
-  date: string | null;
-  entryAt: string | null;
-  exitAt: string | null;
-  exitReason: string | null;
-  status: string;
-  quizAttemptId: string | null;
-  quizScore: number | null;
-  quizPassed: boolean | null;
-  quizSubmittedAt: string | null;
-};
-
-type ReportResponse = {
-  tenantId: string;
-  tenantName: string;
-  records: AttendanceRecord[];
-  totalRecords: number;
 };
 
 
@@ -83,13 +62,13 @@ export default function AttendanceReportPage() {
   const [selectedTenant, setSelectedTenant] = useState<string>("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [report, setReport] = useState<ReportResponse | null>(null);
+  const [report, setReport] = useState<SuperAttendanceResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Edit dialog
   const [editOpen, setEditOpen] = useState(false);
-  const [editRecord, setEditRecord] = useState<AttendanceRecord | null>(null);
+  const [editRecord, setEditRecord] = useState<SuperAttendanceRecord | null>(null);
   const [editEntryAt, setEditEntryAt] = useState("");
   const [editExitAt, setEditExitAt] = useState("");
   const [editScore, setEditScore] = useState("");
@@ -115,7 +94,7 @@ export default function AttendanceReportPage() {
       if (dateFrom) params.set("from", dateFrom);
       if (dateTo) params.set("to", dateTo);
       const qs = params.toString();
-      const data = await superFetch<ReportResponse>(
+      const data = await superFetch<SuperAttendanceResponse>(
         `/api/v2/super/tenants/${selectedTenant}/attendance-report${qs ? `?${qs}` : ""}`
       );
       setReport(data);
@@ -126,7 +105,7 @@ export default function AttendanceReportPage() {
     }
   }, [superFetch, selectedTenant, dateFrom, dateTo]);
 
-  const openEdit = (record: AttendanceRecord) => {
+  const openEdit = (record: SuperAttendanceRecord) => {
     setEditRecord(record);
     setEditEntryAt(isoToDatetimeLocal(record.entryAt));
     setEditExitAt(isoToDatetimeLocal(record.exitAt));
