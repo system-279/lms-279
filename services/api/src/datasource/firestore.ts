@@ -1112,14 +1112,38 @@ export class FirestoreDataSource implements DataSource {
     }
 
     // 500件ずつバッチに分割して削除（Firestore上限対応）
+    // リトライ付き: 既に削除済みのドキュメントへのdelete()はno-opなのでリトライ安全
     const BATCH_LIMIT = 500;
+    const MAX_RETRIES = 3;
     for (let i = 0; i < docsToDelete.length; i += BATCH_LIMIT) {
       const chunk = docsToDelete.slice(i, i + BATCH_LIMIT);
-      const batch = this.db.batch();
-      for (const ref of chunk) {
-        batch.delete(ref);
+      let lastError: unknown;
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+          const batch = this.db.batch();
+          for (const ref of chunk) {
+            batch.delete(ref);
+          }
+          await batch.commit();
+          lastError = null;
+          break;
+        } catch (err) {
+          lastError = err;
+          console.error(
+            `resetLessonDataForUser batch ${Math.floor(i / BATCH_LIMIT) + 1} ` +
+            `attempt ${attempt + 1}/${MAX_RETRIES} failed:`, err
+          );
+          if (attempt < MAX_RETRIES - 1) {
+            await new Promise(r => setTimeout(r, 100 * Math.pow(2, attempt)));
+          }
+        }
       }
-      await batch.commit();
+      if (lastError) {
+        throw new Error(
+          `resetLessonDataForUser: batch deletion failed after ${MAX_RETRIES} retries. ` +
+          `${i} of ${docsToDelete.length} docs were already deleted.`
+        );
+      }
     }
   }
 

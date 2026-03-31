@@ -336,6 +336,27 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
     submittedAt: now.toISOString(),
   });
 
+  // レースコンディション対策: 採点後、進捗書き込み前にセッション状態を再確認
+  // forceExitSessionが並行実行されていた場合、セッションはforce_exitedになり
+  // レッスンデータもリセット済み。この場合、進捗書き込みをスキップする。
+  if (activeSession) {
+    const currentSession = await ds.getLessonSession(activeSession.id);
+    if (!currentSession || currentSession.status === "force_exited") {
+      res.status(409).json({
+        error: "session_force_exited",
+        message: "セッションが終了したため、結果は記録されません",
+        attempt: {
+          id: updated!.id,
+          status: updated!.status,
+          score: updated!.score,
+          isPassed: updated!.isPassed,
+          submittedAt: updated!.submittedAt,
+        },
+      });
+      return;
+    }
+  }
+
   // 合格した場合: 進捗更新 + 退室打刻
   if (gradingResult.isPassed) {
     if (quiz) {

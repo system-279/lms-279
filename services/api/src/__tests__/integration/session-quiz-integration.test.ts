@@ -451,4 +451,52 @@ describe("Quiz submission × Session integration", () => {
     expect(newSessionRes.status).toBe(201);
     expect(newSessionRes.body.session.status).toBe("active");
   });
+
+  // =========================================================
+  // 11. レースコンディション: セッション再確認でforce_exitedを検出し409
+  // =========================================================
+  it("セッション再確認でforce_exitedを検出すると409を返し進捗を書き込まない", async () => {
+    // セッション作成（有効期限内）
+    const sessionRes = await studentRequest
+      .post("/lesson-sessions")
+      .send({
+        lessonId,
+        videoId: "dummy-video",
+        sessionToken: "test-token-race",
+      });
+    expect(sessionRes.status).toBe(201);
+    const sessionId = sessionRes.body.session.id;
+
+    // attempt作成
+    const attemptRes = await studentRequest
+      .post(`/quizzes/${quizId}/attempts`)
+      .send({});
+    expect(attemptRes.status).toBe(201);
+    const attemptId = attemptRes.body.attempt.id;
+
+    // getLessonSessionをモックして、再確認時にforce_exitedを返す
+    // （レースコンディション: getActiveLessonSessionとgetLessonSessionの間で状態が変わる）
+    const originalGetLessonSession = ds.getLessonSession.bind(ds);
+    ds.getLessonSession = async (id: string) => {
+      const session = await originalGetLessonSession(id);
+      if (session && session.id === sessionId) {
+        return { ...session, status: "force_exited" as const };
+      }
+      return session;
+    };
+
+    // テスト提出 → 409 session_force_exited
+    const submitRes = await studentRequest
+      .patch(`/quiz-attempts/${attemptId}`)
+      .send({ answers: { q1: ["q1-a"] } });
+    expect(submitRes.status).toBe(409);
+    expect(submitRes.body.error).toBe("session_force_exited");
+
+    // モック復元
+    ds.getLessonSession = originalGetLessonSession;
+
+    // user_progressが存在しないことを確認
+    const progress = await ds.getUserProgress(studentUserId, lessonId);
+    expect(progress).toBeNull();
+  });
 });
