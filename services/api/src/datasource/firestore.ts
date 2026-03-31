@@ -1141,7 +1141,8 @@ export class FirestoreDataSource implements DataSource {
       if (lastError) {
         throw new Error(
           `resetLessonDataForUser: batch deletion failed after ${MAX_RETRIES} retries. ` +
-          `${i} of ${docsToDelete.length} docs were already deleted.`
+          `${i} of ${docsToDelete.length} docs were already deleted.`,
+          { cause: lastError }
         );
       }
     }

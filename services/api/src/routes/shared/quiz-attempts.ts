@@ -340,20 +340,25 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
   // forceExitSessionが並行実行されていた場合、セッションはforce_exitedになり
   // レッスンデータもリセット済み。この場合、進捗書き込みをスキップする。
   if (activeSession) {
-    const currentSession = await ds.getLessonSession(activeSession.id);
-    if (!currentSession || currentSession.status === "force_exited") {
-      res.status(409).json({
-        error: "session_force_exited",
-        message: "セッションが終了したため、結果は記録されません",
-        attempt: {
-          id: updated!.id,
-          status: updated!.status,
-          score: updated!.score,
-          isPassed: updated!.isPassed,
-          submittedAt: updated!.submittedAt,
-        },
-      });
-      return;
+    try {
+      const currentSession = await ds.getLessonSession(activeSession.id);
+      if (!currentSession || currentSession.status === "force_exited") {
+        res.status(409).json({
+          error: "session_force_exited",
+          message: "セッションが強制終了されたため、進捗には反映されません。再受講が必要です。",
+          attempt: {
+            id: updated!.id,
+            status: updated!.status,
+            score: updated!.score,
+            isPassed: updated!.isPassed,
+            submittedAt: updated!.submittedAt,
+          },
+        });
+        return;
+      }
+    } catch (err) {
+      // セッション再確認失敗時は楽観的に続行（レース検出より提出成功を優先）
+      console.error(`Session re-check failed for session ${activeSession.id}, proceeding:`, err);
     }
   }
 
@@ -370,17 +375,16 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
     if (activeSession) {
       try {
         await completeSession(ds, activeSession.id, updated!.id);
-      } catch {
-        // セッション完了失敗はテスト提出自体をブロックしない
-        console.error(`Failed to complete session for attempt ${attemptId}`);
+      } catch (err) {
+        console.error(`Failed to complete session for attempt ${attemptId}:`, err);
       }
     }
   } else if (activeSession && quiz.maxAttempts > 0 && attempt.attemptNumber >= quiz.maxAttempts) {
     // 不合格 + 受験上限到達: セッションを強制退室（残留防止）
     try {
       await forceExitSession(ds, activeSession.id, "max_attempts_failed");
-    } catch {
-      console.error(`Failed to force-exit session for max attempts: ${attemptId}`);
+    } catch (err) {
+      console.error(`Failed to force-exit session for max attempts ${attemptId}:`, err);
     }
   }
 
