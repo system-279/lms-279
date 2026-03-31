@@ -726,8 +726,14 @@ export class FirestoreDataSource implements DataSource {
       const now = new Date();
 
       if (doc.exists) {
-        tx.update(docRef, { ...update, updatedAt: now });
-        return this.toVideoAnalytics(docId, { ...doc.data()!, ...update, updatedAt: now });
+        // undefinedをフィルタリング（Firestoreはundefined値を拒否するため）
+        const filtered: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(update)) {
+          if (value !== undefined) filtered[key] = value;
+        }
+        filtered.updatedAt = now;
+        tx.set(docRef, filtered, { merge: true });
+        return this.toVideoAnalytics(docId, { ...doc.data()!, ...filtered });
       } else {
         const fullData = {
           videoId,
