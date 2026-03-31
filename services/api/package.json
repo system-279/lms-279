@@ -13,6 +13,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@lms-279/shared-types": "*",
     "@google-cloud/firestore": "8.1.0",
     "@google-cloud/secret-manager": "^6.1.1",
     "@google-cloud/storage": "^7.16.0",

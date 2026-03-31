@@ -49,6 +49,7 @@ npm run test
 
 | サービス | 役割 |
 |---------|------|
+| `packages/shared-types` | FE-BE共有APIレスポンス型（`@lms-279/shared-types`） |
 | `services/api` | REST API（認証、講座管理、動画管理、テスト、進捗） |
 | `services/notification` | 通知送信 |
 | `web` | Next.js App Router（受講者/管理画面） |
@@ -97,6 +98,7 @@ npm run test
 - **セキュリティ強化**: Helmet, レート制限, CORS（ADR-025）
 - **Google Workspace連携**: DWDでDrive動画インポート + Docsテスト生成（ADR-026）
 - **出席管理**: lesson_sessionsで入退室打刻、15分一時停止/2時間制限で強制退室（ADR-027）
+- **FE-BE共有型**: `@lms-279/shared-types`でAPIレスポンスDTOを共有。新規APIエンドポイント追加時はshared-typesに型を先に定義すること
 
 全ADRは`docs/adr/`を参照。
 

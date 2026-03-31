@@ -43,6 +43,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build shared-types
+        run: npm run build -w @lms-279/shared-types
+
       - name: Run type check
         run: npm run type-check
 
@@ -61,6 +64,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Build shared-types
+        run: npm run build -w @lms-279/shared-types
 
       - name: Run tests
         run: npm run test -w @lms-279/api

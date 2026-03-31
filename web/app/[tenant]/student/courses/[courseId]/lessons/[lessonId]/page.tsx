@@ -11,6 +11,7 @@ import { SessionRulesNotice } from "@/components/session/SessionRulesNotice";
 import { SessionTimer } from "@/components/session/SessionTimer";
 import { PauseTimeoutOverlay } from "@/components/session/PauseTimeoutOverlay";
 import { ForceExitDialog } from "@/components/session/ForceExitDialog";
+import type { LessonSessionResponse } from "@lms-279/shared-types";
 
 // ============================================================
 // 型定義
@@ -145,13 +146,7 @@ type AttemptResult = {
   questionResults: QuestionResult[];
 };
 
-type LessonSession = {
-  id: string;
-  entryAt: string;
-  deadlineAt: string;
-  remainingMs: number;
-  status: string;
-};
+type LessonSession = LessonSessionResponse;
 
 type ForceExitReason = "pause_timeout" | "time_limit";
 

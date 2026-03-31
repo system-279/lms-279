@@ -21,12 +21,21 @@ import {
 } from "@/components/ui/table";
 import { useAuthenticatedFetch } from "@/lib/hooks/use-authenticated-fetch";
 import { cn } from "@/lib/utils";
+import type {
+  CourseProgressResponse,
+  UserProgressResponse,
+  SuspiciousViewingResponse,
+  SuspiciousFlag,
+  AdminAttendanceResponse,
+  LessonSessionStatus,
+  SessionExitReason,
+} from "@lms-279/shared-types";
 
-// ─── 型定義 ───────────────────────────────────────────────────────
+// ─── UI用ローカル型 ──────────────────────────────────────────────
 
 type Course = {
   id: string;
-  title: string;
+  name: string;
 };
 
 type User = {
@@ -34,54 +43,6 @@ type User = {
   name: string;
   email: string;
 };
-
-type CourseProgressStudent = {
-  userId: string;
-  userName: string;
-  email: string;
-  completedLessons: number;
-  totalLessons: number;
-  progressRatio: number; // 0-1
-  isCompleted: boolean;
-};
-
-type CourseProgressData = {
-  course: { id: string; name: string };
-  totalStudents: number;
-  completedStudents: number;
-  avgProgressRatio: number;
-  students: CourseProgressStudent[];
-};
-
-type LessonProgress = {
-  lessonId: string;
-  lessonTitle: string | null;
-  videoCompleted: boolean;
-  quizPassed: boolean;
-  lessonCompleted: boolean;
-};
-
-type UserCourseProgress = {
-  courseId: string;
-  courseName: string | null;
-  completedLessons: number;
-  totalLessons: number;
-  progressRatio: number; // 0-1
-  isCompleted: boolean;
-  lessonProgresses?: LessonProgress[];
-};
-
-type UserProgressData = {
-  user: { id: string; name: string; email: string };
-  courses: UserCourseProgress[];
-};
-
-type SuspiciousFlag =
-  | "excessive_seeks"
-  | "no_pauses_long_session"
-  | "background_playback"
-  | "speed_violation"
-  | "position_jump";
 
 const FLAG_LABELS: Record<SuspiciousFlag, string> = {
   excessive_seeks: "過度なシーク",
@@ -91,66 +52,26 @@ const FLAG_LABELS: Record<SuspiciousFlag, string> = {
   position_jump: "不自然な位置移動",
 };
 
-type SuspiciousViewingRecord = {
-  userId: string;
-  userName: string;
-  videoId: string;
-  lessonTitle: string | null;
-  coverageRatio: number;
-  seekCount: number;
-  speedViolationCount: number;
-  suspiciousFlags: SuspiciousFlag[];
-  updatedAt: string;
-};
-
-type SuspiciousViewingData = {
-  suspiciousViewings: SuspiciousViewingRecord[];
-};
-
-type AttendanceStatus = "completed" | "force_exited" | "active" | "abandoned";
-type ExitReason = "quiz_submitted" | "pause_timeout" | "time_limit" | "browser_close" | "max_attempts_failed";
-
-const ATTENDANCE_STATUS_LABELS: Record<AttendanceStatus, string> = {
+const ATTENDANCE_STATUS_LABELS: Record<LessonSessionStatus, string> = {
   completed: "完了",
   force_exited: "強制退室",
   active: "出席中",
   abandoned: "放棄",
 };
 
-const ATTENDANCE_STATUS_VARIANT: Record<AttendanceStatus, "default" | "destructive" | "secondary" | "outline"> = {
+const ATTENDANCE_STATUS_VARIANT: Record<LessonSessionStatus, "default" | "destructive" | "secondary" | "outline"> = {
   completed: "default",
   force_exited: "destructive",
   active: "secondary",
   abandoned: "outline",
 };
 
-const EXIT_REASON_LABELS: Record<ExitReason, string> = {
+const EXIT_REASON_LABELS: Record<SessionExitReason, string> = {
   quiz_submitted: "テスト送信",
   pause_timeout: "一時停止超過",
   time_limit: "時間超過",
   browser_close: "ブラウザ終了",
   max_attempts_failed: "受験上限(不合格)",
-};
-
-type AttendanceRecord = {
-  sessionId: string;
-  userName: string;
-  userEmail: string;
-  lessonTitle: string;
-  status: AttendanceStatus;
-  entryAt: string;
-  exitAt: string | null;
-  exitReason: ExitReason | null;
-  durationMin: number;
-};
-
-type AttendanceData = {
-  courseId: string;
-  courseName: string;
-  totalSessions: number;
-  completedSessions: number;
-  forceExitedSessions: number;
-  records: AttendanceRecord[];
 };
 
 // ─── 汎用コンポーネント ──────────────────────────────────────────
@@ -202,7 +123,7 @@ function CourseProgressTab() {
   const [coursesError, setCoursesError] = useState<string | null>(null);
 
   const [selectedCourseId, setSelectedCourseId] = useState<string>("");
-  const [progressData, setProgressData] = useState<CourseProgressData | null>(null);
+  const [progressData, setProgressData] = useState<CourseProgressResponse | null>(null);
   const [progressLoading, setProgressLoading] = useState(false);
   const [progressError, setProgressError] = useState<string | null>(null);
 
@@ -237,7 +158,7 @@ function CourseProgressTab() {
       setProgressError(null);
       setProgressData(null);
       try {
-        const data = await authFetch<CourseProgressData>(
+        const data = await authFetch<CourseProgressResponse>(
           `/api/v1/admin/analytics/courses/${courseId}/progress`
         );
         setProgressData(data);
@@ -294,7 +215,7 @@ function CourseProgressTab() {
               <SelectContent>
                 {courses.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
-                    {c.title}
+                    {c.name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -393,7 +314,7 @@ function UserProgressTab() {
   const [usersError, setUsersError] = useState<string | null>(null);
 
   const [selectedUserId, setSelectedUserId] = useState<string>("");
-  const [progressData, setProgressData] = useState<UserProgressData | null>(null);
+  const [progressData, setProgressData] = useState<UserProgressResponse | null>(null);
   const [progressLoading, setProgressLoading] = useState(false);
   const [progressError, setProgressError] = useState<string | null>(null);
 
@@ -431,7 +352,7 @@ function UserProgressTab() {
       setProgressError(null);
       setProgressData(null);
       try {
-        const data = await authFetch<UserProgressData>(
+        const data = await authFetch<UserProgressResponse>(
           `/api/v1/admin/analytics/users/${userId}/progress`
         );
         setProgressData(data);
@@ -576,7 +497,7 @@ function UserProgressTab() {
 function SuspiciousViewingTab() {
   const { authFetch } = useAuthenticatedFetch();
 
-  const [data, setData] = useState<SuspiciousViewingData | null>(null);
+  const [data, setData] = useState<SuspiciousViewingResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -584,7 +505,7 @@ function SuspiciousViewingTab() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    authFetch<SuspiciousViewingData>("/api/v1/admin/analytics/suspicious-viewing")
+    authFetch<SuspiciousViewingResponse>("/api/v1/admin/analytics/suspicious-viewing")
       .then((res) => {
         if (!cancelled) setData(res);
       })
@@ -656,7 +577,7 @@ function AttendanceTab() {
   const [coursesError, setCoursesError] = useState<string | null>(null);
 
   const [selectedCourseId, setSelectedCourseId] = useState<string>("");
-  const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
+  const [attendanceData, setAttendanceData] = useState<AdminAttendanceResponse | null>(null);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
 
@@ -691,7 +612,7 @@ function AttendanceTab() {
       setAttendanceError(null);
       setAttendanceData(null);
       try {
-        const data = await authFetch<AttendanceData>(
+        const data = await authFetch<AdminAttendanceResponse>(
           `/api/v1/admin/analytics/attendance/courses/${courseId}`
         );
         setAttendanceData(data);
@@ -759,7 +680,7 @@ function AttendanceTab() {
               <SelectContent>
                 {courses.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
-                    {c.title}
+                    {c.name}
                   </SelectItem>
                 ))}
               </SelectContent>
