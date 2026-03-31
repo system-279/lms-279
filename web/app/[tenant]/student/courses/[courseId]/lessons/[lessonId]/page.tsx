@@ -818,6 +818,17 @@ export default function StudentLessonDetailPage() {
     handleForceExit("pause_timeout");
   }, [handleForceExit]);
 
+  // ブラウザ終了時: sendBeaconでセッション放棄
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (!session || session.status !== "active") return;
+      const url = `/api/v2/${tenantId}/lesson-sessions/${session.id}/abandon`;
+      navigator.sendBeacon(url);
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [session, tenantId]);
+
   // ============================================================
   // 動画メタデータ・再生URL取得
   // ============================================================

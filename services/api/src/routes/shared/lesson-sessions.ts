@@ -11,6 +11,7 @@ import {
   createSession,
   getOrCreateSession,
   forceExitSession,
+  abandonSession,
   handleStaleSession,
 } from "../../services/lesson-session.js";
 
@@ -135,6 +136,39 @@ router.patch("/lesson-sessions/:sessionId/force-exit", requireUser, async (req: 
   } catch (err) {
     console.error(`Failed to force-exit session ${sessionId}:`, err);
     res.status(500).json({ error: "force_exit_failed", message: "セッション終了処理に失敗しました" });
+  }
+});
+
+/**
+ * セッション放棄（ブラウザ終了時sendBeacon用）
+ * POST /lesson-sessions/:sessionId/abandon
+ *
+ * sendBeaconはカスタムヘッダーを送れないためrequireUserを使わず、
+ * セッションID（UUID）の知識を暗黙的な認証とする。
+ * セッションIDはセッション作成者のみが知る値であり、
+ * abandoned操作は非破壊的（データリセットなし）なためリスクは限定的。
+ */
+router.post("/lesson-sessions/:sessionId/abandon", async (req: Request, res: Response) => {
+  const ds = req.dataSource!;
+  const sessionId = req.params.sessionId as string;
+
+  const session = await ds.getLessonSession(sessionId);
+  if (!session) {
+    res.status(404).json({ error: "not_found", message: "Session not found" });
+    return;
+  }
+
+  if (session.status !== "active") {
+    res.status(409).json({ error: "session_not_active", message: "Session is not active" });
+    return;
+  }
+
+  try {
+    await abandonSession(ds, sessionId);
+    res.status(204).end();
+  } catch (err) {
+    console.error(`Failed to abandon session ${sessionId}:`, err);
+    res.status(500).json({ error: "abandon_failed", message: "セッション放棄処理に失敗しました" });
   }
 });
 

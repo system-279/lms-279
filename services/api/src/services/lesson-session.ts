@@ -91,6 +91,25 @@ export async function forceExitSession(
 }
 
 /**
+ * セッションを放棄状態に更新（ブラウザ終了時）
+ * forceExitSessionと異なり、学習データのリセットは行わない。
+ */
+export async function abandonSession(
+  ds: DataSource,
+  sessionId: string
+): Promise<LessonSession> {
+  const updated = await ds.updateLessonSession(sessionId, {
+    status: "abandoned",
+    exitAt: new Date().toISOString(),
+    exitReason: "browser_close",
+  });
+  if (!updated) {
+    throw new Error(`Session ${sessionId} not found`);
+  }
+  return updated;
+}
+
+/**
  * セッションをテスト送信で完了（退室打刻）
  */
 export async function completeSession(
