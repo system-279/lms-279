@@ -10,6 +10,10 @@ import { requireUser } from "../../middleware/auth.js";
 import type { VideoEventType } from "../../types/entities.js";
 import { processVideoEvents } from "../../services/video-analytics.js";
 import { updateLessonProgress } from "../../services/progress.js";
+import { forceExitSession } from "../../services/lesson-session.js";
+import { logger } from "../../utils/logger.js";
+
+const PAUSE_TIMEOUT_MS = 15 * 60 * 1000; // 15分
 
 const router = Router();
 
@@ -145,7 +149,53 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
     metadata: event.metadata ?? undefined,
   }));
 
+  // 3.5. セッション取得 + 15分超過チェック（ADR-027）
+  // イベント保存前にチェック: forceExitSessionがデータリセットするため、保存→即削除を回避
+  const activeSession = await ds.getActiveLessonSession(userId, video.lessonId);
+  if (activeSession?.pauseStartedAt) {
+    const pausedMs = Date.now() - new Date(activeSession.pauseStartedAt).getTime();
+    if (pausedMs > PAUSE_TIMEOUT_MS) {
+      try {
+        await forceExitSession(ds, activeSession.id, "pause_timeout");
+      } catch (err) {
+        logger.error("Failed to force-exit session on pause timeout", {
+          error: String(err), sessionId: activeSession.id, userId,
+        });
+      }
+      res.status(409).json({ error: "session_force_exited", message: "一時停止が15分を超過しました" });
+      return;
+    }
+  }
+
   const savedEvents = await ds.createVideoEvents(eventsToCreate);
+
+  // 3.6. バッチ内のpause/playイベントで状態を更新
+  // 失敗してもanalytics応答は返す（pause追跡は二次的機能）
+  if (activeSession) {
+    try {
+      const lastPause = savedEvents.filter(e => e.eventType === "pause").at(-1);
+      const lastPlay = savedEvents.filter(e => e.eventType === "play").at(-1);
+
+      if (lastPause && (!lastPlay || lastPause.clientTimestamp > lastPlay.clientTimestamp)) {
+        await ds.updateLessonSession(activeSession.id, {
+          pauseStartedAt: new Date(lastPause.clientTimestamp).toISOString(),
+        });
+      } else if (lastPlay && activeSession.pauseStartedAt) {
+        const pauseDurationSec = Math.floor(
+          (lastPlay.clientTimestamp - new Date(activeSession.pauseStartedAt).getTime()) / 1000
+        );
+        const longestPauseSec = Math.max(activeSession.longestPauseSec, pauseDurationSec);
+        await ds.updateLessonSession(activeSession.id, {
+          pauseStartedAt: null,
+          longestPauseSec,
+        });
+      }
+    } catch (err) {
+      logger.error("Failed to update session pause state", {
+        error: String(err), sessionId: activeSession.id, userId, videoId,
+      });
+    }
+  }
 
   // 4. 現在のanalytics取得
   const currentAnalytics = await ds.getVideoAnalytics(userId, videoId);
@@ -175,8 +225,7 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
       });
     }
 
-    // セッション内動画視聴完了フラグを更新
-    const activeSession = await ds.getActiveLessonSession(userId, video.lessonId);
+    // セッション内動画視聴完了フラグを更新（step 3.5で取得済みのセッションを再利用）
     if (activeSession && !activeSession.sessionVideoCompleted) {
       await ds.updateLessonSession(activeSession.id, { sessionVideoCompleted: true });
     }
