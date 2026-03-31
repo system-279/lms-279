@@ -52,12 +52,25 @@ export async function getOrCreateSession(
   videoId: string,
   sessionToken: string
 ): Promise<{ session: LessonSession; created: boolean }> {
-  const existing = await ds.getActiveLessonSession(userId, lessonId);
-  if (existing) {
-    return { session: existing, created: false };
-  }
-  const session = await createSession(ds, userId, lessonId, courseId, videoId, sessionToken);
-  return { session, created: true };
+  const now = new Date();
+  const deadlineAt = new Date(now.getTime() + SESSION_DURATION_MS);
+
+  return ds.getOrCreateLessonSession(userId, lessonId, {
+    userId,
+    lessonId,
+    courseId,
+    videoId,
+    sessionToken,
+    status: "active",
+    entryAt: now.toISOString(),
+    exitAt: null,
+    exitReason: null,
+    deadlineAt: deadlineAt.toISOString(),
+    pauseStartedAt: null,
+    longestPauseSec: 0,
+    sessionVideoCompleted: false,
+    quizAttemptId: null,
+  });
 }
 
 /**

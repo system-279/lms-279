@@ -171,6 +171,15 @@ export interface DataSource {
 
   // Lesson Sessions (Attendance)
   createLessonSession(data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">): Promise<LessonSession>;
+  /**
+   * アクティブセッション取得または作成（アトミック操作）
+   * 同一userId+lessonIdに対する並行呼び出しで重複activeセッションが作成されないことを保証する。
+   * トランザクション失敗時はエラーをスローする。
+   */
+  getOrCreateLessonSession(
+    userId: string, lessonId: string,
+    data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">
+  ): Promise<{ session: LessonSession; created: boolean }>;
   getLessonSession(sessionId: string): Promise<LessonSession | null>;
   getActiveLessonSession(userId: string, lessonId: string): Promise<LessonSession | null>;
   updateLessonSession(sessionId: string, data: Partial<Omit<LessonSession, "id" | "createdAt">>): Promise<LessonSession | null>;

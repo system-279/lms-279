@@ -1027,6 +1027,53 @@ export class FirestoreDataSource implements DataSource {
     return this.toLessonSession(doc.id, doc.data()!);
   }
 
+  async getOrCreateLessonSession(
+    userId: string, lessonId: string,
+    data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">
+  ): Promise<{ session: LessonSession; created: boolean }> {
+    return this.db.runTransaction(async (tx) => {
+      // センチネルドキュメントでドキュメントレベルロックを確保
+      // クエリのみのトランザクションでは0件ヒット時にロックが効かないため必須
+      const lockRef = this.collection("session_locks").doc(`${userId}_${lessonId}`);
+      await tx.get(lockRef);
+
+      const snapshot = await tx.get(
+        this.collection("lesson_sessions")
+          .where("userId", "==", userId)
+          .where("lessonId", "==", lessonId)
+          .where("status", "==", "active")
+          .limit(1)
+      );
+
+      if (!snapshot.empty) {
+        const doc = snapshot.docs[0];
+        return { session: this.toLessonSession(doc.id, doc.data()), created: false };
+      }
+
+      const newDocRef = this.collection("lesson_sessions").doc();
+      const now = new Date();
+      const sanitized = Object.fromEntries(
+        Object.entries(data).map(([k, v]) => [k, v ?? null])
+      );
+      tx.create(newDocRef, {
+        ...sanitized,
+        createdAt: now,
+        updatedAt: now,
+      });
+      // ロックドキュメントを更新してトランザクション競合を検知可能にする
+      tx.set(lockRef, { userId, lessonId, updatedAt: now });
+
+      return {
+        session: this.toLessonSession(newDocRef.id, {
+          ...sanitized,
+          createdAt: now,
+          updatedAt: now,
+        }),
+        created: true,
+      };
+    });
+  }
+
   async getLessonSession(sessionId: string): Promise<LessonSession | null> {
     const doc = await this.collection("lesson_sessions").doc(sessionId).get();
     if (!doc.exists) return null;
