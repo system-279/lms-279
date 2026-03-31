@@ -13,7 +13,7 @@ import { updateLessonProgress } from "../../services/progress.js";
 import { forceExitSession } from "../../services/lesson-session.js";
 import { logger } from "../../utils/logger.js";
 
-const PAUSE_TIMEOUT_MS = 15 * 60 * 1000; // 15分
+const PAUSE_TIMEOUT_MS = Number(process.env.PAUSE_TIMEOUT_MS) || 15 * 60 * 1000; // デフォルト15分
 
 const router = Router();
 

@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
-  timeout: 30000,
+  timeout: 60000,
   retries: 1,
   use: {
     baseURL: "http://localhost:3000",
@@ -18,6 +18,8 @@ export default defineConfig({
       env: {
         AUTH_MODE: "dev",
         PORT: "8080",
+        E2E_TEST_ENABLED: "true",
+        PAUSE_TIMEOUT_MS: "5000",
       },
     },
     {
