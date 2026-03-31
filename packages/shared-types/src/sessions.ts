@@ -7,6 +7,7 @@ import type { LessonSessionStatus, SessionExitReason } from "./enums.js";
 
 export interface LessonSessionResponse {
   id: string;
+  sessionToken: string;
   status: LessonSessionStatus;
   entryAt: string;
   exitAt: string | null;

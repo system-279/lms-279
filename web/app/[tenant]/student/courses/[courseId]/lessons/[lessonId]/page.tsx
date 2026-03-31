@@ -713,6 +713,8 @@ export default function StudentLessonDetailPage() {
   const [forceExitOpen, setForceExitOpen] = useState(false);
   const [forceExitReason, setForceExitReason] = useState<ForceExitReason>("time_limit");
   const sessionCreatingRef = useRef(false);
+  // セッション作成前からVideoPlayerに渡すtoken。createSessionで同じ値をBEに送信する。
+  const pendingTokenRef = useRef(crypto.randomUUID());
 
   const [loadingCourse, setLoadingCourse] = useState(true);
   const [loadingVideo, setLoadingVideo] = useState(false);
@@ -760,8 +762,8 @@ export default function StudentLessonDetailPage() {
       if (data.session) {
         setSession(data.session);
       }
-    } catch {
-      // セッション取得失敗はサイレント
+    } catch (error) {
+      console.error("Failed to fetch active session:", error);
     }
   }, [authFetch, lessonId]);
 
@@ -770,8 +772,9 @@ export default function StudentLessonDetailPage() {
   }, [fetchActiveSession]);
 
   // 動画初回再生時: セッション作成
+  // pendingTokenRefと同じtokenをBEに送信し、VideoPlayerが送るイベントと一致させる
   const createSession = useCallback(async () => {
-    if (session || sessionCreatingRef.current) return;
+    if (session || sessionCreatingRef.current || !videoMeta) return;
     sessionCreatingRef.current = true;
     try {
       const data = await authFetch<{ session: LessonSession }>(
@@ -779,16 +782,21 @@ export default function StudentLessonDetailPage() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lessonId }),
+          body: JSON.stringify({
+            lessonId,
+            videoId: videoMeta.id,
+            sessionToken: pendingTokenRef.current,
+          }),
         }
       );
       setSession(data.session);
-    } catch {
-      // セッション作成失敗はサイレント
+    } catch (error) {
+      console.error("Failed to create session:", error);
+      setError("出席セッションの作成に失敗しました。ページを再読み込みしてください。");
     } finally {
       sessionCreatingRef.current = false;
     }
-  }, [authFetch, lessonId, session]);
+  }, [authFetch, lessonId, videoMeta, session]);
 
   // 強制退室処理
   const handleForceExit = useCallback(
@@ -799,8 +807,8 @@ export default function StudentLessonDetailPage() {
           `/api/v1/lesson-sessions/${session.id}/force-exit`,
           { method: "PATCH" }
         );
-      } catch {
-        // 強制退室API失敗でもダイアログは表示
+      } catch (error) {
+        console.error("Failed to force-exit session:", error);
       }
       setForceExitReason(reason);
       setForceExitOpen(true);
@@ -821,22 +829,17 @@ export default function StudentLessonDetailPage() {
   // ブラウザ終了時: sendBeaconでセッション放棄
   // fetch()はbeforeunloadで中断されるためsendBeaconを使用。
   // sendBeaconはカスタムヘッダーを送れないため、authFetchを使わず/api/v2パスに直接リクエスト。
-  // モバイルではbeforeunloadが発火しないためvisibilitychangeも併用。
+  // visibilitychangeは使わない: タブ切替やアプリ切替でもhiddenが発火し、
+  // 正常な学習中のセッションがabandonedになる誤判定を引き起こすため。
   useEffect(() => {
-    const sendAbandon = () => {
+    const handleBeforeUnload = () => {
       if (!session || session.status !== "active") return;
       const url = `/api/v2/${tenantId}/lesson-sessions/${session.id}/abandon`;
       navigator.sendBeacon(url);
     };
-    const handleBeforeUnload = () => sendAbandon();
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") sendAbandon();
-    };
     window.addEventListener("beforeunload", handleBeforeUnload);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [session, tenantId]);
 
@@ -1053,6 +1056,7 @@ export default function StudentLessonDetailPage() {
                     onComplete={handleVideoComplete}
                     onPlay={handleVideoPlay}
                     onPause={handleVideoPause}
+                    sessionToken={session?.sessionToken ?? pendingTokenRef.current}
                   />
                   {session && (
                     <PauseTimeoutOverlay

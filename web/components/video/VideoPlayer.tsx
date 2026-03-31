@@ -17,6 +17,8 @@ interface VideoPlayerProps {
   eventEndpoint?: string;
   /** 認証付きfetch関数。省略時はグローバルfetch */
   fetchFn?: (url: string, options?: RequestInit) => Promise<Response>;
+  /** セッショントークン。省略時は内部で生成 */
+  sessionToken?: string;
 }
 
 /** crypto.randomUUID が使えない環境向けフォールバック */
@@ -39,6 +41,7 @@ export function VideoPlayer({
   onPause,
   eventEndpoint,
   fetchFn,
+  sessionToken: externalSessionToken,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -50,8 +53,11 @@ export function VideoPlayer({
   const [showControls, setShowControls] = useState(true);
   const hideControlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // セッショントークンはマウント時に1度だけ生成
-  const sessionToken = useMemo(() => generateSessionToken(), []);
+  // 外部から渡された場合はそれを使用、なければ内部で生成（後方互換性）
+  const sessionToken = useMemo(
+    () => externalSessionToken ?? generateSessionToken(),
+    [externalSessionToken]
+  );
 
   // --- 倍速禁止（ADR-015） ---
   useEffect(() => {

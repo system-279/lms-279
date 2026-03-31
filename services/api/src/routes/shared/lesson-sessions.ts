@@ -178,6 +178,7 @@ function formatSession(session: LessonSession): LessonSessionResponse {
   const remainingMs = Math.max(0, new Date(session.deadlineAt).getTime() - Date.now());
   return {
     id: session.id,
+    sessionToken: session.sessionToken,
     status: session.status,
     entryAt: session.entryAt,
     exitAt: session.exitAt,
