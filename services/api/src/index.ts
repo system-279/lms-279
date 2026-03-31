@@ -3,6 +3,7 @@ import express from "express";
 import helmet from "helmet";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { tenantAwareAuthMiddleware } from "./middleware/tenant-auth.js";
+import { resetE2eDataSource } from "./datasource/factory.js";
 import {
   tenantMiddleware,
   demoAuthMiddleware,
@@ -117,6 +118,14 @@ app.use((req, _res, next) => {
 // ========================================
 // ルーターのマウント
 // ========================================
+
+// E2Eテスト用: DataSourceリセット（E2E_TEST_ENABLED=true時のみ）
+if (process.env.E2E_TEST_ENABLED === "true") {
+  app.post("/api/v2/e2e-test/__reset", (_req, res) => {
+    resetE2eDataSource();
+    res.status(204).end();
+  });
+}
 
 // テナント登録API（認証のみ、テナントコンテキスト不要）
 app.use("/api/v2/tenants", authLimiter, tenantsRouter);

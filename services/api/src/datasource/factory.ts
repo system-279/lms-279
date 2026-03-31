@@ -34,11 +34,27 @@ function getFirestore(): Firestore {
 // デモ用DataSourceのシングルトン
 const demoDataSource = new InMemoryDataSource({ readOnly: true });
 
+// E2Eテスト用DataSource（E2E_TEST_ENABLED=true時のみ生成）
+const E2E_TENANT_ID = "e2e-test";
+let e2eDataSource = process.env.E2E_TEST_ENABLED === "true"
+  ? new InMemoryDataSource({ readOnly: false })
+  : null;
+
+export function resetE2eDataSource(): void {
+  if (process.env.E2E_TEST_ENABLED === "true") {
+    e2eDataSource = new InMemoryDataSource({ readOnly: false });
+  }
+}
+
 /**
  * テナントコンテキストに応じたDataSourceを取得
  * @throws Error tenantIdが未指定の場合（デモモード以外）
  */
 export function getDataSource(context: TenantContext): DataSource {
+  if (context.tenantId === E2E_TENANT_ID && e2eDataSource) {
+    return e2eDataSource;
+  }
+
   if (context.isDemo) {
     return demoDataSource;
   }
