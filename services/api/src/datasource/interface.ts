@@ -143,6 +143,15 @@ export interface DataSource {
   getVideoAnalyticsByVideoId(videoId: string): Promise<VideoAnalytics[]>;
   getAllVideoAnalytics(): Promise<VideoAnalytics[]>;
   upsertVideoAnalytics(userId: string, videoId: string, data: Partial<Omit<VideoAnalytics, "id" | "videoId" | "userId">>): Promise<VideoAnalytics>;
+  /**
+   * アトミックにVideoAnalyticsを読み取り→計算→書き込み。
+   * 並行リクエストによるロストアップデートを防止する。
+   * compute関数は現在の値を受け取り、更新データを返す。
+   */
+  computeAndUpsertVideoAnalytics(
+    userId: string, videoId: string,
+    compute: (current: VideoAnalytics | null) => Partial<Omit<VideoAnalytics, "id" | "videoId" | "userId">>
+  ): Promise<VideoAnalytics>;
 
   // Quizzes
   getQuizzes(filter?: QuizFilter): Promise<Quiz[]>;
