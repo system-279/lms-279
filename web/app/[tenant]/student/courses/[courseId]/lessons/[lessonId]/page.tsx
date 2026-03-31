@@ -771,24 +771,29 @@ export default function StudentLessonDetailPage() {
 
   // 動画初回再生時: セッション作成
   const createSession = useCallback(async () => {
-    if (session || sessionCreatingRef.current) return;
+    if (session || sessionCreatingRef.current || !videoMeta) return;
     sessionCreatingRef.current = true;
     try {
+      const sessionToken = crypto.randomUUID();
       const data = await authFetch<{ session: LessonSession }>(
         `/api/v1/lesson-sessions`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lessonId }),
+          body: JSON.stringify({
+            lessonId,
+            videoId: videoMeta.id,
+            sessionToken,
+          }),
         }
       );
       setSession(data.session);
-    } catch {
-      // セッション作成失敗はサイレント
+    } catch (error) {
+      console.error("Failed to create session:", error);
     } finally {
       sessionCreatingRef.current = false;
     }
-  }, [authFetch, lessonId, session]);
+  }, [authFetch, lessonId, videoMeta, session]);
 
   // 強制退室処理
   const handleForceExit = useCallback(
