@@ -4,6 +4,7 @@ import {
   createSession,
   getOrCreateSession,
   forceExitSession,
+  abandonSession,
   completeSession,
   validateSessionDeadline,
   handleStaleSession,
@@ -156,6 +157,74 @@ describe("lesson-session service", () => {
       };
 
       expect(validateSessionDeadline(session)).toBe(false);
+    });
+  });
+
+  describe("abandonSession", () => {
+    it("sets status to abandoned with browser_close reason", async () => {
+      const { lesson, video } = await setupLesson();
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+      const abandoned = await abandonSession(ds, session.id);
+
+      expect(abandoned.status).toBe("abandoned");
+      expect(abandoned.exitReason).toBe("browser_close");
+      expect(abandoned.exitAt).toBeTruthy();
+    });
+
+    it("does NOT reset lesson data (unlike forceExitSession)", async () => {
+      const { lesson, video } = await setupLesson();
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+
+      // 学習データを作成
+      await ds.upsertVideoAnalytics("user1", video.id, {
+        coverageRatio: 0.5,
+        isComplete: false,
+        watchedRanges: [{ start: 0, end: 150 }],
+        totalWatchTimeSec: 150,
+        seekCount: 0,
+        suspiciousFlags: [],
+      });
+
+      await abandonSession(ds, session.id);
+
+      // video_analyticsがリセットされていないことを確認
+      const analytics = await ds.getVideoAnalytics("user1", video.id);
+      expect(analytics).not.toBeNull();
+      expect(analytics!.coverageRatio).toBe(0.5);
+    });
+
+    it("allows creating a new session after abandoning", async () => {
+      const { lesson, video } = await setupLesson();
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+      await abandonSession(ds, session.id);
+
+      // abandoned後は getActiveLessonSession が null を返すため新規作成可能
+      const active = await ds.getActiveLessonSession("user1", lesson.id);
+      expect(active).toBeNull();
+
+      const newSession = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-2");
+      expect(newSession.id).not.toBe(session.id);
+      expect(newSession.status).toBe("active");
+    });
+
+    it("throws when session does not exist", async () => {
+      await expect(abandonSession(ds, "nonexistent-id")).rejects.toThrow("not found");
+    });
+
+    it("returns session as-is if already completed (TOCTOU safety)", async () => {
+      const { lesson, video } = await setupLesson();
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+
+      // テスト送信でセッション完了
+      await ds.updateLessonSession(session.id, {
+        status: "completed",
+        exitAt: new Date().toISOString(),
+        exitReason: "quiz_submitted",
+      });
+
+      // abandonは完了済みセッションを上書きしない
+      const result = await abandonSession(ds, session.id);
+      expect(result.status).toBe("completed");
     });
   });
 

@@ -91,6 +91,35 @@ export async function forceExitSession(
 }
 
 /**
+ * セッションを放棄状態に更新（ブラウザ終了時）
+ * forceExitSessionと異なり、学習データのリセットは行わない。
+ * 放棄後、同一ユーザーは同じレッスンで新規セッションを作成可能。
+ */
+export async function abandonSession(
+  ds: DataSource,
+  sessionId: string
+): Promise<LessonSession> {
+  // TOCTOU対策: 更新前にstatusを再確認（テスト送信による完了との競合防止）
+  const session = await ds.getLessonSession(sessionId);
+  if (!session) {
+    throw new Error(`Session ${sessionId} not found`);
+  }
+  if (session.status !== "active") {
+    return session;
+  }
+
+  const updated = await ds.updateLessonSession(sessionId, {
+    status: "abandoned",
+    exitAt: new Date().toISOString(),
+    exitReason: "browser_close",
+  });
+  if (!updated) {
+    throw new Error(`Session ${sessionId} not found`);
+  }
+  return updated;
+}
+
+/**
  * セッションをテスト送信で完了（退室打刻）
  */
 export async function completeSession(
