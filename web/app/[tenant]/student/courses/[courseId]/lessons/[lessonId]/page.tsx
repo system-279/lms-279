@@ -713,6 +713,8 @@ export default function StudentLessonDetailPage() {
   const [forceExitOpen, setForceExitOpen] = useState(false);
   const [forceExitReason, setForceExitReason] = useState<ForceExitReason>("time_limit");
   const sessionCreatingRef = useRef(false);
+  // セッション作成前からVideoPlayerに渡すtoken。createSessionで同じ値をBEに送信する。
+  const pendingTokenRef = useRef(crypto.randomUUID());
 
   const [loadingCourse, setLoadingCourse] = useState(true);
   const [loadingVideo, setLoadingVideo] = useState(false);
@@ -760,8 +762,8 @@ export default function StudentLessonDetailPage() {
       if (data.session) {
         setSession(data.session);
       }
-    } catch {
-      // セッション取得失敗はサイレント
+    } catch (error) {
+      console.error("Failed to fetch active session:", error);
     }
   }, [authFetch, lessonId]);
 
@@ -770,11 +772,11 @@ export default function StudentLessonDetailPage() {
   }, [fetchActiveSession]);
 
   // 動画初回再生時: セッション作成
+  // pendingTokenRefと同じtokenをBEに送信し、VideoPlayerが送るイベントと一致させる
   const createSession = useCallback(async () => {
     if (session || sessionCreatingRef.current || !videoMeta) return;
     sessionCreatingRef.current = true;
     try {
-      const sessionToken = crypto.randomUUID();
       const data = await authFetch<{ session: LessonSession }>(
         `/api/v1/lesson-sessions`,
         {
@@ -783,13 +785,14 @@ export default function StudentLessonDetailPage() {
           body: JSON.stringify({
             lessonId,
             videoId: videoMeta.id,
-            sessionToken,
+            sessionToken: pendingTokenRef.current,
           }),
         }
       );
       setSession(data.session);
     } catch (error) {
       console.error("Failed to create session:", error);
+      setError("出席セッションの作成に失敗しました。ページを再読み込みしてください。");
     } finally {
       sessionCreatingRef.current = false;
     }
@@ -804,8 +807,8 @@ export default function StudentLessonDetailPage() {
           `/api/v1/lesson-sessions/${session.id}/force-exit`,
           { method: "PATCH" }
         );
-      } catch {
-        // 強制退室API失敗でもダイアログは表示
+      } catch (error) {
+        console.error("Failed to force-exit session:", error);
       }
       setForceExitReason(reason);
       setForceExitOpen(true);
@@ -1053,7 +1056,7 @@ export default function StudentLessonDetailPage() {
                     onComplete={handleVideoComplete}
                     onPlay={handleVideoPlay}
                     onPause={handleVideoPause}
-                    sessionToken={session?.sessionToken}
+                    sessionToken={session?.sessionToken ?? pendingTokenRef.current}
                   />
                   {session && (
                     <PauseTimeoutOverlay

@@ -149,9 +149,16 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
     metadata: event.metadata ?? undefined,
   }));
 
-  // 3.5. セッション取得 + 15分超過チェック（ADR-027）
+  // 3.5. セッション取得 + sessionToken照合 + 15分超過チェック（ADR-027）
   // イベント保存前にチェック: forceExitSessionがデータリセットするため、保存→即削除を回避
   const activeSession = await ds.getActiveLessonSession(userId, video.lessonId);
+  if (activeSession && activeSession.sessionToken !== sessionToken.trim()) {
+    res.status(400).json({
+      error: "session_token_mismatch",
+      message: "sessionToken does not match active session",
+    });
+    return;
+  }
   if (activeSession?.pauseStartedAt) {
     const pausedMs = Date.now() - new Date(activeSession.pauseStartedAt).getTime();
     if (pausedMs > PAUSE_TIMEOUT_MS) {

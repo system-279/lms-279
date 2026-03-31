@@ -53,9 +53,11 @@ export function VideoPlayer({
   const [showControls, setShowControls] = useState(true);
   const hideControlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 外部から渡された場合はそれを使用、なければ内部で生成
-  const internalToken = useMemo(() => generateSessionToken(), []);
-  const sessionToken = externalSessionToken ?? internalToken;
+  // 外部から渡された場合はそれを使用、なければ内部で生成（後方互換性）
+  const sessionToken = useMemo(
+    () => externalSessionToken ?? generateSessionToken(),
+    [externalSessionToken]
+  );
 
   // --- 倍速禁止（ADR-015） ---
   useEffect(() => {
