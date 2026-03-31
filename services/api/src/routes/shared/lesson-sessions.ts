@@ -9,7 +9,6 @@ import { logger } from "../../utils/logger.js";
 import type { LessonSession } from "../../types/entities.js";
 import type { LessonSessionResponse } from "@lms-279/shared-types";
 import {
-  createSession,
   getOrCreateSession,
   forceExitSession,
   abandonSession,
@@ -47,27 +46,34 @@ router.post("/lesson-sessions", requireUser, async (req: Request, res: Response)
     return;
   }
 
-  const { session, created } = await getOrCreateSession(
-    ds, userId, lessonId, lesson.courseId, videoId, sessionToken
-  );
+  try {
+    const { session, created } = await getOrCreateSession(
+      ds, userId, lessonId, lesson.courseId, videoId, sessionToken
+    );
 
-  // 既存セッションが期限切れの場合はハンドル
-  if (!created) {
-    const handled = await handleStaleSession(ds, session);
-    if (handled.status === "force_exited") {
-      // 期限切れだったので新規作成
-      const newSession = await createSession(
-        ds, userId, lessonId, lesson.courseId, videoId, sessionToken
-      );
-      res.status(201).json({ session: formatSession(newSession) });
+    // 既存セッションが期限切れの場合はハンドル
+    if (!created) {
+      const handled = await handleStaleSession(ds, session);
+      if (handled.status === "force_exited") {
+        // 期限切れだったのでトランザクション付きで新規作成
+        const { session: newSession } = await getOrCreateSession(
+          ds, userId, lessonId, lesson.courseId, videoId, sessionToken
+        );
+        res.status(201).json({ session: formatSession(newSession) });
+        return;
+      }
+      // 既存のactiveセッションを返す
+      res.status(200).json({ session: formatSession(handled) });
       return;
     }
-    // 既存のactiveセッションを返す
-    res.status(200).json({ session: formatSession(handled) });
-    return;
-  }
 
-  res.status(201).json({ session: formatSession(session) });
+    res.status(201).json({ session: formatSession(session) });
+  } catch (err) {
+    logger.error("Failed to get-or-create session", {
+      error: err instanceof Error ? err : String(err), userId, lessonId,
+    });
+    res.status(500).json({ error: "session_create_failed", message: "セッション作成に失敗しました。再度お試しください。" });
+  }
 });
 
 /**

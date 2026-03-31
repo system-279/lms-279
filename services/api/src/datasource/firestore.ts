@@ -1032,6 +1032,11 @@ export class FirestoreDataSource implements DataSource {
     data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">
   ): Promise<{ session: LessonSession; created: boolean }> {
     return this.db.runTransaction(async (tx) => {
+      // センチネルドキュメントでドキュメントレベルロックを確保
+      // クエリのみのトランザクションでは0件ヒット時にロックが効かないため必須
+      const lockRef = this.collection("session_locks").doc(`${userId}_${lessonId}`);
+      await tx.get(lockRef);
+
       const snapshot = await tx.get(
         this.collection("lesson_sessions")
           .where("userId", "==", userId)
@@ -1055,6 +1060,8 @@ export class FirestoreDataSource implements DataSource {
         createdAt: now,
         updatedAt: now,
       });
+      // ロックドキュメントを更新してトランザクション競合を検知可能にする
+      tx.set(lockRef, { userId, lessonId, updatedAt: now });
 
       return {
         session: this.toLessonSession(newDocRef.id, {
