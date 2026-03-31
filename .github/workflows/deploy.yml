@@ -72,9 +72,8 @@ jobs:
         run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
 
       - name: Build and push API image
-        working-directory: services/api
         run: |
-          docker build -t ${{ env.ARTIFACT_REGISTRY }}/api:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/api:latest .
+          docker build -f services/api/Dockerfile -t ${{ env.ARTIFACT_REGISTRY }}/api:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/api:latest .
           docker push ${{ env.ARTIFACT_REGISTRY }}/api:${{ github.sha }}
           docker push ${{ env.ARTIFACT_REGISTRY }}/api:latest
 
@@ -118,9 +117,8 @@ jobs:
         run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
 
       - name: Build and push Web image
-        working-directory: web
         run: |
-          docker build \
+          docker build -f web/Dockerfile \
             --build-arg NEXT_PUBLIC_API_URL=https://api-3zcica5euq-an.a.run.app \
             --build-arg NEXT_PUBLIC_AUTH_MODE=firebase \
             --build-arg NEXT_PUBLIC_FIREBASE_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }} \

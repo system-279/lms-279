@@ -1,0 +1,11 @@
+.git
+node_modules
+**/node_modules
+**/.next
+**/dist
+e2e
+docs
+.github
+.claude
+.vscode
+*.md
