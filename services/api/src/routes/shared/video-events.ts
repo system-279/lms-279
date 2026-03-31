@@ -185,11 +185,11 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
 
       if (lastPause && (!lastPlay || lastPause.clientTimestamp > lastPlay.clientTimestamp)) {
         await ds.updateLessonSession(activeSession.id, {
-          pauseStartedAt: new Date(lastPause.clientTimestamp).toISOString(),
+          pauseStartedAt: new Date().toISOString(),
         });
       } else if (lastPlay && activeSession.pauseStartedAt) {
         const pauseDurationSec = Math.floor(
-          (lastPlay.clientTimestamp - new Date(activeSession.pauseStartedAt).getTime()) / 1000
+          (Date.now() - new Date(activeSession.pauseStartedAt).getTime()) / 1000
         );
         const longestPauseSec = Math.max(activeSession.longestPauseSec, pauseDurationSec);
         await ds.updateLessonSession(activeSession.id, {

@@ -123,7 +123,8 @@ describe("session cross-feature integration", () => {
     s = await ds.getLessonSession(session.id);
     expect(s!.pauseStartedAt).not.toBeNull();
 
-    // play（30秒後）
+    // play（サーバー時刻を30秒進めてから送信）
+    vi.setSystemTime(new Date("2026-03-31T10:00:30Z"));
     const playEvents = makeEvents([{ type: "play", pos: 95, offsetMs: 130000 }]);
     await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events: playEvents });
 
