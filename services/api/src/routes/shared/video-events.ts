@@ -10,6 +10,9 @@ import { requireUser } from "../../middleware/auth.js";
 import type { VideoEventType } from "../../types/entities.js";
 import { processVideoEvents } from "../../services/video-analytics.js";
 import { updateLessonProgress } from "../../services/progress.js";
+import { forceExitSession } from "../../services/lesson-session.js";
+
+const PAUSE_TIMEOUT_MS = 15 * 60 * 1000; // 15分
 
 const router = Router();
 
@@ -146,6 +149,41 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
   }));
 
   const savedEvents = await ds.createVideoEvents(eventsToCreate);
+
+  // 3.5. セッション内 pause/play 状態追跡（ADR-027）
+  const activeSession = await ds.getActiveLessonSession(userId, video.lessonId);
+  if (activeSession) {
+    // 15分超過チェック（サーバーサイド強制退室）
+    if (activeSession.pauseStartedAt) {
+      const pausedMs = Date.now() - new Date(activeSession.pauseStartedAt).getTime();
+      if (pausedMs > PAUSE_TIMEOUT_MS) {
+        await forceExitSession(ds, activeSession.id, "pause_timeout");
+        res.status(409).json({ error: "session_force_exited", message: "一時停止が15分を超過しました" });
+        return;
+      }
+    }
+
+    // バッチ内のpause/playイベントで状態を更新
+    const lastPause = savedEvents.filter(e => e.eventType === "pause").at(-1);
+    const lastPlay = savedEvents.filter(e => e.eventType === "play").at(-1);
+
+    if (lastPause && (!lastPlay || lastPause.clientTimestamp > lastPlay.clientTimestamp)) {
+      // バッチ内で最後のイベントがpause → pauseStartedAtを記録
+      await ds.updateLessonSession(activeSession.id, {
+        pauseStartedAt: new Date(lastPause.clientTimestamp).toISOString(),
+      });
+    } else if (lastPlay && activeSession.pauseStartedAt) {
+      // playが来た → pause解除、longestPauseSecを更新
+      const pauseDurationSec = Math.floor(
+        (lastPlay.clientTimestamp - new Date(activeSession.pauseStartedAt).getTime()) / 1000
+      );
+      const longestPauseSec = Math.max(activeSession.longestPauseSec, pauseDurationSec);
+      await ds.updateLessonSession(activeSession.id, {
+        pauseStartedAt: null,
+        longestPauseSec,
+      });
+    }
+  }
 
   // 4. 現在のanalytics取得
   const currentAnalytics = await ds.getVideoAnalytics(userId, videoId);
