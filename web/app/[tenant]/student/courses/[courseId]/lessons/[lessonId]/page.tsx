@@ -826,22 +826,17 @@ export default function StudentLessonDetailPage() {
   // ブラウザ終了時: sendBeaconでセッション放棄
   // fetch()はbeforeunloadで中断されるためsendBeaconを使用。
   // sendBeaconはカスタムヘッダーを送れないため、authFetchを使わず/api/v2パスに直接リクエスト。
-  // モバイルではbeforeunloadが発火しないためvisibilitychangeも併用。
+  // visibilitychangeは使わない: タブ切替やアプリ切替でもhiddenが発火し、
+  // 正常な学習中のセッションがabandonedになる誤判定を引き起こすため。
   useEffect(() => {
-    const sendAbandon = () => {
+    const handleBeforeUnload = () => {
       if (!session || session.status !== "active") return;
       const url = `/api/v2/${tenantId}/lesson-sessions/${session.id}/abandon`;
       navigator.sendBeacon(url);
     };
-    const handleBeforeUnload = () => sendAbandon();
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") sendAbandon();
-    };
     window.addEventListener("beforeunload", handleBeforeUnload);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [session, tenantId]);
 
@@ -1058,6 +1053,7 @@ export default function StudentLessonDetailPage() {
                     onComplete={handleVideoComplete}
                     onPlay={handleVideoPlay}
                     onPause={handleVideoPause}
+                    sessionToken={session?.sessionToken}
                   />
                   {session && (
                     <PauseTimeoutOverlay
