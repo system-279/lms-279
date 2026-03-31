@@ -2,27 +2,29 @@ FROM node:24-slim
 
 WORKDIR /app
 
-# package.jsonとtsconfig.jsonをコピー
-COPY package.json ./
-COPY tsconfig.json ./
+# ワークスペースルート構造をコピー（依存解決に必要）
+COPY package.json package-lock.json ./
+COPY packages/shared-types ./packages/shared-types
+COPY services/api/package.json services/api/tsconfig.json ./services/api/
 
-# 依存関係をインストール
-RUN npm install
+# ワークスペース依存関係をインストール
+RUN npm ci -w @lms-279/shared-types -w @lms-279/api
 
-# ソースコードをコピー
-COPY src ./src
+# shared-typesをビルド（型定義生成）
+RUN npm run build -w @lms-279/shared-types
 
-# TypeScriptをビルド
-RUN npm run build
+# APIソースをコピーしてビルド
+COPY services/api/src ./services/api/src
+RUN npm run build -w @lms-279/api
 
-# 不要なファイルを削除
-RUN rm -rf src node_modules/.cache
+# 不要ファイル削除
+RUN rm -rf services/api/src packages/shared-types/src node_modules/.cache
 
 # 本番用依存関係のみ再インストール
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev -w @lms-279/shared-types -w @lms-279/api
 
-# ポートを公開
+WORKDIR /app/services/api
+
 EXPOSE 8080
 
-# 起動コマンド
 CMD ["node", "dist/index.js"]
