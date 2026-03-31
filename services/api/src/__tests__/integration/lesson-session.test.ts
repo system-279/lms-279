@@ -206,6 +206,26 @@ describe("lesson-session service", () => {
       expect(newSession.id).not.toBe(session.id);
       expect(newSession.status).toBe("active");
     });
+
+    it("throws when session does not exist", async () => {
+      await expect(abandonSession(ds, "nonexistent-id")).rejects.toThrow("not found");
+    });
+
+    it("returns session as-is if already completed (TOCTOU safety)", async () => {
+      const { lesson, video } = await setupLesson();
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+
+      // テスト送信でセッション完了
+      await ds.updateLessonSession(session.id, {
+        status: "completed",
+        exitAt: new Date().toISOString(),
+        exitReason: "quiz_submitted",
+      });
+
+      // abandonは完了済みセッションを上書きしない
+      const result = await abandonSession(ds, session.id);
+      expect(result.status).toBe("completed");
+    });
   });
 
   describe("handleStaleSession", () => {

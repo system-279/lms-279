@@ -819,14 +819,25 @@ export default function StudentLessonDetailPage() {
   }, [handleForceExit]);
 
   // ブラウザ終了時: sendBeaconでセッション放棄
+  // fetch()はbeforeunloadで中断されるためsendBeaconを使用。
+  // sendBeaconはカスタムヘッダーを送れないため、authFetchを使わず/api/v2パスに直接リクエスト。
+  // モバイルではbeforeunloadが発火しないためvisibilitychangeも併用。
   useEffect(() => {
-    const handleBeforeUnload = () => {
+    const sendAbandon = () => {
       if (!session || session.status !== "active") return;
       const url = `/api/v2/${tenantId}/lesson-sessions/${session.id}/abandon`;
       navigator.sendBeacon(url);
     };
+    const handleBeforeUnload = () => sendAbandon();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") sendAbandon();
+    };
     window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [session, tenantId]);
 
   // ============================================================
