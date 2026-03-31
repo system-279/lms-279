@@ -180,26 +180,41 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
   // 失敗してもanalytics応答は返す（pause追跡は二次的機能）
   if (activeSession) {
     try {
-      const lastPause = savedEvents.filter(e => e.eventType === "pause").at(-1);
-      const lastPlay = savedEvents.filter(e => e.eventType === "play").at(-1);
+      // 配列インデックスで順序判定（clientTimestampに依存しない）
+      let pauseIndex = -1;
+      let playIndex = -1;
+      for (let i = savedEvents.length - 1; i >= 0; i--) {
+        if (pauseIndex < 0 && savedEvents[i].eventType === "pause") pauseIndex = i;
+        if (playIndex < 0 && savedEvents[i].eventType === "play") playIndex = i;
+        if (pauseIndex >= 0 && playIndex >= 0) break;
+      }
 
-      if (lastPause && (!lastPlay || lastPause.clientTimestamp > lastPlay.clientTimestamp)) {
+      if (pauseIndex >= 0 && pauseIndex > playIndex) {
         await ds.updateLessonSession(activeSession.id, {
           pauseStartedAt: new Date().toISOString(),
         });
-      } else if (lastPlay && activeSession.pauseStartedAt) {
+      } else if (playIndex >= 0 && activeSession.pauseStartedAt) {
         const pauseDurationSec = Math.floor(
           (Date.now() - new Date(activeSession.pauseStartedAt).getTime()) / 1000
         );
-        const longestPauseSec = Math.max(activeSession.longestPauseSec, pauseDurationSec);
-        await ds.updateLessonSession(activeSession.id, {
-          pauseStartedAt: null,
-          longestPauseSec,
-        });
+        if (!Number.isFinite(pauseDurationSec) || pauseDurationSec < 0) {
+          logger.warn("Invalid pause duration computed, skipping update", {
+            pauseStartedAt: activeSession.pauseStartedAt,
+            pauseDurationSec,
+            sessionId: activeSession.id, userId, videoId,
+          });
+        } else {
+          const longestPauseSec = Math.max(activeSession.longestPauseSec, pauseDurationSec);
+          await ds.updateLessonSession(activeSession.id, {
+            pauseStartedAt: null,
+            longestPauseSec,
+          });
+        }
       }
     } catch (err) {
       logger.error("Failed to update session pause state", {
-        error: String(err), sessionId: activeSession.id, userId, videoId,
+        error: err instanceof Error ? err : String(err),
+        sessionId: activeSession.id, userId, videoId,
       });
     }
   }

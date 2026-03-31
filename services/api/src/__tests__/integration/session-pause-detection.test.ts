@@ -193,6 +193,46 @@ describe("server-side pause detection via video-events", () => {
       expect(Math.abs(pauseTime - serverTime)).toBeLessThan(1000); // 1秒以内の誤差
     });
 
+    it("uses server time for play-side duration calculation, ignoring client timestamp", async () => {
+      const session = await createActiveSession();
+
+      // pause送信（サーバー時刻 10:00:00）
+      const pauseEvents = makeEvents([
+        { type: "pause", position: 10, offsetMs: 10000 },
+      ]);
+      await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events: pauseEvents });
+
+      // サーバー時刻を120秒進めるが、clientTimestampは2秒後のみ（改ざん試行）
+      vi.setSystemTime(new Date("2026-03-31T10:02:00Z"));
+      const playEvents = [{
+        eventType: "play",
+        position: 10,
+        playbackRate: 1,
+        clientTimestamp: baseTime + 12000, // pauseの2秒後（改ざん: 実際は120秒経過）
+      }];
+      await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events: playEvents });
+
+      const updated = await ds.getLessonSession(session.id);
+      expect(updated!.pauseStartedAt).toBeNull();
+      // サーバー時刻ベースで120秒であるべき（clientTimestampの2秒ではない）
+      expect(updated!.longestPauseSec).toBeGreaterThanOrEqual(120);
+    });
+
+    it("correctly determines pause/play order within a batch by array position", async () => {
+      const session = await createActiveSession();
+
+      // 同一バッチでpause→playの順（配列末尾がplay → pauseStartedAt設定なし）
+      const events = [
+        { eventType: "pause", position: 10, playbackRate: 1, clientTimestamp: baseTime + 10000 },
+        { eventType: "play", position: 10, playbackRate: 1, clientTimestamp: baseTime + 11000 },
+      ];
+      await request.post(`/videos/${videoId}/events`).send({ sessionToken: "token-1", events });
+
+      let updated = await ds.getLessonSession(session.id);
+      // playが後 → pauseStartedAtは設定されない（またはnullのまま）
+      expect(updated!.pauseStartedAt).toBeNull();
+    });
+
     it("does nothing when no active session exists", async () => {
       // セッションなしでもpause/playイベントはエラーにならない
       const events = makeEvents([
