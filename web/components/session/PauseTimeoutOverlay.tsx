@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import { Play } from "lucide-react";
 
 interface PauseTimeoutOverlayProps {
   isPaused: boolean;
@@ -66,10 +67,14 @@ export function PauseTimeoutOverlay({
 
   return (
     <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 pointer-events-none">
-      <div className="rounded-lg bg-background/95 px-6 py-4 text-center shadow-lg">
+      <div className="flex flex-col items-center gap-3 rounded-lg bg-background/95 px-6 py-4 text-center shadow-lg">
         <p className="text-sm font-medium">
           一時停止中 — 残り {displayTime} で自動退室
         </p>
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Play className="h-3 w-3" />
+          <span>画面をクリックして再開</span>
+        </div>
       </div>
     </div>
   );
