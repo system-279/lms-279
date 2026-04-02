@@ -683,7 +683,7 @@ export default function StudentLessonDetailPage() {
   const courseId = params.courseId as string;
   const lessonId = params.lessonId as string;
   const { tenantId } = useTenant();
-  const { authFetch } = useAuthenticatedFetch();
+  const { authFetch, authLoading } = useAuthenticatedFetch();
 
   /**
    * VideoEventTracker の fetchFn シグネチャ (url, options?) => Promise<Response> に合わせるラッパー。
@@ -768,8 +768,9 @@ export default function StudentLessonDetailPage() {
   }, [authFetch, lessonId]);
 
   useEffect(() => {
+    if (authLoading) return;
     fetchActiveSession();
-  }, [fetchActiveSession]);
+  }, [fetchActiveSession, authLoading]);
 
   // 動画初回再生時: セッション作成
   // pendingTokenRefと同じtokenをBEに送信し、VideoPlayerが送るイベントと一致させる
