@@ -58,6 +58,14 @@ describe("checkQuizAccess", () => {
     const result = checkQuizAccess(enrollment);
     expect(result).toEqual({ allowed: false, reason: "quiz_access_expired" });
   });
+
+  it("無効な日付データはアクセス拒否（データ破損防御）", () => {
+    const enrollment = makeEnrollment({
+      quizAccessUntil: "invalid-date",
+    });
+    const result = checkQuizAccess(enrollment);
+    expect(result).toEqual({ allowed: false, reason: "invalid_deadline_data" });
+  });
 });
 
 describe("checkVideoAccess", () => {
@@ -87,6 +95,14 @@ describe("checkVideoAccess", () => {
     });
     const result = checkVideoAccess(enrollment);
     expect(result).toEqual({ allowed: false, reason: "video_access_expired" });
+  });
+
+  it("無効な日付データはアクセス拒否（データ破損防御）", () => {
+    const enrollment = makeEnrollment({
+      videoAccessUntil: "not-a-date",
+    });
+    const result = checkVideoAccess(enrollment);
+    expect(result).toEqual({ allowed: false, reason: "invalid_deadline_data" });
   });
 });
 

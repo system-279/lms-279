@@ -683,7 +683,8 @@ router.post("/tenants/:tenantId/enrollments", async (req: Request, res: Response
     return;
   }
 
-  const deadlines = calculateDefaultDeadlines(enrolledAt);
+  const normalizedEnrolledAt = new Date(enrolledAt).toISOString();
+  const deadlines = calculateDefaultDeadlines(normalizedEnrolledAt);
   const docId = `${userId}_${courseId}`;
   const basePath = `tenants/${tenantId}`;
   const docRef = db.collection(`${basePath}/enrollments`).doc(docId);
@@ -691,7 +692,7 @@ router.post("/tenants/:tenantId/enrollments", async (req: Request, res: Response
   await docRef.set({
     userId,
     courseId,
-    enrolledAt,
+    enrolledAt: normalizedEnrolledAt,
     quizAccessUntil: deadlines.quizAccessUntil,
     videoAccessUntil: deadlines.videoAccessUntil,
     createdBy: req.superAdmin!.email,
@@ -722,37 +723,60 @@ router.post("/tenants/:tenantId/enrollments/bulk", async (req: Request, res: Res
     return;
   }
 
+  if (!userIds.every((id: unknown) => typeof id === "string" && (id as string).trim() !== "")) {
+    res.status(400).json({ error: "bad_request", message: "All userIds must be non-empty strings" });
+    return;
+  }
+
   if (!isValidISODate(enrolledAt)) {
     res.status(400).json({ error: "invalid_date", message: "enrolledAt must be a valid date string" });
     return;
   }
 
-  const deadlines = calculateDefaultDeadlines(enrolledAt);
+  const normalizedEnrolledAt = new Date(enrolledAt).toISOString();
+  const deadlines = calculateDefaultDeadlines(normalizedEnrolledAt);
   const basePath = `tenants/${tenantId}`;
   const BATCH_LIMIT = 500;
   const results: EnrollmentResponse[] = [];
+  const errors: { chunkIndex: number; error: string }[] = [];
 
   for (let i = 0; i < userIds.length; i += BATCH_LIMIT) {
     const batch = db.batch();
     const chunk = userIds.slice(i, i + BATCH_LIMIT);
+    const chunkResults: EnrollmentResponse[] = [];
 
     for (const uid of chunk) {
-      const docId = `${uid}_${courseId}`;
+      const docId = `${(uid as string).trim()}_${courseId}`;
       const docRef = db.collection(`${basePath}/enrollments`).doc(docId);
       const enrollmentData = {
-        userId: uid,
+        userId: (uid as string).trim(),
         courseId,
-        enrolledAt,
+        enrolledAt: normalizedEnrolledAt,
         quizAccessUntil: deadlines.quizAccessUntil,
         videoAccessUntil: deadlines.videoAccessUntil,
         createdBy: req.superAdmin!.email,
         updatedAt: new Date().toISOString(),
       };
       batch.set(docRef, enrollmentData);
-      results.push(toEnrollmentResponse(docId, enrollmentData));
+      chunkResults.push(toEnrollmentResponse(docId, enrollmentData));
     }
 
-    await batch.commit();
+    try {
+      await batch.commit();
+      results.push(...chunkResults);
+    } catch (err) {
+      errors.push({ chunkIndex: Math.floor(i / BATCH_LIMIT), error: String(err) });
+    }
+  }
+
+  if (errors.length > 0) {
+    res.status(207).json({
+      enrollments: results,
+      count: results.length,
+      errors,
+      message: `${results.length}件作成、${errors.length}バッチ失敗`,
+    });
+    return;
   }
 
   res.status(201).json({ enrollments: results, count: results.length });

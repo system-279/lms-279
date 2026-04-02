@@ -21,6 +21,10 @@ export function checkQuizAccess(enrollment: Enrollment | null): AccessCheckResul
   const now = new Date();
   const deadline = new Date(enrollment.quizAccessUntil);
 
+  if (isNaN(deadline.getTime())) {
+    return { allowed: false, reason: "invalid_deadline_data" };
+  }
+
   if (now >= deadline) {
     return { allowed: false, reason: "quiz_access_expired" };
   }
@@ -38,6 +42,10 @@ export function checkVideoAccess(enrollment: Enrollment | null): AccessCheckResu
 
   const now = new Date();
   const deadline = new Date(enrollment.videoAccessUntil);
+
+  if (isNaN(deadline.getTime())) {
+    return { allowed: false, reason: "invalid_deadline_data" };
+  }
 
   if (now >= deadline) {
     return { allowed: false, reason: "video_access_expired" };
