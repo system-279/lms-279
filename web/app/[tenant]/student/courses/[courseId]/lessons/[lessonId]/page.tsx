@@ -12,6 +12,7 @@ import { SessionTimer } from "@/components/session/SessionTimer";
 import { PauseTimeoutOverlay } from "@/components/session/PauseTimeoutOverlay";
 import { ForceExitDialog } from "@/components/session/ForceExitDialog";
 import type { LessonSessionResponse } from "@lms-279/shared-types";
+import { useVideoCompletion } from "@/lib/hooks/use-video-completion";
 
 // ============================================================
 // 型定義
@@ -53,20 +54,6 @@ type PlaybackData = {
   };
 };
 
-type Analytics = {
-  videoId: string;
-  userId: string;
-  watchedRanges: { start: number; end: number }[];
-  totalWatchTimeSec: number;
-  coverageRatio: number;
-  isComplete: boolean;
-  seekCount: number;
-  pauseCount: number;
-  totalPauseDurationSec: number;
-  speedViolationCount: number;
-  suspiciousFlags: string[];
-  updatedAt?: string;
-};
 
 // ============================================================
 // テスト関連の型定義
@@ -703,9 +690,18 @@ export default function StudentLessonDetailPage() {
   const [currentLesson, setCurrentLesson] = useState<Lesson | null>(null);
   const [videoMeta, setVideoMeta] = useState<VideoMeta | null>(null);
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
-  const [analytics, setAnalytics] = useState<Analytics | null>(null);
-  // 動画完了ゲート: 動画完了時にテストセクションを表示するためのフラグ
-  const [videoCompleted, setVideoCompleted] = useState(false);
+  // 動画完了判定（カスタムフック）
+  const {
+    analytics,
+    loadingAnalytics,
+    showQuizSection,
+    handleVideoComplete,
+  } = useVideoCompletion({
+    authFetch,
+    videoMeta,
+    hasVideo: currentLesson?.hasVideo ?? false,
+    hasQuiz: currentLesson?.hasQuiz ?? false,
+  });
 
   // セッション（入退室管理）
   const [session, setSession] = useState<LessonSession | null>(null);
@@ -718,7 +714,6 @@ export default function StudentLessonDetailPage() {
 
   const [loadingCourse, setLoadingCourse] = useState(true);
   const [loadingVideo, setLoadingVideo] = useState(false);
-  const [loadingAnalytics, setLoadingAnalytics] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
 
@@ -881,37 +876,6 @@ export default function StudentLessonDetailPage() {
   // 視聴分析取得
   // ============================================================
 
-  const fetchAnalytics = useCallback(async () => {
-    if (!videoMeta) return;
-    setLoadingAnalytics(true);
-    try {
-      const data = await authFetch<{ analytics: Analytics }>(
-        `/api/v1/videos/${videoMeta.id}/analytics`
-      );
-      setAnalytics(data.analytics);
-      // 動画完了状態を同期
-      if (data.analytics.isComplete) {
-        setVideoCompleted(true);
-      }
-    } catch {
-      // 分析取得失敗はサイレント（メイン機能ではない）
-    } finally {
-      setLoadingAnalytics(false);
-    }
-  }, [authFetch, videoMeta]);
-
-  useEffect(() => {
-    if (videoMeta) {
-      fetchAnalytics();
-    }
-  }, [videoMeta, fetchAnalytics]);
-
-  // 動画完了コールバック: analytics再取得し、サーバーが完了と判定した場合のみフラグを立てる
-  const handleVideoComplete = useCallback(async () => {
-    await fetchAnalytics();
-    // fetchAnalytics 内で isComplete === true の場合に setVideoCompleted(true) が呼ばれる
-  }, [fetchAnalytics]);
-
   // 動画再生開始: セッション作成
   const handleVideoPlay = useCallback(() => {
     setVideoPaused(false);
@@ -940,13 +904,6 @@ export default function StudentLessonDetailPage() {
   const coveragePercent = analytics
     ? Math.round(analytics.coverageRatio * 100)
     : 0;
-
-  // テストセクションを表示すべきか:
-  // - 動画なしレッスン: 常に表示
-  // - 動画ありレッスン: analytics.isComplete === true または videoCompleted フラグ
-  const showQuizSection =
-    currentLesson?.hasQuiz &&
-    (!currentLesson.hasVideo || videoCompleted || analytics?.isComplete === true);
 
   // ============================================================
   // レンダリング
