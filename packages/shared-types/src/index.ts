@@ -3,3 +3,4 @@ export type * from "./common.js";
 export type * from "./analytics.js";
 export type * from "./attendance.js";
 export type * from "./sessions.js";
+export type * from "./student-progress.js";

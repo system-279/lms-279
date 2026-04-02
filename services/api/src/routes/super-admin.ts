@@ -11,7 +11,7 @@
 
 import { Router, Request, Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
-import type { SuperAttendanceResponse } from "@lms-279/shared-types";
+import type { SuperAttendanceResponse, SuperStudentProgressResponse } from "@lms-279/shared-types";
 import {
   superAdminAuthMiddleware,
   getAllSuperAdmins,
@@ -613,6 +613,410 @@ router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Requ
   }
 
   res.json({ message: "updated" });
+});
+
+// ============================================================
+// テナント別受講状況管理
+// ============================================================
+
+/**
+ * GET /tenants/:tenantId/student-progress
+ * テナント内受講生のコース別・レッスン別進捗一覧
+ * クエリ: ?courseId=xxx でコース絞り込み可
+ */
+router.get("/tenants/:tenantId/student-progress", async (req: Request, res: Response) => {
+  const db = getFirestore();
+  const tenantId = req.params.tenantId as string;
+  const courseIdFilter = typeof req.query.courseId === "string" ? req.query.courseId : undefined;
+
+  // テナント存在確認
+  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+  if (!tenantDoc.exists) {
+    res.status(404).json({ error: "not_found", message: "Tenant not found" });
+    return;
+  }
+
+  const basePath = `tenants/${tenantId}`;
+
+  // 受講生一覧取得（role=student）
+  const usersSnapshot = await db.collection(`${basePath}/users`)
+    .where("role", "==", "student")
+    .get();
+
+  // コース一覧取得
+  let coursesSnapshot;
+  if (courseIdFilter) {
+    const courseDoc = await db.collection(`${basePath}/courses`).doc(courseIdFilter).get();
+    coursesSnapshot = courseDoc.exists ? [courseDoc] : [];
+  } else {
+    const snap = await db.collection(`${basePath}/courses`).get();
+    coursesSnapshot = snap.docs;
+  }
+
+  // レッスン一覧取得
+  const lessonsSnapshot = await db.collection(`${basePath}/lessons`).get();
+  const lessonsMap = new Map<string, { title: string; hasVideo: boolean; hasQuiz: boolean }>();
+  for (const doc of lessonsSnapshot.docs) {
+    const data = doc.data();
+    lessonsMap.set(doc.id, {
+      title: data.title ?? doc.id,
+      hasVideo: data.hasVideo ?? false,
+      hasQuiz: data.hasQuiz ?? false,
+    });
+  }
+
+  // user_progress 全レコード取得
+  const progressSnapshot = await db.collection(`${basePath}/user_progress`).get();
+  // キー: userId_lessonId → progress data
+  const progressMap = new Map<string, {
+    videoCompleted: boolean;
+    quizPassed: boolean;
+    quizBestScore: number | null;
+    lessonCompleted: boolean;
+  }>();
+  for (const doc of progressSnapshot.docs) {
+    const data = doc.data();
+    progressMap.set(doc.id, {
+      videoCompleted: data.videoCompleted ?? false,
+      quizPassed: data.quizPassed ?? false,
+      quizBestScore: data.quizBestScore ?? null,
+      lessonCompleted: data.lessonCompleted ?? false,
+    });
+  }
+
+  // course_progress 全レコード取得
+  const courseProgressSnapshot = await db.collection(`${basePath}/course_progress`).get();
+  // キー: userId_courseId → progress data
+  const courseProgressMap = new Map<string, {
+    completedLessons: number;
+    totalLessons: number;
+    progressRatio: number;
+    isCompleted: boolean;
+  }>();
+  for (const doc of courseProgressSnapshot.docs) {
+    const data = doc.data();
+    courseProgressMap.set(doc.id, {
+      completedLessons: data.completedLessons ?? 0,
+      totalLessons: data.totalLessons ?? 0,
+      progressRatio: data.progressRatio ?? 0,
+      isCompleted: data.isCompleted ?? false,
+    });
+  }
+
+  // レスポンス構築
+  const students = usersSnapshot.docs.map((userDoc) => {
+    const userData = userDoc.data();
+    const userId = userDoc.id;
+
+    const courses = coursesSnapshot.map((courseDoc) => {
+      const courseData = typeof courseDoc.data === "function" ? courseDoc.data() : courseDoc.data?.();
+      if (!courseData) return null;
+      const courseId = courseDoc.id;
+      const lessonOrder: string[] = courseData.lessonOrder ?? [];
+
+      // コース進捗
+      const cpKey = `${userId}_${courseId}`;
+      const cp = courseProgressMap.get(cpKey);
+
+      // レッスン進捗
+      const lessons = lessonOrder.map((lessonId) => {
+        const lessonInfo = lessonsMap.get(lessonId);
+        const upKey = `${userId}_${lessonId}`;
+        const up = progressMap.get(upKey);
+
+        return {
+          lessonId,
+          lessonTitle: lessonInfo?.title ?? lessonId,
+          videoCompleted: up?.videoCompleted ?? false,
+          quizPassed: up?.quizPassed ?? false,
+          quizBestScore: up?.quizBestScore ?? null,
+          lessonCompleted: up?.lessonCompleted ?? false,
+        };
+      });
+
+      return {
+        courseId,
+        courseName: courseData.name ?? courseId,
+        completedLessons: cp?.completedLessons ?? 0,
+        totalLessons: cp?.totalLessons ?? lessonOrder.length,
+        progressRatio: cp?.progressRatio ?? 0,
+        isCompleted: cp?.isCompleted ?? false,
+        lessons,
+      };
+    }).filter((c): c is NonNullable<typeof c> => c !== null);
+
+    return {
+      userId,
+      userName: userData.name ?? null,
+      userEmail: userData.email ?? "",
+      courses,
+    };
+  });
+
+  const response: SuperStudentProgressResponse = {
+    tenantId,
+    tenantName: tenantDoc.data()?.name ?? tenantId,
+    students,
+    totalStudents: students.length,
+  };
+  res.json(response);
+});
+
+/**
+ * PATCH /tenants/:tenantId/student-progress/:lessonId/:userId
+ * 受講者のレッスン進捗を手動編集
+ */
+router.patch("/tenants/:tenantId/student-progress/:lessonId/:userId", async (req: Request, res: Response) => {
+  const db = getFirestore();
+  const tenantId = req.params.tenantId as string;
+  const lessonId = req.params.lessonId as string;
+  const userId = req.params.userId as string;
+  const { videoCompleted, quizPassed, quizBestScore, lessonCompleted } = req.body;
+
+  // バリデーション
+  if (videoCompleted !== undefined && typeof videoCompleted !== "boolean") {
+    res.status(400).json({ error: "invalid_videoCompleted", message: "videoCompleted must be a boolean" });
+    return;
+  }
+  if (quizPassed !== undefined && typeof quizPassed !== "boolean") {
+    res.status(400).json({ error: "invalid_quizPassed", message: "quizPassed must be a boolean" });
+    return;
+  }
+  if (quizBestScore !== undefined && (typeof quizBestScore !== "number" || !Number.isFinite(quizBestScore) || quizBestScore < 0 || quizBestScore > 100)) {
+    res.status(400).json({ error: "invalid_quizBestScore", message: "quizBestScore must be a number between 0 and 100" });
+    return;
+  }
+  if (lessonCompleted !== undefined && typeof lessonCompleted !== "boolean") {
+    res.status(400).json({ error: "invalid_lessonCompleted", message: "lessonCompleted must be a boolean" });
+    return;
+  }
+
+  if (videoCompleted === undefined && quizPassed === undefined && quizBestScore === undefined && lessonCompleted === undefined) {
+    res.status(400).json({ error: "no_fields", message: "At least one field must be provided" });
+    return;
+  }
+
+  const basePath = `tenants/${tenantId}`;
+
+  // ユーザー存在確認
+  const userDoc = await db.collection(`${basePath}/users`).doc(userId).get();
+  if (!userDoc.exists) {
+    res.status(404).json({ error: "not_found", message: "User not found" });
+    return;
+  }
+
+  // レッスン存在確認 + courseId取得
+  const lessonDoc = await db.collection(`${basePath}/lessons`).doc(lessonId).get();
+  if (!lessonDoc.exists) {
+    res.status(404).json({ error: "not_found", message: "Lesson not found" });
+    return;
+  }
+  const courseId = lessonDoc.data()?.courseId as string;
+
+  // user_progress更新
+  const progressId = `${userId}_${lessonId}`;
+  const progressRef = db.collection(`${basePath}/user_progress`).doc(progressId);
+  const currentDoc = await progressRef.get();
+  const current = currentDoc.data() ?? {};
+
+  const updatedData: Record<string, unknown> = {
+    userId,
+    lessonId,
+    courseId,
+    updatedAt: new Date(),
+  };
+  if (videoCompleted !== undefined) updatedData.videoCompleted = videoCompleted;
+  if (quizPassed !== undefined) updatedData.quizPassed = quizPassed;
+  if (quizBestScore !== undefined) updatedData.quizBestScore = quizBestScore;
+  if (lessonCompleted !== undefined) updatedData.lessonCompleted = lessonCompleted;
+
+  await progressRef.set({ ...current, ...updatedData }, { merge: true });
+
+  // course_progress再計算
+  const courseDoc = await db.collection(`${basePath}/courses`).doc(courseId).get();
+  if (courseDoc.exists) {
+    const courseData = courseDoc.data()!;
+    const lessonOrder: string[] = courseData.lessonOrder ?? [];
+    const totalLessons = lessonOrder.length;
+
+    if (totalLessons > 0) {
+      // 全レッスンの進捗を取得
+      const allLessonsSnap = await db.collection(`${basePath}/lessons`).get();
+      const allLessonsMap = new Map<string, { hasVideo: boolean; hasQuiz: boolean }>();
+      for (const doc of allLessonsSnap.docs) {
+        const d = doc.data();
+        allLessonsMap.set(doc.id, { hasVideo: d.hasVideo ?? false, hasQuiz: d.hasQuiz ?? false });
+      }
+
+      let completedLessons = 0;
+      for (const lid of lessonOrder) {
+        const lesson = allLessonsMap.get(lid);
+        if (lesson && !lesson.hasVideo && !lesson.hasQuiz) {
+          completedLessons++;
+          continue;
+        }
+        const upId = `${userId}_${lid}`;
+        let isLessonCompleted: boolean;
+        if (lid === lessonId) {
+          // 今更新したレッスン → 更新後の値を使う
+          isLessonCompleted = (lessonCompleted !== undefined ? lessonCompleted : current.lessonCompleted) ?? false;
+        } else {
+          const upDoc = await db.collection(`${basePath}/user_progress`).doc(upId).get();
+          isLessonCompleted = upDoc.data()?.lessonCompleted ?? false;
+        }
+        if (isLessonCompleted) completedLessons++;
+      }
+
+      const progressRatio = completedLessons / totalLessons;
+      const isCompleted = completedLessons >= totalLessons;
+
+      const cpId = `${userId}_${courseId}`;
+      await db.collection(`${basePath}/course_progress`).doc(cpId).set({
+        userId,
+        courseId,
+        completedLessons,
+        totalLessons,
+        progressRatio,
+        isCompleted,
+        updatedAt: new Date(),
+      }, { merge: true });
+    }
+  }
+
+  const superAdmin = req.superAdmin;
+  console.log(
+    `[SuperAdmin] Student progress updated: tenant=${tenantId} user=${userId} lesson=${lessonId} by ${superAdmin?.email}`
+  );
+
+  res.json({ message: "updated" });
+});
+
+/**
+ * POST /tenants/:tenantId/student-progress/export-sheets
+ * 受講状況をGoogleスプレッドシートにエクスポート
+ */
+router.post("/tenants/:tenantId/student-progress/export-sheets", async (req: Request, res: Response) => {
+  const { isWorkspaceIntegrationAvailable } = await import("../services/google-auth.js");
+  if (!isWorkspaceIntegrationAvailable()) {
+    res.status(503).json({
+      error: "workspace_not_available",
+      message: "Google Workspace integration is not configured",
+    });
+    return;
+  }
+
+  const db = getFirestore();
+  const tenantId = req.params.tenantId as string;
+  const courseIdFilter = typeof req.body.courseId === "string" ? req.body.courseId : undefined;
+
+  // テナント存在確認
+  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+  if (!tenantDoc.exists) {
+    res.status(404).json({ error: "not_found", message: "Tenant not found" });
+    return;
+  }
+  const tenantName = tenantDoc.data()?.name ?? tenantId;
+
+  // 進捗データ取得（GETと同じロジック → 内部リダイレクト的に再利用）
+  // ここでは直接Firestoreから取得
+  const basePath = `tenants/${tenantId}`;
+
+  const [usersSnap, lessonsSnap, progressSnap, courseProgressSnap] = await Promise.all([
+    db.collection(`${basePath}/users`).where("role", "==", "student").get(),
+    db.collection(`${basePath}/lessons`).get(),
+    db.collection(`${basePath}/user_progress`).get(),
+    db.collection(`${basePath}/course_progress`).get(),
+  ]);
+
+  let coursesSnap;
+  if (courseIdFilter) {
+    const courseDoc = await db.collection(`${basePath}/courses`).doc(courseIdFilter).get();
+    coursesSnap = courseDoc.exists ? [courseDoc] : [];
+  } else {
+    const snap = await db.collection(`${basePath}/courses`).get();
+    coursesSnap = snap.docs;
+  }
+
+  // マップ構築
+  const lessonsMap = new Map<string, { title: string }>();
+  for (const doc of lessonsSnap.docs) {
+    lessonsMap.set(doc.id, { title: doc.data().title ?? doc.id });
+  }
+
+  const progressMap = new Map<string, {
+    videoCompleted: boolean; quizPassed: boolean; quizBestScore: number | null; lessonCompleted: boolean;
+  }>();
+  for (const doc of progressSnap.docs) {
+    const d = doc.data();
+    progressMap.set(doc.id, {
+      videoCompleted: d.videoCompleted ?? false,
+      quizPassed: d.quizPassed ?? false,
+      quizBestScore: d.quizBestScore ?? null,
+      lessonCompleted: d.lessonCompleted ?? false,
+    });
+  }
+
+  const courseProgressMap = new Map<string, {
+    completedLessons: number; totalLessons: number; progressRatio: number; isCompleted: boolean;
+  }>();
+  for (const doc of courseProgressSnap.docs) {
+    const d = doc.data();
+    courseProgressMap.set(doc.id, {
+      completedLessons: d.completedLessons ?? 0,
+      totalLessons: d.totalLessons ?? 0,
+      progressRatio: d.progressRatio ?? 0,
+      isCompleted: d.isCompleted ?? false,
+    });
+  }
+
+  // スプレッドシート行データ構築
+  const rows: string[][] = [];
+  for (const userDoc of usersSnap.docs) {
+    const userData = userDoc.data();
+    const userId = userDoc.id;
+
+    for (const courseDoc of coursesSnap) {
+      const courseData = typeof courseDoc.data === "function" ? courseDoc.data() : courseDoc.data?.();
+      if (!courseData) continue;
+      const courseId = courseDoc.id;
+      const lessonOrder: string[] = courseData.lessonOrder ?? [];
+      const cpKey = `${userId}_${courseId}`;
+      const cp = courseProgressMap.get(cpKey);
+
+      for (const lessonId of lessonOrder) {
+        const lessonInfo = lessonsMap.get(lessonId);
+        const upKey = `${userId}_${lessonId}`;
+        const up = progressMap.get(upKey);
+
+        rows.push([
+          userData.name ?? "",
+          userData.email ?? "",
+          courseData.name ?? courseId,
+          String(cp?.completedLessons ?? 0),
+          String(cp?.totalLessons ?? lessonOrder.length),
+          `${((cp?.progressRatio ?? 0) * 100).toFixed(1)}%`,
+          cp?.isCompleted ? "完了" : "未完了",
+          lessonInfo?.title ?? lessonId,
+          up?.videoCompleted ? "完了" : "未完了",
+          up?.quizPassed ? "合格" : "未合格",
+          up?.quizBestScore !== null && up?.quizBestScore !== undefined ? String(up.quizBestScore) : "",
+          up?.lessonCompleted ? "完了" : "未完了",
+        ]);
+      }
+    }
+  }
+
+  try {
+    const { exportStudentProgressToSheets } = await import("../services/google-sheets-export.js");
+    const result = await exportStudentProgressToSheets(tenantName, rows);
+    res.json(result);
+  } catch (e) {
+    console.error("[SuperAdmin] Sheets export failed:", e);
+    res.status(500).json({
+      error: "export_failed",
+      message: e instanceof Error ? e.message : "Failed to export to Google Sheets",
+    });
+  }
 });
 
 export const superAdminRouter = router;

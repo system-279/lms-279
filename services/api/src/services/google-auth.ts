@@ -1,9 +1,10 @@
-import { google, type drive_v3, type docs_v1 } from "googleapis";
+import { google, type drive_v3, type docs_v1, type sheets_v4 } from "googleapis";
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 
 const SCOPES = [
   "https://www.googleapis.com/auth/drive.readonly",
   "https://www.googleapis.com/auth/documents.readonly",
+  "https://www.googleapis.com/auth/spreadsheets",
 ];
 
 const GCP_PROJECT_ID = "lms-279";
@@ -13,6 +14,7 @@ const DWD_SECRET_NAME = `projects/${GCP_PROJECT_ID}/secrets/dwd-workspace-key/ve
 let authClient: InstanceType<typeof google.auth.JWT> | null = null;
 let driveClient: drive_v3.Drive | null = null;
 let docsClient: docs_v1.Docs | null = null;
+let sheetsClient: sheets_v4.Sheets | null = null;
 let cachedAdminEmail: string | null = null;
 let secretManagerClient: SecretManagerServiceClient | null = null;
 
@@ -63,6 +65,7 @@ async function getAuthClient(): Promise<InstanceType<typeof google.auth.JWT>> {
     // 認証が変わったのでAPIクライアントもリセット
     driveClient = null;
     docsClient = null;
+    sheetsClient = null;
   }
   return authClient;
 }
@@ -87,6 +90,17 @@ export async function getDocsClient(): Promise<docs_v1.Docs> {
     docsClient = google.docs({ version: "v1", auth });
   }
   return docsClient;
+}
+
+/**
+ * Google Sheets API クライアント（シングルトン）
+ */
+export async function getSheetsClient(): Promise<sheets_v4.Sheets> {
+  if (!sheetsClient) {
+    const auth = await getAuthClient();
+    sheetsClient = google.sheets({ version: "v4", auth });
+  }
+  return sheetsClient;
 }
 
 /**
