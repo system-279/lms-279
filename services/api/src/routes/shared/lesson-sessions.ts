@@ -137,6 +137,13 @@ router.patch("/lesson-sessions/:sessionId/force-exit", requireUser, async (req: 
     return;
   }
 
+  // 動画完了済みセッションではpauseタイムアウトによる強制退室を拒否
+  // (HTML5 videoのendedはpause状態を伴うため、完了後の自然なpauseでデータ全消去が発動するのを防止)
+  if (reason === "pause_timeout" && session.sessionVideoCompleted) {
+    res.json({ session: formatSession(session) });
+    return;
+  }
+
   try {
     const exited = await forceExitSession(ds, sessionId, reason);
     res.json({ session: formatSession(exited) });
