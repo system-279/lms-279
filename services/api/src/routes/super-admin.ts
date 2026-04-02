@@ -620,19 +620,25 @@ router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Requ
 // 受講期間管理（Enrollments）
 // ============================================================
 
+function isValidISODate(value: string): boolean {
+  return !isNaN(new Date(value).getTime());
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toEnrollmentResponse(id: string, data: any): EnrollmentResponse {
   return {
     id,
-    userId: data.userId,
-    courseId: data.courseId,
-    enrolledAt: data.enrolledAt?.toDate?.()?.toISOString?.() ?? data.enrolledAt ?? null,
-    quizAccessUntil: data.quizAccessUntil?.toDate?.()?.toISOString?.() ?? data.quizAccessUntil ?? null,
-    videoAccessUntil: data.videoAccessUntil?.toDate?.()?.toISOString?.() ?? data.videoAccessUntil ?? null,
-    createdBy: data.createdBy,
-    updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() ?? data.updatedAt ?? null,
+    userId: data.userId ?? "",
+    courseId: data.courseId ?? "",
+    enrolledAt: data.enrolledAt?.toDate?.()?.toISOString?.() ?? data.enrolledAt ?? "",
+    quizAccessUntil: data.quizAccessUntil?.toDate?.()?.toISOString?.() ?? data.quizAccessUntil ?? "",
+    videoAccessUntil: data.videoAccessUntil?.toDate?.()?.toISOString?.() ?? data.videoAccessUntil ?? "",
+    createdBy: data.createdBy ?? "",
+    updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() ?? data.updatedAt ?? "",
   };
 }
+
+const BULK_CREATE_LIMIT = 1000;
 
 /**
  * テナント内enrollment一覧
@@ -672,6 +678,11 @@ router.post("/tenants/:tenantId/enrollments", async (req: Request, res: Response
     return;
   }
 
+  if (!isValidISODate(enrolledAt)) {
+    res.status(400).json({ error: "invalid_date", message: "enrolledAt must be a valid date string" });
+    return;
+  }
+
   const deadlines = calculateDefaultDeadlines(enrolledAt);
   const docId = `${userId}_${courseId}`;
   const basePath = `tenants/${tenantId}`;
@@ -703,6 +714,16 @@ router.post("/tenants/:tenantId/enrollments/bulk", async (req: Request, res: Res
 
   if (!Array.isArray(userIds) || userIds.length === 0 || !courseId || !enrolledAt) {
     res.status(400).json({ error: "bad_request", message: "userIds (non-empty array), courseId, enrolledAt are required" });
+    return;
+  }
+
+  if (userIds.length > BULK_CREATE_LIMIT) {
+    res.status(400).json({ error: "too_many_users", message: `一括登録は最大${BULK_CREATE_LIMIT}件までです` });
+    return;
+  }
+
+  if (!isValidISODate(enrolledAt)) {
+    res.status(400).json({ error: "invalid_date", message: "enrolledAt must be a valid date string" });
     return;
   }
 
@@ -750,6 +771,11 @@ router.patch("/tenants/:tenantId/enrollments/:enrollmentId", async (req: Request
 
   if (!quizAccessUntil && !videoAccessUntil) {
     res.status(400).json({ error: "bad_request", message: "quizAccessUntil or videoAccessUntil is required" });
+    return;
+  }
+
+  if ((quizAccessUntil && !isValidISODate(quizAccessUntil)) || (videoAccessUntil && !isValidISODate(videoAccessUntil))) {
+    res.status(400).json({ error: "invalid_date", message: "Date fields must be valid date strings" });
     return;
   }
 
