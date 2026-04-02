@@ -906,10 +906,10 @@ export default function StudentLessonDetailPage() {
     }
   }, [videoMeta, fetchAnalytics]);
 
-  // 動画完了コールバック: analytics再取得 + テスト表示フラグを立てる
+  // 動画完了コールバック: analytics再取得し、サーバーが完了と判定した場合のみフラグを立てる
   const handleVideoComplete = useCallback(async () => {
     await fetchAnalytics();
-    setVideoCompleted(true);
+    // fetchAnalytics 内で isComplete === true の場合に setVideoCompleted(true) が呼ばれる
   }, [fetchAnalytics]);
 
   // 動画再生開始: セッション作成
