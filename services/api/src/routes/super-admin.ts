@@ -11,7 +11,7 @@
 
 import { Router, Request, Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
-import type { SuperAttendanceResponse } from "@lms-279/shared-types";
+import type { SuperAttendanceResponse, EnrollmentResponse } from "@lms-279/shared-types";
 import {
   superAdminAuthMiddleware,
   getAllSuperAdmins,
@@ -20,6 +20,7 @@ import {
 } from "../middleware/super-admin.js";
 import type { TenantMetadata, TenantStatus } from "../types/tenant.js";
 import { masterRouter } from "./super-admin-master.js";
+import { calculateDefaultDeadlines } from "../services/enrollment.js";
 
 const router = Router();
 
@@ -613,6 +614,183 @@ router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Requ
   }
 
   res.json({ message: "updated" });
+});
+
+// ============================================================
+// 受講期間管理（Enrollments）
+// ============================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toEnrollmentResponse(id: string, data: any): EnrollmentResponse {
+  return {
+    id,
+    userId: data.userId,
+    courseId: data.courseId,
+    enrolledAt: data.enrolledAt?.toDate?.()?.toISOString?.() ?? data.enrolledAt ?? null,
+    quizAccessUntil: data.quizAccessUntil?.toDate?.()?.toISOString?.() ?? data.quizAccessUntil ?? null,
+    videoAccessUntil: data.videoAccessUntil?.toDate?.()?.toISOString?.() ?? data.videoAccessUntil ?? null,
+    createdBy: data.createdBy,
+    updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() ?? data.updatedAt ?? null,
+  };
+}
+
+/**
+ * テナント内enrollment一覧
+ * GET /super/tenants/:tenantId/enrollments?courseId=xxx
+ */
+router.get("/tenants/:tenantId/enrollments", async (req: Request, res: Response) => {
+  const db = getFirestore();
+  const tenantId = req.params.tenantId as string;
+  const courseId = req.query.courseId as string | undefined;
+
+  const basePath = `tenants/${tenantId}`;
+  let query: FirebaseFirestore.Query = db.collection(`${basePath}/enrollments`);
+  if (courseId) {
+    query = query.where("courseId", "==", courseId);
+  }
+
+  const snapshot = await query.get();
+  const enrollments = snapshot.docs.map((doc) =>
+    toEnrollmentResponse(doc.id, doc.data())
+  );
+
+  res.json({ enrollments });
+});
+
+/**
+ * enrollment作成
+ * POST /super/tenants/:tenantId/enrollments
+ * body: { userId, courseId, enrolledAt }
+ */
+router.post("/tenants/:tenantId/enrollments", async (req: Request, res: Response) => {
+  const db = getFirestore();
+  const tenantId = req.params.tenantId as string;
+  const { userId, courseId, enrolledAt } = req.body;
+
+  if (!userId || !courseId || !enrolledAt) {
+    res.status(400).json({ error: "bad_request", message: "userId, courseId, enrolledAt are required" });
+    return;
+  }
+
+  const deadlines = calculateDefaultDeadlines(enrolledAt);
+  const docId = `${userId}_${courseId}`;
+  const basePath = `tenants/${tenantId}`;
+  const docRef = db.collection(`${basePath}/enrollments`).doc(docId);
+
+  await docRef.set({
+    userId,
+    courseId,
+    enrolledAt,
+    quizAccessUntil: deadlines.quizAccessUntil,
+    videoAccessUntil: deadlines.videoAccessUntil,
+    createdBy: req.superAdmin!.email,
+    updatedAt: new Date().toISOString(),
+  });
+
+  const created = await docRef.get();
+  res.status(201).json(toEnrollmentResponse(docId, created.data()));
+});
+
+/**
+ * enrollment一括作成
+ * POST /super/tenants/:tenantId/enrollments/bulk
+ * body: { userIds: string[], courseId, enrolledAt }
+ */
+router.post("/tenants/:tenantId/enrollments/bulk", async (req: Request, res: Response) => {
+  const db = getFirestore();
+  const tenantId = req.params.tenantId as string;
+  const { userIds, courseId, enrolledAt } = req.body;
+
+  if (!Array.isArray(userIds) || userIds.length === 0 || !courseId || !enrolledAt) {
+    res.status(400).json({ error: "bad_request", message: "userIds (non-empty array), courseId, enrolledAt are required" });
+    return;
+  }
+
+  const deadlines = calculateDefaultDeadlines(enrolledAt);
+  const basePath = `tenants/${tenantId}`;
+  const BATCH_LIMIT = 500;
+  const results: EnrollmentResponse[] = [];
+
+  for (let i = 0; i < userIds.length; i += BATCH_LIMIT) {
+    const batch = db.batch();
+    const chunk = userIds.slice(i, i + BATCH_LIMIT);
+
+    for (const uid of chunk) {
+      const docId = `${uid}_${courseId}`;
+      const docRef = db.collection(`${basePath}/enrollments`).doc(docId);
+      const enrollmentData = {
+        userId: uid,
+        courseId,
+        enrolledAt,
+        quizAccessUntil: deadlines.quizAccessUntil,
+        videoAccessUntil: deadlines.videoAccessUntil,
+        createdBy: req.superAdmin!.email,
+        updatedAt: new Date().toISOString(),
+      };
+      batch.set(docRef, enrollmentData);
+      results.push(toEnrollmentResponse(docId, enrollmentData));
+    }
+
+    await batch.commit();
+  }
+
+  res.status(201).json({ enrollments: results, count: results.length });
+});
+
+/**
+ * enrollment更新（期限変更）
+ * PATCH /super/tenants/:tenantId/enrollments/:enrollmentId
+ * body: { quizAccessUntil?, videoAccessUntil? }
+ */
+router.patch("/tenants/:tenantId/enrollments/:enrollmentId", async (req: Request, res: Response) => {
+  const db = getFirestore();
+  const tenantId = req.params.tenantId as string;
+  const enrollmentId = req.params.enrollmentId as string;
+  const { quizAccessUntil, videoAccessUntil } = req.body;
+
+  if (!quizAccessUntil && !videoAccessUntil) {
+    res.status(400).json({ error: "bad_request", message: "quizAccessUntil or videoAccessUntil is required" });
+    return;
+  }
+
+  const basePath = `tenants/${tenantId}`;
+  const docRef = db.collection(`${basePath}/enrollments`).doc(enrollmentId);
+  const doc = await docRef.get();
+
+  if (!doc.exists) {
+    res.status(404).json({ error: "not_found", message: "Enrollment not found" });
+    return;
+  }
+
+  const updateData: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+  if (quizAccessUntil) updateData.quizAccessUntil = quizAccessUntil;
+  if (videoAccessUntil) updateData.videoAccessUntil = videoAccessUntil;
+  await docRef.update(updateData);
+
+  const updated = await docRef.get();
+  res.json(toEnrollmentResponse(enrollmentId, updated.data()));
+});
+
+/**
+ * enrollment削除
+ * DELETE /super/tenants/:tenantId/enrollments/:enrollmentId
+ */
+router.delete("/tenants/:tenantId/enrollments/:enrollmentId", async (req: Request, res: Response) => {
+  const db = getFirestore();
+  const tenantId = req.params.tenantId as string;
+  const enrollmentId = req.params.enrollmentId as string;
+
+  const basePath = `tenants/${tenantId}`;
+  const docRef = db.collection(`${basePath}/enrollments`).doc(enrollmentId);
+  const doc = await docRef.get();
+
+  if (!doc.exists) {
+    res.status(404).json({ error: "not_found", message: "Enrollment not found" });
+    return;
+  }
+
+  await docRef.delete();
+  res.status(204).send();
 });
 
 export const superAdminRouter = router;

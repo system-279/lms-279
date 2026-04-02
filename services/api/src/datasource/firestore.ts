@@ -35,6 +35,7 @@ import type {
   UserProgress,
   CourseProgress,
   LessonSession,
+  Enrollment,
 } from "../types/entities.js";
 
 // Firestore Timestampを Date に変換
@@ -1231,6 +1232,66 @@ export class FirestoreDataSource implements DataSource {
         );
       }
     }
+  }
+
+  // Enrollments (受講期間管理)
+
+  async getEnrollment(userId: string, courseId: string): Promise<Enrollment | null> {
+    const docId = `${userId}_${courseId}`;
+    const doc = await this.collection("enrollments").doc(docId).get();
+    if (!doc.exists) return null;
+    return this.toEnrollment(docId, doc.data()!);
+  }
+
+  async getEnrollmentsByCourse(courseId: string): Promise<Enrollment[]> {
+    const snapshot = await this.collection("enrollments")
+      .where("courseId", "==", courseId)
+      .get();
+    return snapshot.docs.map((doc) => this.toEnrollment(doc.id, doc.data()));
+  }
+
+  async getEnrollmentsByUser(userId: string): Promise<Enrollment[]> {
+    const snapshot = await this.collection("enrollments")
+      .where("userId", "==", userId)
+      .get();
+    return snapshot.docs.map((doc) => this.toEnrollment(doc.id, doc.data()));
+  }
+
+  async upsertEnrollment(data: Omit<Enrollment, "id" | "updatedAt">): Promise<Enrollment> {
+    const docId = `${data.userId}_${data.courseId}`;
+    const docRef = this.collection("enrollments").doc(docId);
+    const doc = await docRef.get();
+
+    if (doc.exists) {
+      await applyUpdate(docRef, data as unknown as Record<string, unknown>);
+    } else {
+      await docRef.set({
+        ...data,
+        updatedAt: new Date(),
+      });
+    }
+
+    const updated = await docRef.get();
+    return this.toEnrollment(docId, updated.data()!);
+  }
+
+  async deleteEnrollment(userId: string, courseId: string): Promise<void> {
+    const docId = `${userId}_${courseId}`;
+    await this.collection("enrollments").doc(docId).delete();
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toEnrollment(id: string, data: any): Enrollment {
+    return {
+      id,
+      userId: data.userId,
+      courseId: data.courseId,
+      enrolledAt: toDate(data.enrolledAt).toISOString(),
+      quizAccessUntil: toDate(data.quizAccessUntil).toISOString(),
+      videoAccessUntil: toDate(data.videoAccessUntil).toISOString(),
+      createdBy: data.createdBy,
+      updatedAt: toDate(data.updatedAt).toISOString(),
+    };
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
