@@ -76,12 +76,16 @@ export default function StudentProgressPage() {
       .catch(() => setTenants([]));
   }, [superFetch]);
 
-  // テナント選択時にコース一覧を取得
+  // テナント選択時に初回データ取得（コース一覧抽出 + レポート表示）
   useEffect(() => {
     if (!selectedTenant) {
       setCourses([]);
+      setReport(null);
       return;
     }
+    setLoading(true);
+    setError(null);
+    setExpanded({});
     superFetch<SuperStudentProgressResponse>(
       `/api/v2/super/tenants/${selectedTenant}/student-progress`
     )
@@ -94,8 +98,14 @@ export default function StudentProgressPage() {
           }
         }
         setCourses(Array.from(courseMap, ([id, name]) => ({ id, name })));
+        setSelectedCourse("");
+        setReport(data);
       })
-      .catch(() => setCourses([]));
+      .catch((e) => {
+        setCourses([]);
+        setError(e instanceof Error ? e.message : "取得に失敗しました");
+      })
+      .finally(() => setLoading(false));
   }, [superFetch, selectedTenant]);
 
   const fetchReport = useCallback(async () => {
@@ -148,7 +158,13 @@ export default function StudentProgressPage() {
         lessonCompleted: editLessonCompleted,
       };
       if (editQuizBestScore !== "") {
-        body.quizBestScore = Number(editQuizBestScore);
+        const score = Number(editQuizBestScore);
+        if (isNaN(score) || score < 0 || score > 100) {
+          setEditError("テスト最高点は0〜100の数値を入力してください");
+          setEditLoading(false);
+          return;
+        }
+        body.quizBestScore = score;
       }
 
       await superFetch(

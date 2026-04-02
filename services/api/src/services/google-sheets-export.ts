@@ -54,7 +54,10 @@ export async function exportStudentProgressToSheets(
     },
   });
 
-  const spreadsheetId = createRes.data.spreadsheetId!;
+  const spreadsheetId = createRes.data.spreadsheetId;
+  if (!spreadsheetId) {
+    throw new Error("Failed to create spreadsheet: no ID returned");
+  }
   const sheetId = createRes.data.sheets?.[0]?.properties?.sheetId ?? 0;
 
   // データ書き込み（ヘッダ + データ行）
