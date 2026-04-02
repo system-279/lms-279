@@ -92,7 +92,7 @@ router.get("/lesson-sessions/active", requireUser, async (req: Request, res: Res
 
   const session = await ds.getActiveLessonSession(userId, lessonId);
   if (!session) {
-    res.status(404).json({ error: "no_active_session", message: "No active session found" });
+    res.json({ session: null });
     return;
   }
 
