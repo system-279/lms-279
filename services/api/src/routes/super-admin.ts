@@ -620,8 +620,10 @@ router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Requ
 // 受講期間管理（Enrollments）
 // ============================================================
 
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z?)?$/;
+
 function isValidISODate(value: string): boolean {
-  return !isNaN(new Date(value).getTime());
+  return ISO_DATE_RE.test(value) && !isNaN(new Date(value).getTime());
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -639,6 +641,12 @@ function toEnrollmentResponse(id: string, data: any): EnrollmentResponse {
 }
 
 const BULK_CREATE_LIMIT = 1000;
+const ENROLLEDAT_RANGE_YEARS = 5;
+
+function isEnrolledAtInRange(dateStr: string): boolean {
+  const diff = Math.abs(new Date(dateStr).getTime() - Date.now());
+  return diff <= ENROLLEDAT_RANGE_YEARS * 365.25 * 24 * 60 * 60 * 1000;
+}
 
 /**
  * テナント内enrollment一覧
@@ -680,6 +688,11 @@ router.post("/tenants/:tenantId/enrollments", async (req: Request, res: Response
 
   if (!isValidISODate(enrolledAt)) {
     res.status(400).json({ error: "invalid_date", message: "enrolledAt must be a valid date string" });
+    return;
+  }
+
+  if (!isEnrolledAtInRange(enrolledAt)) {
+    res.status(400).json({ error: "date_out_of_range", message: `enrolledAt must be within ${ENROLLEDAT_RANGE_YEARS} years from now` });
     return;
   }
 
@@ -733,17 +746,32 @@ router.post("/tenants/:tenantId/enrollments/bulk", async (req: Request, res: Res
     return;
   }
 
+  if (!isEnrolledAtInRange(enrolledAt)) {
+    res.status(400).json({ error: "date_out_of_range", message: `enrolledAt must be within ${ENROLLEDAT_RANGE_YEARS} years from now` });
+    return;
+  }
+
   const normalizedEnrolledAt = new Date(enrolledAt).toISOString();
   const deadlines = calculateDefaultDeadlines(normalizedEnrolledAt);
   const basePath = `tenants/${tenantId}`;
   const BATCH_LIMIT = 500;
   const results: EnrollmentResponse[] = [];
   const errors: { chunkIndex: number; error: string }[] = [];
+  const overwritten: string[] = [];
 
   for (let i = 0; i < userIds.length; i += BATCH_LIMIT) {
     const batch = db.batch();
     const chunk = userIds.slice(i, i + BATCH_LIMIT);
     const chunkResults: EnrollmentResponse[] = [];
+
+    // 既存チェック: batch内のdocIdを一括取得
+    const docRefs = chunk.map((uid: string) =>
+      db.collection(`${basePath}/enrollments`).doc(`${uid.trim()}_${courseId}`)
+    );
+    const existingDocs = await db.getAll(...docRefs);
+    for (const doc of existingDocs) {
+      if (doc.exists) overwritten.push(doc.id);
+    }
 
     for (const uid of chunk) {
       const docId = `${(uid as string).trim()}_${courseId}`;
@@ -774,12 +802,17 @@ router.post("/tenants/:tenantId/enrollments/bulk", async (req: Request, res: Res
       enrollments: results,
       count: results.length,
       errors,
+      ...(overwritten.length > 0 && { overwritten }),
       message: `${results.length}件作成、${errors.length}バッチ失敗`,
     });
     return;
   }
 
-  res.status(201).json({ enrollments: results, count: results.length });
+  res.status(201).json({
+    enrollments: results,
+    count: results.length,
+    ...(overwritten.length > 0 && { overwritten, message: `${overwritten.length}件の既存登録を上書きしました` }),
+  });
 });
 
 /**
@@ -813,8 +846,8 @@ router.patch("/tenants/:tenantId/enrollments/:enrollmentId", async (req: Request
   }
 
   const updateData: Record<string, unknown> = { updatedAt: new Date().toISOString() };
-  if (quizAccessUntil) updateData.quizAccessUntil = quizAccessUntil;
-  if (videoAccessUntil) updateData.videoAccessUntil = videoAccessUntil;
+  if (quizAccessUntil) updateData.quizAccessUntil = new Date(quizAccessUntil).toISOString();
+  if (videoAccessUntil) updateData.videoAccessUntil = new Date(videoAccessUntil).toISOString();
   await docRef.update(updateData);
 
   const updated = await docRef.get();
