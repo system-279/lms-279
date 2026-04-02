@@ -614,8 +614,11 @@ export class FirestoreDataSource implements DataSource {
     const now = new Date();
 
     docRefs.forEach((docRef, index) => {
+      const event = events[index];
       batch.set(docRef, {
-        ...events[index],
+        ...event,
+        seekFrom: event.seekFrom ?? null,
+        metadata: event.metadata ?? null,
         timestamp: now,
       });
     });
