@@ -130,7 +130,12 @@ export function VideoEventTracker({
         clientTimestamp: Date.now(),
       });
       // ended時は即座にflushし、サーバー確認済みanalyticsをコールバックで返す
+      // バッチintervalをクリアして並行drainQueue呼び出しを防止
       if (onEndedFlush) {
+        if (batchIntervalRef.current !== null) {
+          clearInterval(batchIntervalRef.current);
+          batchIntervalRef.current = null;
+        }
         drainQueue().then((analytics) => {
           onEndedFlush(analytics);
         });
