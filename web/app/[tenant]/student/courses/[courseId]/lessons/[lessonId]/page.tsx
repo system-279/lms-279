@@ -805,7 +805,7 @@ export default function StudentLessonDetailPage() {
       try {
         await authFetch<unknown>(
           `/api/v1/lesson-sessions/${session.id}/force-exit`,
-          { method: "PATCH" }
+          { method: "PATCH", body: JSON.stringify({ reason }) }
         );
       } catch (error) {
         console.error("Failed to force-exit session:", error);
