@@ -4,6 +4,7 @@ import {
   calculateCoverageRatio,
   extractWatchedRangesFromEvents,
   detectSuspiciousFlags,
+  processVideoEvents,
 } from "../video-analytics.js";
 import type { VideoAnalytics, VideoEvent, WatchedRange } from "../../types/entities.js";
 
@@ -376,5 +377,147 @@ describe("detectSuspiciousFlags", () => {
 
     const flags = detectSuspiciousFlags(analytics, events);
     expect(flags).not.toContain("position_jump");
+  });
+});
+
+// -----------------------------------------------
+// processVideoEvents（統合テスト: heartbeat → coverageRatio → isComplete判定）
+// -----------------------------------------------
+
+describe("processVideoEvents", () => {
+  // 正常再生シナリオ: 60秒動画を0→60まで通しで再生（5秒間隔heartbeat）
+  it("正常再生で全区間視聴 → coverageRatio ≈ 1.0 になる", () => {
+    const durationSec = 60;
+    // 5秒間隔のheartbeat: 0, 5, 10, 15, ... 60
+    const events: VideoEvent[] = [];
+    for (let t = 0; t <= durationSec; t += 5) {
+      events.push({
+        id: `e${t}`,
+        videoId: "v1",
+        userId: "u1",
+        sessionToken: "sess",
+        eventType: "heartbeat",
+        position: t,
+        playbackRate: 1,
+        clientTimestamp: t * 1000,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const result = processVideoEvents(events, null, durationSec);
+
+    // coverageRatio ≈ 1.0（60秒中60秒視聴）
+    expect(result.coverageRatio).toBeGreaterThanOrEqual(0.95);
+    expect(result.totalWatchTimeSec).toBe(60);
+    // watchedRangesが全区間をカバー
+    expect(result.watchedRanges).toEqual([{ start: 0, end: 60 }]);
+  });
+
+  // caller側のisComplete判定と組み合わせたシナリオ
+  it("正常再生で coverageRatio >= requiredWatchRatio(0.95) → isComplete判定可能", () => {
+    const durationSec = 600; // 10分動画
+    const requiredWatchRatio = 0.95;
+
+    // 5秒間隔のheartbeat: 0 → 600（全区間再生）
+    const events: VideoEvent[] = [];
+    for (let t = 0; t <= durationSec; t += 5) {
+      events.push({
+        id: `e${t}`,
+        videoId: "v1",
+        userId: "u1",
+        sessionToken: "sess",
+        eventType: "heartbeat",
+        position: t,
+        playbackRate: 1,
+        clientTimestamp: t * 1000,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const result = processVideoEvents(events, null, durationSec);
+    // video-events.ts L229 と同じ判定
+    const isComplete = (result.coverageRatio ?? 0) >= requiredWatchRatio;
+
+    expect(isComplete).toBe(true);
+    expect(result.coverageRatio).toBeGreaterThanOrEqual(0.95);
+  });
+
+  // 飛ばし再生シナリオ: 前半のみ視聴
+  it("前半のみ視聴 → coverageRatio ≈ 0.5 で isComplete=false", () => {
+    const durationSec = 60;
+    const requiredWatchRatio = 0.95;
+
+    // 0→30まで再生（後半飛ばし）
+    const events: VideoEvent[] = [];
+    for (let t = 0; t <= 30; t += 5) {
+      events.push({
+        id: `e${t}`,
+        videoId: "v1",
+        userId: "u1",
+        sessionToken: "sess",
+        eventType: "heartbeat",
+        position: t,
+        playbackRate: 1,
+        clientTimestamp: t * 1000,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const result = processVideoEvents(events, null, durationSec);
+    const isComplete = (result.coverageRatio ?? 0) >= requiredWatchRatio;
+
+    expect(isComplete).toBe(false);
+    expect(result.coverageRatio).toBeCloseTo(0.5, 1);
+  });
+
+  // 複数セッションでの累積視聴
+  it("複数セッションで累積視聴 → 合算で isComplete=true", () => {
+    const durationSec = 60;
+    const requiredWatchRatio = 0.95;
+
+    // セッション1: 0→30
+    const session1Events: VideoEvent[] = [];
+    for (let t = 0; t <= 30; t += 5) {
+      session1Events.push({
+        id: `s1e${t}`,
+        videoId: "v1",
+        userId: "u1",
+        sessionToken: "sess1",
+        eventType: "heartbeat",
+        position: t,
+        playbackRate: 1,
+        clientTimestamp: t * 1000,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const afterSession1 = processVideoEvents(session1Events, null, durationSec);
+
+    // セッション2: 30→60（前回の結果を引き継ぐ）
+    const session2Events: VideoEvent[] = [];
+    for (let t = 30; t <= 60; t += 5) {
+      session2Events.push({
+        id: `s2e${t}`,
+        videoId: "v1",
+        userId: "u1",
+        sessionToken: "sess2",
+        eventType: "heartbeat",
+        position: t,
+        playbackRate: 1,
+        clientTimestamp: (t + 100) * 1000,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const currentAnalytics = makeAnalytics({
+      watchedRanges: afterSession1.watchedRanges,
+      totalWatchTimeSec: afterSession1.totalWatchTimeSec,
+      coverageRatio: afterSession1.coverageRatio,
+    });
+    const afterSession2 = processVideoEvents(session2Events, currentAnalytics, durationSec);
+    const isComplete = (afterSession2.coverageRatio ?? 0) >= requiredWatchRatio;
+
+    expect(isComplete).toBe(true);
+    expect(afterSession2.coverageRatio).toBeGreaterThanOrEqual(0.95);
   });
 });
