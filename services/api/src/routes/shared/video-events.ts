@@ -160,7 +160,10 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
     });
     return;
   }
-  if (activeSession?.pauseStartedAt) {
+  if (activeSession?.pauseStartedAt && !activeSession.sessionVideoCompleted) {
+    // 動画完了済みセッション（sessionVideoCompleted=true）ではpauseタイムアウトを適用しない。
+    // 動画のendedイベントはHTML5のpause状態を伴うため、完了後の自然なpauseで
+    // 強制退室→データ全消去が発動するのを防止する。
     const pausedMs = Date.now() - new Date(activeSession.pauseStartedAt).getTime();
     if (pausedMs > PAUSE_TIMEOUT_MS) {
       try {
