@@ -1023,7 +1023,7 @@ export default function StudentLessonDetailPage() {
                   />
                   {session && (
                     <PauseTimeoutOverlay
-                      isPaused={videoPaused}
+                      isPaused={videoPaused && !showQuizSection}
                       onTimeout={handlePauseTimeout}
                     />
                   )}
