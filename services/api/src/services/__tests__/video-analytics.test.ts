@@ -247,12 +247,12 @@ describe("extractWatchedRangesFromEvents", () => {
     expect(result).toEqual([{ start: 0, end: 10 }]);
   });
 
-  it("heartbeatが1件のみ → 区間長さ0なので新規rangesに追加されない", () => {
+  it("heartbeatが1件のみ → 直前5秒の視聴区間として生成される", () => {
     const events = [makeHeartbeat(5, 0)] as VideoEvent[];
 
     const result = extractWatchedRangesFromEvents(events, []);
-    // rangeStart=5, rangeEnd=5 → rangeEnd > rangeStart が false なので追加されない
-    expect(result).toEqual([]);
+    // heartbeat1個: position=5 → {start: 0, end: 5} として生成
+    expect(result).toEqual([{ start: 0, end: 5 }]);
   });
 
   it("clientTimestampでソートされていないheartbeatも正しく処理される", () => {
