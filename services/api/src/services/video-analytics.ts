@@ -66,17 +66,20 @@ export function extractWatchedRangesFromEvents(
       rangeEnd = curr.position;
     } else {
       // 不連続 → 現在の区間を確定して新しい区間を開始
-      if (rangeEnd > rangeStart) {
-        newRanges.push({ start: rangeStart, end: rangeEnd });
+      // rangeEnd === rangeStartの場合（heartbeat1個の区間）も、直前5秒の視聴としてレンジ生成
+      if (rangeEnd >= rangeStart) {
+        const start = rangeEnd === rangeStart ? Math.max(0, rangeStart - 5) : rangeStart;
+        newRanges.push({ start, end: rangeEnd });
       }
       rangeStart = curr.position;
       rangeEnd = curr.position;
     }
   }
 
-  // 最後の区間を追加
-  if (rangeEnd > rangeStart) {
-    newRanges.push({ start: rangeStart, end: rangeEnd });
+  // 最後の区間を追加（heartbeat1個の区間も含む）
+  if (rangeEnd >= rangeStart) {
+    const start = rangeEnd === rangeStart ? Math.max(0, rangeStart - 5) : rangeStart;
+    newRanges.push({ start, end: rangeEnd });
   }
 
   // endedイベントのpositionで最終レンジを拡張（末尾数秒のギャップを閉じる）
