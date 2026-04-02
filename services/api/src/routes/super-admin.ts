@@ -796,78 +796,85 @@ router.patch("/tenants/:tenantId/student-progress/:lessonId/:userId", async (req
     res.status(404).json({ error: "not_found", message: "Lesson not found" });
     return;
   }
-  const courseId = lessonDoc.data()?.courseId as string;
-
-  // user_progress更新
-  const progressId = `${userId}_${lessonId}`;
-  const progressRef = db.collection(`${basePath}/user_progress`).doc(progressId);
-  const currentDoc = await progressRef.get();
-  const current = currentDoc.data() ?? {};
-
-  const updatedData: Record<string, unknown> = {
-    userId, lessonId, courseId, updatedAt: new Date(),
-  };
-  if (videoCompleted !== undefined) updatedData.videoCompleted = videoCompleted;
-  if (quizPassed !== undefined) updatedData.quizPassed = quizPassed;
-  if (quizBestScore !== undefined) updatedData.quizBestScore = quizBestScore;
-  if (lessonCompleted !== undefined) updatedData.lessonCompleted = lessonCompleted;
-
-  await progressRef.set({ ...current, ...updatedData }, { merge: true });
-
-  // course_progress再計算（N+1回避: user_progressを一括取得してマップ化）
-  const courseDoc = await db.collection(`${basePath}/courses`).doc(courseId).get();
-  if (courseDoc.exists) {
-    const courseData = courseDoc.data()!;
-    const lessonOrder: string[] = courseData.lessonOrder ?? [];
-    const totalLessons = lessonOrder.length;
-
-    if (totalLessons > 0) {
-      const [allLessonsSnap, userProgressSnap] = await Promise.all([
-        db.collection(`${basePath}/lessons`).get(),
-        db.collection(`${basePath}/user_progress`)
-          .where("userId", "==", userId)
-          .where("courseId", "==", courseId)
-          .get(),
-      ]);
-
-      const allLessonsMap = new Map<string, { hasVideo: boolean; hasQuiz: boolean }>();
-      for (const doc of allLessonsSnap.docs) {
-        const d = doc.data();
-        allLessonsMap.set(doc.id, { hasVideo: d.hasVideo ?? false, hasQuiz: d.hasQuiz ?? false });
-      }
-
-      // user_progressをマップ化（一括取得済み）
-      const userProgressMap = new Map<string, boolean>();
-      for (const doc of userProgressSnap.docs) {
-        userProgressMap.set(doc.id, doc.data()?.lessonCompleted ?? false);
-      }
-
-      let completedLessons = 0;
-      for (const lid of lessonOrder) {
-        const lesson = allLessonsMap.get(lid);
-        if (lesson && !lesson.hasVideo && !lesson.hasQuiz) {
-          completedLessons++;
-          continue;
-        }
-        const upId = `${userId}_${lid}`;
-        let isLessonCompleted: boolean;
-        if (lid === lessonId) {
-          isLessonCompleted = (lessonCompleted !== undefined ? lessonCompleted : current.lessonCompleted) ?? false;
-        } else {
-          isLessonCompleted = userProgressMap.get(upId) ?? false;
-        }
-        if (isLessonCompleted) completedLessons++;
-      }
-
-      const progressRatio = completedLessons / totalLessons;
-      const isCompleted = completedLessons >= totalLessons;
-
-      const cpId = `${userId}_${courseId}`;
-      await db.collection(`${basePath}/course_progress`).doc(cpId).set({
-        userId, courseId, completedLessons, totalLessons, progressRatio, isCompleted, updatedAt: new Date(),
-      }, { merge: true });
-    }
+  const courseId = lessonDoc.data()?.courseId;
+  if (!courseId || typeof courseId !== "string") {
+    res.status(422).json({ error: "invalid_lesson_data", message: "Lesson has no valid courseId" });
+    return;
   }
+
+  // 事前にレッスン情報・user_progressを一括取得（トランザクション外で読み取り）
+  const [allLessonsSnap, userProgressSnap, courseDoc] = await Promise.all([
+    db.collection(`${basePath}/lessons`).get(),
+    db.collection(`${basePath}/user_progress`)
+      .where("userId", "==", userId)
+      .where("courseId", "==", courseId)
+      .get(),
+    db.collection(`${basePath}/courses`).doc(courseId).get(),
+  ]);
+
+  // user_progress + course_progressをトランザクションで一括更新
+  await db.runTransaction(async (tx) => {
+    const progressId = `${userId}_${lessonId}`;
+    const progressRef = db.collection(`${basePath}/user_progress`).doc(progressId);
+    const currentDoc = await tx.get(progressRef);
+    const current = currentDoc.data() ?? {};
+
+    const updatedData: Record<string, unknown> = {
+      userId, lessonId, courseId, updatedAt: new Date(),
+    };
+    if (videoCompleted !== undefined) updatedData.videoCompleted = videoCompleted;
+    if (quizPassed !== undefined) updatedData.quizPassed = quizPassed;
+    if (quizBestScore !== undefined) updatedData.quizBestScore = quizBestScore;
+    if (lessonCompleted !== undefined) updatedData.lessonCompleted = lessonCompleted;
+
+    tx.set(progressRef, { ...current, ...updatedData }, { merge: true });
+
+    // course_progress再計算
+    if (courseDoc.exists) {
+      const courseData = courseDoc.data()!;
+      const lessonOrder: string[] = courseData.lessonOrder ?? [];
+      const totalLessons = lessonOrder.length;
+
+      if (totalLessons > 0) {
+        const allLessonsMap = new Map<string, { hasVideo: boolean; hasQuiz: boolean }>();
+        for (const doc of allLessonsSnap.docs) {
+          const d = doc.data();
+          allLessonsMap.set(doc.id, { hasVideo: d.hasVideo ?? false, hasQuiz: d.hasQuiz ?? false });
+        }
+
+        const userProgressMap = new Map<string, boolean>();
+        for (const doc of userProgressSnap.docs) {
+          userProgressMap.set(doc.id, doc.data()?.lessonCompleted ?? false);
+        }
+
+        let completedLessons = 0;
+        for (const lid of lessonOrder) {
+          const lesson = allLessonsMap.get(lid);
+          if (lesson && !lesson.hasVideo && !lesson.hasQuiz) {
+            completedLessons++;
+            continue;
+          }
+          const upId = `${userId}_${lid}`;
+          let isLessonCompleted: boolean;
+          if (lid === lessonId) {
+            isLessonCompleted = (lessonCompleted !== undefined ? lessonCompleted : current.lessonCompleted) ?? false;
+          } else {
+            isLessonCompleted = userProgressMap.get(upId) ?? false;
+          }
+          if (isLessonCompleted) completedLessons++;
+        }
+
+        const progressRatio = completedLessons / totalLessons;
+        const isCompleted = completedLessons >= totalLessons;
+
+        const cpId = `${userId}_${courseId}`;
+        const cpRef = db.collection(`${basePath}/course_progress`).doc(cpId);
+        tx.set(cpRef, {
+          userId, courseId, completedLessons, totalLessons, progressRatio, isCompleted, updatedAt: new Date(),
+        }, { merge: true });
+      }
+    }
+  });
 
   const superAdmin = req.superAdmin;
   console.log(

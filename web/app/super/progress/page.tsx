@@ -73,7 +73,10 @@ export default function StudentProgressPage() {
   useEffect(() => {
     superFetch<{ tenants: Tenant[] }>("/api/v2/super/tenants?limit=100")
       .then((data) => setTenants(data.tenants))
-      .catch(() => setTenants([]));
+      .catch((e) => {
+        setTenants([]);
+        setError(e instanceof Error ? e.message : "テナント一覧の取得に失敗しました");
+      });
   }, [superFetch]);
 
   // テナント選択時に初回データ取得（コース一覧抽出 + レポート表示）

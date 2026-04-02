@@ -35,7 +35,7 @@ export async function exportStudentProgressToSheets(
   const today = new Date().toISOString().split("T")[0];
   const title = `${tenantName}_受講状況_${today}`;
 
-  // スプレッドシート作成
+  // Step 1: スプレッドシート作成
   const createRes = await sheets.spreadsheets.create({
     requestBody: {
       properties: { title },
@@ -60,61 +60,69 @@ export async function exportStudentProgressToSheets(
   }
   const sheetId = createRes.data.sheets?.[0]?.properties?.sheetId ?? 0;
 
-  // データ書き込み（ヘッダ + データ行）
-  const allRows = [HEADERS, ...rows];
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: "受講状況!A1",
-    valueInputOption: "RAW",
-    requestBody: { values: allRows },
-  });
+  // Step 2-3: データ書き込み + フォーマット（失敗時はorphanスプレッドシートを削除）
+  try {
+    // データ書き込み（ヘッダ + データ行）
+    const allRows = [HEADERS, ...rows];
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: "受講状況!A1",
+      valueInputOption: "RAW",
+      requestBody: { values: allRows },
+    });
 
-  // フォーマット: ヘッダ行を太字 + フィルタ設定 + 列幅自動調整
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [
-        // ヘッダ行を太字に
-        {
-          repeatCell: {
-            range: { sheetId, startRowIndex: 0, endRowIndex: 1 },
-            cell: {
-              userEnteredFormat: {
-                textFormat: { bold: true },
-                backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+    // フォーマット: ヘッダ行を太字 + フィルタ設定 + 列幅自動調整
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            repeatCell: {
+              range: { sheetId, startRowIndex: 0, endRowIndex: 1 },
+              cell: {
+                userEnteredFormat: {
+                  textFormat: { bold: true },
+                  backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+                },
+              },
+              fields: "userEnteredFormat(textFormat,backgroundColor)",
+            },
+          },
+          {
+            setBasicFilter: {
+              filter: {
+                range: {
+                  sheetId,
+                  startRowIndex: 0,
+                  endRowIndex: rows.length + 1,
+                  startColumnIndex: 0,
+                  endColumnIndex: HEADERS.length,
+                },
               },
             },
-            fields: "userEnteredFormat(textFormat,backgroundColor)",
           },
-        },
-        // オートフィルタ設定
-        {
-          setBasicFilter: {
-            filter: {
-              range: {
+          {
+            autoResizeDimensions: {
+              dimensions: {
                 sheetId,
-                startRowIndex: 0,
-                endRowIndex: rows.length + 1,
-                startColumnIndex: 0,
-                endColumnIndex: HEADERS.length,
+                dimension: "COLUMNS",
+                startIndex: 0,
+                endIndex: HEADERS.length,
               },
             },
           },
-        },
-        // 列幅自動調整
-        {
-          autoResizeDimensions: {
-            dimensions: {
-              sheetId,
-              dimension: "COLUMNS",
-              startIndex: 0,
-              endIndex: HEADERS.length,
-            },
-          },
-        },
-      ],
-    },
-  });
+        ],
+      },
+    });
+  } catch (writeError) {
+    // Drive APIはreadonly scopeのため削除不可 → orphanスプレッドシートIDをログに記録
+    console.error(
+      "[Sheets] Data write failed after spreadsheet creation. Orphaned spreadsheet:",
+      `https://docs.google.com/spreadsheets/d/${spreadsheetId}`,
+      writeError
+    );
+    throw writeError;
+  }
 
   const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
   return { spreadsheetUrl, spreadsheetId };
