@@ -228,7 +228,7 @@ describe("extractWatchedRangesFromEvents", () => {
     const events = [
       makeEvent("play", 0, 0),
       makeEvent("pause", 10, 10000),
-      makeEvent("seek", 5, 5000),
+      makeEvent("seeked", 5, 5000),
       makeHeartbeat(0, 0),
       makeHeartbeat(3, 3000),
       makeHeartbeat(6, 6000),

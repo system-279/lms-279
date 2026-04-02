@@ -203,7 +203,7 @@ export function processVideoEvents(
   let speedViolationCountDelta = 0;
 
   for (const event of events) {
-    if (event.eventType === "seek") {
+    if (event.eventType === "seeked") {
       seekCountDelta++;
     } else if (event.eventType === "pause") {
       pauseCountDelta++;
