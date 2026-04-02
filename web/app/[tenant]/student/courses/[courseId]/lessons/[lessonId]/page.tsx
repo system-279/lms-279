@@ -1108,7 +1108,7 @@ export default function StudentLessonDetailPage() {
           <div className="rounded-md border p-6 space-y-3">
             <p className="text-sm font-medium text-center">テストに挑戦する</p>
             <p className="text-sm text-muted-foreground text-center">
-              動画の視聴進捗が95%に達するとテストを受けられます（現在: {coveragePercent}%）
+              動画を最後まで視聴するとテストに挑戦できます
             </p>
             <p className="text-xs text-muted-foreground/70 text-center">
               ※ 飛ばした部分は視聴としてカウントされません。最初から通して視聴してください。
