@@ -38,8 +38,9 @@ import type {
 } from "../types/entities.js";
 
 // Firestore Timestampを Date に変換
-function toDate(timestamp: Timestamp | Date | null | undefined): Date {
+export function toDate(timestamp: Timestamp | Date | string | null | undefined): Date {
   if (!timestamp) return new Date();
+  if (typeof timestamp === "string") return new Date(timestamp);
   if (timestamp instanceof Date) return timestamp;
   if (typeof timestamp.toDate === "function") return timestamp.toDate();
   return new Date();
