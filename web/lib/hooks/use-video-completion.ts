@@ -31,6 +31,8 @@ type UseVideoCompletionReturn = {
   showQuizSection: boolean;
   fetchAnalytics: () => Promise<void>;
   handleVideoComplete: () => Promise<void>;
+  /** POST /eventsレスポンスのanalyticsを直接反映（ended flush用） */
+  setAnalyticsFromFlush: (flush: { isComplete: boolean; coverageRatio: number } | null) => void;
 };
 
 export function useVideoCompletion({
@@ -73,6 +75,19 @@ export function useVideoCompletion({
     await fetchAnalytics();
   }, [fetchAnalytics]);
 
+  const setAnalyticsFromFlush = useCallback(
+    (flush: { isComplete: boolean; coverageRatio: number } | null) => {
+      if (flush?.isComplete) {
+        setVideoCompleted(true);
+      }
+      // flush失敗時はfetchAnalyticsにフォールバック
+      if (!flush) {
+        fetchAnalytics();
+      }
+    },
+    [fetchAnalytics]
+  );
+
   const showQuizSection =
     hasQuiz && (!hasVideo || videoCompleted || analytics?.isComplete === true);
 
@@ -83,6 +98,7 @@ export function useVideoCompletion({
     showQuizSection,
     fetchAnalytics,
     handleVideoComplete,
+    setAnalyticsFromFlush,
   };
 }
 

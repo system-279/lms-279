@@ -2,7 +2,7 @@
 
 import { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { VideoControls } from "./VideoControls";
-import { VideoEventTracker } from "./VideoEventTracker";
+import { VideoEventTracker, type FlushAnalytics } from "./VideoEventTracker";
 
 interface VideoPlayerProps {
   videoId?: string;
@@ -21,6 +21,8 @@ interface VideoPlayerProps {
   sessionToken?: string;
   /** プレビューモード: イベント送信・タブ離脱検知を無効化 */
   preview?: boolean;
+  /** ended時にイベントflush後のサーバー確認済みanalyticsを受け取るコールバック */
+  onEndedFlush?: (analytics: FlushAnalytics | null) => void;
 }
 
 /** crypto.randomUUID が使えない環境向けフォールバック */
@@ -45,6 +47,7 @@ export function VideoPlayer({
   fetchFn,
   sessionToken: externalSessionToken,
   preview = false,
+  onEndedFlush,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -101,7 +104,11 @@ export function VideoPlayer({
     const handleCanPlay = () => setIsLoading(false);
     const handleEnded = () => {
       setIsPlaying(false);
-      onComplete?.();
+      // onEndedFlush提供時はVideoEventTrackerのflush完了後にコールバックが呼ばれるため、
+      // ここでのonComplete呼び出しを抑制（レースコンディション防止）
+      if (!onEndedFlush) {
+        onComplete?.();
+      }
     };
     const handleError = () => {
       const err = video.error;
@@ -133,7 +140,7 @@ export function VideoPlayer({
       video.removeEventListener("ended", handleEnded);
       video.removeEventListener("error", handleError);
     };
-  }, [onComplete, onPlay, onPause]);
+  }, [onComplete, onPlay, onPause, onEndedFlush]);
 
   // --- タブ離脱検知（プレビューモードでは無効） ---
   useEffect(() => {
@@ -258,6 +265,7 @@ export function VideoPlayer({
           sessionToken={sessionToken}
           apiEndpoint={eventEndpoint ?? `/api/v1/videos/${videoId}/events`}
           fetchFn={fetchFn ?? fetch}
+          onEndedFlush={onEndedFlush}
         />
       )}
     </div>

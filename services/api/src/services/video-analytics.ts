@@ -79,6 +79,16 @@ export function extractWatchedRangesFromEvents(
     newRanges.push({ start: rangeStart, end: rangeEnd });
   }
 
+  // endedイベントのpositionで最終レンジを拡張（末尾数秒のギャップを閉じる）
+  const endedEvent = events.find((e) => e.eventType === "ended");
+  if (endedEvent && newRanges.length > 0) {
+    const lastRange = newRanges[newRanges.length - 1];
+    const gap = endedEvent.position - lastRange.end;
+    if (gap > 0 && gap <= 10) {
+      lastRange.end = endedEvent.position;
+    }
+  }
+
   // 既存rangesとマージ
   return mergeWatchedRanges([...existingRanges, ...newRanges]);
 }
