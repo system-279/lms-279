@@ -1110,9 +1110,11 @@ export default function StudentLessonDetailPage() {
             <p className="text-sm text-muted-foreground text-center">
               動画を最後まで視聴するとテストに挑戦できます
             </p>
-            <p className="text-xs text-muted-foreground/70 text-center">
-              ※ 飛ばした部分は視聴としてカウントされません。最初から通して視聴してください。
-            </p>
+            <div className="rounded bg-destructive/10 px-3 py-2">
+              <p className="text-xs font-medium text-destructive text-center">
+                飛ばした部分は視聴としてカウントされません。最初から通して視聴してください。
+              </p>
+            </div>
           </div>
         )
       )}
