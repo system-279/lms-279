@@ -678,9 +678,12 @@ export default function StudentLessonDetailPage() {
    */
   const eventFetchFn = useCallback(
     async (url: string, options?: RequestInit): Promise<Response> => {
-      await authFetch<unknown>(url, options);
-      // VideoEventTracker は Response の内容を使わないため、ok:true の最小 Response を返す
-      return new Response(null, { status: 200 });
+      const data = await authFetch<unknown>(url, options);
+      // POST /eventsのレスポンス（analytics含む）をVideoEventTrackerに渡す
+      return new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     },
     [authFetch]
   );
@@ -696,6 +699,7 @@ export default function StudentLessonDetailPage() {
     loadingAnalytics,
     showQuizSection,
     handleVideoComplete,
+    setAnalyticsFromFlush,
   } = useVideoCompletion({
     authFetch,
     videoMeta,
@@ -1012,6 +1016,7 @@ export default function StudentLessonDetailPage() {
                     eventEndpoint={`/api/v2/${tenantId}/videos/${videoMeta.id}/events`}
                     fetchFn={eventFetchFn}
                     onComplete={handleVideoComplete}
+                    onEndedFlush={setAnalyticsFromFlush}
                     onPlay={handleVideoPlay}
                     onPause={handleVideoPause}
                     sessionToken={session?.sessionToken ?? pendingTokenRef.current}
