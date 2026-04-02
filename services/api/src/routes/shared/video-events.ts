@@ -20,7 +20,8 @@ const router = Router();
 const VALID_EVENT_TYPES: VideoEventType[] = [
   "play",
   "pause",
-  "seek",
+  "seeking",
+  "seeked",
   "ended",
   "heartbeat",
   "ratechange",

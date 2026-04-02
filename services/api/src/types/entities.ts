@@ -124,7 +124,8 @@ export interface Video {
 export type VideoEventType =
   | "play"
   | "pause"
-  | "seek"
+  | "seeking"
+  | "seeked"
   | "ended"
   | "heartbeat"
   | "ratechange"
