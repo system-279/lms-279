@@ -174,4 +174,68 @@ describe("useVideoCompletion", () => {
     });
     expect(result.current.showQuizSection).toBe(false);
   });
+
+  // 8. videoCompleted=trueは一度立ったら戻らない（one-way latch）
+  it("does not revert videoCompleted once set to true", async () => {
+    // 初回: 完了
+    mockAuthFetch.mockResolvedValueOnce(makeAnalytics({ isComplete: true }));
+
+    const videoMeta = { id: "v1" };
+    const { result } = renderHook(() =>
+      useVideoCompletion({
+        authFetch: mockAuthFetch,
+        videoMeta,
+        hasVideo: true,
+        hasQuiz: true,
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.videoCompleted).toBe(true);
+    });
+
+    // 2回目: サーバーがisComplete=falseを返す（データ補正等）
+    mockAuthFetch.mockResolvedValueOnce(makeAnalytics({ isComplete: false }));
+
+    act(() => {
+      result.current.handleVideoComplete();
+    });
+
+    await waitFor(() => {
+      expect(result.current.loadingAnalytics).toBe(false);
+    });
+
+    // videoCompletedはtrueのまま（リバートしない）
+    expect(result.current.videoCompleted).toBe(true);
+    expect(result.current.showQuizSection).toBe(true);
+  });
+
+  // 9. videoId変更時に新しいvideoIdでfetchが走る
+  it("re-fetches analytics when videoId changes", async () => {
+    mockAuthFetch.mockResolvedValueOnce(makeAnalytics({ isComplete: true }));
+
+    const { result, rerender } = renderHook(
+      (props: { videoMeta: { id: string } | null }) =>
+        useVideoCompletion({
+          authFetch: mockAuthFetch,
+          videoMeta: props.videoMeta,
+          hasVideo: true,
+          hasQuiz: true,
+        }),
+      { initialProps: { videoMeta: { id: "v1" } } }
+    );
+
+    await waitFor(() => {
+      expect(result.current.videoCompleted).toBe(true);
+    });
+    expect(mockAuthFetch).toHaveBeenCalledWith("/api/v1/videos/v1/analytics");
+
+    // videoId変更 → 新しいfetch
+    mockAuthFetch.mockResolvedValueOnce(makeAnalytics({ isComplete: false }));
+    rerender({ videoMeta: { id: "v2" } });
+
+    await waitFor(() => {
+      expect(mockAuthFetch).toHaveBeenCalledWith("/api/v1/videos/v2/analytics");
+    });
+  });
 });
