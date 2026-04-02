@@ -65,7 +65,7 @@ export function PauseTimeoutOverlay({
   const displayTime = `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
 
   return (
-    <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60">
+    <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 pointer-events-none">
       <div className="rounded-lg bg-background/95 px-6 py-4 text-center shadow-lg">
         <p className="text-sm font-medium">
           一時停止中 — 残り {displayTime} で自動退室
