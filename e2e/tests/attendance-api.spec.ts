@@ -89,7 +89,9 @@ test.describe.serial("出席管理 E2E テスト", () => {
     );
     if (res.status() === 200) {
       const { session } = await res.json();
-      await request.post(`${API_BASE}/lesson-sessions/${session.id}/abandon`);
+      if (session) {
+        await request.post(`${API_BASE}/lesson-sessions/${session.id}/abandon`);
+      }
     }
   });
 
