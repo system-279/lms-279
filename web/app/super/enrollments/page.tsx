@@ -92,10 +92,10 @@ export default function EnrollmentsPage() {
     superFetch<{ tenants: Tenant[] }>(`/api/v2/super/tenants/${selectedTenant}`)
       .then(async () => {
         // テナントのコース一覧は共有ルート経由で取得
-        const res = await superFetch<Course[]>(
+        const res = await superFetch<{ courses: Course[] }>(
           `/api/v2/${selectedTenant}/courses`
         );
-        setCourses(Array.isArray(res) ? res : []);
+        setCourses(Array.isArray(res.courses) ? res.courses : []);
       })
       .catch(() => setCourses([]));
   }, [selectedTenant, superFetch]);
