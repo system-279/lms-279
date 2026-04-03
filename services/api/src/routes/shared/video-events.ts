@@ -146,12 +146,21 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
   }
 
   // 2.5. 受講期間チェック
-  const enrollmentSetting = await ds.getCourseEnrollmentSetting(video.courseId);
-  const videoAccessResult = checkVideoAccess(enrollmentSetting);
-  if (!videoAccessResult.allowed) {
-    res.status(403).json({
-      error: videoAccessResult.reason,
-      message: "動画視聴期間が終了しています",
+  try {
+    const enrollmentSetting = await ds.getCourseEnrollmentSetting(video.courseId);
+    const videoAccessResult = checkVideoAccess(enrollmentSetting);
+    if (!videoAccessResult.allowed) {
+      res.status(403).json({
+        error: videoAccessResult.reason,
+        message: "動画視聴期間が終了しています",
+      });
+      return;
+    }
+  } catch (err) {
+    console.error(`Failed to check video access for courseId ${video.courseId}:`, err);
+    res.status(500).json({
+      error: "enrollment_check_failed",
+      message: "受講期限チェックが失敗しました",
     });
     return;
   }

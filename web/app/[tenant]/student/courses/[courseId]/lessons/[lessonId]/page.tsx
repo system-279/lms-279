@@ -97,6 +97,8 @@ type QuizByLessonResponse = {
   quiz: Quiz;
   userAttemptCount: number;
   attemptSummaries: AttemptSummary[];
+  accessExpired?: boolean;
+  expiredReason?: string;
 };
 
 type ActiveAttempt = {
@@ -180,6 +182,9 @@ function QuizSection({
       setQuiz(data.quiz);
       setUserAttemptCount(data.userAttemptCount);
       setAttemptSummaries(data.attemptSummaries);
+      if (data.accessExpired) {
+        setQuizAccessExpired(true);
+      }
     } catch (e) {
       setQuizError(e instanceof Error ? e.message : "テスト情報の取得に失敗しました");
     } finally {

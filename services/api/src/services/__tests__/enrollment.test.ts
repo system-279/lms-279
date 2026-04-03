@@ -4,6 +4,7 @@ import {
   checkVideoAccess,
   calculateDefaultDeadlines,
 } from "../enrollment.js";
+import { toDateStrict } from "../../datasource/firestore.js";
 import type { CourseEnrollmentSetting } from "../../types/entities.js";
 
 const NOW = new Date("2026-04-02T10:00:00Z");
@@ -141,5 +142,72 @@ describe("calculateDefaultDeadlines", () => {
     const result = calculateDefaultDeadlines("2026-12-15T00:00:00Z");
     expect(result.quizAccessUntil).toBe("2027-02-15T23:59:59.999Z");
     expect(result.videoAccessUntil).toBe("2027-12-15T23:59:59.999Z");
+  });
+});
+
+describe("toDateStrict", () => {
+  it("null入力は例外をスロー", () => {
+    expect(() => toDateStrict(null, "enrolledAt")).toThrow(
+      "Invalid deadline field: enrolledAt is empty or null"
+    );
+  });
+
+  it("undefined入力は例外をスロー", () => {
+    expect(() => toDateStrict(undefined, "quizAccessUntil")).toThrow(
+      "Invalid deadline field: quizAccessUntil is empty or null"
+    );
+  });
+
+  it("空文字列入力は例外をスロー", () => {
+    expect(() => toDateStrict("", "videoAccessUntil")).toThrow(
+      "Invalid deadline field: videoAccessUntil is empty or null"
+    );
+  });
+
+  it("ホワイトスペースのみの文字列は例外をスロー", () => {
+    expect(() => toDateStrict("  ", "enrolledAt")).toThrow(
+      "Invalid deadline field: enrolledAt is empty or null"
+    );
+  });
+
+  it("無効な日付形式は例外をスロー", () => {
+    expect(() => toDateStrict("invalid-date", "quizAccessUntil")).toThrow(
+      /Invalid date format for quizAccessUntil/
+    );
+  });
+
+  it("無効なDate オブジェクトは例外をスロー", () => {
+    const invalidDate = new Date("invalid");
+    expect(() => toDateStrict(invalidDate, "enrolledAt")).toThrow(
+      "Invalid Date object for enrolledAt"
+    );
+  });
+
+  it("有効なISO文字列は正常にDate を返す", () => {
+    const result = toDateStrict("2026-04-01T00:00:00Z", "enrolledAt");
+    expect(result).toBeInstanceOf(Date);
+    expect(result.toISOString()).toBe("2026-04-01T00:00:00.000Z");
+  });
+
+  it("有効なDate インスタンスは正常に返す", () => {
+    const date = new Date("2026-04-01T00:00:00Z");
+    const result = toDateStrict(date, "videoAccessUntil");
+    expect(result).toEqual(date);
+  });
+
+  it("Firestore Timestampオブジェクトは正常にDate を返す", () => {
+    const fakeTimestamp = { toDate: () => new Date("2026-04-01T00:00:00Z") };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = toDateStrict(fakeTimestamp as any, "enrolledAt");
+    expect(result).toBeInstanceOf(Date);
+    expect(result.toISOString()).toBe("2026-04-01T00:00:00.000Z");
+  });
+
+  it("無効なTimestamp.toDate()結果は例外をスロー", () => {
+    const invalidTimestamp = { toDate: () => new Date("invalid") };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(() => toDateStrict(invalidTimestamp as any, "quizAccessUntil")).toThrow(
+      "Invalid Timestamp.toDate() result for quizAccessUntil"
+    );
   });
 });

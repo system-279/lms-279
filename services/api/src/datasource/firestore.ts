@@ -48,6 +48,52 @@ export function toDate(timestamp: Timestamp | Date | string | null | undefined):
 }
 
 /**
+ * 必須フィールド用の厳密な日付パース関数
+ * null/undefined/空文字列 → エラーをスロー
+ * 無効な日付形式 → エラーをスロー
+ * 用途: enrolledAt, quizAccessUntil, videoAccessUntil など、必須の期限フィールド
+ */
+export function toDateStrict(
+  timestamp: Timestamp | Date | string | null | undefined,
+  fieldName: string
+): Date {
+  if (!timestamp || (typeof timestamp === "string" && !timestamp.trim())) {
+    throw new Error(
+      `Invalid deadline field: ${fieldName} is empty or null. This is a critical data corruption issue.`
+    );
+  }
+
+  if (typeof timestamp === "string") {
+    const parsed = new Date(timestamp);
+    if (isNaN(parsed.getTime())) {
+      throw new Error(
+        `Invalid date format for ${fieldName}: "${timestamp}". Expected ISO 8601 format.`
+      );
+    }
+    return parsed;
+  }
+
+  if (timestamp instanceof Date) {
+    if (isNaN(timestamp.getTime())) {
+      throw new Error(`Invalid Date object for ${fieldName}`);
+    }
+    return timestamp;
+  }
+
+  if (typeof timestamp.toDate === "function") {
+    const d = timestamp.toDate();
+    if (isNaN(d.getTime())) {
+      throw new Error(`Invalid Timestamp.toDate() result for ${fieldName}`);
+    }
+    return d;
+  }
+
+  throw new Error(
+    `Unknown timestamp type for ${fieldName}: expected Timestamp|Date|string, got ${typeof timestamp}`
+  );
+}
+
+/**
  * Firestoreドキュメントを部分更新するヘルパー
  * FieldValue.serverTimestamp() / Timestamp.now() はSDKバージョン不整合で
  * シリアライズエラーを起こすため、new Date() を使用する。
@@ -1310,15 +1356,21 @@ export class FirestoreDataSource implements DataSource {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private toCourseEnrollmentSetting(id: string, data: any): CourseEnrollmentSetting {
-    return {
-      id,
-      courseId: data.courseId ?? id,
-      enrolledAt: toDate(data.enrolledAt).toISOString(),
-      quizAccessUntil: toDate(data.quizAccessUntil).toISOString(),
-      videoAccessUntil: toDate(data.videoAccessUntil).toISOString(),
-      createdBy: data.createdBy,
-      updatedAt: toDate(data.updatedAt).toISOString(),
-    };
+    try {
+      return {
+        id,
+        courseId: data.courseId ?? id,
+        enrolledAt: toDateStrict(data.enrolledAt, "enrolledAt").toISOString(),
+        quizAccessUntil: toDateStrict(data.quizAccessUntil, "quizAccessUntil").toISOString(),
+        videoAccessUntil: toDateStrict(data.videoAccessUntil, "videoAccessUntil").toISOString(),
+        createdBy: data.createdBy,
+        updatedAt: toDateStrict(data.updatedAt, "updatedAt").toISOString(),
+      };
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      console.error(`Failed to parse CourseEnrollmentSetting for course ${id}:`, error);
+      throw e;
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
