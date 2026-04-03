@@ -1021,14 +1021,14 @@ router.put("/tenants/:tenantId/course-settings/:courseId", async (req: Request, 
   // テナント存在確認
   const tenantDoc = await db.collection("tenants").doc(tenantId).get();
   if (!tenantDoc.exists) {
-    res.status(404).json({ error: "tenant_not_found", message: "テナントが見つかりません" });
+    res.status(404).json({ error: "not_found", message: "Tenant not found" });
     return;
   }
 
   // コース存在確認
   const courseDoc = await db.collection(`tenants/${tenantId}/courses`).doc(courseId).get();
   if (!courseDoc.exists) {
-    res.status(404).json({ error: "course_not_found", message: "コースが見つかりません" });
+    res.status(404).json({ error: "not_found", message: "Course not found" });
     return;
   }
 
@@ -1077,7 +1077,7 @@ router.delete("/tenants/:tenantId/course-settings/:courseId", async (req: Reques
   // テナント存在確認
   const tenantDoc = await db.collection("tenants").doc(tenantId).get();
   if (!tenantDoc.exists) {
-    res.status(404).json({ error: "tenant_not_found", message: "テナントが見つかりません" });
+    res.status(404).json({ error: "not_found", message: "Tenant not found" });
     return;
   }
 
