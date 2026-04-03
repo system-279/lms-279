@@ -4,14 +4,13 @@ import {
   checkVideoAccess,
   calculateDefaultDeadlines,
 } from "../enrollment.js";
-import type { Enrollment } from "../../types/entities.js";
+import type { CourseEnrollmentSetting } from "../../types/entities.js";
 
 const NOW = new Date("2026-04-02T10:00:00Z");
 
-function makeEnrollment(overrides: Partial<Enrollment> = {}): Enrollment {
+function makeSetting(overrides: Partial<CourseEnrollmentSetting> = {}): CourseEnrollmentSetting {
   return {
-    id: "user1_course1",
-    userId: "user1",
+    id: "course1",
     courseId: "course1",
     enrolledAt: "2026-03-01T00:00:00Z",
     quizAccessUntil: "2026-05-01T00:00:00Z",
@@ -36,7 +35,7 @@ describe("checkQuizAccess", () => {
   });
 
   it("期限内はアクセス許可", () => {
-    const enrollment = makeEnrollment({
+    const enrollment = makeSetting({
       quizAccessUntil: "2026-06-01T00:00:00Z",
     });
     const result = checkQuizAccess(enrollment);
@@ -44,7 +43,7 @@ describe("checkQuizAccess", () => {
   });
 
   it("期限切れはアクセス拒否", () => {
-    const enrollment = makeEnrollment({
+    const enrollment = makeSetting({
       quizAccessUntil: "2026-03-01T00:00:00Z",
     });
     const result = checkQuizAccess(enrollment);
@@ -52,7 +51,7 @@ describe("checkQuizAccess", () => {
   });
 
   it("期限ちょうどはアクセス拒否", () => {
-    const enrollment = makeEnrollment({
+    const enrollment = makeSetting({
       quizAccessUntil: NOW.toISOString(),
     });
     const result = checkQuizAccess(enrollment);
@@ -60,7 +59,7 @@ describe("checkQuizAccess", () => {
   });
 
   it("無効な日付データはアクセス拒否（データ破損防御）", () => {
-    const enrollment = makeEnrollment({
+    const enrollment = makeSetting({
       quizAccessUntil: "invalid-date",
     });
     const result = checkQuizAccess(enrollment);
@@ -82,7 +81,7 @@ describe("checkVideoAccess", () => {
   });
 
   it("期限内はアクセス許可", () => {
-    const enrollment = makeEnrollment({
+    const enrollment = makeSetting({
       videoAccessUntil: "2027-06-01T00:00:00Z",
     });
     const result = checkVideoAccess(enrollment);
@@ -90,7 +89,7 @@ describe("checkVideoAccess", () => {
   });
 
   it("期限切れはアクセス拒否", () => {
-    const enrollment = makeEnrollment({
+    const enrollment = makeSetting({
       videoAccessUntil: "2026-01-01T00:00:00Z",
     });
     const result = checkVideoAccess(enrollment);
@@ -98,7 +97,7 @@ describe("checkVideoAccess", () => {
   });
 
   it("無効な日付データはアクセス拒否（データ破損防御）", () => {
-    const enrollment = makeEnrollment({
+    const enrollment = makeSetting({
       videoAccessUntil: "not-a-date",
     });
     const result = checkVideoAccess(enrollment);

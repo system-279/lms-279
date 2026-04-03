@@ -14,7 +14,7 @@
 | `notification_policies` | 通知ポリシー |
 | `notification_logs` | 通知ログ |
 | `auth_error_logs` | 認証エラーログ |
-| `enrollments` | 受講登録 |
+| `course_enrollment_settings` | 受講期間設定（テナント×コース単位） |
 
 ### 新規コレクション
 
@@ -162,13 +162,12 @@ questions配列の各要素:
 | createdAt | Timestamp | 作成日時 |
 | updatedAt | Timestamp | 更新日時 |
 
-#### enrollments/{userId_courseId}（受講期間管理）
+#### course_enrollment_settings/{courseId}（受講期間設定 — テナント×コース単位）
 | フィールド | 型 | 説明 |
 |-----------|------|------|
-| userId | string | ユーザーID |
 | courseId | string | コースID |
 | enrolledAt | string | 受講開始日（スーパー管理者が設定） |
-| quizAccessUntil | string | テスト受験期限（デフォルト: enrolledAt + 2ヶ月） |
-| videoAccessUntil | string | 動画視聴期限（デフォルト: enrolledAt + 1年） |
+| quizAccessUntil | string | テスト受験期限（enrolledAt + 2ヶ月、自動計算） |
+| videoAccessUntil | string | 動画視聴期限（enrolledAt + 1年、自動計算） |
 | createdBy | string | 設定したスーパー管理者のメールアドレス |
 | updatedAt | string | 更新日時 |

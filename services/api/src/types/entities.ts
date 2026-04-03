@@ -313,13 +313,12 @@ export interface LessonSessionFilter {
 // 受講期間管理
 // ========================================
 
-export interface Enrollment {
-  id: string;              // userId_courseId
-  userId: string;
+export interface CourseEnrollmentSetting {
+  id: string;              // = courseId
   courseId: string;
   enrolledAt: string;      // ISO — スーパー管理者が設定する受講開始日
-  quizAccessUntil: string; // ISO — enrolledAt + 2ヶ月（デフォルト）
-  videoAccessUntil: string;// ISO — enrolledAt + 1年（デフォルト）
+  quizAccessUntil: string; // ISO — enrolledAt + 2ヶ月（自動計算）
+  videoAccessUntil: string;// ISO — enrolledAt + 1年（自動計算）
   createdBy: string;       // スーパー管理者email
   updatedAt: string;
 }
