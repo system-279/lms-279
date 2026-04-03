@@ -59,10 +59,12 @@ export default function StudentProgressPage() {
     lessonTitle: string;
     lesson: SuperLessonRecord;
   } | null>(null);
-  const [editVideoCompleted, setEditVideoCompleted] = useState(false);
+  const [editDate, setEditDate] = useState("");
+  const [editEntryTime, setEditEntryTime] = useState("");
+  const [editExitTime, setEditExitTime] = useState("");
+  const [editExitReason, setEditExitReason] = useState("");
+  const [editQuizScore, setEditQuizScore] = useState("");
   const [editQuizPassed, setEditQuizPassed] = useState(false);
-  const [editQuizBestScore, setEditQuizBestScore] = useState("");
-  const [editLessonCompleted, setEditLessonCompleted] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -135,6 +137,16 @@ export default function StudentProgressPage() {
     setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
+  const toJstDateAndTime = (iso: string | null): { date: string; time: string } => {
+    if (!iso) return { date: "", time: "" };
+    const d = new Date(iso);
+    const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+    return {
+      date: jst.toISOString().slice(0, 10),
+      time: jst.toISOString().slice(11, 16),
+    };
+  };
+
   const openEdit = (userId: string, userName: string | null, lesson: SuperLessonRecord) => {
     setEditContext({
       userId,
@@ -143,36 +155,57 @@ export default function StudentProgressPage() {
       lessonTitle: lesson.lessonTitle,
       lesson,
     });
-    setEditVideoCompleted(lesson.videoCompleted);
+    const entry = toJstDateAndTime(lesson.latestEntryAt);
+    const exit = toJstDateAndTime(lesson.latestExitAt);
+    setEditDate(entry.date);
+    setEditEntryTime(entry.time);
+    setEditExitTime(exit.time);
+    setEditExitReason(lesson.latestExitReason ?? "");
+    setEditQuizScore(lesson.quizBestScore?.toString() ?? "");
     setEditQuizPassed(lesson.quizPassed);
-    setEditQuizBestScore(lesson.quizBestScore?.toString() ?? "");
-    setEditLessonCompleted(lesson.lessonCompleted);
     setEditError(null);
     setEditOpen(true);
   };
 
+  const jstToUtcIso = (date: string, time: string): string => {
+    const jstDate = new Date(`${date}T${time}:00+09:00`);
+    return jstDate.toISOString();
+  };
+
   const handleEdit = async () => {
     if (!editContext || !selectedTenant) return;
+    const sessionId = editContext.lesson.latestSessionId;
+    if (!sessionId) {
+      setEditError("このレッスンにはセッション記録がありません");
+      return;
+    }
     setEditLoading(true);
     setEditError(null);
     try {
-      const body: Record<string, unknown> = {
-        videoCompleted: editVideoCompleted,
-        quizPassed: editQuizPassed,
-        lessonCompleted: editLessonCompleted,
-      };
-      if (editQuizBestScore !== "") {
-        const score = Number(editQuizBestScore);
+      const body: Record<string, unknown> = {};
+
+      if (editDate && editEntryTime) {
+        body.entryAt = jstToUtcIso(editDate, editEntryTime);
+      }
+      if (editDate && editExitTime) {
+        body.exitAt = jstToUtcIso(editDate, editExitTime);
+      }
+      if (editExitReason) {
+        body.exitReason = editExitReason;
+      }
+      if (editQuizScore !== "") {
+        const score = Number(editQuizScore);
         if (isNaN(score) || score < 0 || score > 100) {
-          setEditError("テスト最高点は0〜100の数値を入力してください");
+          setEditError("テスト点数は0〜100の数値を入力してください");
           setEditLoading(false);
           return;
         }
-        body.quizBestScore = score;
+        body.quizScore = score;
       }
+      body.quizPassed = editQuizPassed;
 
       await superFetch(
-        `/api/v2/super/tenants/${selectedTenant}/student-progress/${editContext.lessonId}/${editContext.userId}`,
+        `/api/v2/super/tenants/${selectedTenant}/attendance-report/${sessionId}`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -406,44 +439,74 @@ export default function StudentProgressPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={editVideoCompleted}
-                onChange={(e) => setEditVideoCompleted(e.target.checked)}
-                className="h-4 w-4"
-              />
-              <span className="text-sm font-medium">動画完了</span>
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={editQuizPassed}
-                onChange={(e) => setEditQuizPassed(e.target.checked)}
-                className="h-4 w-4"
-              />
-              <span className="text-sm font-medium">テスト合格</span>
-            </label>
             <div className="space-y-1">
-              <label className="text-sm font-medium">テスト最高点</label>
+              <label className="text-sm font-medium">日付</label>
               <Input
-                type="number"
-                min="0"
-                max="100"
-                value={editQuizBestScore}
-                onChange={(e) => setEditQuizBestScore(e.target.value)}
-                placeholder="未受験の場合は空"
+                type="date"
+                value={editDate}
+                onChange={(e) => setEditDate(e.target.value)}
               />
             </div>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={editLessonCompleted}
-                onChange={(e) => setEditLessonCompleted(e.target.checked)}
-                className="h-4 w-4"
-              />
-              <span className="text-sm font-medium">レッスン完了</span>
-            </label>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-sm font-medium">入室</label>
+                <Input
+                  type="time"
+                  value={editEntryTime}
+                  onChange={(e) => setEditEntryTime(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium">退室</label>
+                <Input
+                  type="time"
+                  value={editExitTime}
+                  onChange={(e) => setEditExitTime(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">退室理由</label>
+              <Select value={editExitReason} onValueChange={setEditExitReason}>
+                <SelectTrigger>
+                  <SelectValue placeholder="未設定" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="quiz_submitted">テスト送信</SelectItem>
+                  <SelectItem value="pause_timeout">一時停止タイムアウト</SelectItem>
+                  <SelectItem value="time_limit">時間制限</SelectItem>
+                  <SelectItem value="browser_close">ブラウザ終了</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-sm font-medium">テスト点数</label>
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={editQuizScore}
+                  onChange={(e) => setEditQuizScore(e.target.value)}
+                  placeholder="未受験の場合は空"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium">合否</label>
+                <Select
+                  value={editQuizPassed ? "passed" : "failed"}
+                  onValueChange={(v) => setEditQuizPassed(v === "passed")}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="passed">合格</SelectItem>
+                    <SelectItem value="failed">不合格</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
             {editError && (
               <div className="text-sm text-destructive">{editError}</div>
             )}
