@@ -81,7 +81,7 @@ router.get("/quizzes/by-lesson/:lessonId", requireUser, async (req: Request, res
   }
 
   // 受講期限チェック（#220）— ソフトチェック（403しない、フラグのみ）
-  const enrollmentResult = await checkQuizAccessSoft(req, res, quiz.courseId);
+  const enrollmentResult = await checkQuizAccessSoft(req, res);
   if (!enrollmentResult) return; // 500送信済み
   const { accessExpired, expiredReason } = enrollmentResult;
 
@@ -148,7 +148,7 @@ router.get("/quizzes/:quizId", requireUser, async (req: Request, res: Response) 
   }
 
   // 受講期限チェック（#220）
-  const blocked = await guardQuizAccess(req, res, quiz.courseId);
+  const blocked = await guardQuizAccess(req, res);
   if (blocked) return;
 
   // 受験回数取得
@@ -198,7 +198,7 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
   }
 
   // 受講期間チェック
-  const enrollBlocked = await guardQuizAccess(req, res, quiz.courseId);
+  const enrollBlocked = await guardQuizAccess(req, res);
   if (enrollBlocked) return;
 
   // 原子的にattempt作成（in_progress一意性 + attemptNumber採番 + maxAttemptsチェック）
@@ -282,7 +282,7 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
   }
 
   // 受講期限チェック（#220） - 開始〜提出間の期限跨ぎに対応
-  const submitBlocked = await guardQuizAccess(req, res, quiz.courseId);
+  const submitBlocked = await guardQuizAccess(req, res);
   if (submitBlocked) return;
 
   const now = new Date();

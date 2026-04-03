@@ -11,14 +11,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -28,10 +20,9 @@ import {
 } from "@/components/ui/dialog";
 import { addMonths, addYears } from "date-fns";
 import { useSuperAdminFetch } from "@/lib/super-api";
-import type { CourseEnrollmentSettingResponse } from "@lms-279/shared-types";
+import type { TenantEnrollmentSettingResponse } from "@lms-279/shared-types";
 
 type Tenant = { id: string; name: string };
-type Course = { id: string; name: string };
 
 function formatDate(iso: string | null): string {
   if (!iso) return "—";
@@ -51,15 +42,12 @@ export default function EnrollmentsPage() {
 
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selectedTenant, setSelectedTenant] = useState("");
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [settings, setSettings] = useState<CourseEnrollmentSettingResponse[]>([]);
+  const [setting, setSetting] = useState<TenantEnrollmentSettingResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // 設定ダイアログ
   const [settingOpen, setSettingOpen] = useState(false);
-  const [settingCourseId, setSettingCourseId] = useState("");
-  const [settingCourseName, setSettingCourseName] = useState("");
   const [settingEnrolledAt, setSettingEnrolledAt] = useState("");
   const [settingLoading, setSettingLoading] = useState(false);
 
@@ -70,32 +58,16 @@ export default function EnrollmentsPage() {
       .catch(() => {});
   }, [superFetch]);
 
-  // コース一覧取得（テナント選択時）
-  useEffect(() => {
-    if (!selectedTenant) {
-      setCourses([]);
-      return;
-    }
-    superFetch<{ tenants: Tenant[] }>(`/api/v2/super/tenants/${selectedTenant}`)
-      .then(async () => {
-        const res = await superFetch<{ courses: Course[] }>(
-          `/api/v2/${selectedTenant}/courses`
-        );
-        setCourses(Array.isArray(res.courses) ? res.courses : []);
-      })
-      .catch(() => setCourses([]));
-  }, [selectedTenant, superFetch]);
-
-  // 設定一覧取得
-  const fetchSettings = useCallback(async () => {
+  // 設定取得
+  const fetchSetting = useCallback(async () => {
     if (!selectedTenant) return;
     setLoading(true);
     setError(null);
     try {
-      const data = await superFetch<{ settings: CourseEnrollmentSettingResponse[] }>(
-        `/api/v2/super/tenants/${selectedTenant}/course-settings`
+      const data = await superFetch<{ setting: TenantEnrollmentSettingResponse | null }>(
+        `/api/v2/super/tenants/${selectedTenant}/enrollment-setting`
       );
-      setSettings(data.settings);
+      setSetting(data.setting);
     } catch (e) {
       setError(e instanceof Error ? e.message : "取得に失敗しました");
     } finally {
@@ -105,20 +77,19 @@ export default function EnrollmentsPage() {
 
   useEffect(() => {
     if (selectedTenant) {
-      fetchSettings();
+      fetchSetting();
+    } else {
+      setSetting(null);
     }
-  }, [selectedTenant, fetchSettings]);
-
-  // コース名マップ
-  const courseNameMap = new Map(courses.map((c) => [c.id, c.name]));
+  }, [selectedTenant, fetchSetting]);
 
   // 設定保存
   const handleSave = async () => {
-    if (!selectedTenant || !settingCourseId || !settingEnrolledAt) return;
+    if (!selectedTenant || !settingEnrolledAt) return;
     setSettingLoading(true);
     try {
       await superFetch(
-        `/api/v2/super/tenants/${selectedTenant}/course-settings/${settingCourseId}`,
+        `/api/v2/super/tenants/${selectedTenant}/enrollment-setting`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -128,7 +99,7 @@ export default function EnrollmentsPage() {
         }
       );
       setSettingOpen(false);
-      fetchSettings();
+      fetchSetting();
     } catch (e) {
       setError(e instanceof Error ? e.message : "保存に失敗しました");
     } finally {
@@ -137,37 +108,30 @@ export default function EnrollmentsPage() {
   };
 
   // 設定削除
-  const handleDelete = async (courseId: string) => {
-    const courseName = courseNameMap.get(courseId) ?? courseId;
-    if (!confirm(`${courseName} の受講期間設定を削除しますか？\n削除するとこのコースの受講期間制限が解除されます。`)) return;
+  const handleDelete = async () => {
+    if (!confirm("受講期間設定を削除しますか？\n削除するとこのテナントの受講期間制限が解除されます。")) return;
     try {
       await superFetch(
-        `/api/v2/super/tenants/${selectedTenant}/course-settings/${courseId}`,
+        `/api/v2/super/tenants/${selectedTenant}/enrollment-setting`,
         { method: "DELETE" }
       );
-      fetchSettings();
+      fetchSetting();
     } catch (e) {
       setError(e instanceof Error ? e.message : "削除に失敗しました");
     }
   };
 
   // 設定ダイアログを開く
-  const openSettingDialog = (courseId: string, courseName: string, currentEnrolledAt?: string) => {
-    setSettingCourseId(courseId);
-    setSettingCourseName(courseName);
-    setSettingEnrolledAt(currentEnrolledAt?.split("T")[0] ?? "");
+  const openSettingDialog = () => {
+    setSettingEnrolledAt(setting?.enrolledAt?.split("T")[0] ?? "");
     setSettingOpen(true);
   };
-
-  // 未設定コース
-  const settingCourseIds = new Set(settings.map((s) => s.courseId));
-  const unconfiguredCourses = courses.filter((c) => !settingCourseIds.has(c.id));
 
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold">受講期間管理</h2>
       <p className="text-sm text-muted-foreground">
-        テナント×コース単位で受講期間を設定します。テスト期限（+2ヶ月）と動画期限（+1年）は受講開始日から自動計算されます。期限はUTC基準（日本時間で翌日9時頃まで有効）です。
+        テナント単位で受講期間を設定します。テスト期限（+2ヶ月）と動画期限（+1年）は受講開始日から自動計算されます。期限は日本時間の日末（23:59）まで有効です。
       </p>
 
       {/* テナント選択 */}
@@ -185,95 +149,38 @@ export default function EnrollmentsPage() {
 
       {error && <p className="text-destructive text-sm">{error}</p>}
 
-      {/* 設定済みコース一覧 */}
       {loading ? (
         <p className="text-muted-foreground">読み込み中...</p>
       ) : !selectedTenant ? (
         <p className="text-muted-foreground">テナントを選択してください</p>
+      ) : setting ? (
+        <div className="rounded-md border p-6 space-y-3 max-w-lg">
+          <div className="grid grid-cols-2 gap-y-2 text-sm">
+            <span className="text-muted-foreground">受講開始日</span>
+            <span>{formatDate(setting.enrolledAt)}</span>
+            <span className="text-muted-foreground">テスト期限</span>
+            <span className={isExpired(setting.quizAccessUntil) ? "text-destructive font-medium" : ""}>
+              {formatDate(setting.quizAccessUntil)}
+              {isExpired(setting.quizAccessUntil) && " (期限切れ)"}
+            </span>
+            <span className="text-muted-foreground">動画期限</span>
+            <span className={isExpired(setting.videoAccessUntil) ? "text-destructive font-medium" : ""}>
+              {formatDate(setting.videoAccessUntil)}
+              {isExpired(setting.videoAccessUntil) && " (期限切れ)"}
+            </span>
+            <span className="text-muted-foreground">設定者</span>
+            <span className="text-xs">{setting.createdBy}</span>
+          </div>
+          <div className="flex gap-2 pt-2">
+            <Button size="sm" variant="outline" onClick={openSettingDialog}>変更</Button>
+            <Button size="sm" variant="outline" className="text-destructive" onClick={handleDelete}>削除</Button>
+          </div>
+        </div>
       ) : (
-        <>
-          {settings.length > 0 && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>コース</TableHead>
-                  <TableHead>受講開始日</TableHead>
-                  <TableHead>テスト期限</TableHead>
-                  <TableHead>動画期限</TableHead>
-                  <TableHead>設定者</TableHead>
-                  <TableHead>操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {settings.map((s) => (
-                  <TableRow key={s.courseId}>
-                    <TableCell>{courseNameMap.get(s.courseId) ?? s.courseId}</TableCell>
-                    <TableCell>{formatDate(s.enrolledAt)}</TableCell>
-                    <TableCell>
-                      <span className={isExpired(s.quizAccessUntil) ? "text-destructive font-medium" : ""}>
-                        {formatDate(s.quizAccessUntil)}
-                        {isExpired(s.quizAccessUntil) && " (期限切れ)"}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <span className={isExpired(s.videoAccessUntil) ? "text-destructive font-medium" : ""}>
-                        {formatDate(s.videoAccessUntil)}
-                        {isExpired(s.videoAccessUntil) && " (期限切れ)"}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-xs">{s.createdBy}</TableCell>
-                    <TableCell>
-                      <div className="flex gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openSettingDialog(
-                            s.courseId,
-                            courseNameMap.get(s.courseId) ?? s.courseId,
-                            s.enrolledAt
-                          )}
-                        >
-                          変更
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-destructive"
-                          onClick={() => handleDelete(s.courseId)}
-                        >
-                          削除
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-
-          {settings.length === 0 && (
-            <p className="text-muted-foreground">受講期間の設定がありません</p>
-          )}
-
-          {/* 未設定コース一覧 */}
-          {unconfiguredCourses.length > 0 && (
-            <div className="space-y-2">
-              <h3 className="text-sm font-medium text-muted-foreground">未設定のコース</h3>
-              <div className="flex flex-wrap gap-2">
-                {unconfiguredCourses.map((c) => (
-                  <Button
-                    key={c.id}
-                    variant="outline"
-                    size="sm"
-                    onClick={() => openSettingDialog(c.id, c.name)}
-                  >
-                    {c.name} — 期間を設定
-                  </Button>
-                ))}
-              </div>
-            </div>
-          )}
-        </>
+        <div className="space-y-2">
+          <p className="text-muted-foreground">受講期間が設定されていません</p>
+          <Button onClick={openSettingDialog}>受講期間を設定</Button>
+        </div>
       )}
 
       {/* 設定ダイアログ */}
@@ -282,7 +189,7 @@ export default function EnrollmentsPage() {
           <DialogHeader>
             <DialogTitle>受講期間を設定</DialogTitle>
             <DialogDescription>
-              {settingCourseName} の受講開始日を設定します。テスト期限（+2ヶ月）と動画期限（+1年）は自動計算されます。
+              テナントの受講開始日を設定します。テスト期限（+2ヶ月）と動画期限（+1年）は自動計算されます。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -294,11 +201,10 @@ export default function EnrollmentsPage() {
                 onChange={(e) => setSettingEnrolledAt(e.target.value)}
               />
             </div>
-            {/* プレビュー: date-fnsで計算。formatDateは日付のみ表示なのでendOfDayUTC不要（BEは日末T23:59:59.999Zで保存） */}
             {settingEnrolledAt && !isNaN(new Date(settingEnrolledAt).getTime()) && (
               <div className="text-sm text-muted-foreground space-y-1">
-                <p>テスト期限: {formatDate(addMonths(new Date(settingEnrolledAt), 2).toISOString())}（この日の終わりまで有効）</p>
-                <p>動画期限: {formatDate(addYears(new Date(settingEnrolledAt), 1).toISOString())}（この日の終わりまで有効）</p>
+                <p>テスト期限: {formatDate(addMonths(new Date(settingEnrolledAt), 2).toISOString())}（この日のJST 23:59まで有効）</p>
+                <p>動画期限: {formatDate(addYears(new Date(settingEnrolledAt), 1).toISOString())}（この日のJST 23:59まで有効）</p>
               </div>
             )}
           </div>

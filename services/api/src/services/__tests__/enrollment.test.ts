@@ -5,14 +5,13 @@ import {
   calculateDefaultDeadlines,
 } from "../enrollment.js";
 import { toDateStrict } from "../../datasource/firestore.js";
-import type { CourseEnrollmentSetting } from "../../types/entities.js";
+import type { TenantEnrollmentSetting } from "../../types/entities.js";
 
 const NOW = new Date("2026-04-02T10:00:00Z");
 
-function makeSetting(overrides: Partial<CourseEnrollmentSetting> = {}): CourseEnrollmentSetting {
+function makeSetting(overrides: Partial<TenantEnrollmentSetting> = {}): TenantEnrollmentSetting {
   return {
-    id: "course1",
-    courseId: "course1",
+    id: "_config",
     enrolledAt: "2026-03-01T00:00:00Z",
     quizAccessUntil: "2026-05-01T00:00:00Z",
     videoAccessUntil: "2027-03-01T00:00:00Z",
@@ -106,31 +105,30 @@ describe("checkVideoAccess", () => {
   });
 });
 
-describe("calculateDefaultDeadlines", () => {
-  it("enrolledAtから2ヶ月と1年を計算（期限は日末23:59:59.999Z）", () => {
+describe("calculateDefaultDeadlines (JST日末基準)", () => {
+  // JST日末 = UTC 14:59:59.999
+
+  it("enrolledAtから2ヶ月と1年を計算（期限はJST日末 = UTC 14:59:59.999）", () => {
     const result = calculateDefaultDeadlines("2026-04-01T00:00:00Z");
-    expect(result.quizAccessUntil).toBe("2026-06-01T23:59:59.999Z");
-    expect(result.videoAccessUntil).toBe("2027-04-01T23:59:59.999Z");
+    expect(result.quizAccessUntil).toBe("2026-06-01T14:59:59.999Z");
+    expect(result.videoAccessUntil).toBe("2027-04-01T14:59:59.999Z");
   });
 
   it("月末の日付でも正しくクランプ（1月31日 + 2ヶ月 = 3月31日）", () => {
     const result = calculateDefaultDeadlines("2026-01-31T00:00:00Z");
-    expect(result.quizAccessUntil).toBe("2026-03-31T23:59:59.999Z");
+    expect(result.quizAccessUntil).toBe("2026-03-31T14:59:59.999Z");
   });
 
   it("12月31日 + 2ヶ月 = 翌年2月28日（月末クランプ）", () => {
     const result = calculateDefaultDeadlines("2026-12-31T00:00:00Z");
-    // 2027年は非閏年 → 2月28日
-    expect(result.quizAccessUntil).toBe("2027-02-28T23:59:59.999Z");
-    expect(result.videoAccessUntil).toBe("2027-12-31T23:59:59.999Z");
+    expect(result.quizAccessUntil).toBe("2027-02-28T14:59:59.999Z");
+    expect(result.videoAccessUntil).toBe("2027-12-31T14:59:59.999Z");
   });
 
   it("閏年2月29日 + 1年 = 非閏年2月28日（月末クランプ）", () => {
     const result = calculateDefaultDeadlines("2024-02-29T00:00:00Z");
-    // 2025年は非閏年 → 2月28日
-    expect(result.videoAccessUntil).toBe("2025-02-28T23:59:59.999Z");
-    // 2024-02-29 + 2ヶ月 = 2024-04-29
-    expect(result.quizAccessUntil).toBe("2024-04-29T23:59:59.999Z");
+    expect(result.videoAccessUntil).toBe("2025-02-28T14:59:59.999Z");
+    expect(result.quizAccessUntil).toBe("2024-04-29T14:59:59.999Z");
   });
 
   it("無効な日付文字列は例外をスロー", () => {
@@ -140,8 +138,8 @@ describe("calculateDefaultDeadlines", () => {
 
   it("年末の日付でも正しく計算", () => {
     const result = calculateDefaultDeadlines("2026-12-15T00:00:00Z");
-    expect(result.quizAccessUntil).toBe("2027-02-15T23:59:59.999Z");
-    expect(result.videoAccessUntil).toBe("2027-12-15T23:59:59.999Z");
+    expect(result.quizAccessUntil).toBe("2027-02-15T14:59:59.999Z");
+    expect(result.videoAccessUntil).toBe("2027-12-15T14:59:59.999Z");
   });
 });
 

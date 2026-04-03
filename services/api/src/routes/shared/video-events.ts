@@ -146,7 +146,7 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
   }
 
   // 2.5. 受講期間チェック
-  const evtBlocked = await guardVideoAccess(req, res, video.courseId);
+  const evtBlocked = await guardVideoAccess(req, res);
   if (evtBlocked) return;
 
   // 3. dataSource.createVideoEvents() でイベント保存

@@ -36,7 +36,7 @@ import type {
   UserProgress,
   CourseProgress,
   LessonSession,
-  CourseEnrollmentSetting,
+  TenantEnrollmentSetting,
 } from "../types/entities.js";
 import { countEffectiveAttempts } from "../services/quiz-attempt-utils.js";
 
@@ -1390,36 +1390,30 @@ export class FirestoreDataSource implements DataSource {
     }
   }
 
-  // Course Enrollment Settings (テナント単位の受講期間管理)
+  // Tenant Enrollment Setting (テナント単位の受講期間管理)
 
-  async getCourseEnrollmentSetting(courseId: string): Promise<CourseEnrollmentSetting | null> {
-    const doc = await this.collection("course_enrollment_settings").doc(courseId).get();
+  async getTenantEnrollmentSetting(): Promise<TenantEnrollmentSetting | null> {
+    const doc = await this.collection("enrollment_setting").doc("_config").get();
     if (!doc.exists) return null;
-    return this.toCourseEnrollmentSetting(doc.id, doc.data()!);
+    return this.toTenantEnrollmentSetting(doc.id, doc.data()!);
   }
 
-  async getCourseEnrollmentSettings(): Promise<CourseEnrollmentSetting[]> {
-    const snapshot = await this.collection("course_enrollment_settings").get();
-    return mapDocsResilient(snapshot.docs, (id, data) => this.toCourseEnrollmentSetting(id, data), "CourseEnrollmentSetting");
-  }
-
-  async upsertCourseEnrollmentSetting(data: Omit<CourseEnrollmentSetting, "id" | "updatedAt">): Promise<CourseEnrollmentSetting> {
-    const docRef = this.collection("course_enrollment_settings").doc(data.courseId);
+  async upsertTenantEnrollmentSetting(data: Omit<TenantEnrollmentSetting, "id" | "updatedAt">): Promise<TenantEnrollmentSetting> {
+    const docRef = this.collection("enrollment_setting").doc("_config");
     await docRef.set({ ...data, updatedAt: new Date() }, { merge: true });
     const updated = await docRef.get();
-    return this.toCourseEnrollmentSetting(updated.id, updated.data()!);
+    return this.toTenantEnrollmentSetting(updated.id, updated.data()!);
   }
 
-  async deleteCourseEnrollmentSetting(courseId: string): Promise<void> {
-    await this.collection("course_enrollment_settings").doc(courseId).delete();
+  async deleteTenantEnrollmentSetting(): Promise<void> {
+    await this.collection("enrollment_setting").doc("_config").delete();
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private toCourseEnrollmentSetting(id: string, data: any): CourseEnrollmentSetting {
+  private toTenantEnrollmentSetting(id: string, data: any): TenantEnrollmentSetting {
     try {
       return {
         id,
-        courseId: data.courseId ?? id,
         enrolledAt: toDateStrict(data.enrolledAt, "enrolledAt").toISOString(),
         quizAccessUntil: toDateStrict(data.quizAccessUntil, "quizAccessUntil").toISOString(),
         videoAccessUntil: toDateStrict(data.videoAccessUntil, "videoAccessUntil").toISOString(),
@@ -1428,7 +1422,7 @@ export class FirestoreDataSource implements DataSource {
       };
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
-      console.error(`Failed to parse CourseEnrollmentSetting for course ${id}:`, error);
+      console.error(`Failed to parse TenantEnrollmentSetting:`, error);
       throw e;
     }
   }

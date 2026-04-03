@@ -1,5 +1,4 @@
-export interface CourseEnrollmentSettingResponse {
-  courseId: string;
+export interface TenantEnrollmentSettingResponse {
   enrolledAt: string;
   quizAccessUntil: string;
   videoAccessUntil: string;

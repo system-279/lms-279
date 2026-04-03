@@ -114,8 +114,7 @@ describe("Enrollment Access Control (integration)", () => {
   });
 
   async function setEnrollment(quizAccessUntil: string, videoAccessUntil: string) {
-    await ds.upsertCourseEnrollmentSetting({
-      courseId,
+    await ds.upsertTenantEnrollmentSetting({
       enrolledAt: "2026-01-01T00:00:00Z",
       quizAccessUntil,
       videoAccessUntil,
