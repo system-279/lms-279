@@ -277,8 +277,8 @@ export class FirestoreDataSource implements DataSource {
       hasVideo: data.hasVideo ?? false,
       hasQuiz: data.hasQuiz ?? false,
       videoUnlocksPrior: data.videoUnlocksPrior ?? false,
-      createdAt: toDate(data.createdAt),
-      updatedAt: toDate(data.updatedAt),
+      createdAt: toDate(data.createdAt).toISOString(),
+      updatedAt: toDate(data.updatedAt).toISOString(),
     };
   }
 
@@ -352,8 +352,8 @@ export class FirestoreDataSource implements DataSource {
       name: data.name ?? null,
       role: data.role ?? "student",
       firebaseUid: data.firebaseUid,
-      createdAt: toDate(data.createdAt),
-      updatedAt: toDate(data.updatedAt),
+      createdAt: toDate(data.createdAt).toISOString(),
+      updatedAt: toDate(data.updatedAt).toISOString(),
     };
   }
 
@@ -401,7 +401,7 @@ export class FirestoreDataSource implements DataSource {
       id,
       email: data.email,
       note: data.note ?? null,
-      createdAt: toDate(data.createdAt),
+      createdAt: toDate(data.createdAt).toISOString(),
     };
   }
 
@@ -478,8 +478,8 @@ export class FirestoreDataSource implements DataSource {
       repeatIntervalHours: data.repeatIntervalHours ?? 24,
       maxRepeatDays: data.maxRepeatDays ?? 7,
       active: data.active ?? true,
-      createdAt: toDate(data.createdAt),
-      updatedAt: toDate(data.updatedAt),
+      createdAt: toDate(data.createdAt).toISOString(),
+      updatedAt: toDate(data.updatedAt).toISOString(),
     };
   }
 
@@ -508,7 +508,7 @@ export class FirestoreDataSource implements DataSource {
     const docRef = this.collection("auth_error_logs").doc();
     await docRef.set({
       ...data,
-      occurredAt: Timestamp.fromDate(data.occurredAt),
+      occurredAt: Timestamp.fromDate(new Date(data.occurredAt)),
     });
     const doc = await docRef.get();
     return this.toAuthErrorLog(doc.id, doc.data()!);
@@ -526,7 +526,7 @@ export class FirestoreDataSource implements DataSource {
       method: data.method,
       userAgent: data.userAgent ?? null,
       ipAddress: data.ipAddress ?? null,
-      occurredAt: toDate(data.occurredAt),
+      occurredAt: toDate(data.occurredAt).toISOString(),
     };
   }
 
@@ -561,7 +561,7 @@ export class FirestoreDataSource implements DataSource {
       userId,
       notificationEnabled: data.notificationEnabled ?? true,
       timezone: data.timezone ?? "Asia/Tokyo",
-      updatedAt: toDate(data.updatedAt),
+      updatedAt: toDate(data.updatedAt).toISOString(),
     };
   }
 

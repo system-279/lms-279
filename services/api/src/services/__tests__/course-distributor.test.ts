@@ -82,8 +82,8 @@ function makeMasterCourse(overrides?: Partial<Course>): Course {
     lessonOrder: ["lesson-1", "lesson-2"],
     passThreshold: 70,
     createdBy: "admin-user",
-    createdAt: new Date("2024-01-01"),
-    updatedAt: new Date("2024-01-01"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -98,8 +98,8 @@ function makeLessons(): Lesson[] {
       hasVideo: true,
       hasQuiz: true,
       videoUnlocksPrior: false,
-      createdAt: new Date("2024-01-01"),
-      updatedAt: new Date("2024-01-01"),
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
     },
     {
       id: "lesson-2",
@@ -109,8 +109,8 @@ function makeLessons(): Lesson[] {
       hasVideo: true,
       hasQuiz: false,
       videoUnlocksPrior: true,
-      createdAt: new Date("2024-01-01"),
-      updatedAt: new Date("2024-01-01"),
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
     },
   ];
 }

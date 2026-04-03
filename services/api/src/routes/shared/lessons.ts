@@ -45,8 +45,8 @@ router.get("/admin/courses/:courseId/lessons", requireAdmin, async (req: Request
       hasVideo: lesson.hasVideo,
       hasQuiz: lesson.hasQuiz,
       videoUnlocksPrior: lesson.videoUnlocksPrior,
-      createdAt: lesson.createdAt.toISOString(),
-      updatedAt: lesson.updatedAt.toISOString(),
+      createdAt: lesson.createdAt,
+      updatedAt: lesson.updatedAt,
     })),
   });
 });
@@ -103,8 +103,8 @@ router.post("/admin/courses/:courseId/lessons", requireAdmin, async (req: Reques
       hasVideo: lesson.hasVideo,
       hasQuiz: lesson.hasQuiz,
       videoUnlocksPrior: lesson.videoUnlocksPrior,
-      createdAt: lesson.createdAt.toISOString(),
-      updatedAt: lesson.updatedAt.toISOString(),
+      createdAt: lesson.createdAt,
+      updatedAt: lesson.updatedAt,
     },
   });
 });
@@ -142,8 +142,8 @@ router.get(
         hasVideo: lesson.hasVideo,
         hasQuiz: lesson.hasQuiz,
         videoUnlocksPrior: lesson.videoUnlocksPrior,
-        createdAt: lesson.createdAt.toISOString(),
-        updatedAt: lesson.updatedAt.toISOString(),
+        createdAt: lesson.createdAt,
+        updatedAt: lesson.updatedAt,
       },
     });
   }
@@ -239,8 +239,8 @@ router.patch(
         hasVideo: lesson!.hasVideo,
         hasQuiz: lesson!.hasQuiz,
         videoUnlocksPrior: lesson!.videoUnlocksPrior,
-        createdAt: lesson!.createdAt.toISOString(),
-        updatedAt: lesson!.updatedAt.toISOString(),
+        createdAt: lesson!.createdAt,
+        updatedAt: lesson!.updatedAt,
       },
     });
   }

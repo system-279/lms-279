@@ -44,8 +44,8 @@ function serializeLesson(lesson: Lesson) {
     hasVideo: lesson.hasVideo,
     hasQuiz: lesson.hasQuiz,
     videoUnlocksPrior: lesson.videoUnlocksPrior,
-    createdAt: lesson.createdAt.toISOString(),
-    updatedAt: lesson.updatedAt.toISOString(),
+    createdAt: lesson.createdAt,
+    updatedAt: lesson.updatedAt,
   };
 }
 
