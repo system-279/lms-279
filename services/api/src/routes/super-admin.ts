@@ -11,7 +11,7 @@
 
 import { Router, Request, Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
-import type { SuperAttendanceResponse, SuperStudentProgressResponse, EnrollmentResponse } from "@lms-279/shared-types";
+import type { SuperAttendanceResponse, SuperStudentProgressResponse, CourseEnrollmentSettingResponse } from "@lms-279/shared-types";
 import {
   superAdminAuthMiddleware,
   getAllSuperAdmins,
@@ -964,7 +964,7 @@ router.post("/tenants/:tenantId/student-progress/export-sheets", async (req: Req
 });
 
 // ============================================================
-// 受講期間管理（Enrollments）
+// 受講期間管理（テナント×コース単位）
 // ============================================================
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z?)?$/;
@@ -974,10 +974,8 @@ function isValidISODate(value: string): boolean {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function toEnrollmentResponse(id: string, data: any): EnrollmentResponse {
+function toCourseSettingResponse(data: any): CourseEnrollmentSettingResponse {
   return {
-    id,
-    userId: data.userId ?? "",
     courseId: data.courseId ?? "",
     enrolledAt: data.enrolledAt?.toDate?.()?.toISOString?.() ?? data.enrolledAt ?? "",
     quizAccessUntil: data.quizAccessUntil?.toDate?.()?.toISOString?.() ?? data.quizAccessUntil ?? "",
@@ -987,7 +985,6 @@ function toEnrollmentResponse(id: string, data: any): EnrollmentResponse {
   };
 }
 
-const BULK_CREATE_LIMIT = 1000;
 const ENROLLEDAT_RANGE_YEARS = 5;
 
 function isEnrolledAtInRange(dateStr: string): boolean {
@@ -996,40 +993,33 @@ function isEnrolledAtInRange(dateStr: string): boolean {
 }
 
 /**
- * テナント内enrollment一覧
- * GET /super/tenants/:tenantId/enrollments?courseId=xxx
+ * テナントのコース受講期間設定一覧
+ * GET /super/tenants/:tenantId/course-settings
  */
-router.get("/tenants/:tenantId/enrollments", async (req: Request, res: Response) => {
+router.get("/tenants/:tenantId/course-settings", async (req: Request, res: Response) => {
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
-  const courseId = req.query.courseId as string | undefined;
-
   const basePath = `tenants/${tenantId}`;
-  let query: FirebaseFirestore.Query = db.collection(`${basePath}/enrollments`);
-  if (courseId) {
-    query = query.where("courseId", "==", courseId);
-  }
 
-  const snapshot = await query.get();
-  const enrollments = snapshot.docs.map((doc) =>
-    toEnrollmentResponse(doc.id, doc.data())
-  );
+  const snapshot = await db.collection(`${basePath}/course_enrollment_settings`).get();
+  const settings = snapshot.docs.map((doc) => toCourseSettingResponse(doc.data()));
 
-  res.json({ enrollments });
+  res.json({ settings });
 });
 
 /**
- * enrollment作成
- * POST /super/tenants/:tenantId/enrollments
- * body: { userId, courseId, enrolledAt }
+ * コース受講期間設定の作成/更新
+ * PUT /super/tenants/:tenantId/course-settings/:courseId
+ * body: { enrolledAt }
  */
-router.post("/tenants/:tenantId/enrollments", async (req: Request, res: Response) => {
+router.put("/tenants/:tenantId/course-settings/:courseId", async (req: Request, res: Response) => {
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
-  const { userId, courseId, enrolledAt } = req.body;
+  const courseId = req.params.courseId as string;
+  const { enrolledAt } = req.body;
 
-  if (!userId || !courseId || !enrolledAt) {
-    res.status(400).json({ error: "bad_request", message: "userId, courseId, enrolledAt are required" });
+  if (!enrolledAt) {
+    res.status(400).json({ error: "bad_request", message: "enrolledAt is required" });
     return;
   }
 
@@ -1045,177 +1035,37 @@ router.post("/tenants/:tenantId/enrollments", async (req: Request, res: Response
 
   const normalizedEnrolledAt = new Date(enrolledAt).toISOString();
   const deadlines = calculateDefaultDeadlines(normalizedEnrolledAt);
-  const docId = `${userId}_${courseId}`;
   const basePath = `tenants/${tenantId}`;
-  const docRef = db.collection(`${basePath}/enrollments`).doc(docId);
+  const docRef = db.collection(`${basePath}/course_enrollment_settings`).doc(courseId);
 
-  await docRef.set({
-    userId,
+  const settingData = {
     courseId,
     enrolledAt: normalizedEnrolledAt,
     quizAccessUntil: deadlines.quizAccessUntil,
     videoAccessUntil: deadlines.videoAccessUntil,
     createdBy: req.superAdmin!.email,
     updatedAt: new Date().toISOString(),
-  });
+  };
 
-  const created = await docRef.get();
-  res.status(201).json(toEnrollmentResponse(docId, created.data()));
+  await docRef.set(settingData, { merge: true });
+  res.json(toCourseSettingResponse(settingData));
 });
 
 /**
- * enrollment一括作成
- * POST /super/tenants/:tenantId/enrollments/bulk
- * body: { userIds: string[], courseId, enrolledAt }
+ * コース受講期間設定の削除
+ * DELETE /super/tenants/:tenantId/course-settings/:courseId
  */
-router.post("/tenants/:tenantId/enrollments/bulk", async (req: Request, res: Response) => {
+router.delete("/tenants/:tenantId/course-settings/:courseId", async (req: Request, res: Response) => {
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
-  const { userIds, courseId, enrolledAt } = req.body;
-
-  if (!Array.isArray(userIds) || userIds.length === 0 || !courseId || !enrolledAt) {
-    res.status(400).json({ error: "bad_request", message: "userIds (non-empty array), courseId, enrolledAt are required" });
-    return;
-  }
-
-  if (userIds.length > BULK_CREATE_LIMIT) {
-    res.status(400).json({ error: "too_many_users", message: `一括登録は最大${BULK_CREATE_LIMIT}件までです` });
-    return;
-  }
-
-  if (!userIds.every((id: unknown) => typeof id === "string" && (id as string).trim() !== "")) {
-    res.status(400).json({ error: "bad_request", message: "All userIds must be non-empty strings" });
-    return;
-  }
-
-  if (!isValidISODate(enrolledAt)) {
-    res.status(400).json({ error: "invalid_date", message: "enrolledAt must be a valid date string" });
-    return;
-  }
-
-  if (!isEnrolledAtInRange(enrolledAt)) {
-    res.status(400).json({ error: "date_out_of_range", message: `enrolledAt must be within ${ENROLLEDAT_RANGE_YEARS} years from now` });
-    return;
-  }
-
-  const normalizedEnrolledAt = new Date(enrolledAt).toISOString();
-  const deadlines = calculateDefaultDeadlines(normalizedEnrolledAt);
+  const courseId = req.params.courseId as string;
   const basePath = `tenants/${tenantId}`;
-  const BATCH_LIMIT = 500;
-  const results: EnrollmentResponse[] = [];
-  const errors: { chunkIndex: number; error: string }[] = [];
-  const overwritten: string[] = [];
 
-  for (let i = 0; i < userIds.length; i += BATCH_LIMIT) {
-    const batch = db.batch();
-    const chunk = userIds.slice(i, i + BATCH_LIMIT);
-    const chunkResults: EnrollmentResponse[] = [];
-
-    // 既存チェック: batch内のdocIdを一括取得
-    const docRefs = chunk.map((uid: string) =>
-      db.collection(`${basePath}/enrollments`).doc(`${uid.trim()}_${courseId}`)
-    );
-    const existingDocs = await db.getAll(...docRefs);
-    for (const doc of existingDocs) {
-      if (doc.exists) overwritten.push(doc.id);
-    }
-
-    for (const uid of chunk) {
-      const docId = `${(uid as string).trim()}_${courseId}`;
-      const docRef = db.collection(`${basePath}/enrollments`).doc(docId);
-      const enrollmentData = {
-        userId: (uid as string).trim(),
-        courseId,
-        enrolledAt: normalizedEnrolledAt,
-        quizAccessUntil: deadlines.quizAccessUntil,
-        videoAccessUntil: deadlines.videoAccessUntil,
-        createdBy: req.superAdmin!.email,
-        updatedAt: new Date().toISOString(),
-      };
-      batch.set(docRef, enrollmentData);
-      chunkResults.push(toEnrollmentResponse(docId, enrollmentData));
-    }
-
-    try {
-      await batch.commit();
-      results.push(...chunkResults);
-    } catch (err) {
-      errors.push({ chunkIndex: Math.floor(i / BATCH_LIMIT), error: String(err) });
-    }
-  }
-
-  if (errors.length > 0) {
-    res.status(207).json({
-      enrollments: results,
-      count: results.length,
-      errors,
-      ...(overwritten.length > 0 && { overwritten }),
-      message: `${results.length}件作成、${errors.length}バッチ失敗`,
-    });
-    return;
-  }
-
-  res.status(201).json({
-    enrollments: results,
-    count: results.length,
-    ...(overwritten.length > 0 && { overwritten, message: `${overwritten.length}件の既存登録を上書きしました` }),
-  });
-});
-
-/**
- * enrollment更新（期限変更）
- * PATCH /super/tenants/:tenantId/enrollments/:enrollmentId
- * body: { quizAccessUntil?, videoAccessUntil? }
- */
-router.patch("/tenants/:tenantId/enrollments/:enrollmentId", async (req: Request, res: Response) => {
-  const db = getFirestore();
-  const tenantId = req.params.tenantId as string;
-  const enrollmentId = req.params.enrollmentId as string;
-  const { quizAccessUntil, videoAccessUntil } = req.body;
-
-  if (!quizAccessUntil && !videoAccessUntil) {
-    res.status(400).json({ error: "bad_request", message: "quizAccessUntil or videoAccessUntil is required" });
-    return;
-  }
-
-  if ((quizAccessUntil && !isValidISODate(quizAccessUntil)) || (videoAccessUntil && !isValidISODate(videoAccessUntil))) {
-    res.status(400).json({ error: "invalid_date", message: "Date fields must be valid date strings" });
-    return;
-  }
-
-  const basePath = `tenants/${tenantId}`;
-  const docRef = db.collection(`${basePath}/enrollments`).doc(enrollmentId);
+  const docRef = db.collection(`${basePath}/course_enrollment_settings`).doc(courseId);
   const doc = await docRef.get();
 
   if (!doc.exists) {
-    res.status(404).json({ error: "not_found", message: "Enrollment not found" });
-    return;
-  }
-
-  const updateData: Record<string, unknown> = { updatedAt: new Date().toISOString() };
-  if (quizAccessUntil) updateData.quizAccessUntil = new Date(quizAccessUntil).toISOString();
-  if (videoAccessUntil) updateData.videoAccessUntil = new Date(videoAccessUntil).toISOString();
-  await docRef.update(updateData);
-
-  const updated = await docRef.get();
-  res.json(toEnrollmentResponse(enrollmentId, updated.data()));
-});
-
-/**
- * enrollment削除
- * DELETE /super/tenants/:tenantId/enrollments/:enrollmentId
- */
-router.delete("/tenants/:tenantId/enrollments/:enrollmentId", async (req: Request, res: Response) => {
-  const db = getFirestore();
-  const tenantId = req.params.tenantId as string;
-  const enrollmentId = req.params.enrollmentId as string;
-
-  const basePath = `tenants/${tenantId}`;
-  const docRef = db.collection(`${basePath}/enrollments`).doc(enrollmentId);
-  const doc = await docRef.get();
-
-  if (!doc.exists) {
-    res.status(404).json({ error: "not_found", message: "Enrollment not found" });
+    res.status(404).json({ error: "not_found", message: "Course setting not found" });
     return;
   }
 

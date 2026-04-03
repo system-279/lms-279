@@ -238,8 +238,8 @@ router.get("/videos/:videoId/playback-url", requireUser, async (req: Request, re
   }
 
   // 受講期間チェック
-  const enrollment = await ds.getEnrollment(userId, video.courseId);
-  const videoAccessResult = checkVideoAccess(enrollment);
+  const enrollmentSetting = await ds.getCourseEnrollmentSetting(video.courseId);
+  const videoAccessResult = checkVideoAccess(enrollmentSetting);
   if (!videoAccessResult.allowed) {
     res.status(403).json({
       error: videoAccessResult.reason,

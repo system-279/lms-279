@@ -187,8 +187,8 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
   }
 
   // 受講期間チェック
-  const enrollment = await ds.getEnrollment(userId, quiz.courseId);
-  const quizAccessResult = checkQuizAccess(enrollment);
+  const enrollmentSetting = await ds.getCourseEnrollmentSetting(quiz.courseId);
+  const quizAccessResult = checkQuizAccess(enrollmentSetting);
   if (!quizAccessResult.allowed) {
     res.status(403).json({
       error: quizAccessResult.reason,

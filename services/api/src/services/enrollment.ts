@@ -1,9 +1,9 @@
 /**
  * 受講期間管理サービス
- * enrollmentの期限チェックユーティリティ
+ * テナント×コース単位の期限チェックユーティリティ
  */
 
-import type { Enrollment } from "../types/entities.js";
+import type { CourseEnrollmentSetting } from "../types/entities.js";
 
 export interface AccessCheckResult {
   allowed: boolean;
@@ -12,14 +12,14 @@ export interface AccessCheckResult {
 
 /**
  * テスト受験のアクセスチェック
- * enrollment未登録(null) → アクセス許可（後方互換）
- * enrollment登録済み → quizAccessUntilで判定
+ * setting未登録(null) → アクセス許可（後方互換）
+ * setting登録済み → quizAccessUntilで判定
  */
-export function checkQuizAccess(enrollment: Enrollment | null): AccessCheckResult {
-  if (!enrollment) return { allowed: true };
+export function checkQuizAccess(setting: CourseEnrollmentSetting | null): AccessCheckResult {
+  if (!setting) return { allowed: true };
 
   const now = new Date();
-  const deadline = new Date(enrollment.quizAccessUntil);
+  const deadline = new Date(setting.quizAccessUntil);
 
   if (isNaN(deadline.getTime())) {
     return { allowed: false, reason: "invalid_deadline_data" };
@@ -34,14 +34,14 @@ export function checkQuizAccess(enrollment: Enrollment | null): AccessCheckResul
 
 /**
  * 動画視聴のアクセスチェック
- * enrollment未登録(null) → アクセス許可（後方互換）
- * enrollment登録済み → videoAccessUntilで判定
+ * setting未登録(null) → アクセス許可（後方互換）
+ * setting登録済み → videoAccessUntilで判定
  */
-export function checkVideoAccess(enrollment: Enrollment | null): AccessCheckResult {
-  if (!enrollment) return { allowed: true };
+export function checkVideoAccess(setting: CourseEnrollmentSetting | null): AccessCheckResult {
+  if (!setting) return { allowed: true };
 
   const now = new Date();
-  const deadline = new Date(enrollment.videoAccessUntil);
+  const deadline = new Date(setting.videoAccessUntil);
 
   if (isNaN(deadline.getTime())) {
     return { allowed: false, reason: "invalid_deadline_data" };

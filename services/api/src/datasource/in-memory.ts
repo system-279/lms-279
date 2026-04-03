@@ -35,7 +35,7 @@ import type {
   UserProgress,
   CourseProgress,
   LessonSession,
-  Enrollment,
+  CourseEnrollmentSetting,
 } from "../types/entities.js";
 
 // デモ用初期データ
@@ -203,7 +203,7 @@ export class InMemoryDataSource implements DataSource {
   private userProgress: Map<string, UserProgress> = new Map();
   private courseProgress: Map<string, CourseProgress> = new Map();
   private lessonSessions: LessonSession[] = [];
-  private enrollments = new Map<string, Enrollment>();
+  private courseEnrollmentSettings = new Map<string, CourseEnrollmentSetting>();
 
   private readonly readOnly: boolean;
 
@@ -1033,36 +1033,29 @@ export class InMemoryDataSource implements DataSource {
     this.userProgress.delete(progressKey);
   }
 
-  // Enrollments (受講期間管理)
+  // Course Enrollment Settings (テナント単位の受講期間管理)
 
-  async getEnrollment(userId: string, courseId: string): Promise<Enrollment | null> {
-    const key = `${userId}_${courseId}`;
-    return this.enrollments.get(key) ?? null;
+  async getCourseEnrollmentSetting(courseId: string): Promise<CourseEnrollmentSetting | null> {
+    return this.courseEnrollmentSettings.get(courseId) ?? null;
   }
 
-  async getEnrollmentsByCourse(courseId: string): Promise<Enrollment[]> {
-    return Array.from(this.enrollments.values()).filter((e) => e.courseId === courseId);
+  async getCourseEnrollmentSettings(): Promise<CourseEnrollmentSetting[]> {
+    return Array.from(this.courseEnrollmentSettings.values());
   }
 
-  async getEnrollmentsByUser(userId: string): Promise<Enrollment[]> {
-    return Array.from(this.enrollments.values()).filter((e) => e.userId === userId);
-  }
-
-  async upsertEnrollment(data: Omit<Enrollment, "id" | "updatedAt">): Promise<Enrollment> {
+  async upsertCourseEnrollmentSetting(data: Omit<CourseEnrollmentSetting, "id" | "updatedAt">): Promise<CourseEnrollmentSetting> {
     this.throwIfReadOnly();
-    const key = `${data.userId}_${data.courseId}`;
-    const enrollment: Enrollment = {
+    const setting: CourseEnrollmentSetting = {
       ...data,
-      id: key,
+      id: data.courseId,
       updatedAt: new Date().toISOString(),
     };
-    this.enrollments.set(key, enrollment);
-    return enrollment;
+    this.courseEnrollmentSettings.set(data.courseId, setting);
+    return setting;
   }
 
-  async deleteEnrollment(userId: string, courseId: string): Promise<void> {
+  async deleteCourseEnrollmentSetting(courseId: string): Promise<void> {
     this.throwIfReadOnly();
-    const key = `${userId}_${courseId}`;
-    this.enrollments.delete(key);
+    this.courseEnrollmentSettings.delete(courseId);
   }
 }
