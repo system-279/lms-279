@@ -20,39 +20,39 @@ router.get("/courses/:courseId/progress", requireUser, async (req: Request, res:
   const userId = req.user!.id;
   const courseId = req.params.courseId as string;
 
-  const progress = await ds.getCourseProgress(userId, courseId);
-
-  if (!progress) {
-    // 進捗未開始の場合はデフォルト値を返す
-    const course = await ds.getCourseById(courseId);
-    if (!course) {
-      res.status(404).json({ error: "not_found", message: "Course not found" });
-      return;
-    }
-    res.json({
-      progress: {
-        userId,
-        courseId,
-        completedLessons: 0,
-        totalLessons: course.lessonOrder.length,
-        progressRatio: 0,
-        isCompleted: false,
-        updatedAt: null,
-      },
-    });
+  const course = await ds.getCourseById(courseId);
+  if (!course) {
+    res.status(404).json({ error: "not_found", message: "Course not found" });
     return;
   }
 
+  const [courseProgress, userProgresses] = await Promise.all([
+    ds.getCourseProgress(userId, courseId),
+    ds.getUserProgressByCourse(userId, courseId),
+  ]);
+
+  const lessonProgresses = userProgresses.map((p) => ({
+    lessonId: p.lessonId,
+    videoCompleted: p.videoCompleted,
+    quizPassed: p.quizPassed,
+    lessonCompleted: p.lessonCompleted,
+  }));
+
   res.json({
-    progress: {
-      userId: progress.userId,
-      courseId: progress.courseId,
-      completedLessons: progress.completedLessons,
-      totalLessons: progress.totalLessons,
-      progressRatio: progress.progressRatio,
-      isCompleted: progress.isCompleted,
-      updatedAt: progress.updatedAt,
-    },
+    courseProgress: courseProgress
+      ? {
+          completedLessonCount: courseProgress.completedLessons,
+          totalLessonCount: courseProgress.totalLessons,
+          progressRatio: courseProgress.progressRatio,
+          courseCompleted: courseProgress.isCompleted,
+        }
+      : {
+          completedLessonCount: 0,
+          totalLessonCount: course.lessonOrder.length,
+          progressRatio: 0,
+          courseCompleted: false,
+        },
+    lessonProgresses,
   });
 });
 
