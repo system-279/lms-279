@@ -238,7 +238,7 @@ router.get("/videos/:videoId/playback-url", requireUser, async (req: Request, re
   }
 
   // 受講期間チェック
-  const videoBlocked = await guardVideoAccess(req, res, video.courseId);
+  const videoBlocked = await guardVideoAccess(req, res);
   if (videoBlocked) return;
 
   let playbackUrl: string;

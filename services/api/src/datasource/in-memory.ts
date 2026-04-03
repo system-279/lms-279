@@ -35,7 +35,7 @@ import type {
   UserProgress,
   CourseProgress,
   LessonSession,
-  CourseEnrollmentSetting,
+  TenantEnrollmentSetting,
 } from "../types/entities.js";
 import { countEffectiveAttempts } from "../services/quiz-attempt-utils.js";
 
@@ -204,7 +204,7 @@ export class InMemoryDataSource implements DataSource {
   private userProgress: Map<string, UserProgress> = new Map();
   private courseProgress: Map<string, CourseProgress> = new Map();
   private lessonSessions: LessonSession[] = [];
-  private courseEnrollmentSettings = new Map<string, CourseEnrollmentSetting>();
+  private tenantEnrollmentSetting: TenantEnrollmentSetting | null = null;
 
   private readonly readOnly: boolean;
 
@@ -1034,29 +1034,25 @@ export class InMemoryDataSource implements DataSource {
     this.userProgress.delete(progressKey);
   }
 
-  // Course Enrollment Settings (テナント単位の受講期間管理)
+  // Tenant Enrollment Setting (テナント単位の受講期間管理)
 
-  async getCourseEnrollmentSetting(courseId: string): Promise<CourseEnrollmentSetting | null> {
-    return this.courseEnrollmentSettings.get(courseId) ?? null;
+  async getTenantEnrollmentSetting(): Promise<TenantEnrollmentSetting | null> {
+    return this.tenantEnrollmentSetting;
   }
 
-  async getCourseEnrollmentSettings(): Promise<CourseEnrollmentSetting[]> {
-    return Array.from(this.courseEnrollmentSettings.values());
-  }
-
-  async upsertCourseEnrollmentSetting(data: Omit<CourseEnrollmentSetting, "id" | "updatedAt">): Promise<CourseEnrollmentSetting> {
+  async upsertTenantEnrollmentSetting(data: Omit<TenantEnrollmentSetting, "id" | "updatedAt">): Promise<TenantEnrollmentSetting> {
     this.throwIfReadOnly();
-    const setting: CourseEnrollmentSetting = {
+    const setting: TenantEnrollmentSetting = {
       ...data,
-      id: data.courseId,
+      id: "_config",
       updatedAt: new Date().toISOString(),
     };
-    this.courseEnrollmentSettings.set(data.courseId, setting);
+    this.tenantEnrollmentSetting = setting;
     return setting;
   }
 
-  async deleteCourseEnrollmentSetting(courseId: string): Promise<void> {
+  async deleteTenantEnrollmentSetting(): Promise<void> {
     this.throwIfReadOnly();
-    this.courseEnrollmentSettings.delete(courseId);
+    this.tenantEnrollmentSetting = null;
   }
 }

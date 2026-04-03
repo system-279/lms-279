@@ -11,7 +11,7 @@
 
 import { Router, Request, Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
-import type { SuperAttendanceResponse, SuperStudentProgressResponse, CourseEnrollmentSettingResponse } from "@lms-279/shared-types";
+import type { SuperAttendanceResponse, SuperStudentProgressResponse, TenantEnrollmentSettingResponse } from "@lms-279/shared-types";
 import {
   superAdminAuthMiddleware,
   getAllSuperAdmins,
@@ -1002,9 +1002,8 @@ function isValidISODate(value: string): boolean {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function toCourseSettingResponse(data: any): CourseEnrollmentSettingResponse {
+function toEnrollmentSettingResponse(data: any): TenantEnrollmentSettingResponse {
   return {
-    courseId: data.courseId ?? "",
     enrolledAt: data.enrolledAt?.toDate?.()?.toISOString?.() ?? data.enrolledAt ?? "",
     quizAccessUntil: data.quizAccessUntil?.toDate?.()?.toISOString?.() ?? data.quizAccessUntil ?? "",
     videoAccessUntil: data.videoAccessUntil?.toDate?.()?.toISOString?.() ?? data.videoAccessUntil ?? "",
@@ -1021,14 +1020,13 @@ function isEnrolledAtInRange(dateStr: string): boolean {
 }
 
 /**
- * テナントのコース受講期間設定一覧
- * GET /super/tenants/:tenantId/course-settings
+ * テナントの受講期間設定を取得
+ * GET /super/tenants/:tenantId/enrollment-setting
  */
-router.get("/tenants/:tenantId/course-settings", async (req: Request, res: Response) => {
+router.get("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Response) => {
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
 
-  // テナント存在確認
   const tenantDoc = await db.collection("tenants").doc(tenantId).get();
   if (!tenantDoc.exists) {
     res.status(404).json({ error: "not_found", message: "Tenant not found" });
@@ -1036,34 +1034,29 @@ router.get("/tenants/:tenantId/course-settings", async (req: Request, res: Respo
   }
 
   const basePath = `tenants/${tenantId}`;
-  const snapshot = await db.collection(`${basePath}/course_enrollment_settings`).get();
-  const settings = snapshot.docs.map((doc) => toCourseSettingResponse(doc.data()));
+  const doc = await db.collection(`${basePath}/enrollment_setting`).doc("_config").get();
 
-  res.json({ settings });
-});
-
-/**
- * コース受講期間設定の作成/更新
- * PUT /super/tenants/:tenantId/course-settings/:courseId
- * body: { enrolledAt }
- */
-router.put("/tenants/:tenantId/course-settings/:courseId", async (req: Request, res: Response) => {
-  const db = getFirestore();
-  const tenantId = req.params.tenantId as string;
-  const courseId = req.params.courseId as string;
-  const { enrolledAt } = req.body;
-
-  // テナント存在確認
-  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
-  if (!tenantDoc.exists) {
-    res.status(404).json({ error: "not_found", message: "Tenant not found" });
+  if (!doc.exists) {
+    res.json({ setting: null });
     return;
   }
 
-  // コース存在確認
-  const courseDoc = await db.collection(`tenants/${tenantId}/courses`).doc(courseId).get();
-  if (!courseDoc.exists) {
-    res.status(404).json({ error: "not_found", message: "Course not found" });
+  res.json({ setting: toEnrollmentSettingResponse(doc.data()) });
+});
+
+/**
+ * テナントの受講期間設定を作成/更新
+ * PUT /super/tenants/:tenantId/enrollment-setting
+ * body: { enrolledAt }
+ */
+router.put("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Response) => {
+  const db = getFirestore();
+  const tenantId = req.params.tenantId as string;
+  const { enrolledAt } = req.body;
+
+  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+  if (!tenantDoc.exists) {
+    res.status(404).json({ error: "not_found", message: "Tenant not found" });
     return;
   }
 
@@ -1085,10 +1078,9 @@ router.put("/tenants/:tenantId/course-settings/:courseId", async (req: Request, 
   const normalizedEnrolledAt = new Date(enrolledAt).toISOString();
   const deadlines = calculateDefaultDeadlines(normalizedEnrolledAt);
   const basePath = `tenants/${tenantId}`;
-  const docRef = db.collection(`${basePath}/course_enrollment_settings`).doc(courseId);
+  const docRef = db.collection(`${basePath}/enrollment_setting`).doc("_config");
 
   const settingData = {
-    courseId,
     enrolledAt: normalizedEnrolledAt,
     quizAccessUntil: deadlines.quizAccessUntil,
     videoAccessUntil: deadlines.videoAccessUntil,
@@ -1097,19 +1089,17 @@ router.put("/tenants/:tenantId/course-settings/:courseId", async (req: Request, 
   };
 
   await docRef.set(settingData, { merge: true });
-  res.json(toCourseSettingResponse(settingData));
+  res.json({ setting: toEnrollmentSettingResponse(settingData) });
 });
 
 /**
- * コース受講期間設定の削除
- * DELETE /super/tenants/:tenantId/course-settings/:courseId
+ * テナントの受講期間設定を削除
+ * DELETE /super/tenants/:tenantId/enrollment-setting
  */
-router.delete("/tenants/:tenantId/course-settings/:courseId", async (req: Request, res: Response) => {
+router.delete("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Response) => {
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
-  const courseId = req.params.courseId as string;
 
-  // テナント存在確認
   const tenantDoc = await db.collection("tenants").doc(tenantId).get();
   if (!tenantDoc.exists) {
     res.status(404).json({ error: "not_found", message: "Tenant not found" });
@@ -1117,11 +1107,11 @@ router.delete("/tenants/:tenantId/course-settings/:courseId", async (req: Reques
   }
 
   const basePath = `tenants/${tenantId}`;
-  const docRef = db.collection(`${basePath}/course_enrollment_settings`).doc(courseId);
+  const docRef = db.collection(`${basePath}/enrollment_setting`).doc("_config");
   const doc = await docRef.get();
 
   if (!doc.exists) {
-    res.status(404).json({ error: "not_found", message: "Course setting not found" });
+    res.status(404).json({ error: "not_found", message: "Enrollment setting not found" });
     return;
   }
 

@@ -25,14 +25,14 @@ import type {
   UserProgress,
   CourseProgress,
   LessonSession,
-  CourseEnrollmentSetting,
+  TenantEnrollmentSetting,
 } from "../types/entities.js";
 
 export type { CourseFilter, LessonFilter, Video, VideoEvent, VideoAnalytics, VideoFilter, VideoEventFilter, WatchedRange, SuspiciousFlag } from "../types/entities.js";
 export type { Quiz, QuizAttempt, QuizFilter, QuizAttemptFilter, QuizQuestion, QuizOption, QuestionType, QuizAttemptStatus } from "../types/entities.js";
 export type { UserProgress, CourseProgress } from "../types/entities.js";
 export type { LessonSession, LessonSessionFilter, LessonSessionStatus, SessionExitReason } from "../types/entities.js";
-export type { CourseEnrollmentSetting } from "../types/entities.js";
+export type { TenantEnrollmentSetting } from "../types/entities.js";
 
 export interface NotificationPolicyFilter {
   scope?: "global" | "course" | "user";
@@ -208,11 +208,10 @@ export interface DataSource {
   // Lesson Data Reset (force exit)
   resetLessonDataForUser(userId: string, lessonId: string, courseId: string): Promise<void>;
 
-  // Course Enrollment Settings (テナント単位の受講期間管理)
-  getCourseEnrollmentSetting(courseId: string): Promise<CourseEnrollmentSetting | null>;
-  getCourseEnrollmentSettings(): Promise<CourseEnrollmentSetting[]>;
-  upsertCourseEnrollmentSetting(data: Omit<CourseEnrollmentSetting, "id" | "updatedAt">): Promise<CourseEnrollmentSetting>;
-  deleteCourseEnrollmentSetting(courseId: string): Promise<void>;
+  // Tenant Enrollment Setting (テナント単位の受講期間管理)
+  getTenantEnrollmentSetting(): Promise<TenantEnrollmentSetting | null>;
+  upsertTenantEnrollmentSetting(data: Omit<TenantEnrollmentSetting, "id" | "updatedAt">): Promise<TenantEnrollmentSetting>;
+  deleteTenantEnrollmentSetting(): Promise<void>;
 }
 
 /**
