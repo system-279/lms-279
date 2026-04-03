@@ -55,9 +55,8 @@ export function useVideoCompletion({
         `/api/v1/videos/${videoId}/analytics`
       );
       setAnalytics(data.analytics);
-      if (data.analytics.isComplete) {
-        setVideoCompleted(true);
-      }
+      // サーバー値を正として追従（ラッチしない）
+      setVideoCompleted(data.analytics.isComplete);
     } catch {
       // 分析取得失敗はサイレント（メイン機能ではない）
     } finally {

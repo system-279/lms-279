@@ -175,8 +175,8 @@ describe("useVideoCompletion", () => {
     expect(result.current.showQuizSection).toBe(false);
   });
 
-  // 8. videoCompleted=trueは一度立ったら戻らない（one-way latch）
-  it("does not revert videoCompleted once set to true", async () => {
+  // 8. fetchAnalyticsでサーバー値に追従（isComplete=false→videoCompleted=false）
+  it("reverts videoCompleted when server returns isComplete=false", async () => {
     // 初回: 完了
     mockAuthFetch.mockResolvedValueOnce(makeAnalytics({ isComplete: true }));
 
@@ -205,9 +205,9 @@ describe("useVideoCompletion", () => {
       expect(result.current.loadingAnalytics).toBe(false);
     });
 
-    // videoCompletedはtrueのまま（リバートしない）
-    expect(result.current.videoCompleted).toBe(true);
-    expect(result.current.showQuizSection).toBe(true);
+    // サーバー値に追従してvideoCompleted=falseに戻る
+    expect(result.current.videoCompleted).toBe(false);
+    expect(result.current.showQuizSection).toBe(false);
   });
 
   // 9. videoId変更時に新しいvideoIdでfetchが走る
