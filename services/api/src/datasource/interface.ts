@@ -166,6 +166,16 @@ export interface DataSource {
   getQuizAttempts(filter: QuizAttemptFilter): Promise<QuizAttempt[]>;
   getQuizAttemptById(id: string): Promise<QuizAttempt | null>;
   createQuizAttempt(data: Omit<QuizAttempt, "id">): Promise<QuizAttempt>;
+  /**
+   * quiz attempt作成をトランザクションで保護（原子的操作）
+   * - in_progress attemptが既に存在する場合は作成しない（既存attemptを返す）
+   * - maxAttemptsを超える場合はnullを返す
+   * - attemptNumberをトランザクション内で正確に採番
+   */
+  createQuizAttemptAtomic(
+    quizId: string, userId: string, maxAttempts: number, timeLimitSec: number | null,
+    data: Omit<QuizAttempt, "id" | "attemptNumber">
+  ): Promise<{ attempt: QuizAttempt; existing: boolean } | null>;
   updateQuizAttempt(id: string, data: Partial<Omit<QuizAttempt, "id">>): Promise<QuizAttempt | null>;
 
   // User Progress

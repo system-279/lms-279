@@ -197,9 +197,22 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
     return;
   }
 
-  // 受験回数チェック（maxAttempts=0は無制限）
-  const attempts = await ds.getQuizAttempts({ quizId, userId });
-  if (quiz.maxAttempts > 0 && attempts.length >= quiz.maxAttempts) {
+  // 原子的にattempt作成（in_progress一意性 + attemptNumber採番 + maxAttemptsチェック）
+  const result = await ds.createQuizAttemptAtomic(
+    quizId, userId, quiz.maxAttempts, quiz.timeLimitSec,
+    {
+      quizId,
+      userId,
+      status: "in_progress",
+      answers: {},
+      score: null,
+      isPassed: null,
+      startedAt: new Date().toISOString(),
+      submittedAt: null,
+    }
+  );
+
+  if (result === null) {
     res.status(403).json({
       error: "max_attempts_exceeded",
       message: "受験可能な回数の上限に達しています",
@@ -207,40 +220,15 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
     return;
   }
 
-  // 進行中のattemptチェック（同時受験禁止）
-  const inProgress = attempts.find((a) => a.status === "in_progress");
-  if (inProgress) {
-    // タイムアウト済みのin_progressは自動クリア
-    const isTimedOut = quiz.timeLimitSec && inProgress.startedAt &&
-      (Date.now() - new Date(inProgress.startedAt).getTime()) > quiz.timeLimitSec * 1000;
-    if (isTimedOut) {
-      await ds.updateQuizAttempt(inProgress.id, {
-        status: "timed_out" as "in_progress" | "submitted" | "timed_out",
-        submittedAt: new Date().toISOString(),
-      });
-    } else {
-      res.status(409).json({
-        error: "attempt_in_progress",
-        message: "現在進行中のテストがあります。先に提出してください",
-      });
-      return;
-    }
+  if (result.existing) {
+    res.status(409).json({
+      error: "attempt_in_progress",
+      message: "現在進行中のテストがあります。先に提出してください",
+    });
+    return;
   }
 
-  const attemptNumber = attempts.length + 1;
-
-  const attempt = await ds.createQuizAttempt({
-    quizId,
-    userId,
-    attemptNumber,
-    status: "in_progress",
-    answers: {},
-    score: null,
-    isPassed: null,
-    startedAt: new Date().toISOString(),
-    submittedAt: null,
-  });
-
+  const attempt = result.attempt;
   res.status(201).json({
     attempt: {
       id: attempt.id,
