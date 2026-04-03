@@ -999,8 +999,15 @@ function isEnrolledAtInRange(dateStr: string): boolean {
 router.get("/tenants/:tenantId/course-settings", async (req: Request, res: Response) => {
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
-  const basePath = `tenants/${tenantId}`;
 
+  // テナント存在確認
+  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+  if (!tenantDoc.exists) {
+    res.status(404).json({ error: "not_found", message: "Tenant not found" });
+    return;
+  }
+
+  const basePath = `tenants/${tenantId}`;
   const snapshot = await db.collection(`${basePath}/course_enrollment_settings`).get();
   const settings = snapshot.docs.map((doc) => toCourseSettingResponse(doc.data()));
 
@@ -1017,6 +1024,20 @@ router.put("/tenants/:tenantId/course-settings/:courseId", async (req: Request, 
   const tenantId = req.params.tenantId as string;
   const courseId = req.params.courseId as string;
   const { enrolledAt } = req.body;
+
+  // テナント存在確認
+  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+  if (!tenantDoc.exists) {
+    res.status(404).json({ error: "not_found", message: "Tenant not found" });
+    return;
+  }
+
+  // コース存在確認
+  const courseDoc = await db.collection(`tenants/${tenantId}/courses`).doc(courseId).get();
+  if (!courseDoc.exists) {
+    res.status(404).json({ error: "not_found", message: "Course not found" });
+    return;
+  }
 
   if (!enrolledAt) {
     res.status(400).json({ error: "bad_request", message: "enrolledAt is required" });
@@ -1059,8 +1080,15 @@ router.delete("/tenants/:tenantId/course-settings/:courseId", async (req: Reques
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
   const courseId = req.params.courseId as string;
-  const basePath = `tenants/${tenantId}`;
 
+  // テナント存在確認
+  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+  if (!tenantDoc.exists) {
+    res.status(404).json({ error: "not_found", message: "Tenant not found" });
+    return;
+  }
+
+  const basePath = `tenants/${tenantId}`;
   const docRef = db.collection(`${basePath}/course_enrollment_settings`).doc(courseId);
   const doc = await docRef.get();
 

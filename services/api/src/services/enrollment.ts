@@ -3,7 +3,14 @@
  * テナント×コース単位の期限チェックユーティリティ
  */
 
+import { addMonths, addYears } from "date-fns";
 import type { CourseEnrollmentSetting } from "../types/entities.js";
+
+function endOfDayUTC(date: Date): Date {
+  const d = new Date(date);
+  d.setUTCHours(23, 59, 59, 999);
+  return d;
+}
 
 export interface AccessCheckResult {
   allowed: boolean;
@@ -62,14 +69,17 @@ export function calculateDefaultDeadlines(enrolledAt: string): {
   videoAccessUntil: string;
 } {
   const base = new Date(enrolledAt);
+  if (isNaN(base.getTime())) {
+    throw new Error(`calculateDefaultDeadlines: invalid enrolledAt "${enrolledAt}"`);
+  }
 
-  // テスト: enrolledAt + 2ヶ月
-  const quizDeadline = new Date(base);
-  quizDeadline.setMonth(quizDeadline.getMonth() + 2);
+  // テスト: enrolledAt + 2ヶ月（日末まで有効）
+  // date-fns の addMonths は月末を正しくクランプする
+  // 例: 1/31 + 2ヶ月 = 3/31, 12/31 + 2ヶ月 = 2/28(or 29)
+  const quizDeadline = endOfDayUTC(addMonths(base, 2));
 
-  // 動画: enrolledAt + 1年
-  const videoDeadline = new Date(base);
-  videoDeadline.setFullYear(videoDeadline.getFullYear() + 1);
+  // 動画: enrolledAt + 1年（日末まで有効）
+  const videoDeadline = endOfDayUTC(addYears(base, 1));
 
   return {
     quizAccessUntil: quizDeadline.toISOString(),
