@@ -1018,6 +1018,20 @@ router.put("/tenants/:tenantId/course-settings/:courseId", async (req: Request, 
   const courseId = req.params.courseId as string;
   const { enrolledAt } = req.body;
 
+  // テナント存在確認
+  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+  if (!tenantDoc.exists) {
+    res.status(404).json({ error: "tenant_not_found", message: "テナントが見つかりません" });
+    return;
+  }
+
+  // コース存在確認
+  const courseDoc = await db.collection(`tenants/${tenantId}/courses`).doc(courseId).get();
+  if (!courseDoc.exists) {
+    res.status(404).json({ error: "course_not_found", message: "コースが見つかりません" });
+    return;
+  }
+
   if (!enrolledAt) {
     res.status(400).json({ error: "bad_request", message: "enrolledAt is required" });
     return;
@@ -1059,8 +1073,15 @@ router.delete("/tenants/:tenantId/course-settings/:courseId", async (req: Reques
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
   const courseId = req.params.courseId as string;
-  const basePath = `tenants/${tenantId}`;
 
+  // テナント存在確認
+  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+  if (!tenantDoc.exists) {
+    res.status(404).json({ error: "tenant_not_found", message: "テナントが見つかりません" });
+    return;
+  }
+
+  const basePath = `tenants/${tenantId}`;
   const docRef = db.collection(`${basePath}/course_enrollment_settings`).doc(courseId);
   const doc = await docRef.get();
 
