@@ -290,6 +290,30 @@ describe("Quiz Flow (complete flow)", () => {
       expect(res.status).toBe(403);
       expect(res.body.error).toBe("max_attempts_exceeded");
     });
+
+    it("timed_outはカウントから除外され、再受験できる", async () => {
+      // 1回目: 開始して timed_out にする（DataSource直接操作）
+      const start1 = await studentRequest.post(`/quizzes/${quizId}/attempts`);
+      expect(start1.status).toBe(201);
+      const attempt1Id = start1.body.attempt.id;
+      await ds.updateQuizAttempt(attempt1Id, {
+        status: "timed_out",
+        submittedAt: new Date().toISOString(),
+      });
+
+      // 2回目: 正常に提出
+      const start2 = await studentRequest.post(`/quizzes/${quizId}/attempts`);
+      expect(start2.status).toBe(201);
+      const attempt2Id = start2.body.attempt.id;
+      await studentRequest
+        .patch(`/quiz-attempts/${attempt2Id}`)
+        .send({ answers: { q1: ["q1-a"], q2: ["q2-a"] } });
+
+      // 3回目: timed_outは除外されるので、有効試行は1回 → 再受験可能
+      const start3 = await studentRequest.post(`/quizzes/${quizId}/attempts`);
+      expect(start3.status).toBe(201);
+      expect(start3.body.attempt.attemptNumber).toBe(3);
+    });
   });
 
   describe("進行中attempt重複防止", () => {
