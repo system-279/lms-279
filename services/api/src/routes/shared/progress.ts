@@ -26,17 +26,36 @@ router.get("/courses/:courseId/progress", requireUser, async (req: Request, res:
     return;
   }
 
-  const [courseProgress, userProgresses] = await Promise.all([
+  const [courseProgress, userProgresses, lessons] = await Promise.all([
     ds.getCourseProgress(userId, courseId),
     ds.getUserProgressByCourse(userId, courseId),
+    ds.getLessons({ courseId }),
   ]);
 
-  const lessonProgresses = userProgresses.map((p) => ({
-    lessonId: p.lessonId,
-    videoCompleted: p.videoCompleted,
-    quizPassed: p.quizPassed,
-    lessonCompleted: p.lessonCompleted,
-  }));
+  const progressMap = new Map(userProgresses.map((p) => [p.lessonId, p]));
+  const lessonMap = new Map(lessons.map((l) => [l.id, l]));
+
+  // コースのレッスン順序に従い、コンテンツなしレッスンも含めて返す
+  const lessonProgresses = course.lessonOrder.map((lessonId) => {
+    const p = progressMap.get(lessonId);
+    if (p) {
+      return {
+        lessonId: p.lessonId,
+        videoCompleted: p.videoCompleted,
+        quizPassed: p.quizPassed,
+        lessonCompleted: p.lessonCompleted,
+      };
+    }
+    // コンテンツなしレッスンは自動完了扱い（updateCourseProgressと整合）
+    const lesson = lessonMap.get(lessonId);
+    const autoCompleted = !!lesson && !lesson.hasVideo && !lesson.hasQuiz;
+    return {
+      lessonId,
+      videoCompleted: false,
+      quizPassed: false,
+      lessonCompleted: autoCompleted,
+    };
+  });
 
   res.json({
     courseProgress: courseProgress
@@ -123,29 +142,20 @@ router.get(
       return;
     }
 
-    // 全受講者(student)を取得し、各ユーザーのコース進捗を収集
-    const users = await ds.getUsers();
-    const students = users.filter((u) => u.role === "student");
-
-    const progressList = await Promise.all(
-      students.map(async (user) => {
-        return ds.getCourseProgress(user.id, courseId);
-      })
-    );
+    // コース進捗を一括取得（N+1回避）
+    const progressList = await ds.getCourseProgressByCourseId(courseId);
 
     res.json({
       courseId,
-      progressList: progressList
-        .filter((p): p is NonNullable<typeof p> => p !== null)
-        .map((p) => ({
-          userId: p.userId,
-          courseId: p.courseId,
-          completedLessons: p.completedLessons,
-          totalLessons: p.totalLessons,
-          progressRatio: p.progressRatio,
-          isCompleted: p.isCompleted,
-          updatedAt: p.updatedAt,
-        })),
+      progressList: progressList.map((p) => ({
+        userId: p.userId,
+        courseId: p.courseId,
+        completedLessons: p.completedLessons,
+        totalLessons: p.totalLessons,
+        progressRatio: p.progressRatio,
+        isCompleted: p.isCompleted,
+        updatedAt: p.updatedAt,
+      })),
     });
   }
 );
