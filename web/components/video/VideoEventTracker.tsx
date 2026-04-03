@@ -29,6 +29,7 @@ interface VideoEventTrackerProps {
   apiEndpoint: string;
   fetchFn: (url: string, options?: RequestInit) => Promise<Response>;
   onEndedFlush?: (analytics: FlushAnalytics | null) => void;
+  onAnalyticsUpdate?: (analytics: FlushAnalytics) => void;
 }
 
 const BATCH_INTERVAL_MS = 5000;
@@ -42,6 +43,7 @@ export function VideoEventTracker({
   apiEndpoint,
   fetchFn,
   onEndedFlush,
+  onAnalyticsUpdate,
 }: VideoEventTrackerProps) {
   const eventQueueRef = useRef<VideoEvent[]>([]);
   const lastHeartbeatTimeRef = useRef<number>(-1);
@@ -190,8 +192,11 @@ export function VideoEventTracker({
 
   // 5秒間隔バッチ送信（ADR-021）
   useEffect(() => {
-    batchIntervalRef.current = setInterval(() => {
-      drainQueue();
+    batchIntervalRef.current = setInterval(async () => {
+      const result = await drainQueue();
+      if (result && onAnalyticsUpdate) {
+        onAnalyticsUpdate(result);
+      }
     }, BATCH_INTERVAL_MS);
 
     return () => {
@@ -200,7 +205,7 @@ export function VideoEventTracker({
         batchIntervalRef.current = null;
       }
     };
-  }, [drainQueue]);
+  }, [drainQueue, onAnalyticsUpdate]);
 
   // ページ離脱時にnavigator.sendBeaconで未送信イベントを送信
   useEffect(() => {

@@ -77,13 +77,20 @@ export function useVideoCompletion({
 
   const setAnalyticsFromFlush = useCallback(
     (flush: { isComplete: boolean; coverageRatio: number } | null) => {
-      if (flush?.isComplete) {
+      if (!flush) {
+        // flush失敗時はfetchAnalyticsにフォールバック
+        fetchAnalytics();
+        return;
+      }
+      if (flush.isComplete) {
         setVideoCompleted(true);
       }
-      // flush失敗時はfetchAnalyticsにフォールバック
-      if (!flush) {
-        fetchAnalytics();
-      }
+      // coverageRatioをリアルタイム反映
+      setAnalytics((prev) =>
+        prev
+          ? { ...prev, coverageRatio: flush.coverageRatio, isComplete: flush.isComplete }
+          : prev
+      );
     },
     [fetchAnalytics]
   );

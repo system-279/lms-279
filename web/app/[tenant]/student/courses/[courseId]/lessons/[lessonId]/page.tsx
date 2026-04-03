@@ -1043,6 +1043,7 @@ export default function StudentLessonDetailPage() {
                     fetchFn={eventFetchFn}
                     onComplete={handleVideoComplete}
                     onEndedFlush={setAnalyticsFromFlush}
+                    onAnalyticsUpdate={setAnalyticsFromFlush}
                     onPlay={handleVideoPlay}
                     onPause={handleVideoPause}
                     sessionToken={session?.sessionToken ?? pendingTokenRef.current}
