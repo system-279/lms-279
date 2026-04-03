@@ -13,6 +13,7 @@ import {
   forceExitSession,
   completeSession,
 } from "../../services/lesson-session.js";
+import { checkQuizAccess } from "../../services/enrollment.js";
 
 const router = Router();
 
@@ -183,6 +184,17 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
   if (quiz.requireVideoCompletion) {
     const blocked = await checkVideoCompletionGate(req, res, quiz.lessonId, userId);
     if (blocked) return;
+  }
+
+  // 受講期間チェック
+  const enrollment = await ds.getEnrollment(userId, quiz.courseId);
+  const quizAccessResult = checkQuizAccess(enrollment);
+  if (!quizAccessResult.allowed) {
+    res.status(403).json({
+      error: quizAccessResult.reason,
+      message: "テスト受験期間が終了しています",
+    });
+    return;
   }
 
   // 受験回数チェック（maxAttempts=0は無制限）

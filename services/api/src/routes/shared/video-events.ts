@@ -11,6 +11,7 @@ import type { VideoEventType } from "../../types/entities.js";
 import { processVideoEvents } from "../../services/video-analytics.js";
 import { updateLessonProgress } from "../../services/progress.js";
 import { forceExitSession } from "../../services/lesson-session.js";
+import { checkVideoAccess } from "../../services/enrollment.js";
 import { logger } from "../../utils/logger.js";
 
 const PAUSE_TIMEOUT_MS = Number(process.env.PAUSE_TIMEOUT_MS) || 15 * 60 * 1000; // デフォルト15分
@@ -137,6 +138,17 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
     return;
   }
 
+  // 2.5. 受講期間チェック
+  const enrollment = await ds.getEnrollment(userId, video.courseId);
+  const videoAccessResult = checkVideoAccess(enrollment);
+  if (!videoAccessResult.allowed) {
+    res.status(403).json({
+      error: videoAccessResult.reason,
+      message: "動画視聴期間が終了しています",
+    });
+    return;
+  }
+
   // 3. dataSource.createVideoEvents() でイベント保存
   const eventsToCreate = events.map((event) => ({
     videoId,
@@ -160,7 +172,10 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
     });
     return;
   }
-  if (activeSession?.pauseStartedAt) {
+  if (activeSession?.pauseStartedAt && !activeSession.sessionVideoCompleted) {
+    // 動画完了済みセッション（sessionVideoCompleted=true）ではpauseタイムアウトを適用しない。
+    // 動画のendedイベントはHTML5のpause状態を伴うため、完了後の自然なpauseで
+    // 強制退室→データ全消去が発動するのを防止する。
     const pausedMs = Date.now() - new Date(activeSession.pauseStartedAt).getTime();
     if (pausedMs > PAUSE_TIMEOUT_MS) {
       try {

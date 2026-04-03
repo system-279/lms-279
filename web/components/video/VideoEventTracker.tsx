@@ -17,12 +17,18 @@ interface VideoEvent {
   clientTimestamp: number;
 }
 
+export interface FlushAnalytics {
+  isComplete: boolean;
+  coverageRatio: number;
+}
+
 interface VideoEventTrackerProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   videoId: string;
   sessionToken: string;
   apiEndpoint: string;
   fetchFn: (url: string, options?: RequestInit) => Promise<Response>;
+  onEndedFlush?: (analytics: FlushAnalytics | null) => void;
 }
 
 const BATCH_INTERVAL_MS = 5000;
@@ -35,6 +41,7 @@ export function VideoEventTracker({
   sessionToken,
   apiEndpoint,
   fetchFn,
+  onEndedFlush,
 }: VideoEventTrackerProps) {
   const eventQueueRef = useRef<VideoEvent[]>([]);
   const lastHeartbeatTimeRef = useRef<number>(-1);
@@ -42,26 +49,30 @@ export function VideoEventTracker({
   const batchIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const flushEvents = useCallback(
-    async (events: VideoEvent[]) => {
-      if (events.length === 0) return;
+    async (events: VideoEvent[]): Promise<FlushAnalytics | null> => {
+      if (events.length === 0) return null;
       try {
-        await fetchFn(apiEndpoint, {
+        const res = await fetchFn(apiEndpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ videoId, sessionToken, events }),
         });
+        if (res.ok) {
+          const data = await res.json();
+          return data?.analytics ?? null;
+        }
+        return null;
       } catch {
-        // サーバーサイドで不審パターン検出するため、送信失敗は記録のみ
-        // ADR-022: 不審パターン検出はサーバーサイド
+        return null;
       }
     },
     [apiEndpoint, fetchFn, videoId, sessionToken]
   );
 
-  const drainQueue = useCallback(async () => {
-    if (eventQueueRef.current.length === 0) return;
+  const drainQueue = useCallback(async (): Promise<FlushAnalytics | null> => {
+    if (eventQueueRef.current.length === 0) return null;
     const batch = eventQueueRef.current.splice(0, MAX_BATCH_SIZE);
-    await flushEvents(batch);
+    return await flushEvents(batch);
   }, [flushEvents]);
 
   const enqueueEvent = useCallback((event: VideoEvent) => {
@@ -118,6 +129,17 @@ export function VideoEventTracker({
         playbackRate: video.playbackRate,
         clientTimestamp: Date.now(),
       });
+      // ended時は即座にflushし、サーバー確認済みanalyticsをコールバックで返す
+      // バッチintervalをクリアして並行drainQueue呼び出しを防止
+      if (onEndedFlush) {
+        if (batchIntervalRef.current !== null) {
+          clearInterval(batchIntervalRef.current);
+          batchIntervalRef.current = null;
+        }
+        drainQueue().then((analytics) => {
+          onEndedFlush(analytics);
+        });
+      }
     };
 
     const handleRateChange = () => {
@@ -164,7 +186,7 @@ export function VideoEventTracker({
       video.removeEventListener("ratechange", handleRateChange);
       video.removeEventListener("timeupdate", handleTimeUpdate);
     };
-  }, [videoRef, enqueueEvent]);
+  }, [videoRef, enqueueEvent, onEndedFlush, drainQueue]);
 
   // 5秒間隔バッチ送信（ADR-021）
   useEffect(() => {

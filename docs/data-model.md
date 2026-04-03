@@ -161,3 +161,14 @@ questions配列の各要素:
 | quizAttemptId | string? | 完了時のテストattempt ID |
 | createdAt | Timestamp | 作成日時 |
 | updatedAt | Timestamp | 更新日時 |
+
+#### enrollments/{userId_courseId}（受講期間管理）
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| userId | string | ユーザーID |
+| courseId | string | コースID |
+| enrolledAt | string | 受講開始日（スーパー管理者が設定） |
+| quizAccessUntil | string | テスト受験期限（デフォルト: enrolledAt + 2ヶ月） |
+| videoAccessUntil | string | 動画視聴期限（デフォルト: enrolledAt + 1年） |
+| createdBy | string | 設定したスーパー管理者のメールアドレス |
+| updatedAt | string | 更新日時 |

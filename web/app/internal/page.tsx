@@ -1,3 +1,4 @@
+import { notFound } from "next/navigation";
 import Link from "next/link";
 import {
   Monitor,
@@ -283,7 +284,14 @@ const features: Feature[] = [
 
 // ─── ページ ─────────────────────────────────
 
+const INTERNAL_PAGE_ENABLED =
+  process.env.NEXT_PUBLIC_INTERNAL_PAGE_ENABLED === "true";
+
 export default function InternalPortalPage() {
+  if (!INTERNAL_PAGE_ENABLED) {
+    notFound();
+  }
+
   return (
     <>
       {/* Header */}

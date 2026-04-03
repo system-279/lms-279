@@ -55,7 +55,7 @@ function TenantNav({ isSuperAdminAccess }: { isSuperAdminAccess: boolean }) {
     fetchUserRole();
   }, [authFetch, user, authLoading, isDemo]);
 
-  const isAdmin = role === "admin" || role === "teacher" || isSuperAdminAccess;
+  const isAdmin = role === "admin" || isSuperAdminAccess;
 
   // ナビリンクを決定
   // - 管理画面にいる場合: 「受講者向け」を表示

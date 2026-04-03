@@ -11,6 +11,7 @@ import {
   generatePlaybackUrl,
   deleteVideoFile,
 } from "../../services/gcs.js";
+import { checkVideoAccess } from "../../services/enrollment.js";
 
 const router = Router();
 
@@ -228,9 +229,21 @@ router.get("/videos/:videoId/playback-url", requireUser, async (req: Request, re
   const ds = req.dataSource!;
   const videoId = req.params.videoId as string;
 
+  const userId = req.user!.id;
   const video = await ds.getVideoById(videoId);
   if (!video) {
     res.status(404).json({ error: "not_found", message: "Video not found" });
+    return;
+  }
+
+  // 受講期間チェック
+  const enrollment = await ds.getEnrollment(userId, video.courseId);
+  const videoAccessResult = checkVideoAccess(enrollment);
+  if (!videoAccessResult.allowed) {
+    res.status(403).json({
+      error: videoAccessResult.reason,
+      message: "動画視聴期間が終了しています",
+    });
     return;
   }
 

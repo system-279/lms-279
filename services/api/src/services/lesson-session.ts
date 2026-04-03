@@ -94,11 +94,13 @@ export async function forceExitSession(
     exitReason: reason,
   });
 
-  // レッスンの学習データを完全リセット
-  await ds.resetLessonDataForUser(session.userId, session.lessonId, session.courseId);
-
-  // コース進捗を再計算（通常ロジックと同一のupdateCourseProgressを使用）
-  await updateCourseProgress(ds, session.userId, session.courseId);
+  // 動画完了済みセッションでは学習データをリセットしない。
+  // HTML5 videoのendedはpause状態を伴うため、完了後のpauseタイムアウトや
+  // ページリロード等でデータが全消去されるのを防止する。
+  if (!session.sessionVideoCompleted) {
+    await ds.resetLessonDataForUser(session.userId, session.lessonId, session.courseId);
+    await updateCourseProgress(ds, session.userId, session.courseId);
+  }
 
   return updated!;
 }
