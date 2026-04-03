@@ -224,13 +224,23 @@ router.get("/courses", requireUser, privateCache(60), async (req: Request, res: 
   const ds = req.dataSource!;
   const userId = req.user!.id;
 
-  const courses = await ds.getCourses({ status: "published" });
+  const [courses, enrollmentSetting] = await Promise.all([
+    ds.getCourses({ status: "published" }),
+    ds.getTenantEnrollmentSetting(),
+  ]);
 
   // 自分のコース進捗を一括取得
   const allCourseProgress = await ds.getCourseProgressByUser(userId);
   const progressMap = new Map(allCourseProgress.map((p) => [p.courseId, p]));
 
   res.json({
+    enrollmentSetting: enrollmentSetting
+      ? {
+          enrolledAt: enrollmentSetting.enrolledAt,
+          quizAccessUntil: enrollmentSetting.quizAccessUntil,
+          videoAccessUntil: enrollmentSetting.videoAccessUntil,
+        }
+      : null,
     courses: courses.map((course) => {
       const progress = progressMap.get(course.id);
       return {
@@ -266,7 +276,10 @@ router.get("/courses/:id", requireUser, async (req: Request, res: Response) => {
   const ds = req.dataSource!;
   const id = req.params.id as string;
 
-  const course = await ds.getCourseById(id);
+  const [course, enrollmentSetting] = await Promise.all([
+    ds.getCourseById(id),
+    ds.getTenantEnrollmentSetting(),
+  ]);
   if (!course || course.status !== "published") {
     res.status(404).json({ error: "not_found", message: "Course not found" });
     return;
@@ -284,6 +297,13 @@ router.get("/courses/:id", requireUser, async (req: Request, res: Response) => {
   const allLessons = [...orderedLessons, ...unorderedLessons];
 
   res.json({
+    enrollmentSetting: enrollmentSetting
+      ? {
+          enrolledAt: enrollmentSetting.enrolledAt,
+          quizAccessUntil: enrollmentSetting.quizAccessUntil,
+          videoAccessUntil: enrollmentSetting.videoAccessUntil,
+        }
+      : null,
     course: {
       id: course.id,
       name: course.name,

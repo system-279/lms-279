@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { EnrollmentDeadlineBanner } from "@/components/enrollment-deadline-banner";
 import { useAuthenticatedFetch } from "@/lib/hooks/use-authenticated-fetch";
 import { useTenant } from "@/lib/tenant-context";
 
@@ -23,11 +24,18 @@ type Course = {
   progress?: CourseProgress;
 };
 
+type EnrollmentSetting = {
+  enrolledAt: string;
+  quizAccessUntil: string;
+  videoAccessUntil: string;
+} | null;
+
 export default function StudentCoursesPage() {
   const { tenantId } = useTenant();
   const { authFetch } = useAuthenticatedFetch();
 
   const [courses, setCourses] = useState<Course[]>([]);
+  const [enrollmentSetting, setEnrollmentSetting] = useState<EnrollmentSetting>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,8 +43,9 @@ export default function StudentCoursesPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await authFetch<{ courses: Course[] }>("/api/v1/courses");
+      const data = await authFetch<{ courses: Course[]; enrollmentSetting: EnrollmentSetting }>("/api/v1/courses");
       setCourses(data.courses);
+      setEnrollmentSetting(data.enrollmentSetting ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "講座の取得に失敗しました");
     } finally {
@@ -56,6 +65,10 @@ export default function StudentCoursesPage() {
           受講可能な講座の一覧です。
         </p>
       </div>
+
+      {enrollmentSetting && (
+        <EnrollmentDeadlineBanner setting={enrollmentSetting} />
+      )}
 
       {error && (
         <div className="rounded-md bg-destructive/10 p-4 text-destructive text-sm">

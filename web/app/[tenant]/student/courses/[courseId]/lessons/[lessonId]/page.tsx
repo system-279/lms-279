@@ -12,6 +12,7 @@ import { SessionRulesNotice } from "@/components/session/SessionRulesNotice";
 import { SessionTimer } from "@/components/session/SessionTimer";
 import { PauseTimeoutOverlay } from "@/components/session/PauseTimeoutOverlay";
 import { ForceExitDialog } from "@/components/session/ForceExitDialog";
+import { DeadlineWarningBanner } from "@/components/enrollment-deadline-banner";
 import type { LessonSessionResponse, QuizByLessonResponse, QuizByLessonQuiz, QuizAttemptSummary } from "@lms-279/shared-types";
 import { useVideoCompletion } from "@/lib/hooks/use-video-completion";
 
@@ -112,9 +113,11 @@ type QuizUIState = "idle" | "taking" | "result";
 function QuizSection({
   lessonId,
   authFetch,
+  enrollmentSetting,
 }: {
   lessonId: string;
   authFetch: <T>(url: string, options?: RequestInit) => Promise<T>;
+  enrollmentSetting: { quizAccessUntil: string; videoAccessUntil: string } | null;
 }) {
   const [quizState, setQuizState] = useState<QuizUIState>("idle");
   const [quiz, setQuiz] = useState<Quiz | null>(null);
@@ -315,6 +318,10 @@ function QuizSection({
             )}
           </div>
         </div>
+
+        {enrollmentSetting && !quizAccessExpired && (
+          <DeadlineWarningBanner type="quiz" deadline={enrollmentSetting.quizAccessUntil} />
+        )}
 
         {quizAccessExpired && (
           <div className="rounded-md bg-muted p-4 text-muted-foreground text-sm space-y-1">
@@ -702,6 +709,10 @@ export default function StudentLessonDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [videoAccessExpired, setVideoAccessExpired] = useState(false);
+  const [enrollmentSetting, setEnrollmentSetting] = useState<{
+    quizAccessUntil: string;
+    videoAccessUntil: string;
+  } | null>(null);
 
   // ============================================================
   // コース・レッスン一覧取得
@@ -711,10 +722,17 @@ export default function StudentLessonDetailPage() {
     setLoadingCourse(true);
     setError(null);
     try {
-      const data = await authFetch<{ course: Course; lessons: Lesson[] }>(
+      const data = await authFetch<{
+        course: Course;
+        lessons: Lesson[];
+        enrollmentSetting?: { enrolledAt: string; quizAccessUntil: string; videoAccessUntil: string } | null;
+      }>(
         `/api/v1/courses/${courseId}`
       );
       setCourse(data.course);
+      if (data.enrollmentSetting) {
+        setEnrollmentSetting(data.enrollmentSetting);
+      }
       const sorted = [...data.lessons].sort((a, b) => a.order - b.order);
       setLessons(sorted);
       const found = sorted.find((l) => l.id === lessonId) ?? null;
@@ -976,6 +994,11 @@ export default function StudentLessonDetailPage() {
       {/* 受講ルール */}
       <SessionRulesNotice session={session} />
 
+      {/* 受講期限の警告 */}
+      {enrollmentSetting && !videoAccessExpired && (
+        <DeadlineWarningBanner type="video" deadline={enrollmentSetting.videoAccessUntil} />
+      )}
+
       {/* 動画セクション */}
       <div className="space-y-4">
         {currentLesson.hasVideo ? (
@@ -1059,7 +1082,7 @@ export default function StudentLessonDetailPage() {
       {/* テストセクション */}
       {currentLesson.hasQuiz && (
         showQuizSection ? (
-          <QuizSection lessonId={lessonId} authFetch={authFetch} />
+          <QuizSection lessonId={lessonId} authFetch={authFetch} enrollmentSetting={enrollmentSetting} />
         ) : (
           /* 動画未完了ゲートメッセージ */
           <div className="rounded-md border p-6 space-y-3">
