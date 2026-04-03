@@ -5,6 +5,7 @@
  */
 
 import type { VideoEvent, VideoAnalytics, WatchedRange, SuspiciousFlag } from "../types/entities.js";
+import { logger } from "../utils/logger.js";
 
 /**
  * 視聴区間をマージ（重複排除）
@@ -253,6 +254,16 @@ export function processVideoEvents(
   };
 
   const updatedSuspiciousFlags = detectSuspiciousFlags(analyticsForDetection, events);
+
+  if (updatedSuspiciousFlags.length > 0) {
+    logger.warn("Suspicious activity detected", {
+      userId: base.userId, videoId: base.videoId,
+      flags: updatedSuspiciousFlags,
+      seekCount: updatedSeekCount,
+      pauseCount: updatedPauseCount,
+      speedViolationCount: updatedSpeedViolationCount,
+    });
+  }
 
   // isComplete判定はcaller側で requiredWatchRatio と比較して行う
   return {

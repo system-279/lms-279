@@ -12,6 +12,7 @@ import {
   deleteVideoFile,
 } from "../../services/gcs.js";
 import { checkVideoAccess } from "../../services/enrollment.js";
+import { logger } from "../../utils/logger.js";
 
 const router = Router();
 
@@ -257,6 +258,10 @@ router.get("/videos/:videoId/playback-url", requireUser, async (req: Request, re
     res.status(500).json({ error: "invalid_video_source", message: "Video source is not properly configured" });
     return;
   }
+
+  logger.info("Playback URL issued", {
+    userId, videoId, sourceType: video.sourceType, lessonId: video.lessonId,
+  });
 
   res.json({
     playbackUrl,

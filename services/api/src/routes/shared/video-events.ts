@@ -131,6 +131,13 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
     }
   }
 
+  // イベント受信ログ
+  const eventTypes = events.reduce((acc: Record<string, number>, e: { eventType: string }) => {
+    acc[e.eventType] = (acc[e.eventType] || 0) + 1;
+    return acc;
+  }, {});
+  logger.info("Video events received", { userId, videoId, eventCount: events.length, eventTypes });
+
   // 2. 動画取得（durationSec, requiredWatchRatio取得）
   const video = await ds.getVideoById(videoId);
   if (!video) {
@@ -244,6 +251,14 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
       const isComplete = coverageRatio >= video.requiredWatchRatio;
       return { ...analyticsUpdate, isComplete };
     });
+    logger.info("Video analytics updated", {
+      userId, videoId,
+      coverageRatio: updatedAnalytics.coverageRatio,
+      isComplete: updatedAnalytics.isComplete,
+      watchedRangesCount: updatedAnalytics.watchedRanges?.length ?? 0,
+      totalWatchTimeSec: updatedAnalytics.totalWatchTimeSec,
+      requiredWatchRatio: video.requiredWatchRatio,
+    });
   } catch (err) {
     logger.error("Failed to update video analytics", {
       error: err instanceof Error ? err : String(err),
@@ -260,6 +275,12 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
 
   // 8. 進捗更新: isComplete=true になった場合
   if (isComplete) {
+    logger.info("Video completed - updating progress", {
+      userId, videoId, lessonId: video.lessonId,
+      coverageRatio: updatedAnalytics.coverageRatio,
+      requiredWatchRatio: video.requiredWatchRatio,
+    });
+
     const lesson = await ds.getLessonById(video.lessonId);
     if (lesson) {
       // テストなしレッスンの場合、quizPassed=trueとして完了扱い
@@ -268,11 +289,16 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
         videoCompleted: true,
         quizPassed: quizPassed ? true : undefined,
       });
+      logger.info("Lesson progress updated", {
+        userId, lessonId: lesson.id, courseId: lesson.courseId,
+        videoCompleted: true, quizPassed,
+      });
     }
 
     // セッション内動画視聴完了フラグを更新（step 3.5で取得済みのセッションを再利用）
     if (activeSession && !activeSession.sessionVideoCompleted) {
       await ds.updateLessonSession(activeSession.id, { sessionVideoCompleted: true });
+      logger.info("Session video completed", { sessionId: activeSession.id, userId, videoId });
     }
   }
 
