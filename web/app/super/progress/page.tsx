@@ -117,7 +117,8 @@ export default function StudentProgressPage() {
     setError(null);
     setExpanded({});
     try {
-      const qs = selectedCourse ? `?courseId=${selectedCourse}` : "";
+      const courseId = selectedCourse && selectedCourse !== "__all__" ? selectedCourse : "";
+      const qs = courseId ? `?courseId=${courseId}` : "";
       const data = await superFetch<SuperStudentProgressResponse>(
         `/api/v2/super/tenants/${selectedTenant}/student-progress${qs}`
       );
@@ -236,7 +237,7 @@ export default function StudentProgressPage() {
               <SelectValue placeholder="全コース" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">全コース</SelectItem>
+              <SelectItem value="__all__">全コース</SelectItem>
               {courses.map((c) => (
                 <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
               ))}
