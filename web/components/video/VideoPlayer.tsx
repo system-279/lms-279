@@ -23,6 +23,8 @@ interface VideoPlayerProps {
   preview?: boolean;
   /** ended時にイベントflush後のサーバー確認済みanalyticsを受け取るコールバック */
   onEndedFlush?: (analytics: FlushAnalytics | null) => void;
+  /** 5秒バッチ送信ごとのanalytics更新コールバック */
+  onAnalyticsUpdate?: (analytics: FlushAnalytics) => void;
 }
 
 /** crypto.randomUUID が使えない環境向けフォールバック */
@@ -48,6 +50,7 @@ export function VideoPlayer({
   sessionToken: externalSessionToken,
   preview = false,
   onEndedFlush,
+  onAnalyticsUpdate,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -266,6 +269,7 @@ export function VideoPlayer({
           apiEndpoint={eventEndpoint ?? `/api/v1/videos/${videoId}/events`}
           fetchFn={fetchFn ?? fetch}
           onEndedFlush={onEndedFlush}
+          onAnalyticsUpdate={onAnalyticsUpdate}
         />
       )}
     </div>
