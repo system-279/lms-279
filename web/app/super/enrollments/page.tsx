@@ -51,7 +51,8 @@ export default function EnrollmentsPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selectedTenant, setSelectedTenant] = useState("");
   const [courses, setCourses] = useState<Course[]>([]);
-  const [selectedCourse, setSelectedCourse] = useState("");
+  const ALL_COURSES = "__all__";
+  const [selectedCourse, setSelectedCourse] = useState(ALL_COURSES);
   const [enrollments, setEnrollments] = useState<EnrollmentResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -105,7 +106,7 @@ export default function EnrollmentsPage() {
     setLoading(true);
     setError(null);
     try {
-      const query = selectedCourse ? `?courseId=${selectedCourse}` : "";
+      const query = selectedCourse !== ALL_COURSES ? `?courseId=${selectedCourse}` : "";
       const data = await superFetch<{ enrollments: EnrollmentResponse[] }>(
         `/api/v2/super/tenants/${selectedTenant}/enrollments${query}`
       );
@@ -125,7 +126,7 @@ export default function EnrollmentsPage() {
 
   // 新規作成
   const handleCreate = async () => {
-    if (!selectedTenant || !selectedCourse || !createUserId || !createEnrolledAt) return;
+    if (!selectedTenant || selectedCourse === ALL_COURSES || !createUserId || !createEnrolledAt) return;
     setCreateLoading(true);
     try {
       await superFetch(`/api/v2/super/tenants/${selectedTenant}/enrollments`, {
@@ -150,7 +151,7 @@ export default function EnrollmentsPage() {
 
   // 一括作成
   const handleBulkCreate = async () => {
-    if (!selectedTenant || !selectedCourse || !bulkUserIds || !bulkEnrolledAt) return;
+    if (!selectedTenant || selectedCourse === ALL_COURSES || !bulkUserIds || !bulkEnrolledAt) return;
     setBulkLoading(true);
     try {
       const userIds = bulkUserIds
@@ -239,14 +240,14 @@ export default function EnrollmentsPage() {
           <Select value={selectedCourse} onValueChange={setSelectedCourse} disabled={!selectedTenant}>
             <SelectTrigger><SelectValue placeholder="全コース" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="">全コース</SelectItem>
+              <SelectItem value={ALL_COURSES}>全コース</SelectItem>
               {courses.map((c) => (
                 <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
-        {selectedTenant && selectedCourse && (
+        {selectedTenant && selectedCourse !== ALL_COURSES && (
           <div className="flex gap-2">
             <Button onClick={() => setCreateOpen(true)}>新規登録</Button>
             <Button variant="outline" onClick={() => setBulkOpen(true)}>一括登録</Button>
