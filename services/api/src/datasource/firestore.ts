@@ -894,6 +894,56 @@ export class FirestoreDataSource implements DataSource {
     return this.toQuizAttempt(doc.id, doc.data()!);
   }
 
+  async createQuizAttemptAtomic(
+    quizId: string, userId: string, maxAttempts: number, timeLimitSec: number | null,
+    data: Omit<QuizAttempt, "id" | "attemptNumber">
+  ): Promise<{ attempt: QuizAttempt; existing: boolean } | null> {
+    return this.db.runTransaction(async (tx) => {
+      // センチネルドキュメントでドキュメントレベルロックを確保
+      const lockRef = this.collection("quiz_attempt_locks").doc(`${quizId}_${userId}`);
+      await tx.get(lockRef);
+
+      // 全attemptを取得してin_progressチェック + attemptNumber採番
+      const snapshot = await tx.get(
+        this.collection("quiz_attempts")
+          .where("quizId", "==", quizId)
+          .where("userId", "==", userId)
+          .orderBy("startedAt", "desc")
+      );
+      const attempts = snapshot.docs.map((doc) => this.toQuizAttempt(doc.id, doc.data()));
+
+      // in_progress チェック（タイムアウト自動クリア含む）
+      const inProgress = attempts.find((a) => a.status === "in_progress");
+      if (inProgress) {
+        const isTimedOut = timeLimitSec && inProgress.startedAt &&
+          (Date.now() - new Date(inProgress.startedAt).getTime()) > timeLimitSec * 1000;
+        if (isTimedOut) {
+          const docRef = this.collection("quiz_attempts").doc(inProgress.id);
+          tx.update(docRef, { status: "timed_out", submittedAt: new Date().toISOString() });
+        } else {
+          return { attempt: inProgress, existing: true };
+        }
+      }
+
+      // maxAttempts チェック（0は無制限）
+      const nonTimedOutCount = attempts.filter((a) => a.status !== "timed_out" || a === inProgress).length;
+      if (maxAttempts > 0 && nonTimedOutCount >= maxAttempts) {
+        return null;
+      }
+
+      const attemptNumber = attempts.length + 1;
+      const newDocRef = this.collection("quiz_attempts").doc();
+      const attemptData = { ...data, attemptNumber };
+      tx.create(newDocRef, attemptData);
+      tx.set(lockRef, { quizId, userId, updatedAt: new Date() });
+
+      return {
+        attempt: this.toQuizAttempt(newDocRef.id, attemptData),
+        existing: false,
+      };
+    });
+  }
+
   async updateQuizAttempt(
     id: string,
     data: Partial<Omit<QuizAttempt, "id">>

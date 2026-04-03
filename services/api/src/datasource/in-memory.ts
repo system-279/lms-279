@@ -820,6 +820,38 @@ export class InMemoryDataSource implements DataSource {
     return attempt;
   }
 
+  async createQuizAttemptAtomic(
+    quizId: string, userId: string, maxAttempts: number, timeLimitSec: number | null,
+    data: Omit<QuizAttempt, "id" | "attemptNumber">
+  ): Promise<{ attempt: QuizAttempt; existing: boolean } | null> {
+    this.throwIfReadOnly();
+    const existing = this.quizAttempts.filter((a) => a.quizId === quizId && a.userId === userId);
+
+    const inProgress = existing.find((a) => a.status === "in_progress");
+    if (inProgress) {
+      const isTimedOut = timeLimitSec && inProgress.startedAt &&
+        (Date.now() - new Date(inProgress.startedAt).getTime()) > timeLimitSec * 1000;
+      if (isTimedOut) {
+        inProgress.status = "timed_out";
+        inProgress.submittedAt = new Date().toISOString();
+      } else {
+        return { attempt: inProgress, existing: true };
+      }
+    }
+
+    if (maxAttempts > 0 && existing.length >= maxAttempts) {
+      return null;
+    }
+
+    const attempt: QuizAttempt = {
+      ...data,
+      attemptNumber: existing.length + 1,
+      id: InMemoryDataSource.uniqueId("quiz-attempt"),
+    };
+    this.quizAttempts.push(attempt);
+    return { attempt, existing: false };
+  }
+
   async updateQuizAttempt(
     id: string,
     data: Partial<Omit<QuizAttempt, "id">>
