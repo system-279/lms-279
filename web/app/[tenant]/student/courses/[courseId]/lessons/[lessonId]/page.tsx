@@ -12,7 +12,7 @@ import { SessionRulesNotice } from "@/components/session/SessionRulesNotice";
 import { SessionTimer } from "@/components/session/SessionTimer";
 import { PauseTimeoutOverlay } from "@/components/session/PauseTimeoutOverlay";
 import { ForceExitDialog } from "@/components/session/ForceExitDialog";
-import type { LessonSessionResponse } from "@lms-279/shared-types";
+import type { LessonSessionResponse, QuizByLessonResponse, QuizByLessonQuiz, QuizAttemptSummary } from "@lms-279/shared-types";
 import { useVideoCompletion } from "@/lib/hooks/use-video-completion";
 
 // ============================================================
@@ -60,46 +60,9 @@ type PlaybackData = {
 // テスト関連の型定義
 // ============================================================
 
-type QuizOption = {
-  id: string;
-  text: string;
-  isCorrect: boolean; // 受講者向けAPIでは常にfalse
-};
-
-type QuizQuestion = {
-  id: string;
-  text: string;
-  type: "single" | "multi";
-  options: QuizOption[];
-  points: number;
-};
-
-type Quiz = {
-  id: string;
-  title: string;
-  passThreshold: number;
-  maxAttempts: number;
-  timeLimitSec: number | null;
-  questions: QuizQuestion[];
-};
-
-type AttemptSummary = {
-  id: string;
-  attemptNumber: number;
-  status: "submitted" | "timed_out" | "in_progress";
-  score: number | null;
-  isPassed: boolean | null;
-  startedAt: string;
-  submittedAt: string | null;
-};
-
-type QuizByLessonResponse = {
-  quiz: Quiz;
-  userAttemptCount: number;
-  attemptSummaries: AttemptSummary[];
-  accessExpired?: boolean;
-  expiredReason?: string;
-};
+// Quiz / AttemptSummary / QuizByLessonResponse は @lms-279/shared-types からインポート
+type Quiz = QuizByLessonQuiz;
+type AttemptSummary = QuizAttemptSummary;
 
 type ActiveAttempt = {
   id: string;

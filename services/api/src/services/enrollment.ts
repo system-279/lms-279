@@ -4,6 +4,7 @@
  */
 
 import { addMonths, addYears } from "date-fns";
+import type { Request, Response } from "express";
 import type { CourseEnrollmentSetting } from "../types/entities.js";
 
 function endOfDayUTC(date: Date): Date {
@@ -59,6 +60,90 @@ export function checkVideoAccess(setting: CourseEnrollmentSetting | null): Acces
   }
 
   return { allowed: true };
+}
+
+/**
+ * Route用ヘルパー: テスト受講期限を403でガード。
+ * 期限切れの場合 res に 403 を送信し true を返す。呼び出し元は return すること。
+ * エラー発生時は 500 を送信し true を返す。
+ */
+export async function guardQuizAccess(
+  req: Request, res: Response, courseId: string,
+): Promise<boolean> {
+  try {
+    const ds = req.dataSource!;
+    const setting = await ds.getCourseEnrollmentSetting(courseId);
+    const result = checkQuizAccess(setting);
+    if (!result.allowed) {
+      res.status(403).json({
+        error: result.reason,
+        message: "テスト受験期間が終了しています",
+      });
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error(`Failed to check quiz access for courseId ${courseId}:`, err);
+    res.status(500).json({
+      error: "enrollment_check_failed",
+      message: "受講期限チェックが失敗しました",
+    });
+    return true;
+  }
+}
+
+/**
+ * Route用ヘルパー: 動画視聴期限を403でガード。
+ * 期限切れの場合 res に 403 を送信し true を返す。呼び出し元は return すること。
+ */
+export async function guardVideoAccess(
+  req: Request, res: Response, courseId: string,
+): Promise<boolean> {
+  try {
+    const ds = req.dataSource!;
+    const setting = await ds.getCourseEnrollmentSetting(courseId);
+    const result = checkVideoAccess(setting);
+    if (!result.allowed) {
+      res.status(403).json({
+        error: result.reason,
+        message: "動画視聴期間が終了しています",
+      });
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error(`Failed to check video access for courseId ${courseId}:`, err);
+    res.status(500).json({
+      error: "enrollment_check_failed",
+      message: "受講期限チェックが失敗しました",
+    });
+    return true;
+  }
+}
+
+/**
+ * Route用ヘルパー: テスト受講期限の事前検知（403しない）。
+ * by-lesson エンドポイント用。期限切れでもレスポンスは返す。
+ */
+export async function checkQuizAccessSoft(
+  req: Request, res: Response, courseId: string,
+): Promise<{ accessExpired: boolean; expiredReason?: string } | null> {
+  try {
+    const ds = req.dataSource!;
+    const setting = await ds.getCourseEnrollmentSetting(courseId);
+    const result = checkQuizAccess(setting);
+    if (!result.allowed) {
+      return { accessExpired: true, expiredReason: result.reason };
+    }
+    return { accessExpired: false };
+  } catch (err) {
+    console.error(`Failed to check quiz access for courseId ${courseId}:`, err);
+    res.status(500).json({
+      error: "enrollment_check_failed",
+      message: "受講期限チェックが失敗しました",
+    });
+    return null; // 呼び出し元は null なら return すること
+  }
 }
 
 /**

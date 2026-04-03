@@ -11,7 +11,7 @@ import {
   generatePlaybackUrl,
   deleteVideoFile,
 } from "../../services/gcs.js";
-import { checkVideoAccess } from "../../services/enrollment.js";
+import { guardVideoAccess } from "../../services/enrollment.js";
 import { logger } from "../../utils/logger.js";
 
 const router = Router();
@@ -238,24 +238,8 @@ router.get("/videos/:videoId/playback-url", requireUser, async (req: Request, re
   }
 
   // 受講期間チェック
-  try {
-    const enrollmentSetting = await ds.getCourseEnrollmentSetting(video.courseId);
-    const videoAccessResult = checkVideoAccess(enrollmentSetting);
-    if (!videoAccessResult.allowed) {
-      res.status(403).json({
-        error: videoAccessResult.reason,
-        message: "動画視聴期間が終了しています",
-      });
-      return;
-    }
-  } catch (err) {
-    console.error(`Failed to check video access for courseId ${video.courseId}:`, err);
-    res.status(500).json({
-      error: "enrollment_check_failed",
-      message: "受講期限チェックが失敗しました",
-    });
-    return;
-  }
+  const videoBlocked = await guardVideoAccess(req, res, video.courseId);
+  if (videoBlocked) return;
 
   let playbackUrl: string;
 

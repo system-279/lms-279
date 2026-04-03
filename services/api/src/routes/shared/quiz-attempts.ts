@@ -13,7 +13,7 @@ import {
   forceExitSession,
   completeSession,
 } from "../../services/lesson-session.js";
-import { checkQuizAccess } from "../../services/enrollment.js";
+import { guardQuizAccess, checkQuizAccessSoft } from "../../services/enrollment.js";
 
 const router = Router();
 
@@ -80,24 +80,10 @@ router.get("/quizzes/by-lesson/:lessonId", requireUser, async (req: Request, res
     if (blocked) return;
   }
 
-  // 受講期限チェック（#220）
-  let accessExpired = false;
-  let expiredReason: string | undefined;
-  try {
-    const enrollmentSetting = await ds.getCourseEnrollmentSetting(quiz.courseId);
-    const quizAccessResult = checkQuizAccess(enrollmentSetting);
-    if (!quizAccessResult.allowed) {
-      accessExpired = true;
-      expiredReason = quizAccessResult.reason;
-    }
-  } catch (err) {
-    console.error(`Failed to check quiz access for courseId ${quiz.courseId}:`, err);
-    res.status(500).json({
-      error: "enrollment_check_failed",
-      message: "受講期限チェックが失敗しました",
-    });
-    return;
-  }
+  // 受講期限チェック（#220）— ソフトチェック（403しない、フラグのみ）
+  const enrollmentResult = await checkQuizAccessSoft(req, res, quiz.courseId);
+  if (!enrollmentResult) return; // 500送信済み
+  const { accessExpired, expiredReason } = enrollmentResult;
 
   // 受験履歴取得
   const attempts = await ds.getQuizAttempts({ quizId: quiz.id, userId });
@@ -162,24 +148,8 @@ router.get("/quizzes/:quizId", requireUser, async (req: Request, res: Response) 
   }
 
   // 受講期限チェック（#220）
-  try {
-    const enrollmentSetting = await ds.getCourseEnrollmentSetting(quiz.courseId);
-    const quizAccessResult = checkQuizAccess(enrollmentSetting);
-    if (!quizAccessResult.allowed) {
-      res.status(403).json({
-        error: quizAccessResult.reason,
-        message: "テスト受験期間が終了しています",
-      });
-      return;
-    }
-  } catch (err) {
-    console.error(`Failed to check quiz access for courseId ${quiz.courseId}:`, err);
-    res.status(500).json({
-      error: "enrollment_check_failed",
-      message: "受講期限チェックが失敗しました",
-    });
-    return;
-  }
+  const blocked = await guardQuizAccess(req, res, quiz.courseId);
+  if (blocked) return;
 
   // 受験回数取得
   const attempts = await ds.getQuizAttempts({ quizId, userId });
@@ -228,24 +198,8 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
   }
 
   // 受講期間チェック
-  try {
-    const enrollmentSetting = await ds.getCourseEnrollmentSetting(quiz.courseId);
-    const quizAccessResult = checkQuizAccess(enrollmentSetting);
-    if (!quizAccessResult.allowed) {
-      res.status(403).json({
-        error: quizAccessResult.reason,
-        message: "テスト受験期間が終了しています",
-      });
-      return;
-    }
-  } catch (err) {
-    console.error(`Failed to check quiz access for courseId ${quiz.courseId}:`, err);
-    res.status(500).json({
-      error: "enrollment_check_failed",
-      message: "受講期限チェックが失敗しました",
-    });
-    return;
-  }
+  const enrollBlocked = await guardQuizAccess(req, res, quiz.courseId);
+  if (enrollBlocked) return;
 
   // 原子的にattempt作成（in_progress一意性 + attemptNumber採番 + maxAttemptsチェック）
   const result = await ds.createQuizAttemptAtomic(
@@ -328,24 +282,8 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
   }
 
   // 受講期限チェック（#220） - 開始〜提出間の期限跨ぎに対応
-  try {
-    const enrollmentSetting = await ds.getCourseEnrollmentSetting(quiz.courseId);
-    const quizAccessResult = checkQuizAccess(enrollmentSetting);
-    if (!quizAccessResult.allowed) {
-      res.status(403).json({
-        error: quizAccessResult.reason,
-        message: "テスト受験期間が終了しています",
-      });
-      return;
-    }
-  } catch (err) {
-    console.error(`Failed to check quiz access for courseId ${quiz.courseId}:`, err);
-    res.status(500).json({
-      error: "enrollment_check_failed",
-      message: "受講期限チェックが失敗しました",
-    });
-    return;
-  }
+  const submitBlocked = await guardQuizAccess(req, res, quiz.courseId);
+  if (submitBlocked) return;
 
   const now = new Date();
   const answers: Record<string, string[]> = req.body.answers ?? {};
