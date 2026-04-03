@@ -194,4 +194,20 @@ describe("toDateStrict", () => {
     const result = toDateStrict(date, "videoAccessUntil");
     expect(result).toEqual(date);
   });
+
+  it("Firestore Timestampオブジェクトは正常にDate を返す", () => {
+    const fakeTimestamp = { toDate: () => new Date("2026-04-01T00:00:00Z") };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = toDateStrict(fakeTimestamp as any, "enrolledAt");
+    expect(result).toBeInstanceOf(Date);
+    expect(result.toISOString()).toBe("2026-04-01T00:00:00.000Z");
+  });
+
+  it("無効なTimestamp.toDate()結果は例外をスロー", () => {
+    const invalidTimestamp = { toDate: () => new Date("invalid") };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(() => toDateStrict(invalidTimestamp as any, "quizAccessUntil")).toThrow(
+      "Invalid Timestamp.toDate() result for quizAccessUntil"
+    );
+  });
 });

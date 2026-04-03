@@ -228,12 +228,21 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
   }
 
   // 受講期間チェック
-  const enrollmentSetting = await ds.getCourseEnrollmentSetting(quiz.courseId);
-  const quizAccessResult = checkQuizAccess(enrollmentSetting);
-  if (!quizAccessResult.allowed) {
-    res.status(403).json({
-      error: quizAccessResult.reason,
-      message: "テスト受験期間が終了しています",
+  try {
+    const enrollmentSetting = await ds.getCourseEnrollmentSetting(quiz.courseId);
+    const quizAccessResult = checkQuizAccess(enrollmentSetting);
+    if (!quizAccessResult.allowed) {
+      res.status(403).json({
+        error: quizAccessResult.reason,
+        message: "テスト受験期間が終了しています",
+      });
+      return;
+    }
+  } catch (err) {
+    console.error(`Failed to check quiz access for courseId ${quiz.courseId}:`, err);
+    res.status(500).json({
+      error: "enrollment_check_failed",
+      message: "受講期限チェックが失敗しました",
     });
     return;
   }

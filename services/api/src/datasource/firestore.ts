@@ -81,7 +81,11 @@ export function toDateStrict(
   }
 
   if (typeof timestamp.toDate === "function") {
-    return timestamp.toDate();
+    const d = timestamp.toDate();
+    if (isNaN(d.getTime())) {
+      throw new Error(`Invalid Timestamp.toDate() result for ${fieldName}`);
+    }
+    return d;
   }
 
   throw new Error(
