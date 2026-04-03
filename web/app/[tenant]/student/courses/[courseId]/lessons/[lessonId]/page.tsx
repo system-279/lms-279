@@ -924,7 +924,7 @@ export default function StudentLessonDetailPage() {
   // ============================================================
 
   const coveragePercent = analytics
-    ? Math.round(analytics.coverageRatio * 100)
+    ? (analytics.isComplete ? 100 : Math.round(analytics.coverageRatio * 100))
     : 0;
 
   // ============================================================
