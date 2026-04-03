@@ -45,6 +45,8 @@ export interface SuperAttendanceRecord {
   userId: string;
   userName: string | null;
   userEmail: string | null;
+  courseId: string;
+  courseName: string;
   lessonId: string;
   lessonTitle: string;
   date: string | null;

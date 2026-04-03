@@ -520,6 +520,13 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
     lessonsMap.set(doc.id, doc.data().title ?? doc.id);
   }
 
+  // コース名を取得
+  const coursesSnapshot = await db.collection(`${basePath}/courses`).get();
+  const coursesMap = new Map<string, string>();
+  for (const doc of coursesSnapshot.docs) {
+    coursesMap.set(doc.id, doc.data().name ?? doc.id);
+  }
+
   // レポート行を構築
   const records = sessionsSnapshot.docs.map((doc) => {
     const data = doc.data();
@@ -531,6 +538,8 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
       userId: data.userId,
       userName: user?.name ?? null,
       userEmail: user?.email ?? null,
+      courseId: data.courseId ?? "",
+      courseName: coursesMap.get(data.courseId) ?? data.courseId ?? "",
       lessonId: data.lessonId,
       lessonTitle: lessonsMap.get(data.lessonId) ?? data.lessonId,
       date: data.entryAt?.toDate?.().toISOString?.()?.split("T")[0]
@@ -544,6 +553,15 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
       quizPassed: attempt?.isPassed ?? null,
       quizSubmittedAt: attempt?.submittedAt ?? null,
     };
+  });
+
+  // デフォルトソート: 受講者名 → コース名 → レッスン名
+  records.sort((a, b) => {
+    const nameComp = (a.userName ?? "").localeCompare(b.userName ?? "", "ja");
+    if (nameComp !== 0) return nameComp;
+    const courseComp = a.courseName.localeCompare(b.courseName, "ja");
+    if (courseComp !== 0) return courseComp;
+    return a.lessonTitle.localeCompare(b.lessonTitle, "ja");
   });
 
   const response: SuperAttendanceResponse = {
