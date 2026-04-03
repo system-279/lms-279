@@ -227,7 +227,7 @@ export class FirestoreDataSource implements DataSource {
       passThreshold: data.passThreshold ?? 80,
       createdBy: data.createdBy,
       ...(data.sourceMasterCourseId && { sourceMasterCourseId: data.sourceMasterCourseId }),
-      ...(data.copiedAt && { copiedAt: toISOOptional(data.copiedAt) }),
+      ...(data.copiedAt && { copiedAt: toISOOptional(data.copiedAt) ?? undefined }),
       createdAt: toISOStrict(data.createdAt, "Course.createdAt"),
       updatedAt: toISOStrict(data.updatedAt, "Course.updatedAt"),
     };
