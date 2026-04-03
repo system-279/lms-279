@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { useTenant } from "@/lib/tenant-context";
 import { useAuth } from "@/lib/auth-context";
+import { useAuthFetch } from "@/lib/auth-fetch-context";
 
 const AUTH_MODE = process.env.NEXT_PUBLIC_AUTH_MODE ?? "dev";
 
@@ -14,6 +16,22 @@ const AUTH_MODE = process.env.NEXT_PUBLIC_AUTH_MODE ?? "dev";
 export default function TenantPage() {
   const { tenantId, isDemo } = useTenant();
   const { user, loading, error, signInWithGoogle } = useAuth();
+  const authFetch = useAuthFetch();
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    if (loading || (!user && !isDemo)) return;
+    const fetchRole = async () => {
+      try {
+        const data = await authFetch<{ user?: { role?: string }; isSuperAdminAccess?: boolean }>("/auth/me");
+        const role = data.user?.role;
+        setIsAdmin(role === "admin" || !!data.isSuperAdminAccess);
+      } catch {
+        setIsAdmin(false);
+      }
+    };
+    fetchRole();
+  }, [authFetch, user, loading, isDemo]);
 
   // Firebase認証モードで未ログインの場合はログイン画面を表示
   if (AUTH_MODE === "firebase" && !isDemo && !user && !loading) {
@@ -66,12 +84,14 @@ export default function TenantPage() {
           >
             受講者として学習を開始
           </Link>
-          <Link
-            href={`/${tenantId}/admin`}
-            className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
-          >
-            管理画面
-          </Link>
+          {isAdmin && (
+            <Link
+              href={`/${tenantId}/admin`}
+              className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+            >
+              管理画面
+            </Link>
+          )}
         </div>
 
         {isDemo && (
