@@ -37,6 +37,7 @@ import type {
   LessonSession,
   CourseEnrollmentSetting,
 } from "../types/entities.js";
+import { countEffectiveAttempts } from "../services/quiz-attempt-utils.js";
 
 // デモ用初期データ
 const initialCourses: Course[] = [
@@ -839,7 +840,7 @@ export class InMemoryDataSource implements DataSource {
       }
     }
 
-    if (maxAttempts > 0 && existing.length >= maxAttempts) {
+    if (maxAttempts > 0 && countEffectiveAttempts(existing) >= maxAttempts) {
       return null;
     }
 

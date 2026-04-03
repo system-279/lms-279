@@ -37,14 +37,50 @@ import type {
   LessonSession,
   CourseEnrollmentSetting,
 } from "../types/entities.js";
+import { countEffectiveAttempts } from "../services/quiz-attempt-utils.js";
 
-// Firestore Timestampを Date に変換
+// Firestore Timestampを Date に変換（非推奨: toISOStrict/toISOOptional を使用）
 export function toDate(timestamp: Timestamp | Date | string | null | undefined): Date {
-  if (!timestamp) return new Date();
+  if (!timestamp) {
+    console.warn("toDate(): null/undefined timestamp, returning current time (deprecated behavior)");
+    return new Date();
+  }
   if (typeof timestamp === "string") return new Date(timestamp);
   if (timestamp instanceof Date) return timestamp;
   if (typeof timestamp.toDate === "function") return timestamp.toDate();
   return new Date();
+}
+
+/**
+ * 必須フィールド用: ISO 8601 文字列を返す。null/undefinedはエラー。
+ */
+export function toISOStrict(
+  timestamp: Timestamp | Date | string | null | undefined,
+  fieldName: string,
+): string {
+  return toDateStrict(timestamp, fieldName).toISOString();
+}
+
+/**
+ * 任意フィールド用: null/undefined → null、有効値 → ISO 8601 文字列。
+ * lax fallback（現在時刻で埋める）をしない。
+ */
+export function toISOOptional(
+  timestamp: Timestamp | Date | string | null | undefined,
+): string | null {
+  if (!timestamp) return null;
+  if (typeof timestamp === "string") {
+    const d = new Date(timestamp);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  if (timestamp instanceof Date) {
+    return isNaN(timestamp.getTime()) ? null : timestamp.toISOString();
+  }
+  if (typeof timestamp.toDate === "function") {
+    const d = timestamp.toDate();
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  return null;
 }
 
 /**
@@ -191,9 +227,9 @@ export class FirestoreDataSource implements DataSource {
       passThreshold: data.passThreshold ?? 80,
       createdBy: data.createdBy,
       ...(data.sourceMasterCourseId && { sourceMasterCourseId: data.sourceMasterCourseId }),
-      ...(data.copiedAt && { copiedAt: toDate(data.copiedAt).toISOString() }),
-      createdAt: toDate(data.createdAt).toISOString(),
-      updatedAt: toDate(data.updatedAt).toISOString(),
+      ...(data.copiedAt && { copiedAt: toISOOptional(data.copiedAt) }),
+      createdAt: toISOStrict(data.createdAt, "Course.createdAt"),
+      updatedAt: toISOStrict(data.updatedAt, "Course.updatedAt"),
     };
   }
 
@@ -277,8 +313,8 @@ export class FirestoreDataSource implements DataSource {
       hasVideo: data.hasVideo ?? false,
       hasQuiz: data.hasQuiz ?? false,
       videoUnlocksPrior: data.videoUnlocksPrior ?? false,
-      createdAt: toDate(data.createdAt).toISOString(),
-      updatedAt: toDate(data.updatedAt).toISOString(),
+      createdAt: toISOStrict(data.createdAt, "Lesson.createdAt"),
+      updatedAt: toISOStrict(data.updatedAt, "Lesson.updatedAt"),
     };
   }
 
@@ -352,8 +388,8 @@ export class FirestoreDataSource implements DataSource {
       name: data.name ?? null,
       role: data.role ?? "student",
       firebaseUid: data.firebaseUid,
-      createdAt: toDate(data.createdAt).toISOString(),
-      updatedAt: toDate(data.updatedAt).toISOString(),
+      createdAt: toISOStrict(data.createdAt, "User.createdAt"),
+      updatedAt: toISOStrict(data.updatedAt, "User.updatedAt"),
     };
   }
 
@@ -401,7 +437,7 @@ export class FirestoreDataSource implements DataSource {
       id,
       email: data.email,
       note: data.note ?? null,
-      createdAt: toDate(data.createdAt).toISOString(),
+      createdAt: toISOStrict(data.createdAt, "AllowedEmail.createdAt"),
     };
   }
 
@@ -478,8 +514,8 @@ export class FirestoreDataSource implements DataSource {
       repeatIntervalHours: data.repeatIntervalHours ?? 24,
       maxRepeatDays: data.maxRepeatDays ?? 7,
       active: data.active ?? true,
-      createdAt: toDate(data.createdAt).toISOString(),
-      updatedAt: toDate(data.updatedAt).toISOString(),
+      createdAt: toISOStrict(data.createdAt, "NotificationPolicy.createdAt"),
+      updatedAt: toISOStrict(data.updatedAt, "NotificationPolicy.updatedAt"),
     };
   }
 
@@ -526,7 +562,7 @@ export class FirestoreDataSource implements DataSource {
       method: data.method,
       userAgent: data.userAgent ?? null,
       ipAddress: data.ipAddress ?? null,
-      occurredAt: toDate(data.occurredAt).toISOString(),
+      occurredAt: toISOStrict(data.occurredAt, "AuthErrorLog.occurredAt"),
     };
   }
 
@@ -561,7 +597,7 @@ export class FirestoreDataSource implements DataSource {
       userId,
       notificationEnabled: data.notificationEnabled ?? true,
       timezone: data.timezone ?? "Asia/Tokyo",
-      updatedAt: toDate(data.updatedAt).toISOString(),
+      updatedAt: toISOStrict(data.updatedAt, "UserSettings.updatedAt"),
     };
   }
 
@@ -649,8 +685,8 @@ export class FirestoreDataSource implements DataSource {
       durationSec: data.durationSec ?? 0,
       requiredWatchRatio: data.requiredWatchRatio ?? 0.95,
       speedLock: data.speedLock ?? true,
-      createdAt: toDate(data.createdAt).toISOString(),
-      updatedAt: toDate(data.updatedAt).toISOString(),
+      createdAt: toISOStrict(data.createdAt, "Video.createdAt"),
+      updatedAt: toISOStrict(data.updatedAt, "Video.updatedAt"),
     };
   }
 
@@ -704,7 +740,7 @@ export class FirestoreDataSource implements DataSource {
       position: data.position,
       seekFrom: data.seekFrom,
       playbackRate: data.playbackRate,
-      timestamp: toDate(data.timestamp).toISOString(),
+      timestamp: toISOStrict(data.timestamp, "VideoEvent.timestamp"),
       clientTimestamp: data.clientTimestamp,
       metadata: data.metadata,
     };
@@ -822,7 +858,7 @@ export class FirestoreDataSource implements DataSource {
       totalPauseDurationSec: data.totalPauseDurationSec ?? 0,
       speedViolationCount: data.speedViolationCount ?? 0,
       suspiciousFlags: data.suspiciousFlags ?? [],
-      updatedAt: toDate(data.updatedAt).toISOString(),
+      updatedAt: toISOStrict(data.updatedAt, "VideoAnalytics.updatedAt"),
     };
   }
 
@@ -904,8 +940,8 @@ export class FirestoreDataSource implements DataSource {
       randomizeAnswers: data.randomizeAnswers ?? false,
       requireVideoCompletion: data.requireVideoCompletion ?? true,
       questions: data.questions ?? [],
-      createdAt: toDate(data.createdAt).toISOString(),
-      updatedAt: toDate(data.updatedAt).toISOString(),
+      createdAt: toISOStrict(data.createdAt, "Quiz.createdAt"),
+      updatedAt: toISOStrict(data.updatedAt, "Quiz.updatedAt"),
     };
   }
 
@@ -971,9 +1007,8 @@ export class FirestoreDataSource implements DataSource {
         }
       }
 
-      // maxAttempts チェック（0は無制限）
-      const nonTimedOutCount = attempts.filter((a) => a.status !== "timed_out" || a === inProgress).length;
-      if (maxAttempts > 0 && nonTimedOutCount >= maxAttempts) {
+      // maxAttempts チェック（0は無制限、timed_outは除外）
+      if (maxAttempts > 0 && countEffectiveAttempts(attempts) >= maxAttempts) {
         return null;
       }
 
@@ -1014,8 +1049,8 @@ export class FirestoreDataSource implements DataSource {
       answers: data.answers ?? {},
       score: data.score ?? null,
       isPassed: data.isPassed ?? null,
-      startedAt: toDate(data.startedAt).toISOString(),
-      submittedAt: data.submittedAt ? toDate(data.submittedAt).toISOString() : null,
+      startedAt: toISOStrict(data.startedAt, "QuizAttempt.startedAt"),
+      submittedAt: toISOOptional(data.submittedAt),
     };
   }
 
@@ -1075,7 +1110,7 @@ export class FirestoreDataSource implements DataSource {
       quizPassed: data.quizPassed ?? false,
       quizBestScore: data.quizBestScore ?? null,
       lessonCompleted: data.lessonCompleted ?? false,
-      updatedAt: toDate(data.updatedAt).toISOString(),
+      updatedAt: toISOStrict(data.updatedAt, "UserProgress.updatedAt"),
     };
   }
 
@@ -1139,7 +1174,7 @@ export class FirestoreDataSource implements DataSource {
       totalLessons: data.totalLessons ?? 0,
       progressRatio: data.progressRatio ?? 0,
       isCompleted: data.isCompleted ?? false,
-      updatedAt: toDate(data.updatedAt).toISOString(),
+      updatedAt: toISOStrict(data.updatedAt, "CourseProgress.updatedAt"),
     };
   }
 
@@ -1383,16 +1418,16 @@ export class FirestoreDataSource implements DataSource {
       videoId: data.videoId,
       sessionToken: data.sessionToken,
       status: data.status,
-      entryAt: toDate(data.entryAt).toISOString(),
-      exitAt: data.exitAt ? toDate(data.exitAt).toISOString() : null,
+      entryAt: toISOStrict(data.entryAt, "LessonSession.entryAt"),
+      exitAt: toISOOptional(data.exitAt),
       exitReason: data.exitReason ?? null,
-      deadlineAt: toDate(data.deadlineAt).toISOString(),
-      pauseStartedAt: data.pauseStartedAt ? toDate(data.pauseStartedAt).toISOString() : null,
+      deadlineAt: toISOStrict(data.deadlineAt, "LessonSession.deadlineAt"),
+      pauseStartedAt: toISOOptional(data.pauseStartedAt),
       longestPauseSec: data.longestPauseSec ?? 0,
       sessionVideoCompleted: data.sessionVideoCompleted ?? false,
       quizAttemptId: data.quizAttemptId ?? null,
-      createdAt: toDate(data.createdAt).toISOString(),
-      updatedAt: toDate(data.updatedAt).toISOString(),
+      createdAt: toISOStrict(data.createdAt, "LessonSession.createdAt"),
+      updatedAt: toISOStrict(data.updatedAt, "LessonSession.updatedAt"),
     };
   }
 }
