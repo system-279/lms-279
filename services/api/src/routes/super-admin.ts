@@ -627,6 +627,7 @@ type ProgressData = {
   lessonsMap: Map<string, { title: string; hasVideo: boolean; hasQuiz: boolean }>;
   progressMap: Map<string, { videoCompleted: boolean; quizPassed: boolean; quizBestScore: number | null; lessonCompleted: boolean }>;
   courseProgressMap: Map<string, { completedLessons: number; totalLessons: number; progressRatio: number; isCompleted: boolean }>;
+  sessionsMap: Map<string, { entryAt: string | null; exitAt: string | null }>;
 };
 
 async function fetchStudentProgressData(
@@ -636,11 +637,12 @@ async function fetchStudentProgressData(
 ): Promise<ProgressData> {
   const basePath = `tenants/${tenantId}`;
 
-  const [usersSnapshot, lessonsSnap, progressSnap, courseProgressSnap] = await Promise.all([
+  const [usersSnapshot, lessonsSnap, progressSnap, courseProgressSnap, sessionsSnap] = await Promise.all([
     db.collection(`${basePath}/users`).where("role", "==", "student").get(),
     db.collection(`${basePath}/lessons`).get(),
     db.collection(`${basePath}/user_progress`).get(),
     db.collection(`${basePath}/course_progress`).get(),
+    db.collection(`${basePath}/lesson_sessions`).orderBy("entryAt", "desc").get(),
   ]);
 
   let coursesSnapshot: FirebaseFirestore.DocumentSnapshot[];
@@ -670,7 +672,20 @@ async function fetchStudentProgressData(
     courseProgressMap.set(doc.id, { completedLessons: d.completedLessons ?? 0, totalLessons: d.totalLessons ?? 0, progressRatio: d.progressRatio ?? 0, isCompleted: d.isCompleted ?? false });
   }
 
-  return { usersSnapshot, coursesSnapshot, lessonsMap, progressMap, courseProgressMap };
+  // 最新セッションのみ保持（entryAt descでソート済みなので最初に見つかったものが最新）
+  const sessionsMap = new Map<string, { entryAt: string | null; exitAt: string | null }>();
+  for (const doc of sessionsSnap.docs) {
+    const d = doc.data();
+    const key = `${d.userId}_${d.lessonId}`;
+    if (!sessionsMap.has(key)) {
+      sessionsMap.set(key, {
+        entryAt: d.entryAt?.toDate?.().toISOString?.() ?? d.entryAt ?? null,
+        exitAt: d.exitAt?.toDate?.().toISOString?.() ?? d.exitAt ?? null,
+      });
+    }
+  }
+
+  return { usersSnapshot, coursesSnapshot, lessonsMap, progressMap, courseProgressMap, sessionsMap };
 }
 
 /**
@@ -689,7 +704,7 @@ router.get("/tenants/:tenantId/student-progress", async (req: Request, res: Resp
     return;
   }
 
-  const { usersSnapshot, coursesSnapshot, lessonsMap, progressMap, courseProgressMap } =
+  const { usersSnapshot, coursesSnapshot, lessonsMap, progressMap, courseProgressMap, sessionsMap } =
     await fetchStudentProgressData(db, tenantId, courseIdFilter);
 
   const students = usersSnapshot.docs.map((userDoc) => {
@@ -708,6 +723,7 @@ router.get("/tenants/:tenantId/student-progress", async (req: Request, res: Resp
         const lessonInfo = lessonsMap.get(lessonId);
         const upKey = `${userId}_${lessonId}`;
         const up = progressMap.get(upKey);
+        const session = sessionsMap.get(upKey);
         return {
           lessonId,
           lessonTitle: lessonInfo?.title ?? lessonId,
@@ -715,6 +731,8 @@ router.get("/tenants/:tenantId/student-progress", async (req: Request, res: Resp
           quizPassed: up?.quizPassed ?? false,
           quizBestScore: up?.quizBestScore ?? null,
           lessonCompleted: up?.lessonCompleted ?? false,
+          latestEntryAt: session?.entryAt ?? null,
+          latestExitAt: session?.exitAt ?? null,
         };
       });
 

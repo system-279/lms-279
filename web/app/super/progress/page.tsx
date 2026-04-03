@@ -285,6 +285,7 @@ export default function StudentProgressPage() {
                     <TableHead>コース</TableHead>
                     <TableHead>進捗</TableHead>
                     <TableHead>進捗率</TableHead>
+                    <TableHead>入退室</TableHead>
                     <TableHead>完了</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -315,6 +316,7 @@ export default function StudentProgressPage() {
                           <TableCell>
                             {(course.progressRatio * 100).toFixed(0)}%
                           </TableCell>
+                          <TableCell></TableCell>
                           <TableCell>
                             {course.isCompleted ? (
                               <span className="text-green-600 font-medium">完了</span>
@@ -347,6 +349,20 @@ export default function StudentProgressPage() {
                                   {lesson.quizBestScore !== null && (
                                     <span className="text-xs ml-1">({lesson.quizBestScore}点)</span>
                                   )}
+                                </TableCell>
+                                <TableCell>
+                                  <div className="text-xs space-y-0.5">
+                                    <div>
+                                      入室: {lesson.latestEntryAt
+                                        ? new Date(lesson.latestEntryAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })
+                                        : "—"}
+                                    </div>
+                                    <div>
+                                      退室: {lesson.latestExitAt
+                                        ? new Date(lesson.latestExitAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })
+                                        : "—"}
+                                    </div>
+                                  </div>
                                 </TableCell>
                                 <TableCell>
                                   {lesson.lessonCompleted ? (
