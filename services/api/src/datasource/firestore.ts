@@ -39,7 +39,10 @@ import type {
 } from "../types/entities.js";
 import { countEffectiveAttempts } from "../services/quiz-attempt-utils.js";
 
-// Firestore Timestampを Date に変換（非推奨: toISOStrict/toISOOptional を使用）
+/**
+ * @deprecated toISOStrict() または toISOOptional() を使用してください。
+ * null/undefined 時に new Date() にフォールバックするため、破損データが正常に見えるリスクがあります。
+ */
 export function toDate(timestamp: Timestamp | Date | string | null | undefined): Date {
   if (!timestamp) {
     console.warn("toDate(): null/undefined timestamp, returning current time (deprecated behavior)");
