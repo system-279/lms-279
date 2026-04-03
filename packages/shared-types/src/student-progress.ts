@@ -38,6 +38,8 @@ export interface SuperLessonRecord {
   quizPassed: boolean;
   quizBestScore: number | null;
   lessonCompleted: boolean;
+  latestSessionId: string | null;
   latestEntryAt: string | null;
   latestExitAt: string | null;
+  latestExitReason: string | null;
 }

@@ -563,7 +563,7 @@ router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Requ
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
   const sessionId = req.params.sessionId as string;
-  const { entryAt, exitAt, quizScore, quizPassed } = req.body;
+  const { entryAt, exitAt, exitReason, quizScore, quizPassed } = req.body;
 
   // 入力バリデーション
   const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
@@ -577,6 +577,11 @@ router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Requ
   }
   if (entryAt !== undefined && exitAt !== undefined && new Date(entryAt) > new Date(exitAt)) {
     res.status(400).json({ error: "invalid_time_range", message: "entryAt must be before exitAt" });
+    return;
+  }
+  const VALID_EXIT_REASONS = ["quiz_submitted", "pause_timeout", "time_limit", "browser_close"];
+  if (exitReason !== undefined && (typeof exitReason !== "string" || !VALID_EXIT_REASONS.includes(exitReason))) {
+    res.status(400).json({ error: "invalid_exitReason", message: `exitReason must be one of: ${VALID_EXIT_REASONS.join(", ")}` });
     return;
   }
   if (quizScore !== undefined && (typeof quizScore !== "number" || !Number.isFinite(quizScore) || quizScore < 0 || quizScore > 100)) {
@@ -601,6 +606,7 @@ router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Requ
   const sessionUpdate: Record<string, unknown> = { updatedAt: new Date().toISOString() };
   if (entryAt !== undefined) sessionUpdate.entryAt = entryAt;
   if (exitAt !== undefined) sessionUpdate.exitAt = exitAt;
+  if (exitReason !== undefined) sessionUpdate.exitReason = exitReason;
   await sessionRef.update(sessionUpdate);
 
   // テスト結果更新（quizAttemptIdがある場合）
@@ -627,7 +633,7 @@ type ProgressData = {
   lessonsMap: Map<string, { title: string; hasVideo: boolean; hasQuiz: boolean }>;
   progressMap: Map<string, { videoCompleted: boolean; quizPassed: boolean; quizBestScore: number | null; lessonCompleted: boolean }>;
   courseProgressMap: Map<string, { completedLessons: number; totalLessons: number; progressRatio: number; isCompleted: boolean }>;
-  sessionsMap: Map<string, { entryAt: string | null; exitAt: string | null }>;
+  sessionsMap: Map<string, { sessionId: string; entryAt: string | null; exitAt: string | null; exitReason: string | null }>;
 };
 
 async function fetchStudentProgressData(
@@ -673,14 +679,16 @@ async function fetchStudentProgressData(
   }
 
   // 最新セッションのみ保持（entryAt descでソート済みなので最初に見つかったものが最新）
-  const sessionsMap = new Map<string, { entryAt: string | null; exitAt: string | null }>();
+  const sessionsMap = new Map<string, { sessionId: string; entryAt: string | null; exitAt: string | null; exitReason: string | null }>();
   for (const doc of sessionsSnap.docs) {
     const d = doc.data();
     const key = `${d.userId}_${d.lessonId}`;
     if (!sessionsMap.has(key)) {
       sessionsMap.set(key, {
+        sessionId: doc.id,
         entryAt: d.entryAt?.toDate?.().toISOString?.() ?? d.entryAt ?? null,
         exitAt: d.exitAt?.toDate?.().toISOString?.() ?? d.exitAt ?? null,
+        exitReason: d.exitReason ?? null,
       });
     }
   }
@@ -731,8 +739,10 @@ router.get("/tenants/:tenantId/student-progress", async (req: Request, res: Resp
           quizPassed: up?.quizPassed ?? false,
           quizBestScore: up?.quizBestScore ?? null,
           lessonCompleted: up?.lessonCompleted ?? false,
+          latestSessionId: session?.sessionId ?? null,
           latestEntryAt: session?.entryAt ?? null,
           latestExitAt: session?.exitAt ?? null,
+          latestExitReason: session?.exitReason ?? null,
         };
       });
 
