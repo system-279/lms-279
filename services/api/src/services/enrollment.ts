@@ -7,7 +7,7 @@ import { addMonths, addYears } from "date-fns";
 import type { Request, Response } from "express";
 import type { TenantEnrollmentSetting } from "../types/entities.js";
 
-/** JST日末 (23:59:59.999 JST = 14:59:59.999 UTC) */
+/** JST日末 (23:59:59.999 JST = 14:59:59.999 UTC)。入力はUTC基準のDateであること。 */
 function endOfDayJST(date: Date): Date {
   const d = new Date(date);
   d.setUTCHours(14, 59, 59, 999);
