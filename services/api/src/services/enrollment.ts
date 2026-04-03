@@ -69,6 +69,9 @@ export function calculateDefaultDeadlines(enrolledAt: string): {
   videoAccessUntil: string;
 } {
   const base = new Date(enrolledAt);
+  if (isNaN(base.getTime())) {
+    throw new Error(`calculateDefaultDeadlines: invalid enrolledAt "${enrolledAt}"`);
+  }
 
   // テスト: enrolledAt + 2ヶ月（日末まで有効）
   // date-fns の addMonths は月末を正しくクランプする

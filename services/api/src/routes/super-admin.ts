@@ -999,8 +999,15 @@ function isEnrolledAtInRange(dateStr: string): boolean {
 router.get("/tenants/:tenantId/course-settings", async (req: Request, res: Response) => {
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
-  const basePath = `tenants/${tenantId}`;
 
+  // テナント存在確認
+  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+  if (!tenantDoc.exists) {
+    res.status(404).json({ error: "not_found", message: "Tenant not found" });
+    return;
+  }
+
+  const basePath = `tenants/${tenantId}`;
   const snapshot = await db.collection(`${basePath}/course_enrollment_settings`).get();
   const settings = snapshot.docs.map((doc) => toCourseSettingResponse(doc.data()));
 

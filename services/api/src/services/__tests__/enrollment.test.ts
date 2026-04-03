@@ -132,6 +132,11 @@ describe("calculateDefaultDeadlines", () => {
     expect(result.quizAccessUntil).toBe("2024-04-29T23:59:59.999Z");
   });
 
+  it("無効な日付文字列は例外をスロー", () => {
+    expect(() => calculateDefaultDeadlines("not-a-date")).toThrow("invalid enrolledAt");
+    expect(() => calculateDefaultDeadlines("")).toThrow("invalid enrolledAt");
+  });
+
   it("年末の日付でも正しく計算", () => {
     const result = calculateDefaultDeadlines("2026-12-15T00:00:00Z");
     expect(result.quizAccessUntil).toBe("2027-02-15T23:59:59.999Z");

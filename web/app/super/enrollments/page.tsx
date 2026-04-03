@@ -294,7 +294,8 @@ export default function EnrollmentsPage() {
                 onChange={(e) => setSettingEnrolledAt(e.target.value)}
               />
             </div>
-            {settingEnrolledAt && (
+            {/* プレビュー: date-fnsで計算。formatDateは日付のみ表示なのでendOfDayUTC不要（BEは日末T23:59:59.999Zで保存） */}
+            {settingEnrolledAt && !isNaN(new Date(settingEnrolledAt).getTime()) && (
               <div className="text-sm text-muted-foreground space-y-1">
                 <p>テスト期限: {formatDate(addMonths(new Date(settingEnrolledAt), 2).toISOString())}（この日の終わりまで有効）</p>
                 <p>動画期限: {formatDate(addYears(new Date(settingEnrolledAt), 1).toISOString())}（この日の終わりまで有効）</p>
