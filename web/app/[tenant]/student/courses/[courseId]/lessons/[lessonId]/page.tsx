@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { VideoPlayer } from "@/components/video/VideoPlayer";
 import { useAuthenticatedFetch } from "@/lib/hooks/use-authenticated-fetch";
 import { useTenant } from "@/lib/tenant-context";
+import { ApiError } from "@/lib/api";
 import { SessionRulesNotice } from "@/components/session/SessionRulesNotice";
 import { SessionTimer } from "@/components/session/SessionTimer";
 import { PauseTimeoutOverlay } from "@/components/session/PauseTimeoutOverlay";
@@ -163,6 +164,7 @@ function QuizSection({
   const [loadingStart, setLoadingStart] = useState(false);
   const [loadingSubmit, setLoadingSubmit] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
+  const [quizAccessExpired, setQuizAccessExpired] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const answersRef = useRef(answers);
   answersRef.current = answers;
@@ -230,7 +232,11 @@ function QuizSection({
       setResult(null);
       setQuizState("taking");
     } catch (e) {
-      setQuizError(e instanceof Error ? e.message : "テストの開始に失敗しました");
+      if (e instanceof ApiError && (e.code === "quiz_access_expired" || e.code === "invalid_deadline_data")) {
+        setQuizAccessExpired(true);
+      } else {
+        setQuizError(e instanceof Error ? e.message : "テストの開始に失敗しました");
+      }
     } finally {
       setLoadingStart(false);
     }
@@ -342,11 +348,18 @@ function QuizSection({
           </div>
         </div>
 
-        {quizError && (
+        {quizAccessExpired && (
+          <div className="rounded-md bg-muted p-4 text-muted-foreground text-sm space-y-1">
+            <p className="font-medium">テスト受験期間が終了しています</p>
+            <p>管理者にお問い合わせください</p>
+          </div>
+        )}
+
+        {quizError && !quizAccessExpired && (
           <p className="text-sm text-destructive">{quizError}</p>
         )}
 
-        {remainingAttempts > 0 ? (
+        {!quizAccessExpired && remainingAttempts > 0 ? (
           <button
             onClick={handleStart}
             disabled={loadingStart}
@@ -354,11 +367,11 @@ function QuizSection({
           >
             {loadingStart ? "開始中..." : "テストを開始"}
           </button>
-        ) : (
+        ) : !quizAccessExpired ? (
           <p className="text-sm text-muted-foreground">
             受験可能な回数の上限に達しています。
           </p>
-        )}
+        ) : null}
 
         {/* 過去の受験結果 */}
         {attemptSummaries.length > 0 && (
@@ -720,6 +733,7 @@ export default function StudentLessonDetailPage() {
   const [loadingVideo, setLoadingVideo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [videoAccessExpired, setVideoAccessExpired] = useState(false);
 
   // ============================================================
   // コース・レッスン一覧取得
@@ -864,7 +878,11 @@ export default function StudentLessonDetailPage() {
       );
       setPlaybackUrl(playbackData.playbackUrl);
     } catch (e) {
-      setVideoError(e instanceof Error ? e.message : "動画情報の取得に失敗しました");
+      if (e instanceof ApiError && (e.code === "video_access_expired" || e.code === "invalid_deadline_data")) {
+        setVideoAccessExpired(true);
+      } else {
+        setVideoError(e instanceof Error ? e.message : "動画情報の取得に失敗しました");
+      }
     } finally {
       setLoadingVideo(false);
     }
@@ -1000,13 +1018,21 @@ export default function StudentLessonDetailPage() {
               </div>
             )}
 
-            {videoError && (
+            {videoAccessExpired && (
+              <div className="w-full aspect-video bg-muted rounded-lg flex flex-col items-center justify-center gap-2 text-muted-foreground">
+                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <p className="text-base font-medium">動画視聴期間が終了しています</p>
+                <p className="text-sm">管理者にお問い合わせください</p>
+              </div>
+            )}
+
+            {videoError && !videoAccessExpired && (
               <div className="rounded-md bg-destructive/10 p-4 text-destructive text-sm">
                 {videoError}
               </div>
             )}
 
-            {!loadingVideo && !videoError && playbackUrl && videoMeta && (
+            {!loadingVideo && !videoError && !videoAccessExpired && playbackUrl && videoMeta && (
               <>
                 <div className="relative">
                   <VideoPlayer

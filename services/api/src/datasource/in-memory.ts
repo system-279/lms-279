@@ -35,6 +35,7 @@ import type {
   UserProgress,
   CourseProgress,
   LessonSession,
+  Enrollment,
 } from "../types/entities.js";
 
 // デモ用初期データ
@@ -202,6 +203,7 @@ export class InMemoryDataSource implements DataSource {
   private userProgress: Map<string, UserProgress> = new Map();
   private courseProgress: Map<string, CourseProgress> = new Map();
   private lessonSessions: LessonSession[] = [];
+  private enrollments = new Map<string, Enrollment>();
 
   private readonly readOnly: boolean;
 
@@ -997,5 +999,38 @@ export class InMemoryDataSource implements DataSource {
     // 4. user_progress: 削除
     const progressKey = `${userId}_${lessonId}`;
     this.userProgress.delete(progressKey);
+  }
+
+  // Enrollments (受講期間管理)
+
+  async getEnrollment(userId: string, courseId: string): Promise<Enrollment | null> {
+    const key = `${userId}_${courseId}`;
+    return this.enrollments.get(key) ?? null;
+  }
+
+  async getEnrollmentsByCourse(courseId: string): Promise<Enrollment[]> {
+    return Array.from(this.enrollments.values()).filter((e) => e.courseId === courseId);
+  }
+
+  async getEnrollmentsByUser(userId: string): Promise<Enrollment[]> {
+    return Array.from(this.enrollments.values()).filter((e) => e.userId === userId);
+  }
+
+  async upsertEnrollment(data: Omit<Enrollment, "id" | "updatedAt">): Promise<Enrollment> {
+    this.throwIfReadOnly();
+    const key = `${data.userId}_${data.courseId}`;
+    const enrollment: Enrollment = {
+      ...data,
+      id: key,
+      updatedAt: new Date().toISOString(),
+    };
+    this.enrollments.set(key, enrollment);
+    return enrollment;
+  }
+
+  async deleteEnrollment(userId: string, courseId: string): Promise<void> {
+    this.throwIfReadOnly();
+    const key = `${userId}_${courseId}`;
+    this.enrollments.delete(key);
   }
 }

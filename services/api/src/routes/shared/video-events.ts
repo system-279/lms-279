@@ -11,6 +11,7 @@ import type { VideoEventType } from "../../types/entities.js";
 import { processVideoEvents } from "../../services/video-analytics.js";
 import { updateLessonProgress } from "../../services/progress.js";
 import { forceExitSession } from "../../services/lesson-session.js";
+import { checkVideoAccess } from "../../services/enrollment.js";
 import { logger } from "../../utils/logger.js";
 
 const PAUSE_TIMEOUT_MS = Number(process.env.PAUSE_TIMEOUT_MS) || 15 * 60 * 1000; // デフォルト15分
@@ -134,6 +135,17 @@ router.post("/videos/:videoId/events", requireUser, async (req: Request, res: Re
   const video = await ds.getVideoById(videoId);
   if (!video) {
     res.status(404).json({ error: "not_found", message: "Video not found" });
+    return;
+  }
+
+  // 2.5. 受講期間チェック
+  const enrollment = await ds.getEnrollment(userId, video.courseId);
+  const videoAccessResult = checkVideoAccess(enrollment);
+  if (!videoAccessResult.allowed) {
+    res.status(403).json({
+      error: videoAccessResult.reason,
+      message: "動画視聴期間が終了しています",
+    });
     return;
   }
 
