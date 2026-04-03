@@ -167,7 +167,7 @@ export default function EnrollmentsPage() {
     <div className="space-y-4">
       <h2 className="text-xl font-bold">受講期間管理</h2>
       <p className="text-sm text-muted-foreground">
-        テナント×コース単位で受講期間を設定します。テスト期限（+2ヶ月）と動画期限（+1年）は受講開始日から自動計算されます。
+        テナント×コース単位で受講期間を設定します。テスト期限（+2ヶ月）と動画期限（+1年）は受講開始日から自動計算されます。期限はUTC基準（日本時間で翌日9時頃まで有効）です。
       </p>
 
       {/* テナント選択 */}
