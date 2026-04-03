@@ -3,7 +3,8 @@
  * 本番用のFirestoreデータソース実装
  */
 
-import { Firestore, Timestamp } from "firebase-admin/firestore";
+import { Firestore, Timestamp, type QueryDocumentSnapshot } from "firebase-admin/firestore";
+import { logger } from "../utils/logger.js";
 import type {
   DataSource,
   CourseFilter,
@@ -133,6 +134,27 @@ export function toDateStrict(
 }
 
 /**
+ * リスト取得の耐障害マッパー。
+ * 1件の破損データで全件が返却不能になることを防ぐ。
+ * 変換に失敗したドキュメントはスキップし、エラーログに記録する。
+ */
+function mapDocsResilient<T>(
+  docs: QueryDocumentSnapshot[],
+  mapper: (id: string, data: FirebaseFirestore.DocumentData) => T,
+  entityName: string,
+): T[] {
+  const results: T[] = [];
+  for (const doc of docs) {
+    try {
+      results.push(mapper(doc.id, doc.data()));
+    } catch (e) {
+      logger.error(`Skipping corrupt ${entityName} document ${doc.id}`, { error: e });
+    }
+  }
+  return results;
+}
+
+/**
  * Firestoreドキュメントを部分更新するヘルパー
  * FieldValue.serverTimestamp() / Timestamp.now() はSDKバージョン不整合で
  * シリアライズエラーを起こすため、new Date() を使用する。
@@ -180,7 +202,7 @@ export class FirestoreDataSource implements DataSource {
     }
 
     const snapshot = await query.get();
-    return snapshot.docs.map((doc) => this.toCourse(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toCourse(id, data), "Course");
   }
 
   async getCourseById(id: string): Promise<Course | null> {
@@ -245,7 +267,7 @@ export class FirestoreDataSource implements DataSource {
     }
 
     const snapshot = await query.get();
-    return snapshot.docs.map((doc) => this.toLesson(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toLesson(id, data), "Lesson");
   }
 
   async getLessonById(id: string): Promise<Lesson | null> {
@@ -324,7 +346,7 @@ export class FirestoreDataSource implements DataSource {
   // Users
   async getUsers(): Promise<User[]> {
     const snapshot = await this.collection("users").orderBy("createdAt", "desc").get();
-    return snapshot.docs.map((doc) => this.toUser(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toUser(id, data), "User");
   }
 
   async getUserById(id: string): Promise<User | null> {
@@ -399,7 +421,7 @@ export class FirestoreDataSource implements DataSource {
   // Allowed Emails
   async getAllowedEmails(): Promise<AllowedEmail[]> {
     const snapshot = await this.collection("allowed_emails").orderBy("createdAt", "desc").get();
-    return snapshot.docs.map((doc) => this.toAllowedEmail(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toAllowedEmail(id, data), "AllowedEmail");
   }
 
   async getAllowedEmailById(id: string): Promise<AllowedEmail | null> {
@@ -462,7 +484,7 @@ export class FirestoreDataSource implements DataSource {
     }
 
     const snapshot = await query.get();
-    return snapshot.docs.map((doc) => this.toNotificationPolicy(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toNotificationPolicy(id, data), "NotificationPolicy");
   }
 
   async getNotificationPolicyById(id: string): Promise<NotificationPolicy | null> {
@@ -540,7 +562,7 @@ export class FirestoreDataSource implements DataSource {
     query = query.limit(limit);
 
     const snapshot = await query.get();
-    return snapshot.docs.map((doc) => this.toAuthErrorLog(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toAuthErrorLog(id, data), "AuthErrorLog");
   }
 
   async createAuthErrorLog(data: Omit<AuthErrorLog, "id">): Promise<AuthErrorLog> {
@@ -616,7 +638,7 @@ export class FirestoreDataSource implements DataSource {
     }
 
     const snapshot = await query.get();
-    return snapshot.docs.map((doc) => this.toVideo(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toVideo(id, data), "Video");
   }
 
   async getVideoById(id: string): Promise<Video | null> {
@@ -729,7 +751,7 @@ export class FirestoreDataSource implements DataSource {
     }
 
     const snapshot = await query.get();
-    return snapshot.docs.map((doc) => this.toVideoEvent(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toVideoEvent(id, data), "VideoEvent");
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -761,12 +783,12 @@ export class FirestoreDataSource implements DataSource {
     const snapshot = await this.collection("video_analytics")
       .where("videoId", "==", videoId)
       .get();
-    return snapshot.docs.map((doc) => this.toVideoAnalytics(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toVideoAnalytics(id, data), "VideoAnalytics");
   }
 
   async getAllVideoAnalytics(): Promise<VideoAnalytics[]> {
     const snapshot = await this.collection("video_analytics").get();
-    return snapshot.docs.map((doc) => this.toVideoAnalytics(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toVideoAnalytics(id, data), "VideoAnalytics");
   }
 
   async upsertVideoAnalytics(
@@ -877,7 +899,7 @@ export class FirestoreDataSource implements DataSource {
     }
 
     const snapshot = await query.get();
-    return snapshot.docs.map((doc) => this.toQuiz(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toQuiz(id, data), "Quiz");
   }
 
   async getQuizById(id: string): Promise<Quiz | null> {
@@ -963,7 +985,7 @@ export class FirestoreDataSource implements DataSource {
     }
 
     const snapshot = await query.get();
-    return snapshot.docs.map((doc) => this.toQuizAttempt(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toQuizAttempt(id, data), "QuizAttempt");
   }
 
   async getQuizAttemptById(id: string): Promise<QuizAttempt | null> {
@@ -1070,7 +1092,7 @@ export class FirestoreDataSource implements DataSource {
       .where("userId", "==", userId)
       .where("courseId", "==", courseId)
       .get();
-    return snapshot.docs.map((doc) => this.toUserProgress(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toUserProgress(id, data), "UserProgress");
   }
 
   async upsertUserProgress(
@@ -1157,14 +1179,14 @@ export class FirestoreDataSource implements DataSource {
     const snapshot = await this.collection("course_progress")
       .where("userId", "==", userId)
       .get();
-    return snapshot.docs.map((doc) => this.toCourseProgress(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toCourseProgress(id, data), "CourseProgress");
   }
 
   async getCourseProgressByCourseId(courseId: string): Promise<CourseProgress[]> {
     const snapshot = await this.collection("course_progress")
       .where("courseId", "==", courseId)
       .get();
-    return snapshot.docs.map((doc) => this.toCourseProgress(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toCourseProgress(id, data), "CourseProgress");
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1283,7 +1305,7 @@ export class FirestoreDataSource implements DataSource {
       .where("courseId", "==", courseId)
       .orderBy("entryAt", "desc")
       .get();
-    return snapshot.docs.map((doc) => this.toLessonSession(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toLessonSession(id, data), "LessonSession");
   }
 
   async resetLessonDataForUser(userId: string, lessonId: string, _courseId: string): Promise<void> {
@@ -1378,7 +1400,7 @@ export class FirestoreDataSource implements DataSource {
 
   async getCourseEnrollmentSettings(): Promise<CourseEnrollmentSetting[]> {
     const snapshot = await this.collection("course_enrollment_settings").get();
-    return snapshot.docs.map((doc) => this.toCourseEnrollmentSetting(doc.id, doc.data()));
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toCourseEnrollmentSetting(id, data), "CourseEnrollmentSetting");
   }
 
   async upsertCourseEnrollmentSetting(data: Omit<CourseEnrollmentSetting, "id" | "updatedAt">): Promise<CourseEnrollmentSetting> {
