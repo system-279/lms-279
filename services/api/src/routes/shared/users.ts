@@ -49,8 +49,8 @@ router.get("/admin/users", requireAdmin, async (req: Request, res: Response) => 
       email: user.email,
       name: user.name,
       role: user.role,
-      createdAt: user.createdAt.toISOString(),
-      updatedAt: user.updatedAt.toISOString(),
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
     })),
   });
 });
@@ -98,8 +98,8 @@ router.post("/admin/users", requireAdmin, async (req: Request, res: Response) =>
       email: user.email,
       name: user.name,
       role: user.role,
-      createdAt: user.createdAt.toISOString(),
-      updatedAt: user.updatedAt.toISOString(),
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
     },
   });
 });
@@ -124,8 +124,8 @@ router.get("/admin/users/:id", requireAdmin, async (req: Request, res: Response)
       email: user.email,
       name: user.name,
       role: user.role,
-      createdAt: user.createdAt.toISOString(),
-      updatedAt: user.updatedAt.toISOString(),
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
     },
   });
 });
@@ -161,8 +161,8 @@ router.patch("/admin/users/:id", requireAdmin, async (req: Request, res: Respons
       email: user!.email,
       name: user!.name,
       role: user!.role,
-      createdAt: user!.createdAt.toISOString(),
-      updatedAt: user!.updatedAt.toISOString(),
+      createdAt: user!.createdAt,
+      updatedAt: user!.updatedAt,
     },
   });
 });

@@ -66,7 +66,7 @@ router.get("/admin/auth-errors", requireAdmin, async (req: Request, res: Respons
       method: log.method,
       userAgent: log.userAgent,
       ipAddress: log.ipAddress,
-      occurredAt: log.occurredAt.toISOString(),
+      occurredAt: log.occurredAt,
     })),
   });
 });

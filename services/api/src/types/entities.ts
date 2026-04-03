@@ -13,22 +13,22 @@ export interface User {
   name: string | null;
   role: UserRole;
   firebaseUid?: string;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AllowedEmail {
   id: string;
   email: string;
   note: string | null;
-  createdAt: Date;
+  createdAt: string;
 }
 
 export interface UserSettings {
   userId: string;
   notificationEnabled: boolean;
   timezone: string;
-  updatedAt: Date;
+  updatedAt: string;
 }
 
 export interface NotificationPolicy {
@@ -40,8 +40,8 @@ export interface NotificationPolicy {
   repeatIntervalHours: number;
   maxRepeatDays: number;
   active: boolean;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AuthErrorLog {
@@ -54,7 +54,7 @@ export interface AuthErrorLog {
   method: string;
   userAgent: string | null;
   ipAddress: string | null;
-  occurredAt: Date;
+  occurredAt: string;
 }
 
 export interface Course {
@@ -66,9 +66,9 @@ export interface Course {
   passThreshold: number;
   createdBy: string;
   sourceMasterCourseId?: string;
-  copiedAt?: Date;
-  createdAt: Date;
-  updatedAt: Date;
+  copiedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Lesson {
@@ -79,8 +79,8 @@ export interface Lesson {
   hasVideo: boolean;
   hasQuiz: boolean;
   videoUnlocksPrior: boolean;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface LessonFilter {

@@ -20,9 +20,9 @@ export function serializeCourse(course: Course) {
     passThreshold: course.passThreshold,
     createdBy: course.createdBy,
     ...(course.sourceMasterCourseId && { sourceMasterCourseId: course.sourceMasterCourseId }),
-    ...(course.copiedAt && { copiedAt: course.copiedAt.toISOString() }),
-    createdAt: course.createdAt.toISOString(),
-    updatedAt: course.updatedAt.toISOString(),
+    ...(course.copiedAt && { copiedAt: course.copiedAt }),
+    createdAt: course.createdAt,
+    updatedAt: course.updatedAt,
   };
 }
 

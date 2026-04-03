@@ -48,8 +48,8 @@ const initialCourses: Course[] = [
     lessonOrder: ["demo-lesson-1", "demo-lesson-2"],
     passThreshold: 80,
     createdBy: "demo-admin",
-    createdAt: new Date("2024-01-01T00:00:00Z"),
-    updatedAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
   },
   {
     id: "demo-course-2",
@@ -59,8 +59,8 @@ const initialCourses: Course[] = [
     lessonOrder: ["demo-lesson-3"],
     passThreshold: 70,
     createdBy: "demo-admin",
-    createdAt: new Date("2024-01-01T00:00:00Z"),
-    updatedAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
   },
   {
     id: "demo-course-3",
@@ -70,8 +70,8 @@ const initialCourses: Course[] = [
     lessonOrder: [],
     passThreshold: 75,
     createdBy: "demo-admin",
-    createdAt: new Date("2024-01-01T00:00:00Z"),
-    updatedAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
   },
 ];
 
@@ -84,8 +84,8 @@ const initialLessons: Lesson[] = [
     hasVideo: true,
     hasQuiz: true,
     videoUnlocksPrior: false,
-    createdAt: new Date("2024-01-01T00:00:00Z"),
-    updatedAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
   },
   {
     id: "demo-lesson-2",
@@ -95,8 +95,8 @@ const initialLessons: Lesson[] = [
     hasVideo: true,
     hasQuiz: false,
     videoUnlocksPrior: true,
-    createdAt: new Date("2024-01-01T00:00:00Z"),
-    updatedAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
   },
   {
     id: "demo-lesson-3",
@@ -106,8 +106,8 @@ const initialLessons: Lesson[] = [
     hasVideo: false,
     hasQuiz: true,
     videoUnlocksPrior: false,
-    createdAt: new Date("2024-01-01T00:00:00Z"),
-    updatedAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
   },
 ];
 
@@ -117,32 +117,32 @@ const initialUsers: User[] = [
     email: "admin@demo.example.com",
     name: "管理者デモ",
     role: "admin",
-    createdAt: new Date("2024-01-01T00:00:00Z"),
-    updatedAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
   },
   {
     id: "demo-teacher",
     email: "teacher@demo.example.com",
     name: "講師デモ",
     role: "teacher",
-    createdAt: new Date("2024-01-01T00:00:00Z"),
-    updatedAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
   },
   {
     id: "demo-student-1",
     email: "student1@demo.example.com",
     name: "受講者A",
     role: "student",
-    createdAt: new Date("2024-01-01T00:00:00Z"),
-    updatedAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
   },
   {
     id: "demo-student-2",
     email: "student2@demo.example.com",
     name: "受講者B",
     role: "student",
-    createdAt: new Date("2024-01-01T00:00:00Z"),
-    updatedAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
   },
 ];
 
@@ -156,8 +156,8 @@ const initialNotificationPolicies: NotificationPolicy[] = [
     repeatIntervalHours: 24,
     maxRepeatDays: 7,
     active: true,
-    createdAt: new Date("2024-01-01T00:00:00Z"),
-    updatedAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
   },
 ];
 
@@ -166,19 +166,19 @@ const initialAllowedEmails: AllowedEmail[] = [
     id: "demo-allowed-1",
     email: "admin@demo.example.com",
     note: "デモ管理者",
-    createdAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
   },
   {
     id: "demo-allowed-2",
     email: "teacher@demo.example.com",
     note: "デモ講師",
-    createdAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
   },
   {
     id: "demo-allowed-3",
     email: "student1@demo.example.com",
     note: "デモ受講者1",
-    createdAt: new Date("2024-01-01T00:00:00Z"),
+    createdAt: "2024-01-01T00:00:00.000Z",
   },
 ];
 
@@ -339,8 +339,8 @@ export class InMemoryDataSource implements DataSource {
     const course: Course = {
       ...data,
       id: InMemoryDataSource.uniqueId("course"),
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
     this.courses.push(course);
     return course;
@@ -350,7 +350,7 @@ export class InMemoryDataSource implements DataSource {
     this.throwIfReadOnly();
     const index = this.courses.findIndex((c) => c.id === id);
     if (index === -1) return null;
-    this.courses[index] = { ...this.courses[index], ...data, updatedAt: new Date() };
+    this.courses[index] = { ...this.courses[index], ...data, updatedAt: new Date().toISOString() };
     return this.courses[index];
   }
 
@@ -381,8 +381,8 @@ export class InMemoryDataSource implements DataSource {
     const lesson: Lesson = {
       ...data,
       id: InMemoryDataSource.uniqueId("lesson"),
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
     this.lessons.push(lesson);
     return lesson;
@@ -392,7 +392,7 @@ export class InMemoryDataSource implements DataSource {
     this.throwIfReadOnly();
     const index = this.lessons.findIndex((l) => l.id === id);
     if (index === -1) return null;
-    this.lessons[index] = { ...this.lessons[index], ...data, updatedAt: new Date() };
+    this.lessons[index] = { ...this.lessons[index], ...data, updatedAt: new Date().toISOString() };
     return this.lessons[index];
   }
 
@@ -414,7 +414,7 @@ export class InMemoryDataSource implements DataSource {
         this.lessons[lessonIndex] = {
           ...this.lessons[lessonIndex],
           order: index,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
         };
       }
     });
@@ -425,7 +425,7 @@ export class InMemoryDataSource implements DataSource {
       this.courses[courseIndex] = {
         ...this.courses[courseIndex],
         lessonOrder: lessonIds,
-        updatedAt: new Date(),
+        updatedAt: new Date().toISOString(),
       };
     }
   }
@@ -452,8 +452,8 @@ export class InMemoryDataSource implements DataSource {
     const user: User = {
       ...data,
       id: InMemoryDataSource.uniqueId("user"),
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
     this.users.push(user);
     return user;
@@ -463,7 +463,7 @@ export class InMemoryDataSource implements DataSource {
     this.throwIfReadOnly();
     const index = this.users.findIndex((u) => u.id === id);
     if (index === -1) return null;
-    this.users[index] = { ...this.users[index], ...data, updatedAt: new Date() };
+    this.users[index] = { ...this.users[index], ...data, updatedAt: new Date().toISOString() };
     return this.users[index];
   }
 
@@ -493,7 +493,7 @@ export class InMemoryDataSource implements DataSource {
     const allowedEmail: AllowedEmail = {
       ...data,
       id: InMemoryDataSource.uniqueId("allowed"),
-      createdAt: new Date(),
+      createdAt: new Date().toISOString(),
     };
     this.allowedEmails.push(allowedEmail);
     return allowedEmail;
@@ -536,8 +536,8 @@ export class InMemoryDataSource implements DataSource {
     const policy: NotificationPolicy = {
       ...data,
       id: InMemoryDataSource.uniqueId("policy"),
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
     this.notificationPolicies.push(policy);
     return policy;
@@ -553,7 +553,7 @@ export class InMemoryDataSource implements DataSource {
     this.notificationPolicies[index] = {
       ...this.notificationPolicies[index],
       ...data,
-      updatedAt: new Date(),
+      updatedAt: new Date().toISOString(),
     };
     return this.notificationPolicies[index];
   }
@@ -593,7 +593,7 @@ export class InMemoryDataSource implements DataSource {
       userId,
       notificationEnabled: data.notificationEnabled ?? existing?.notificationEnabled ?? true,
       timezone: data.timezone ?? existing?.timezone ?? "Asia/Tokyo",
-      updatedAt: new Date(),
+      updatedAt: new Date().toISOString(),
     };
     this.userSettings.set(userId, settings);
     return settings;

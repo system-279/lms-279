@@ -23,7 +23,7 @@ router.get("/admin/allowed-emails", requireAdmin, async (req: Request, res: Resp
       id: e.id,
       email: e.email,
       note: e.note,
-      createdAt: e.createdAt.toISOString(),
+      createdAt: e.createdAt,
     })),
   });
 });
@@ -57,7 +57,7 @@ router.post("/admin/allowed-emails", requireAdmin, async (req: Request, res: Res
       id: allowedEmail.id,
       email: allowedEmail.email,
       note: allowedEmail.note,
-      createdAt: allowedEmail.createdAt.toISOString(),
+      createdAt: allowedEmail.createdAt,
     },
   });
 });

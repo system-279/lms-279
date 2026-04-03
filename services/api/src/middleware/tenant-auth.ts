@@ -83,7 +83,7 @@ async function handleTenantAccessDenied(
         method: req.method,
         userAgent: req.header("user-agent") ?? null,
         ipAddress: req.ip ?? null,
-        occurredAt: new Date(),
+        occurredAt: new Date().toISOString(),
       });
     } catch (logError) {
       // ログ保存失敗は警告のみ、レスポンスには影響させない
