@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isoToDatetimeLocal, datetimeLocalToISO } from "@/lib/tz-helpers";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -102,6 +103,10 @@ export default function AttendanceReportPage() {
   const [editPassed, setEditPassed] = useState("");
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+
+  // PDF出力ダイアログ
+  const [pdfDialogOpen, setPdfDialogOpen] = useState(false);
+  const [pdfColumns, setPdfColumns] = useState<Set<string>>(new Set());
 
   const tableRef = useRef<HTMLDivElement>(null);
 
@@ -281,8 +286,34 @@ export default function AttendanceReportPage() {
     }
   };
 
+  const openPdfDialog = () => {
+    setPdfColumns(new Set(columns.map((c) => c.key)));
+    setPdfDialogOpen(true);
+  };
+
   const handlePrintPdf = () => {
-    window.print();
+    if (!tableRef.current) return;
+    // 非選択カラムを一時非表示
+    const hidden: HTMLElement[] = [];
+    for (const col of columns) {
+      if (!pdfColumns.has(col.key)) {
+        const els = tableRef.current.querySelectorAll<HTMLElement>(`[data-col="${col.key}"]`);
+        els.forEach((el) => {
+          el.style.display = "none";
+          hidden.push(el);
+        });
+      }
+    }
+    setPdfDialogOpen(false);
+    // 次のフレームで印刷（ダイアログが閉じてから）
+    requestAnimationFrame(() => {
+      const restore = () => {
+        hidden.forEach((el) => { el.style.display = ""; });
+        window.removeEventListener("afterprint", restore);
+      };
+      window.addEventListener("afterprint", restore);
+      window.print();
+    });
   };
 
   const sortDirFor = (key: SortKey): SortDir => (sortKey === key ? sortDir : null);
@@ -320,7 +351,7 @@ export default function AttendanceReportPage() {
           </Select>
         </div>
         {report && (
-          <Button variant="outline" onClick={handlePrintPdf}>PDF出力</Button>
+          <Button variant="outline" onClick={openPdfDialog}>PDF出力</Button>
         )}
       </div>
 
@@ -409,6 +440,7 @@ export default function AttendanceReportPage() {
                     {columns.map((col) => (
                       <TableHead
                         key={col.key}
+                        data-col={col.key}
                         className={`cursor-pointer select-none hover:bg-muted/50 ${col.className ?? ""}`}
                         onClick={() => toggleSort(col.key)}
                       >
@@ -422,22 +454,22 @@ export default function AttendanceReportPage() {
                 <TableBody>
                   {filteredRecords.map((r) => (
                     <TableRow key={r.id}>
-                      <TableCell>
+                      <TableCell data-col="userName">
                         <div className="text-sm">{r.userName ?? "—"}</div>
                         <div className="text-xs text-muted-foreground">{r.userEmail}</div>
                       </TableCell>
-                      <TableCell className="text-sm">{r.courseName}</TableCell>
-                      <TableCell className="max-w-[200px] truncate text-sm">{r.lessonTitle}</TableCell>
-                      <TableCell className="whitespace-nowrap text-sm">{formatDate(r.entryAt)}</TableCell>
-                      <TableCell className="whitespace-nowrap text-sm">{formatTime(r.entryAt)}</TableCell>
-                      <TableCell className="whitespace-nowrap text-sm">{formatTime(r.exitAt)}</TableCell>
-                      <TableCell className="text-sm">
+                      <TableCell data-col="courseName" className="text-sm">{r.courseName}</TableCell>
+                      <TableCell data-col="lessonTitle" className="max-w-[200px] truncate text-sm">{r.lessonTitle}</TableCell>
+                      <TableCell data-col="date" className="whitespace-nowrap text-sm">{formatDate(r.entryAt)}</TableCell>
+                      <TableCell data-col="entryAt" className="whitespace-nowrap text-sm">{formatTime(r.entryAt)}</TableCell>
+                      <TableCell data-col="exitAt" className="whitespace-nowrap text-sm">{formatTime(r.exitAt)}</TableCell>
+                      <TableCell data-col="exitReason" className="text-sm">
                         {r.exitReason ? (EXIT_REASON_LABELS[r.exitReason] ?? r.exitReason) : "—"}
                       </TableCell>
-                      <TableCell className="text-sm">
+                      <TableCell data-col="quizScore" className="text-sm">
                         {r.quizScore !== null ? `${r.quizScore}点` : "—"}
                       </TableCell>
-                      <TableCell>
+                      <TableCell data-col="quizPassed">
                         {r.quizPassed === null
                           ? "—"
                           : r.quizPassed
@@ -514,6 +546,55 @@ export default function AttendanceReportPage() {
             <Button variant="outline" onClick={() => setEditOpen(false)}>キャンセル</Button>
             <Button onClick={handleEdit} disabled={editLoading}>
               {editLoading ? "更新中..." : "更新"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* PDF出力カラム選択ダイアログ */}
+      <Dialog open={pdfDialogOpen} onOpenChange={setPdfDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>PDF出力 — カラム選択</DialogTitle>
+            <DialogDescription>
+              出力するカラムを選択してください
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 pb-2 border-b">
+              <Checkbox
+                id="pdf-all"
+                checked={pdfColumns.size === columns.length}
+                onCheckedChange={(checked) => {
+                  setPdfColumns(checked ? new Set(columns.map((c) => c.key)) : new Set());
+                }}
+              />
+              <label htmlFor="pdf-all" className="text-sm font-medium cursor-pointer">
+                全選択
+              </label>
+            </div>
+            {columns.map((col) => (
+              <div key={col.key} className="flex items-center gap-2">
+                <Checkbox
+                  id={`pdf-${col.key}`}
+                  checked={pdfColumns.has(col.key)}
+                  onCheckedChange={(checked) => {
+                    const next = new Set(pdfColumns);
+                    if (checked) next.add(col.key);
+                    else next.delete(col.key);
+                    setPdfColumns(next);
+                  }}
+                />
+                <label htmlFor={`pdf-${col.key}`} className="text-sm cursor-pointer">
+                  {col.label}
+                </label>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPdfDialogOpen(false)}>キャンセル</Button>
+            <Button onClick={handlePrintPdf} disabled={pdfColumns.size === 0}>
+              出力
             </Button>
           </DialogFooter>
         </DialogContent>
