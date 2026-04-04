@@ -3,7 +3,6 @@ import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 
 const SCOPES = [
   "https://www.googleapis.com/auth/drive.readonly",
-  "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/documents.readonly",
   "https://www.googleapis.com/auth/spreadsheets",
 ];
@@ -105,25 +104,20 @@ export async function getSheetsClient(): Promise<sheets_v4.Sheets> {
 }
 
 /**
- * 指定ユーザーのsubjectで認証したSheets+Driveクライアントを返す
+ * 指定ユーザーのsubjectで認証したSheetsクライアントを返す
  * 操作ユーザーのマイドライブにスプレッドシートを作成するために使用
  * シングルトンキャッシュには影響しない（リクエストごとに生成）
+ * スコープはspreadsheetsのみ（DWD認可スコープを最小限にする）
  */
-export async function getClientsForUser(userEmail: string): Promise<{
-  sheets: sheets_v4.Sheets;
-  drive: drive_v3.Drive;
-}> {
+export async function getSheetsClientForUser(userEmail: string): Promise<sheets_v4.Sheets> {
   const keyData = await getDwdKeyFromSecretManager();
   const auth = new google.auth.JWT({
     email: keyData.client_email,
     key: keyData.private_key,
-    scopes: SCOPES,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
     subject: userEmail,
   });
-  return {
-    sheets: google.sheets({ version: "v4", auth }),
-    drive: google.drive({ version: "v3", auth }),
-  };
+  return google.sheets({ version: "v4", auth });
 }
 
 /**
