@@ -235,12 +235,14 @@ test.describe.serial("出席管理 E2E テスト", () => {
     );
     expect(abandonRes.status()).toBe(204);
 
-    // activeセッションがなくなる
+    // activeセッションがなくなる（200 + session: null）
     const activeRes = await request.get(
       `${API_BASE}/lesson-sessions/active?lessonId=${LESSON_ID}`,
       { headers: AUTH_HEADERS }
     );
-    expect(activeRes.status()).toBe(404);
+    expect(activeRes.status()).toBe(200);
+    const activeBody = await activeRes.json();
+    expect(activeBody.session).toBeNull();
   });
 
   test("項目4: pause timeout後のイベント送信で強制退室される", async ({ request }) => {
