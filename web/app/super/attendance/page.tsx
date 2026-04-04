@@ -320,7 +320,9 @@ export default function AttendanceReportPage() {
         }
       );
       setEditOpen(false);
-      fetchReport();
+      const scrollY = window.scrollY;
+      await fetchReport();
+      requestAnimationFrame(() => window.scrollTo(0, scrollY));
     } catch (e) {
       setEditError(e instanceof Error ? e.message : "更新に失敗しました");
     } finally {
