@@ -549,8 +549,8 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
       exitReason: data.exitReason ?? null,
       status: data.status,
       quizAttemptId: data.quizAttemptId ?? null,
-      quizScore: attempt?.score ?? null,
-      quizPassed: attempt?.isPassed ?? null,
+      quizScore: attempt?.score ?? data.quizScore ?? null,
+      quizPassed: attempt?.isPassed ?? data.quizPassed ?? null,
       quizSubmittedAt: attempt?.submittedAt ?? null,
     };
   });
@@ -597,7 +597,7 @@ router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Requ
     res.status(400).json({ error: "invalid_time_range", message: "entryAt must be before exitAt" });
     return;
   }
-  const VALID_EXIT_REASONS = ["quiz_submitted", "pause_timeout", "time_limit", "browser_close"];
+  const VALID_EXIT_REASONS = ["quiz_submitted", "pause_timeout", "time_limit", "browser_close", "max_attempts_failed"];
   if (exitReason !== undefined && (typeof exitReason !== "string" || !VALID_EXIT_REASONS.includes(exitReason))) {
     res.status(400).json({ error: "invalid_exitReason", message: `exitReason must be one of: ${VALID_EXIT_REASONS.join(", ")}` });
     return;
@@ -627,14 +627,22 @@ router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Requ
   if (exitReason !== undefined) sessionUpdate.exitReason = exitReason;
   await sessionRef.update(sessionUpdate);
 
-  // テスト結果更新（quizAttemptIdがある場合）
-  const quizAttemptId = sessionDoc.data()?.quizAttemptId;
-  if (quizAttemptId && (quizScore !== undefined || quizPassed !== undefined)) {
-    const attemptRef = db.collection(`${basePath}/quiz_attempts`).doc(quizAttemptId);
-    const attemptUpdate: Record<string, unknown> = {};
-    if (quizScore !== undefined) attemptUpdate.score = quizScore;
-    if (quizPassed !== undefined) attemptUpdate.isPassed = quizPassed;
-    await attemptRef.update(attemptUpdate);
+  // テスト結果更新
+  if (quizScore !== undefined || quizPassed !== undefined) {
+    const quizAttemptId = sessionDoc.data()?.quizAttemptId;
+    if (quizAttemptId) {
+      // quiz_attemptsドキュメントを更新
+      const attemptRef = db.collection(`${basePath}/quiz_attempts`).doc(quizAttemptId);
+      const attemptUpdate: Record<string, unknown> = {};
+      if (quizScore !== undefined) attemptUpdate.score = quizScore;
+      if (quizPassed !== undefined) attemptUpdate.isPassed = quizPassed;
+      await attemptRef.update(attemptUpdate);
+    }
+    // セッションにも直接保存（quizAttemptIdがない場合のフォールバック）
+    const quizUpdate: Record<string, unknown> = {};
+    if (quizScore !== undefined) quizUpdate.quizScore = quizScore;
+    if (quizPassed !== undefined) quizUpdate.quizPassed = quizPassed;
+    await sessionRef.update(quizUpdate);
   }
 
   res.json({ message: "updated" });
