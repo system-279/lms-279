@@ -3,7 +3,7 @@
  * DWDを使用してスプレッドシートを作成・書き込み
  */
 
-import { getClientsForUser } from "./google-auth.js";
+import { getSheetsClientForUser } from "./google-auth.js";
 
 const HEADERS = [
   "受講者名",
@@ -32,7 +32,7 @@ export async function exportStudentProgressToSheets(
   userEmail: string
 ): Promise<{ spreadsheetUrl: string; spreadsheetId: string }> {
   // 操作ユーザーのsubjectでAPI呼び出し → ユーザーのマイドライブに作成される
-  const { sheets } = await getClientsForUser(userEmail);
+  const sheets = await getSheetsClientForUser(userEmail);
 
   const today = new Date().toISOString().split("T")[0];
   const title = `${tenantName}_受講状況_${today}`;
