@@ -4,6 +4,7 @@
  *
  * エンドポイント:
  * - GET /api/v2/super/tenants - 全テナント一覧（ページング対応）
+ * - POST /api/v2/super/tenants - テナント作成（name, ownerEmail）
  * - GET /api/v2/super/tenants/:id - テナント詳細（統計情報含む）
  * - PATCH /api/v2/super/tenants/:id - テナント更新（name, ownerEmail, status）
  * - DELETE /api/v2/super/tenants/:id - テナント削除（サブコレクション含む完全削除）
@@ -147,6 +148,149 @@ router.get("/tenants", async (req: Request, res: Response) => {
   };
 
   res.json(response);
+});
+
+// ========================================
+// テナントID生成用ヘルパー
+// ========================================
+const RESERVED_TENANT_IDS = new Set([
+  "demo", "admin", "student", "api", "tenants", "register",
+  "login", "logout", "auth", "healthz", "static", "public",
+  "_next", "favicon", "robots", "sitemap", "_master", "super", "help",
+]);
+
+function generateTenantId(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let result = "";
+  for (let i = 0; i < 8; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  if (RESERVED_TENANT_IDS.has(result)) {
+    return generateTenantId();
+  }
+  return result;
+}
+
+/**
+ * テナント作成（スーパー管理者用）
+ * POST /api/v2/super/tenants
+ *
+ * リクエストボディ: { name: string, ownerEmail: string }
+ */
+router.post("/tenants", async (req: Request, res: Response) => {
+  const { name, ownerEmail } = req.body as { name?: string; ownerEmail?: string };
+
+  // バリデーション
+  if (!name || typeof name !== "string" || name.trim().length === 0) {
+    res.status(400).json({
+      error: "invalid_name",
+      message: "組織名は空にできません。",
+    });
+    return;
+  }
+  if (name.length > 100) {
+    res.status(400).json({
+      error: "invalid_name",
+      message: "組織名は100文字以内で入力してください。",
+    });
+    return;
+  }
+
+  if (!ownerEmail || typeof ownerEmail !== "string") {
+    res.status(400).json({
+      error: "invalid_email",
+      message: "オーナーのメールアドレスを指定してください。",
+    });
+    return;
+  }
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(ownerEmail)) {
+    res.status(400).json({
+      error: "invalid_email",
+      message: "有効なメールアドレス形式で入力してください。",
+    });
+    return;
+  }
+
+  const normalizedEmail = ownerEmail.toLowerCase().trim();
+  const trimmedName = name.trim();
+
+  const db = getFirestore();
+
+  // ユニークなテナントIDを生成
+  let tenantId = "";
+  let attempts = 0;
+  const maxAttempts = 10;
+
+  while (attempts < maxAttempts) {
+    tenantId = generateTenantId();
+    const existingDoc = await db.collection("tenants").doc(tenantId).get();
+    if (!existingDoc.exists) break;
+    attempts++;
+  }
+
+  if (attempts >= maxAttempts) {
+    res.status(500).json({
+      error: "id_generation_failed",
+      message: "テナントIDの生成に失敗しました。再度お試しください。",
+    });
+    return;
+  }
+
+  const now = new Date();
+
+  // トランザクションでテナント作成
+  try {
+    await db.runTransaction(async (transaction) => {
+      const tenantRef = db.collection("tenants").doc(tenantId);
+      transaction.set(tenantRef, {
+        id: tenantId,
+        name: trimmedName,
+        ownerId: "",
+        ownerEmail: normalizedEmail,
+        status: "active" as TenantStatus,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      // 許可リストにオーナーメールを追加
+      const allowedEmailRef = db
+        .collection("tenants")
+        .doc(tenantId)
+        .collection("allowed_emails")
+        .doc();
+      transaction.set(allowedEmailRef, {
+        id: allowedEmailRef.id,
+        email: normalizedEmail,
+        note: "オーナー（スーパー管理者が登録）",
+        createdAt: now,
+      });
+    });
+  } catch (txError) {
+    console.error("Transaction failed:", txError);
+    res.status(500).json({
+      error: "transaction_failed",
+      message: "テナントの作成中にエラーが発生しました。",
+    });
+    return;
+  }
+
+  const superAdmin = req.superAdmin;
+  console.log(
+    `[SuperAdmin] Tenant created: ${tenantId} (${trimmedName}) owner=${normalizedEmail} by ${superAdmin?.email}`
+  );
+
+  res.status(201).json({
+    tenant: {
+      id: tenantId,
+      name: trimmedName,
+      ownerId: "",
+      ownerEmail: normalizedEmail,
+      status: "active",
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    },
+  });
 });
 
 /**
