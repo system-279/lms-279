@@ -287,6 +287,11 @@ export default function SuperTenantsPage() {
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2 flex-wrap">
+                    <Link href={`/${tenant.id}/admin`}>
+                      <Button variant="outline" size="sm">
+                        管理画面
+                      </Button>
+                    </Link>
                     <Link href={`/super/tenants/${tenant.id}`}>
                       <Button variant="outline" size="sm">
                         詳細
