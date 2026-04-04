@@ -260,8 +260,8 @@ test.describe.serial("出席管理 E2E テスト", () => {
       { eventType: "pause", position: 30, clientTimestamp: pauseTime },
     ]);
 
-    // 6秒待機（PAUSE_TIMEOUT_MS=5000を超過）
-    await new Promise((resolve) => setTimeout(resolve, 6000));
+    // 8秒待機（PAUSE_TIMEOUT_MS=5000を十分超過。CI環境のタイミングずれを考慮）
+    await new Promise((resolve) => setTimeout(resolve, 8000));
 
     // heartbeat送信 → 409
     const res = await sendEvents(request, token, [
