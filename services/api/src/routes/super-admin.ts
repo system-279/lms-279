@@ -1213,7 +1213,7 @@ router.post("/tenants/:tenantId/student-progress/export-sheets", async (req: Req
 
   try {
     const { exportStudentProgressToSheets } = await import("../services/google-sheets-export.js");
-    const result = await exportStudentProgressToSheets(tenantName, rows);
+    const result = await exportStudentProgressToSheets(tenantName, rows, req.superAdmin!.email);
     res.json(result);
   } catch (e) {
     console.error("[SuperAdmin] Sheets export failed:", e);
