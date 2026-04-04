@@ -11,6 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { MultiSelectFilter } from "@/components/multi-select-filter";
+import type { FilterOption } from "@/components/multi-select-filter";
 import {
   Table,
   TableBody,
@@ -80,12 +82,12 @@ export default function AttendanceReportPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // フィルター
-  const [filterUser, setFilterUser] = useState("");
-  const [filterCourse, setFilterCourse] = useState("");
-  const [filterLesson, setFilterLesson] = useState("");
-  const [filterExitReason, setFilterExitReason] = useState("");
-  const [filterQuizPassed, setFilterQuizPassed] = useState("");
+  // フィルター（複数選択）
+  const [filterUsers, setFilterUsers] = useState<Set<string>>(new Set());
+  const [filterCourses, setFilterCourses] = useState<Set<string>>(new Set());
+  const [filterLessons, setFilterLessons] = useState<Set<string>>(new Set());
+  const [filterExitReasons, setFilterExitReasons] = useState<Set<string>>(new Set());
+  const [filterQuizPassed, setFilterQuizPassed] = useState<Set<string>>(new Set());
 
   // ソート
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
@@ -131,11 +133,11 @@ export default function AttendanceReportPage() {
     if (selectedTenant) {
       fetchReport();
       // フィルター・ソートをリセット
-      setFilterUser("");
-      setFilterCourse("");
-      setFilterLesson("");
-      setFilterExitReason("");
-      setFilterQuizPassed("");
+      setFilterUsers(new Set());
+      setFilterCourses(new Set());
+      setFilterLessons(new Set());
+      setFilterExitReasons(new Set());
+      setFilterQuizPassed(new Set());
       setSortKey(null);
       setSortDir(null);
     } else {
@@ -155,46 +157,72 @@ export default function AttendanceReportPage() {
     }
   };
 
-  // コース一覧（フィルタ用）
-  const courseOptions = useMemo(() => {
+  // フィルタ用オプション（ラベル名で表示、重複排除）
+  const userOptions: FilterOption[] = useMemo(() => {
     if (!report) return [];
     const map = new Map<string, string>();
     for (const r of report.records) {
-      if (r.courseId) map.set(r.courseId, r.courseName);
+      if (r.userId && !map.has(r.userId)) {
+        map.set(r.userId, r.userName ?? r.userEmail ?? r.userId);
+      }
     }
-    return Array.from(map, ([id, name]) => ({ id, name }));
+    return Array.from(map, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label, "ja"));
   }, [report]);
+
+  const courseOptions: FilterOption[] = useMemo(() => {
+    if (!report) return [];
+    const map = new Map<string, string>();
+    for (const r of report.records) {
+      if (r.courseId && !map.has(r.courseId)) {
+        map.set(r.courseId, r.courseName || r.courseId);
+      }
+    }
+    return Array.from(map, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label, "ja"));
+  }, [report]);
+
+  const lessonOptions: FilterOption[] = useMemo(() => {
+    if (!report) return [];
+    const map = new Map<string, string>();
+    for (const r of report.records) {
+      if (r.lessonId && !map.has(r.lessonId)) {
+        map.set(r.lessonId, r.lessonTitle || r.lessonId);
+      }
+    }
+    return Array.from(map, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label, "ja"));
+  }, [report]);
+
+  const exitReasonOptions: FilterOption[] = Object.entries(EXIT_REASON_LABELS).map(([value, label]) => ({ value, label }));
+  const quizPassedOptions: FilterOption[] = [
+    { value: "passed", label: "合格" },
+    { value: "failed", label: "不合格" },
+    { value: "none", label: "未受験" },
+  ];
 
   // フィルタ＋ソート適用
   const filteredRecords = useMemo(() => {
     if (!report) return [];
     let records = report.records;
 
-    // フィルタ
-    if (filterUser) {
-      const q = filterUser.toLowerCase();
-      records = records.filter(
-        (r) =>
-          (r.userName ?? "").toLowerCase().includes(q) ||
-          (r.userEmail ?? "").toLowerCase().includes(q)
-      );
+    // フィルタ（複数選択対応）
+    if (filterUsers.size > 0) {
+      records = records.filter((r) => filterUsers.has(r.userId));
     }
-    if (filterCourse) {
-      records = records.filter((r) => r.courseId === filterCourse);
+    if (filterCourses.size > 0) {
+      records = records.filter((r) => filterCourses.has(r.courseId));
     }
-    if (filterLesson) {
-      const q = filterLesson.toLowerCase();
-      records = records.filter((r) => r.lessonTitle.toLowerCase().includes(q));
+    if (filterLessons.size > 0) {
+      records = records.filter((r) => filterLessons.has(r.lessonId));
     }
-    if (filterExitReason) {
-      records = records.filter((r) => r.exitReason === filterExitReason);
+    if (filterExitReasons.size > 0) {
+      records = records.filter((r) => r.exitReason !== null && filterExitReasons.has(r.exitReason));
     }
-    if (filterQuizPassed === "passed") {
-      records = records.filter((r) => r.quizPassed === true);
-    } else if (filterQuizPassed === "failed") {
-      records = records.filter((r) => r.quizPassed === false);
-    } else if (filterQuizPassed === "none") {
-      records = records.filter((r) => r.quizPassed === null);
+    if (filterQuizPassed.size > 0) {
+      records = records.filter((r) => {
+        if (filterQuizPassed.has("passed") && r.quizPassed === true) return true;
+        if (filterQuizPassed.has("failed") && r.quizPassed === false) return true;
+        if (filterQuizPassed.has("none") && r.quizPassed === null) return true;
+        return false;
+      });
     }
 
     // ソート
@@ -213,7 +241,7 @@ export default function AttendanceReportPage() {
     }
 
     return records;
-  }, [report, filterUser, filterCourse, filterLesson, filterExitReason, filterQuizPassed, sortKey, sortDir]);
+  }, [report, filterUsers, filterCourses, filterLessons, filterExitReasons, filterQuizPassed, sortKey, sortDir]);
 
   const openEdit = (record: SuperAttendanceRecord) => {
     setEditRecord(record);
@@ -319,62 +347,49 @@ export default function AttendanceReportPage() {
 
           {/* フィルター行 */}
           <div className="flex flex-wrap gap-2 mb-3 print:hidden">
-            <Input
-              placeholder="受講者名で絞り込み"
-              value={filterUser}
-              onChange={(e) => setFilterUser(e.target.value)}
-              className="w-44 h-8 text-xs"
+            <MultiSelectFilter
+              label="受講者"
+              options={userOptions}
+              selected={filterUsers}
+              onChange={setFilterUsers}
+              searchable
             />
-            <Select value={filterCourse || "__all__"} onValueChange={(v) => setFilterCourse(v === "__all__" ? "" : v)}>
-              <SelectTrigger className="w-44 h-8 text-xs">
-                <SelectValue placeholder="コース" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">全コース</SelectItem>
-                {courseOptions.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Input
-              placeholder="レッスン名で絞り込み"
-              value={filterLesson}
-              onChange={(e) => setFilterLesson(e.target.value)}
-              className="w-44 h-8 text-xs"
+            <MultiSelectFilter
+              label="コース"
+              options={courseOptions}
+              selected={filterCourses}
+              onChange={setFilterCourses}
             />
-            <Select value={filterExitReason || "__all__"} onValueChange={(v) => setFilterExitReason(v === "__all__" ? "" : v)}>
-              <SelectTrigger className="w-44 h-8 text-xs">
-                <SelectValue placeholder="退室理由" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">全退室理由</SelectItem>
-                {Object.entries(EXIT_REASON_LABELS).map(([k, v]) => (
-                  <SelectItem key={k} value={k}>{v}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={filterQuizPassed || "__all__"} onValueChange={(v) => setFilterQuizPassed(v === "__all__" ? "" : v)}>
-              <SelectTrigger className="w-32 h-8 text-xs">
-                <SelectValue placeholder="合否" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">全て</SelectItem>
-                <SelectItem value="passed">合格</SelectItem>
-                <SelectItem value="failed">不合格</SelectItem>
-                <SelectItem value="none">未受験</SelectItem>
-              </SelectContent>
-            </Select>
-            {(filterUser || filterCourse || filterLesson || filterExitReason || filterQuizPassed) && (
+            <MultiSelectFilter
+              label="レッスン"
+              options={lessonOptions}
+              selected={filterLessons}
+              onChange={setFilterLessons}
+              searchable
+            />
+            <MultiSelectFilter
+              label="退室理由"
+              options={exitReasonOptions}
+              selected={filterExitReasons}
+              onChange={setFilterExitReasons}
+            />
+            <MultiSelectFilter
+              label="合否"
+              options={quizPassedOptions}
+              selected={filterQuizPassed}
+              onChange={setFilterQuizPassed}
+            />
+            {(filterUsers.size > 0 || filterCourses.size > 0 || filterLessons.size > 0 || filterExitReasons.size > 0 || filterQuizPassed.size > 0) && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-8 text-xs"
                 onClick={() => {
-                  setFilterUser("");
-                  setFilterCourse("");
-                  setFilterLesson("");
-                  setFilterExitReason("");
-                  setFilterQuizPassed("");
+                  setFilterUsers(new Set());
+                  setFilterCourses(new Set());
+                  setFilterLessons(new Set());
+                  setFilterExitReasons(new Set());
+                  setFilterQuizPassed(new Set());
                 }}
               >
                 フィルタ解除
