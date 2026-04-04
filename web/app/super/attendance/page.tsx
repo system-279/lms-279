@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { datetimeLocalToISO } from "@/lib/tz-helpers";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -60,6 +59,28 @@ function formatDate(iso: string | null): string {
   });
 }
 
+/** ISO文字列からJST日付部分(yyyy-MM-dd)を取得 */
+function isoToDateJST(iso: string | null): string {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString("sv", { timeZone: "Asia/Tokyo" });
+}
+
+/** ISO文字列からJST時刻部分(HH:mm)を取得 */
+function isoToTimeJST(iso: string | null): string {
+  if (!iso) return "";
+  return new Date(iso).toLocaleTimeString("sv", {
+    timeZone: "Asia/Tokyo",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** 日付(yyyy-MM-dd) + 時刻(HH:mm) をJSTとしてISO UTC文字列に変換 */
+function dateTimeJSTtoISO(date: string, time: string): string {
+  // JSTオフセット (+09:00) を付与して正しいUTCに変換
+  return new Date(`${date}T${time}:00+09:00`).toISOString();
+}
+
 const EXIT_REASON_LABELS: Record<string, string> = {
   quiz_submitted: "テスト合格",
   pause_timeout: "一時停止超過",
@@ -67,6 +88,19 @@ const EXIT_REASON_LABELS: Record<string, string> = {
   browser_close: "ブラウザ終了",
   max_attempts_failed: "受験上限(不合格)",
 };
+
+type Column = { key: SortKey; label: string; className?: string };
+const COLUMNS: Column[] = [
+  { key: "userName", label: "受講者" },
+  { key: "courseName", label: "コース" },
+  { key: "lessonTitle", label: "レッスン" },
+  { key: "date", label: "日付", className: "whitespace-nowrap" },
+  { key: "entryAt", label: "入室", className: "whitespace-nowrap" },
+  { key: "exitAt", label: "退室", className: "whitespace-nowrap" },
+  { key: "exitReason", label: "退室理由" },
+  { key: "quizScore", label: "テスト点数" },
+  { key: "quizPassed", label: "合否" },
+];
 
 function SortIcon({ dir }: { dir: SortDir }) {
   if (dir === "asc") return <span className="ml-1">▲</span>;
@@ -249,25 +283,11 @@ export default function AttendanceReportPage() {
     return records;
   }, [report, filterUsers, filterCourses, filterLessons, filterExitReasons, filterQuizPassed, sortKey, sortDir]);
 
-  /** ISO文字列からローカル日付部分(yyyy-MM-dd)を取得 */
-  const isoToDate = (iso: string | null): string => {
-    if (!iso) return "";
-    const d = new Date(iso);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  };
-
-  /** ISO文字列からローカル時刻部分(HH:mm)を取得 */
-  const isoToTime = (iso: string | null): string => {
-    if (!iso) return "";
-    const d = new Date(iso);
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  };
-
   const openEdit = (record: SuperAttendanceRecord) => {
     setEditRecord(record);
-    setEditDate(isoToDate(record.entryAt));
-    setEditEntryTime(isoToTime(record.entryAt));
-    setEditExitTime(isoToTime(record.exitAt));
+    setEditDate(isoToDateJST(record.entryAt));
+    setEditEntryTime(isoToTimeJST(record.entryAt));
+    setEditExitTime(isoToTimeJST(record.exitAt));
     setEditScore(record.quizScore?.toString() ?? "");
     setEditPassed(record.quizPassed === null ? "" : record.quizPassed ? "true" : "false");
     setEditError(null);
@@ -281,12 +301,14 @@ export default function AttendanceReportPage() {
     try {
       const body: Record<string, unknown> = {};
       if (editDate && editEntryTime) {
-        body.entryAt = datetimeLocalToISO(`${editDate}T${editEntryTime}`);
+        body.entryAt = dateTimeJSTtoISO(editDate, editEntryTime);
       }
       if (editDate && editExitTime) {
-        body.exitAt = datetimeLocalToISO(`${editDate}T${editExitTime}`);
+        body.exitAt = dateTimeJSTtoISO(editDate, editExitTime);
       }
-      if (editScore !== "") body.quizScore = Number(editScore);
+      if (editScore !== "") {
+        body.quizScore = Number(editScore);
+      }
       if (editPassed !== "") body.quizPassed = editPassed === "true";
 
       await superFetch(
@@ -307,7 +329,7 @@ export default function AttendanceReportPage() {
   };
 
   const openPdfDialog = () => {
-    setPdfColumns(new Set(columns.map((c) => c.key)));
+    setPdfColumns(new Set(COLUMNS.map((c) => c.key)));
     setPdfDialogOpen(true);
   };
 
@@ -315,7 +337,7 @@ export default function AttendanceReportPage() {
     if (!tableRef.current) return;
     // 非選択カラムを一時非表示
     const hidden: HTMLElement[] = [];
-    for (const col of columns) {
+    for (const col of COLUMNS) {
       if (!pdfColumns.has(col.key)) {
         const els = tableRef.current.querySelectorAll<HTMLElement>(`[data-col="${col.key}"]`);
         els.forEach((el) => {
@@ -327,29 +349,20 @@ export default function AttendanceReportPage() {
     setPdfDialogOpen(false);
     // 次のフレームで印刷（ダイアログが閉じてから）
     requestAnimationFrame(() => {
+      let restored = false;
       const restore = () => {
+        if (restored) return;
+        restored = true;
         hidden.forEach((el) => { el.style.display = ""; });
         window.removeEventListener("afterprint", restore);
       };
       window.addEventListener("afterprint", restore);
+      setTimeout(restore, 5000); // afterprint未発火時のフォールバック
       window.print();
     });
   };
 
   const sortDirFor = (key: SortKey): SortDir => (sortKey === key ? sortDir : null);
-
-  type Column = { key: SortKey; label: string; className?: string };
-  const columns: Column[] = [
-    { key: "userName", label: "受講者" },
-    { key: "courseName", label: "コース" },
-    { key: "lessonTitle", label: "レッスン" },
-    { key: "date", label: "日付", className: "whitespace-nowrap" },
-    { key: "entryAt", label: "入室", className: "whitespace-nowrap" },
-    { key: "exitAt", label: "退室", className: "whitespace-nowrap" },
-    { key: "exitReason", label: "退室理由" },
-    { key: "quizScore", label: "テスト点数" },
-    { key: "quizPassed", label: "合否" },
-  ];
 
   return (
     <div className="space-y-6">
@@ -457,7 +470,7 @@ export default function AttendanceReportPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    {columns.map((col) => (
+                    {COLUMNS.map((col) => (
                       <TableHead
                         key={col.key}
                         data-col={col.key}
@@ -511,7 +524,7 @@ export default function AttendanceReportPage() {
       )}
 
       {/* 編集ダイアログ */}
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+      <Dialog open={editOpen} onOpenChange={(open) => { setEditOpen(open); if (!open) setEditRecord(null); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>レコードを編集</DialogTitle>
@@ -521,8 +534,9 @@ export default function AttendanceReportPage() {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1">
-              <label className="text-sm font-medium">日付</label>
+              <label htmlFor="edit-date" className="text-sm font-medium">日付</label>
               <Input
+                id="edit-date"
                 type="date"
                 value={editDate}
                 onChange={(e) => setEditDate(e.target.value)}
@@ -530,16 +544,18 @@ export default function AttendanceReportPage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
-                <label className="text-sm font-medium">入室時間</label>
+                <label htmlFor="edit-entry" className="text-sm font-medium">入室時間</label>
                 <Input
+                  id="edit-entry"
                   type="time"
                   value={editEntryTime}
                   onChange={(e) => setEditEntryTime(e.target.value)}
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-sm font-medium">退室時間</label>
+                <label htmlFor="edit-exit" className="text-sm font-medium">退室時間</label>
                 <Input
+                  id="edit-exit"
                   type="time"
                   value={editExitTime}
                   onChange={(e) => setEditExitTime(e.target.value)}
@@ -547,19 +563,21 @@ export default function AttendanceReportPage() {
               </div>
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium">テスト点数</label>
+              <label htmlFor="edit-score" className="text-sm font-medium">テスト点数</label>
               <Input
+                id="edit-score"
                 type="number"
                 min="0"
                 max="100"
+                step="1"
                 value={editScore}
                 onChange={(e) => setEditScore(e.target.value)}
               />
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium">合否</label>
+              <label htmlFor="edit-passed" className="text-sm font-medium">合否</label>
               <Select value={editPassed} onValueChange={setEditPassed}>
-                <SelectTrigger>
+                <SelectTrigger id="edit-passed">
                   <SelectValue placeholder="選択" />
                 </SelectTrigger>
                 <SelectContent>
@@ -594,16 +612,16 @@ export default function AttendanceReportPage() {
             <div className="flex items-center gap-2 pb-2 border-b">
               <Checkbox
                 id="pdf-all"
-                checked={pdfColumns.size === columns.length}
+                checked={pdfColumns.size === COLUMNS.length ? true : pdfColumns.size > 0 ? "indeterminate" : false}
                 onCheckedChange={(checked) => {
-                  setPdfColumns(checked ? new Set(columns.map((c) => c.key)) : new Set());
+                  setPdfColumns(checked ? new Set(COLUMNS.map((c) => c.key)) : new Set());
                 }}
               />
               <label htmlFor="pdf-all" className="text-sm font-medium cursor-pointer">
                 全選択
               </label>
             </div>
-            {columns.map((col) => (
+            {COLUMNS.map((col) => (
               <div key={col.key} className="flex items-center gap-2">
                 <Checkbox
                   id={`pdf-${col.key}`}
