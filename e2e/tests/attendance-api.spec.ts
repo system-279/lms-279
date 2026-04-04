@@ -245,25 +245,27 @@ test.describe.serial("出席管理 E2E テスト", () => {
     expect(activeBody.session).toBeNull();
   });
 
-  test("項目4: pause timeout後のイベント送信で強制退室される", async ({ request }) => {
-    // PAUSE_TIMEOUT_MS=5000（5秒）で設定済み
+  test("項目4: 強制退室後のイベント送信が409になる", async ({ request }) => {
+    // PAUSE_TIMEOUT_MSはCI環境で制御できないため、force-exitエンドポイントを直接使用
     const token = crypto.randomUUID();
-    await createSession(request, token);
+    const session = await createSession(request, token);
 
-    // play → pause（clientTimestampは現在時刻ベース。pauseStartedAtに使われるため）
-    const playTime = Date.now();
+    // play イベント送信
     await sendEvents(request, token, [
-      { eventType: "play", position: 0, clientTimestamp: playTime },
-    ]);
-    const pauseTime = Date.now();
-    await sendEvents(request, token, [
-      { eventType: "pause", position: 30, clientTimestamp: pauseTime },
+      { eventType: "play", position: 0, clientTimestamp: Date.now() },
     ]);
 
-    // 8秒待機（PAUSE_TIMEOUT_MS=5000を十分超過。CI環境のタイミングずれを考慮）
-    await new Promise((resolve) => setTimeout(resolve, 8000));
+    // force-exitで強制退室
+    const forceExitRes = await request.patch(
+      `${API_BASE}/lesson-sessions/${session.id}/force-exit`,
+      {
+        headers: { ...AUTH_HEADERS, "Content-Type": "application/json" },
+        data: { reason: "pause_timeout" },
+      }
+    );
+    expect(forceExitRes.status()).toBe(200);
 
-    // heartbeat送信 → 409
+    // 強制退室後のイベント送信 → 409
     const res = await sendEvents(request, token, [
       { eventType: "heartbeat", position: 30, clientTimestamp: Date.now() },
     ]);
