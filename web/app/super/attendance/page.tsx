@@ -484,32 +484,28 @@ export default function AttendanceReportPage() {
                 onChange={(e) => setEditExitAt(e.target.value)}
               />
             </div>
-            {editRecord?.quizAttemptId && (
-              <>
-                <div className="space-y-1">
-                  <label className="text-sm font-medium">テスト点数</label>
-                  <Input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={editScore}
-                    onChange={(e) => setEditScore(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-sm font-medium">合否</label>
-                  <Select value={editPassed} onValueChange={setEditPassed}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="選択" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="true">合格</SelectItem>
-                      <SelectItem value="false">不合格</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </>
-            )}
+            <div className="space-y-1">
+              <label className="text-sm font-medium">テスト点数</label>
+              <Input
+                type="number"
+                min="0"
+                max="100"
+                value={editScore}
+                onChange={(e) => setEditScore(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">合否</label>
+              <Select value={editPassed} onValueChange={setEditPassed}>
+                <SelectTrigger>
+                  <SelectValue placeholder="選択" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="true">合格</SelectItem>
+                  <SelectItem value="false">不合格</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             {editError && (
               <div className="text-sm text-destructive">{editError}</div>
             )}
