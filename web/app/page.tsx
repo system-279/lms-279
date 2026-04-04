@@ -95,23 +95,6 @@ export default function HomePage() {
           </p>
         )}
 
-        {(AUTH_MODE === "dev" || (!tenantsLoading && tenants.length === 0)) && (
-          <div className="mt-4 pt-4 border-t space-y-2">
-            <Link
-              href="/register"
-              className="block text-sm text-primary hover:underline font-medium"
-            >
-              新しい組織を登録する →
-            </Link>
-            <Link
-              href="/demo/admin"
-              className="block text-sm text-muted-foreground hover:text-primary hover:underline"
-            >
-              デモを見る →
-            </Link>
-          </div>
-        )}
-
         <Link
           href="/help"
           className="mt-4 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition"
@@ -209,15 +192,11 @@ function LoggedInView({
 
       {!tenantsLoading && !tenantsError && tenants.length === 0 && (
         <div className="mb-4">
-          <p className="text-sm text-muted-foreground mb-2">
+          <p className="text-sm text-muted-foreground">
             所属するテナントがありません。
+            <br />
+            管理者にお問い合わせください。
           </p>
-          <Link
-            href="/register"
-            className="text-sm text-primary hover:underline font-medium"
-          >
-            組織を登録する →
-          </Link>
         </div>
       )}
 

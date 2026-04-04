@@ -8,31 +8,9 @@ import { Router, Request, Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
 import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import type { TenantMetadata, CreateTenantRequest } from "../types/tenant.js";
+import { RESERVED_TENANT_IDS, generateTenantId, validateOrganizationName, normalizeEmail } from "../utils/tenant-id.js";
 
 const router = Router();
-
-// ========================================
-// 予約済みテナントID（ルートと競合するID）
-// ========================================
-const RESERVED_TENANT_IDS = new Set([
-  "demo",
-  "admin",
-  "student",
-  "api",
-  "tenants",
-  "register",
-  "login",
-  "logout",
-  "auth",
-  "healthz",
-  "static",
-  "public",
-  "_next",
-  "favicon",
-  "robots",
-  "sitemap",
-  "_master",
-]);
 
 // ========================================
 // レート制限（インメモリ、簡易実装）
@@ -74,44 +52,6 @@ setInterval(() => {
     }
   }
 }, 10 * 60 * 1000); // 10分ごと
-
-// ========================================
-// ヘルパー関数
-// ========================================
-
-/**
- * テナントID生成（8文字のランダム英数字）
- */
-function generateTenantId(): string {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let result = "";
-  for (let i = 0; i < 8; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-
-  if (RESERVED_TENANT_IDS.has(result)) {
-    return generateTenantId();
-  }
-
-  return result;
-}
-
-/**
- * 組織名のバリデーション
- */
-function validateOrganizationName(name: unknown): string | null {
-  if (typeof name !== "string") return null;
-  const trimmed = name.trim();
-  if (trimmed.length < 1 || trimmed.length > 100) return null;
-  return trimmed;
-}
-
-/**
- * メールアドレスの正規化
- */
-function normalizeEmail(email: string): string {
-  return email.toLowerCase().trim();
-}
 
 /**
  * Firebase認証トークンを検証

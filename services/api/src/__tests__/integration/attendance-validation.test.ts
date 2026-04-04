@@ -23,6 +23,7 @@ vi.mock("firebase-admin/firestore", () => ({
 vi.mock("firebase-admin/auth", () => ({
   getAuth: vi.fn(() => ({
     verifyIdToken: vi.fn(),
+    getUserByEmail: vi.fn(() => Promise.reject(new Error("not found"))),
   })),
 }));
 
@@ -44,7 +45,7 @@ describe("PATCH /attendance-report/:sessionId バリデーション", () => {
     app.use(express.json());
     app.use(superAdminRouter);
     request = supertest(app);
-  });
+  }, 30_000);
 
   const endpoint = "/tenants/test-tenant/attendance-report/test-session";
 

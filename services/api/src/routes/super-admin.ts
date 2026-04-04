@@ -4,6 +4,7 @@
  *
  * エンドポイント:
  * - GET /api/v2/super/tenants - 全テナント一覧（ページング対応）
+ * - POST /api/v2/super/tenants - テナント作成（name, ownerEmail）
  * - GET /api/v2/super/tenants/:id - テナント詳細（統計情報含む）
  * - PATCH /api/v2/super/tenants/:id - テナント更新（name, ownerEmail, status）
  * - DELETE /api/v2/super/tenants/:id - テナント削除（サブコレクション含む完全削除）
@@ -11,6 +12,7 @@
 
 import { Router, Request, Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
 import type { SuperAttendanceResponse, SuperStudentProgressResponse, TenantEnrollmentSettingResponse } from "@lms-279/shared-types";
 import {
   superAdminAuthMiddleware,
@@ -21,6 +23,8 @@ import {
 import type { TenantMetadata, TenantStatus } from "../types/tenant.js";
 import { masterRouter } from "./super-admin-master.js";
 import { calculateDefaultDeadlines } from "../services/enrollment.js";
+import { generateTenantId, normalizeEmail } from "../utils/tenant-id.js";
+import { logger } from "../utils/logger.js";
 
 const router = Router();
 
@@ -51,6 +55,7 @@ interface TenantListItem {
   name: string;
   ownerEmail: string;
   status: TenantStatus;
+  userCount: number;
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -124,13 +129,21 @@ router.get("/tenants", async (req: Request, res: Response) => {
 
   const snapshot = await query.offset(offset).limit(limit).get();
 
-  const tenants: TenantListItem[] = snapshot.docs.map((doc) => {
+  // 各テナントのユーザー数を並列取得
+  const userCounts = await Promise.all(
+    snapshot.docs.map((doc) =>
+      db.collection(`tenants/${doc.id}/users`).count().get()
+    )
+  );
+
+  const tenants: TenantListItem[] = snapshot.docs.map((doc, i) => {
     const data = doc.data();
     return {
       id: data.id ?? doc.id,
       name: data.name ?? "",
       ownerEmail: data.ownerEmail ?? "",
       status: data.status ?? "active",
+      userCount: userCounts[i].data().count,
       createdAt: data.createdAt?.toDate?.()?.toISOString() ?? null,
       updatedAt: data.updatedAt?.toDate?.()?.toISOString() ?? null,
     };
@@ -147,6 +160,184 @@ router.get("/tenants", async (req: Request, res: Response) => {
   };
 
   res.json(response);
+});
+
+/**
+ * テナント作成（スーパー管理者用）
+ * POST /api/v2/super/tenants
+ *
+ * リクエストボディ: { name: string, ownerEmail: string }
+ */
+router.post("/tenants", async (req: Request, res: Response) => {
+  const { name, ownerEmail } = req.body as { name?: string; ownerEmail?: string };
+
+  // バリデーション
+  if (!name || typeof name !== "string" || name.trim().length === 0) {
+    res.status(400).json({
+      error: "invalid_name",
+      message: "組織名は空にできません。",
+    });
+    return;
+  }
+  if (name.length > 100) {
+    res.status(400).json({
+      error: "invalid_name",
+      message: "組織名は100文字以内で入力してください。",
+    });
+    return;
+  }
+
+  if (!ownerEmail || typeof ownerEmail !== "string") {
+    res.status(400).json({
+      error: "invalid_email",
+      message: "オーナーのメールアドレスを指定してください。",
+    });
+    return;
+  }
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(ownerEmail)) {
+    res.status(400).json({
+      error: "invalid_email",
+      message: "有効なメールアドレス形式で入力してください。",
+    });
+    return;
+  }
+
+  const normalizedOwnerEmail = normalizeEmail(ownerEmail);
+  const trimmedName = name.trim();
+
+  const db = getFirestore();
+
+  // ユニークなテナントIDを生成
+  let tenantId = "";
+  let attempts = 0;
+  const maxAttempts = 10;
+
+  try {
+    while (attempts < maxAttempts) {
+      tenantId = generateTenantId();
+      const existingDoc = await db.collection("tenants").doc(tenantId).get();
+      if (!existingDoc.exists) break;
+      logger.warn("Tenant ID collision during creation", { tenantId, attempt: attempts + 1 });
+      attempts++;
+    }
+  } catch (e) {
+    logger.error("Failed to check tenant ID uniqueness", {
+      error: e instanceof Error ? e : new Error(String(e)),
+      tenantId,
+      operatorEmail: req.superAdmin?.email,
+    });
+    res.status(500).json({
+      error: "id_generation_failed",
+      message: "テナントIDの生成中にエラーが発生しました。再度お試しください。",
+    });
+    return;
+  }
+
+  if (attempts >= maxAttempts) {
+    res.status(500).json({
+      error: "id_generation_failed",
+      message: "テナントIDの生成に失敗しました。再度お試しください。",
+    });
+    return;
+  }
+
+  const now = new Date();
+
+  // オーナーのFirebase UIDを解決（未登録ユーザーの場合はnull）
+  let ownerUid: string | null = null;
+  try {
+    const userRecord = await getAuth().getUserByEmail(normalizedOwnerEmail);
+    ownerUid = userRecord.uid;
+  } catch {
+    // ユーザーが未登録の場合は初回ログイン時に解決される
+  }
+
+  // トランザクションでテナント作成（createで重複を防止）
+  try {
+    await db.runTransaction(async (transaction) => {
+      const tenantRef = db.collection("tenants").doc(tenantId);
+      transaction.create(tenantRef, {
+        id: tenantId,
+        name: trimmedName,
+        ownerId: ownerUid ?? "",
+        ownerEmail: normalizedOwnerEmail,
+        status: "active" as TenantStatus,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      // 許可リストにオーナーメールを追加
+      const allowedEmailRef = db
+        .collection("tenants")
+        .doc(tenantId)
+        .collection("allowed_emails")
+        .doc();
+      transaction.set(allowedEmailRef, {
+        id: allowedEmailRef.id,
+        email: normalizedOwnerEmail,
+        note: "オーナー（スーパー管理者が登録）",
+        createdAt: now,
+      });
+
+      // オーナーが既存Firebase Authユーザーの場合、初期管理者ユーザーを作成
+      if (ownerUid) {
+        const userRef = db
+          .collection("tenants")
+          .doc(tenantId)
+          .collection("users")
+          .doc();
+        transaction.set(userRef, {
+          id: userRef.id,
+          email: normalizedOwnerEmail,
+          name: null,
+          role: "admin",
+          firebaseUid: ownerUid,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    });
+  } catch (txError) {
+    const grpcCode = (txError as { code?: number })?.code;
+    const isTransient = grpcCode === 14 || grpcCode === 4;
+
+    logger.error("Tenant creation transaction failed", {
+      error: txError instanceof Error ? txError : new Error(String(txError)),
+      tenantId,
+      ownerEmail: normalizedOwnerEmail,
+      operatorEmail: req.superAdmin?.email,
+      grpcCode,
+      isTransient,
+    });
+
+    res.status(isTransient ? 503 : 500).json({
+      error: "transaction_failed",
+      message: isTransient
+        ? "サーバーが一時的に利用できません。数秒後に再度お試しください。"
+        : "テナントの作成中にエラーが発生しました。",
+    });
+    return;
+  }
+
+  logger.info("Tenant created by super admin", {
+    tenantId,
+    tenantName: trimmedName,
+    ownerEmail: normalizedOwnerEmail,
+    operatorEmail: req.superAdmin?.email,
+  });
+
+  res.status(201).json({
+    tenant: {
+      id: tenantId,
+      name: trimmedName,
+      ownerId: ownerUid ?? "",
+      ownerEmail: normalizedOwnerEmail,
+      status: "active",
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    },
+  });
 });
 
 /**
@@ -278,8 +469,9 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
   }
 
   if (ownerEmail !== undefined && ownerEmail !== previousData.ownerEmail) {
-    updateData.ownerEmail = ownerEmail.toLowerCase();
-    changes.push(`ownerEmail: "${previousData.ownerEmail}" -> "${ownerEmail.toLowerCase()}"`);
+    const normalizedNewEmail = normalizeEmail(ownerEmail);
+    updateData.ownerEmail = normalizedNewEmail;
+    changes.push(`ownerEmail: "${previousData.ownerEmail}" -> "${normalizedNewEmail}"`);
   }
 
   if (status !== undefined && status !== previousData.status) {
@@ -297,10 +489,11 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
 
   await tenantRef.update(updateData);
 
-  const superAdmin = req.superAdmin;
-  console.log(
-    `[SuperAdmin] Tenant updated: ${id} - ${changes.join(", ")} by ${superAdmin?.email}`
-  );
+  logger.info("Tenant updated by super admin", {
+    tenantId: id,
+    changes,
+    operatorEmail: req.superAdmin?.email,
+  });
 
   const updatedDoc = await tenantRef.get();
   const updatedData = updatedDoc.data()!;
@@ -338,12 +531,26 @@ router.delete("/tenants/:id", async (req: Request, res: Response) => {
 
   const tenantData = tenantDoc.data()!;
 
-  await db.recursiveDelete(tenantRef);
+  try {
+    await db.recursiveDelete(tenantRef);
+  } catch (deleteError) {
+    logger.error("Tenant deletion failed", {
+      error: deleteError instanceof Error ? deleteError : new Error(String(deleteError)),
+      tenantId: id,
+      operatorEmail: req.superAdmin?.email,
+    });
+    res.status(500).json({
+      error: "delete_failed",
+      message: "テナントの削除中にエラーが発生しました。再度お試しください。",
+    });
+    return;
+  }
 
-  const superAdmin = req.superAdmin;
-  console.log(
-    `[SuperAdmin] Tenant deleted: ${id} (${tenantData.name}) by ${superAdmin?.email}`
-  );
+  logger.info("Tenant deleted by super admin", {
+    tenantId: id,
+    tenantName: tenantData.name,
+    operatorEmail: req.superAdmin?.email,
+  });
 
   res.json({
     message: "テナントを削除しました。",
