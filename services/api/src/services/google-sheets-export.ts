@@ -3,7 +3,7 @@
  * DWDを使用してスプレッドシートを作成・書き込み
  */
 
-import { getSheetsClient } from "./google-auth.js";
+import { getDriveClient, getSheetsClient } from "./google-auth.js";
 
 const HEADERS = [
   "受講者名",
@@ -28,7 +28,8 @@ const HEADERS = [
  */
 export async function exportStudentProgressToSheets(
   tenantName: string,
-  rows: string[][]
+  rows: string[][],
+  shareWithEmail?: string
 ): Promise<{ spreadsheetUrl: string; spreadsheetId: string }> {
   const sheets = await getSheetsClient();
 
@@ -122,6 +123,29 @@ export async function exportStudentProgressToSheets(
       writeError
     );
     throw writeError;
+  }
+
+  // 操作ユーザーに編集権限を付与
+  if (shareWithEmail) {
+    try {
+      const drive = await getDriveClient();
+      await drive.permissions.create({
+        fileId: spreadsheetId,
+        sendNotificationEmail: false,
+        requestBody: {
+          type: "user",
+          role: "writer",
+          emailAddress: shareWithEmail,
+        },
+      });
+    } catch (shareError) {
+      console.error(
+        "[Sheets] Failed to share spreadsheet with user:",
+        shareWithEmail,
+        shareError
+      );
+      // 共有失敗でもスプレッドシート自体は作成済みなのでエラーにしない
+    }
   }
 
   const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
