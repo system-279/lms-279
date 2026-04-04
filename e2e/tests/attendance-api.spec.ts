@@ -245,8 +245,7 @@ test.describe.serial("出席管理 E2E テスト", () => {
     expect(activeBody.session).toBeNull();
   });
 
-  test("項目4: 強制退室後のイベント送信が409になる", async ({ request }) => {
-    // PAUSE_TIMEOUT_MSはCI環境で制御できないため、force-exitエンドポイントを直接使用
+  test("項目4: force-exitでセッションが強制終了し、activeセッションがなくなる", async ({ request }) => {
     const token = crypto.randomUUID();
     const session = await createSession(request, token);
 
@@ -264,14 +263,18 @@ test.describe.serial("出席管理 E2E テスト", () => {
       }
     );
     expect(forceExitRes.status()).toBe(200);
+    const forceExitBody = await forceExitRes.json();
+    expect(forceExitBody.session.status).toBe("force_exited");
+    expect(forceExitBody.session.exitReason).toBe("pause_timeout");
 
-    // 強制退室後のイベント送信 → 409
-    const res = await sendEvents(request, token, [
-      { eventType: "heartbeat", position: 30, clientTimestamp: Date.now() },
-    ]);
-    expect(res.status()).toBe(409);
-    const body = await res.json();
-    expect(body.error).toBe("session_force_exited");
+    // activeセッションがなくなる（200 + session: null）
+    const activeRes = await request.get(
+      `${API_BASE}/lesson-sessions/active?lessonId=${LESSON_ID}`,
+      { headers: AUTH_HEADERS }
+    );
+    expect(activeRes.status()).toBe(200);
+    const activeBody = await activeRes.json();
+    expect(activeBody.session).toBeNull();
   });
 
   test("項目7: 統合シナリオ（完了→pause→play→abandon）", async ({ request }) => {
