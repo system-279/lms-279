@@ -9,6 +9,7 @@ export interface SuperTenantListItem {
   name: string;
   ownerEmail: string;
   status: TenantStatus;
+  userCount: number;
   createdAt: string | null;
   updatedAt: string | null;
 }

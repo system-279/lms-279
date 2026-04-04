@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,27 +29,11 @@ import {
 } from "@/components/ui/select";
 import { useSuperAdminFetch } from "@/lib/super-api";
 import { ApiError } from "@/lib/api";
-
-type TenantStatus = "active" | "suspended";
-
-type Tenant = {
-  id: string;
-  name: string;
-  ownerEmail: string;
-  status: TenantStatus;
-  createdAt: string | null;
-  updatedAt: string | null;
-};
-
-type TenantListResponse = {
-  tenants: Tenant[];
-  pagination: {
-    total: number;
-    limit: number;
-    offset: number;
-    hasMore: boolean;
-  };
-};
+import type {
+  TenantStatus,
+  SuperTenantListItem,
+  SuperTenantListResponse,
+} from "@lms-279/shared-types";
 
 function StatusBadge({ status }: { status: TenantStatus }) {
   if (status === "active") {
@@ -80,7 +65,7 @@ export default function SuperTenantsPage() {
   const superFetchRef = useRef(superFetch);
   superFetchRef.current = superFetch;
 
-  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [tenants, setTenants] = useState<SuperTenantListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -95,7 +80,7 @@ export default function SuperTenantsPage() {
 
   // Edit dialog
   const [editOpen, setEditOpen] = useState(false);
-  const [editingTenant, setEditingTenant] = useState<Tenant | null>(null);
+  const [editingTenant, setEditingTenant] = useState<SuperTenantListItem | null>(null);
   const [editName, setEditName] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [editStatus, setEditStatus] = useState<TenantStatus>("active");
@@ -104,7 +89,7 @@ export default function SuperTenantsPage() {
 
   // Delete dialog
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [deletingTenant, setDeletingTenant] = useState<Tenant | null>(null);
+  const [deletingTenant, setDeletingTenant] = useState<SuperTenantListItem | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -113,7 +98,7 @@ export default function SuperTenantsPage() {
     setError(null);
     try {
       const query = statusFilter !== "all" ? `?status=${statusFilter}` : "";
-      const data = await superFetchRef.current<TenantListResponse>(
+      const data = await superFetchRef.current<SuperTenantListResponse>(
         `/api/v2/super/tenants${query}`,
       );
       setTenants(data.tenants);
@@ -154,7 +139,7 @@ export default function SuperTenantsPage() {
     }
   };
 
-  const openEdit = (tenant: Tenant) => {
+  const openEdit = (tenant: SuperTenantListItem) => {
     setEditingTenant(tenant);
     setEditName(tenant.name);
     setEditEmail(tenant.ownerEmail);
@@ -190,7 +175,7 @@ export default function SuperTenantsPage() {
     }
   };
 
-  const openDelete = (tenant: Tenant) => {
+  const openDelete = (tenant: SuperTenantListItem) => {
     setDeletingTenant(tenant);
     setDeleteError(null);
     setDeleteOpen(true);
@@ -272,6 +257,7 @@ export default function SuperTenantsPage() {
               <TableHead>組織名</TableHead>
               <TableHead>オーナー</TableHead>
               <TableHead>ステータス</TableHead>
+              <TableHead>ユーザー数</TableHead>
               <TableHead>作成日</TableHead>
               <TableHead>操作</TableHead>
             </TableRow>
@@ -291,6 +277,9 @@ export default function SuperTenantsPage() {
                 <TableCell>
                   <StatusBadge status={tenant.status} />
                 </TableCell>
+                <TableCell className="text-center">
+                  {tenant.userCount}
+                </TableCell>
                 <TableCell>
                   {tenant.createdAt
                     ? new Date(tenant.createdAt).toLocaleDateString("ja-JP")
@@ -298,6 +287,11 @@ export default function SuperTenantsPage() {
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2 flex-wrap">
+                    <Link href={`/super/tenants/${tenant.id}`}>
+                      <Button variant="outline" size="sm">
+                        詳細
+                      </Button>
+                    </Link>
                     <Button
                       variant="outline"
                       size="sm"

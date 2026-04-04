@@ -12,6 +12,7 @@
 
 import { Router, Request, Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
 import type { SuperAttendanceResponse, SuperStudentProgressResponse, TenantEnrollmentSettingResponse } from "@lms-279/shared-types";
 import {
   superAdminAuthMiddleware,
@@ -54,6 +55,7 @@ interface TenantListItem {
   name: string;
   ownerEmail: string;
   status: TenantStatus;
+  userCount: number;
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -127,13 +129,21 @@ router.get("/tenants", async (req: Request, res: Response) => {
 
   const snapshot = await query.offset(offset).limit(limit).get();
 
-  const tenants: TenantListItem[] = snapshot.docs.map((doc) => {
+  // 各テナントのユーザー数を並列取得
+  const userCounts = await Promise.all(
+    snapshot.docs.map((doc) =>
+      db.collection(`tenants/${doc.id}/users`).count().get()
+    )
+  );
+
+  const tenants: TenantListItem[] = snapshot.docs.map((doc, i) => {
     const data = doc.data();
     return {
       id: data.id ?? doc.id,
       name: data.name ?? "",
       ownerEmail: data.ownerEmail ?? "",
       status: data.status ?? "active",
+      userCount: userCounts[i].data().count,
       createdAt: data.createdAt?.toDate?.()?.toISOString() ?? null,
       updatedAt: data.updatedAt?.toDate?.()?.toISOString() ?? null,
     };
@@ -234,6 +244,15 @@ router.post("/tenants", async (req: Request, res: Response) => {
 
   const now = new Date();
 
+  // オーナーのFirebase UIDを解決（未登録ユーザーの場合はnull）
+  let ownerUid: string | null = null;
+  try {
+    const userRecord = await getAuth().getUserByEmail(normalizedOwnerEmail);
+    ownerUid = userRecord.uid;
+  } catch {
+    // ユーザーが未登録の場合は初回ログイン時に解決される
+  }
+
   // トランザクションでテナント作成（createで重複を防止）
   try {
     await db.runTransaction(async (transaction) => {
@@ -241,7 +260,7 @@ router.post("/tenants", async (req: Request, res: Response) => {
       transaction.create(tenantRef, {
         id: tenantId,
         name: trimmedName,
-        ownerId: "",
+        ownerId: ownerUid ?? "",
         ownerEmail: normalizedOwnerEmail,
         status: "active" as TenantStatus,
         createdAt: now,
@@ -260,6 +279,24 @@ router.post("/tenants", async (req: Request, res: Response) => {
         note: "オーナー（スーパー管理者が登録）",
         createdAt: now,
       });
+
+      // オーナーが既存Firebase Authユーザーの場合、初期管理者ユーザーを作成
+      if (ownerUid) {
+        const userRef = db
+          .collection("tenants")
+          .doc(tenantId)
+          .collection("users")
+          .doc();
+        transaction.set(userRef, {
+          id: userRef.id,
+          email: normalizedOwnerEmail,
+          name: null,
+          role: "admin",
+          firebaseUid: ownerUid,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
     });
   } catch (txError) {
     const grpcCode = (txError as { code?: number })?.code;
@@ -294,7 +331,7 @@ router.post("/tenants", async (req: Request, res: Response) => {
     tenant: {
       id: tenantId,
       name: trimmedName,
-      ownerId: "",
+      ownerId: ownerUid ?? "",
       ownerEmail: normalizedOwnerEmail,
       status: "active",
       createdAt: now.toISOString(),
@@ -432,8 +469,9 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
   }
 
   if (ownerEmail !== undefined && ownerEmail !== previousData.ownerEmail) {
-    updateData.ownerEmail = ownerEmail.toLowerCase();
-    changes.push(`ownerEmail: "${previousData.ownerEmail}" -> "${ownerEmail.toLowerCase()}"`);
+    const normalizedNewEmail = normalizeEmail(ownerEmail);
+    updateData.ownerEmail = normalizedNewEmail;
+    changes.push(`ownerEmail: "${previousData.ownerEmail}" -> "${normalizedNewEmail}"`);
   }
 
   if (status !== undefined && status !== previousData.status) {
@@ -451,10 +489,11 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
 
   await tenantRef.update(updateData);
 
-  const superAdmin = req.superAdmin;
-  console.log(
-    `[SuperAdmin] Tenant updated: ${id} - ${changes.join(", ")} by ${superAdmin?.email}`
-  );
+  logger.info("Tenant updated by super admin", {
+    tenantId: id,
+    changes,
+    operatorEmail: req.superAdmin?.email,
+  });
 
   const updatedDoc = await tenantRef.get();
   const updatedData = updatedDoc.data()!;
@@ -492,12 +531,26 @@ router.delete("/tenants/:id", async (req: Request, res: Response) => {
 
   const tenantData = tenantDoc.data()!;
 
-  await db.recursiveDelete(tenantRef);
+  try {
+    await db.recursiveDelete(tenantRef);
+  } catch (deleteError) {
+    logger.error("Tenant deletion failed", {
+      error: deleteError instanceof Error ? deleteError : new Error(String(deleteError)),
+      tenantId: id,
+      operatorEmail: req.superAdmin?.email,
+    });
+    res.status(500).json({
+      error: "delete_failed",
+      message: "テナントの削除中にエラーが発生しました。再度お試しください。",
+    });
+    return;
+  }
 
-  const superAdmin = req.superAdmin;
-  console.log(
-    `[SuperAdmin] Tenant deleted: ${id} (${tenantData.name}) by ${superAdmin?.email}`
-  );
+  logger.info("Tenant deleted by super admin", {
+    tenantId: id,
+    tenantName: tenantData.name,
+    operatorEmail: req.superAdmin?.email,
+  });
 
   res.json({
     message: "テナントを削除しました。",
