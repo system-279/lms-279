@@ -329,12 +329,14 @@ test.describe.serial("出席管理 E2E テスト", () => {
     );
     expect(abandonRes.status()).toBe(204);
 
-    // 6. activeセッションなし
+    // 6. activeセッションなし（200 + session: null）
     activeRes = await request.get(
       `${API_BASE}/lesson-sessions/active?lessonId=${LESSON_ID}`,
       { headers: AUTH_HEADERS }
     );
-    expect(activeRes.status()).toBe(404);
+    expect(activeRes.status()).toBe(200);
+    const abandonedBody = await activeRes.json();
+    expect(abandonedBody.session).toBeNull();
 
     // 7. 新しいセッション作成可能
     const newToken = crypto.randomUUID();
