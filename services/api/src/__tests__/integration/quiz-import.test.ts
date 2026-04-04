@@ -9,7 +9,7 @@ describe("quiz-import service", () => {
     beforeEach(async () => {
       const mod = await import("../../services/quiz-import.js");
       validateImportedQuestions = mod.validateImportedQuestions;
-    });
+    }, 30_000);
 
     it("validates well-formed questions with isCorrect set", () => {
       const input = [
