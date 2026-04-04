@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useSuperAdminFetch } from "@/lib/super-api";
+import { ApiError } from "@/lib/api";
 
 type TenantStatus = "active" | "suspended";
 
@@ -62,6 +63,16 @@ function StatusBadge({ status }: { status: TenantStatus }) {
       停止中
     </Badge>
   );
+}
+
+function getErrorMessage(e: unknown, fallback: string): string {
+  if (e instanceof ApiError) {
+    if (e.status === 401) return "認証の有効期限が切れました。再ログインしてください。";
+    if (e.status === 403) return "この操作を行う権限がありません。";
+    return e.message || fallback;
+  }
+  if (e instanceof Error) return e.message;
+  return fallback;
 }
 
 export default function SuperTenantsPage() {
@@ -108,9 +119,8 @@ export default function SuperTenantsPage() {
       setTenants(data.tenants);
       setTotal(data.pagination.total);
     } catch (e) {
-      setError(
-        e instanceof Error ? e.message : "テナント一覧の取得に失敗しました",
-      );
+      console.error("[SuperTenantsPage] Failed to fetch tenants:", e);
+      setError(getErrorMessage(e, "テナント一覧の取得に失敗しました"));
     } finally {
       setLoading(false);
     }
@@ -135,9 +145,10 @@ export default function SuperTenantsPage() {
       setCreateOpen(false);
       setCreateName("");
       setCreateEmail("");
-      fetchTenants();
+      await fetchTenants();
     } catch (e) {
-      setCreateError(e instanceof Error ? e.message : "作成に失敗しました");
+      console.error("[SuperTenantsPage] Failed to create tenant:", e);
+      setCreateError(getErrorMessage(e, "作成に失敗しました"));
     } finally {
       setCreateLoading(false);
     }
@@ -170,9 +181,10 @@ export default function SuperTenantsPage() {
       );
       setEditOpen(false);
       setEditingTenant(null);
-      fetchTenants();
+      await fetchTenants();
     } catch (e) {
-      setEditError(e instanceof Error ? e.message : "更新に失敗しました");
+      console.error("[SuperTenantsPage] Failed to edit tenant:", e);
+      setEditError(getErrorMessage(e, "更新に失敗しました"));
     } finally {
       setEditLoading(false);
     }
@@ -195,9 +207,10 @@ export default function SuperTenantsPage() {
       );
       setDeleteOpen(false);
       setDeletingTenant(null);
-      fetchTenants();
+      await fetchTenants();
     } catch (e) {
-      setDeleteError(e instanceof Error ? e.message : "削除に失敗しました");
+      console.error("[SuperTenantsPage] Failed to delete tenant:", e);
+      setDeleteError(getErrorMessage(e, "削除に失敗しました"));
     } finally {
       setDeleteLoading(false);
     }

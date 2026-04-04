@@ -22,6 +22,8 @@ import {
 import type { TenantMetadata, TenantStatus } from "../types/tenant.js";
 import { masterRouter } from "./super-admin-master.js";
 import { calculateDefaultDeadlines } from "../services/enrollment.js";
+import { generateTenantId, normalizeEmail } from "../utils/tenant-id.js";
+import { logger } from "../utils/logger.js";
 
 const router = Router();
 
@@ -150,27 +152,6 @@ router.get("/tenants", async (req: Request, res: Response) => {
   res.json(response);
 });
 
-// ========================================
-// テナントID生成用ヘルパー
-// ========================================
-const RESERVED_TENANT_IDS = new Set([
-  "demo", "admin", "student", "api", "tenants", "register",
-  "login", "logout", "auth", "healthz", "static", "public",
-  "_next", "favicon", "robots", "sitemap", "_master", "super", "help",
-]);
-
-function generateTenantId(): string {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let result = "";
-  for (let i = 0; i < 8; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  if (RESERVED_TENANT_IDS.has(result)) {
-    return generateTenantId();
-  }
-  return result;
-}
-
 /**
  * テナント作成（スーパー管理者用）
  * POST /api/v2/super/tenants
@@ -212,7 +193,7 @@ router.post("/tenants", async (req: Request, res: Response) => {
     return;
   }
 
-  const normalizedEmail = ownerEmail.toLowerCase().trim();
+  const normalizedOwnerEmail = normalizeEmail(ownerEmail);
   const trimmedName = name.trim();
 
   const db = getFirestore();
@@ -222,11 +203,25 @@ router.post("/tenants", async (req: Request, res: Response) => {
   let attempts = 0;
   const maxAttempts = 10;
 
-  while (attempts < maxAttempts) {
-    tenantId = generateTenantId();
-    const existingDoc = await db.collection("tenants").doc(tenantId).get();
-    if (!existingDoc.exists) break;
-    attempts++;
+  try {
+    while (attempts < maxAttempts) {
+      tenantId = generateTenantId();
+      const existingDoc = await db.collection("tenants").doc(tenantId).get();
+      if (!existingDoc.exists) break;
+      logger.warn("Tenant ID collision during creation", { tenantId, attempt: attempts + 1 });
+      attempts++;
+    }
+  } catch (e) {
+    logger.error("Failed to check tenant ID uniqueness", {
+      error: e instanceof Error ? e : new Error(String(e)),
+      tenantId,
+      operatorEmail: req.superAdmin?.email,
+    });
+    res.status(500).json({
+      error: "id_generation_failed",
+      message: "テナントIDの生成中にエラーが発生しました。再度お試しください。",
+    });
+    return;
   }
 
   if (attempts >= maxAttempts) {
@@ -239,15 +234,15 @@ router.post("/tenants", async (req: Request, res: Response) => {
 
   const now = new Date();
 
-  // トランザクションでテナント作成
+  // トランザクションでテナント作成（createで重複を防止）
   try {
     await db.runTransaction(async (transaction) => {
       const tenantRef = db.collection("tenants").doc(tenantId);
-      transaction.set(tenantRef, {
+      transaction.create(tenantRef, {
         id: tenantId,
         name: trimmedName,
         ownerId: "",
-        ownerEmail: normalizedEmail,
+        ownerEmail: normalizedOwnerEmail,
         status: "active" as TenantStatus,
         createdAt: now,
         updatedAt: now,
@@ -261,31 +256,46 @@ router.post("/tenants", async (req: Request, res: Response) => {
         .doc();
       transaction.set(allowedEmailRef, {
         id: allowedEmailRef.id,
-        email: normalizedEmail,
+        email: normalizedOwnerEmail,
         note: "オーナー（スーパー管理者が登録）",
         createdAt: now,
       });
     });
   } catch (txError) {
-    console.error("Transaction failed:", txError);
-    res.status(500).json({
+    const grpcCode = (txError as { code?: number })?.code;
+    const isTransient = grpcCode === 14 || grpcCode === 4;
+
+    logger.error("Tenant creation transaction failed", {
+      error: txError instanceof Error ? txError : new Error(String(txError)),
+      tenantId,
+      ownerEmail: normalizedOwnerEmail,
+      operatorEmail: req.superAdmin?.email,
+      grpcCode,
+      isTransient,
+    });
+
+    res.status(isTransient ? 503 : 500).json({
       error: "transaction_failed",
-      message: "テナントの作成中にエラーが発生しました。",
+      message: isTransient
+        ? "サーバーが一時的に利用できません。数秒後に再度お試しください。"
+        : "テナントの作成中にエラーが発生しました。",
     });
     return;
   }
 
-  const superAdmin = req.superAdmin;
-  console.log(
-    `[SuperAdmin] Tenant created: ${tenantId} (${trimmedName}) owner=${normalizedEmail} by ${superAdmin?.email}`
-  );
+  logger.info("Tenant created by super admin", {
+    tenantId,
+    tenantName: trimmedName,
+    ownerEmail: normalizedOwnerEmail,
+    operatorEmail: req.superAdmin?.email,
+  });
 
   res.status(201).json({
     tenant: {
       id: tenantId,
       name: trimmedName,
       ownerId: "",
-      ownerEmail: normalizedEmail,
+      ownerEmail: normalizedOwnerEmail,
       status: "active",
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
