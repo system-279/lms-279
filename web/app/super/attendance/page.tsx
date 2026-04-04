@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isoToDatetimeLocal, datetimeLocalToISO } from "@/lib/tz-helpers";
+import { datetimeLocalToISO } from "@/lib/tz-helpers";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -97,8 +97,9 @@ export default function AttendanceReportPage() {
   // 編集ダイアログ
   const [editOpen, setEditOpen] = useState(false);
   const [editRecord, setEditRecord] = useState<SuperAttendanceRecord | null>(null);
-  const [editEntryAt, setEditEntryAt] = useState("");
-  const [editExitAt, setEditExitAt] = useState("");
+  const [editDate, setEditDate] = useState("");
+  const [editEntryTime, setEditEntryTime] = useState("");
+  const [editExitTime, setEditExitTime] = useState("");
   const [editScore, setEditScore] = useState("");
   const [editPassed, setEditPassed] = useState("");
   const [editLoading, setEditLoading] = useState(false);
@@ -248,10 +249,25 @@ export default function AttendanceReportPage() {
     return records;
   }, [report, filterUsers, filterCourses, filterLessons, filterExitReasons, filterQuizPassed, sortKey, sortDir]);
 
+  /** ISO文字列からローカル日付部分(yyyy-MM-dd)を取得 */
+  const isoToDate = (iso: string | null): string => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
+  /** ISO文字列からローカル時刻部分(HH:mm)を取得 */
+  const isoToTime = (iso: string | null): string => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+
   const openEdit = (record: SuperAttendanceRecord) => {
     setEditRecord(record);
-    setEditEntryAt(isoToDatetimeLocal(record.entryAt));
-    setEditExitAt(isoToDatetimeLocal(record.exitAt));
+    setEditDate(isoToDate(record.entryAt));
+    setEditEntryTime(isoToTime(record.entryAt));
+    setEditExitTime(isoToTime(record.exitAt));
     setEditScore(record.quizScore?.toString() ?? "");
     setEditPassed(record.quizPassed === null ? "" : record.quizPassed ? "true" : "false");
     setEditError(null);
@@ -264,8 +280,12 @@ export default function AttendanceReportPage() {
     setEditError(null);
     try {
       const body: Record<string, unknown> = {};
-      if (editEntryAt) body.entryAt = datetimeLocalToISO(editEntryAt);
-      if (editExitAt) body.exitAt = datetimeLocalToISO(editExitAt);
+      if (editDate && editEntryTime) {
+        body.entryAt = datetimeLocalToISO(`${editDate}T${editEntryTime}`);
+      }
+      if (editDate && editExitTime) {
+        body.exitAt = datetimeLocalToISO(`${editDate}T${editExitTime}`);
+      }
       if (editScore !== "") body.quizScore = Number(editScore);
       if (editPassed !== "") body.quizPassed = editPassed === "true";
 
@@ -501,20 +521,30 @@ export default function AttendanceReportPage() {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1">
-              <label className="text-sm font-medium">入室時刻</label>
+              <label className="text-sm font-medium">日付</label>
               <Input
-                type="datetime-local"
-                value={editEntryAt}
-                onChange={(e) => setEditEntryAt(e.target.value)}
+                type="date"
+                value={editDate}
+                onChange={(e) => setEditDate(e.target.value)}
               />
             </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium">退室時刻</label>
-              <Input
-                type="datetime-local"
-                value={editExitAt}
-                onChange={(e) => setEditExitAt(e.target.value)}
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-sm font-medium">入室時間</label>
+                <Input
+                  type="time"
+                  value={editEntryTime}
+                  onChange={(e) => setEditEntryTime(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium">退室時間</label>
+                <Input
+                  type="time"
+                  value={editExitTime}
+                  onChange={(e) => setEditExitTime(e.target.value)}
+                />
+              </div>
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium">テスト点数</label>
