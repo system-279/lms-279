@@ -105,6 +105,28 @@ export async function getSheetsClient(): Promise<sheets_v4.Sheets> {
 }
 
 /**
+ * 指定ユーザーのsubjectで認証したSheets+Driveクライアントを返す
+ * 操作ユーザーのマイドライブにスプレッドシートを作成するために使用
+ * シングルトンキャッシュには影響しない（リクエストごとに生成）
+ */
+export async function getClientsForUser(userEmail: string): Promise<{
+  sheets: sheets_v4.Sheets;
+  drive: drive_v3.Drive;
+}> {
+  const keyData = await getDwdKeyFromSecretManager();
+  const auth = new google.auth.JWT({
+    email: keyData.client_email,
+    key: keyData.private_key,
+    scopes: SCOPES,
+    subject: userEmail,
+  });
+  return {
+    sheets: google.sheets({ version: "v4", auth }),
+    drive: google.drive({ version: "v3", auth }),
+  };
+}
+
+/**
  * Google Workspace 連携が利用可能か確認
  * リクエスト時に環境変数を読み取る
  */
