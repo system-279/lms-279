@@ -539,9 +539,9 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
       userName: user?.name ?? null,
       userEmail: user?.email ?? null,
       courseId: data.courseId ?? "",
-      courseName: coursesMap.get(data.courseId) ?? data.courseId ?? "",
+      courseName: coursesMap.get(data.courseId) ?? (data.courseId ? `(削除済みコース: ${data.courseId.slice(0, 8)}…)` : ""),
       lessonId: data.lessonId,
-      lessonTitle: lessonsMap.get(data.lessonId) ?? data.lessonId,
+      lessonTitle: lessonsMap.get(data.lessonId) ?? (data.lessonId ? `(削除済みレッスン: ${data.lessonId.slice(0, 8)}…)` : data.lessonId),
       date: data.entryAt?.toDate?.().toISOString?.()?.split("T")[0]
         ?? (typeof data.entryAt === "string" ? data.entryAt.split("T")[0] : null),
       entryAt: data.entryAt?.toDate?.().toISOString?.() ?? data.entryAt ?? null,
