@@ -26,6 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAuthenticatedFetch } from "@/lib/hooks/use-authenticated-fetch";
+import { useAuth } from "@/lib/auth-context";
 
 type UserRole = "admin" | "student";
 
@@ -37,17 +38,16 @@ type User = {
   createdAt: string;
 };
 
-const ROLE_LABELS: Record<UserRole, string> = {
-  admin: "管理者",
-  student: "受講者",
-};
-
 export default function UsersPage() {
   const { authFetch } = useAuthenticatedFetch();
+  const { user: currentUser } = useAuth();
 
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Role update (inline)
+  const [updatingRoleId, setUpdatingRoleId] = useState<string | null>(null);
 
   // Create dialog
   const [createOpen, setCreateOpen] = useState(false);
@@ -114,6 +114,28 @@ export default function UsersPage() {
       setCreateError(e instanceof Error ? e.message : "作成に失敗しました");
     } finally {
       setCreateLoading(false);
+    }
+  };
+
+  const handleRoleChange = async (userId: string, newRole: UserRole) => {
+    const prev = users.find((u) => u.id === userId);
+    if (!prev || prev.role === newRole) return;
+
+    // Optimistic update
+    setUsers((us) => us.map((u) => (u.id === userId ? { ...u, role: newRole } : u)));
+    setUpdatingRoleId(userId);
+    try {
+      await authFetch(`/api/v1/admin/users/${userId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: newRole }),
+      });
+    } catch (e) {
+      // Rollback
+      setUsers((us) => us.map((u) => (u.id === userId ? { ...u, role: prev.role } : u)));
+      setError(e instanceof Error ? e.message : "ロールの変更に失敗しました");
+    } finally {
+      setUpdatingRoleId(null);
     }
   };
 
@@ -220,7 +242,21 @@ export default function UsersPage() {
               <TableRow key={user.id}>
                 <TableCell className="font-medium">{user.name}</TableCell>
                 <TableCell>{user.email}</TableCell>
-                <TableCell>{ROLE_LABELS[user.role] ?? user.role}</TableCell>
+                <TableCell>
+                  <Select
+                    value={user.role}
+                    onValueChange={(v) => handleRoleChange(user.id, v as UserRole)}
+                    disabled={updatingRoleId === user.id || user.email === currentUser?.email}
+                  >
+                    <SelectTrigger className="w-[100px] h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="student">受講者</SelectItem>
+                      <SelectItem value="admin">管理者</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </TableCell>
                 <TableCell>
                   {new Date(user.createdAt).toLocaleDateString("ja-JP")}
                 </TableCell>
