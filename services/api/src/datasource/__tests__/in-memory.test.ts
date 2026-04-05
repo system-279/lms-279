@@ -721,4 +721,30 @@ describe("InMemoryDataSource", () => {
       expect(course).not.toBeNull();
     });
   });
+
+  // -----------------------------------------------
+  // AllowedEmails
+  // -----------------------------------------------
+
+  describe("AllowedEmails", () => {
+    let ds: InMemoryDataSource;
+
+    beforeEach(() => {
+      ds = new InMemoryDataSource({ readOnly: false });
+    });
+
+    it("deleteAllowedEmailByEmail はメールアドレスで削除できる", async () => {
+      await ds.createAllowedEmail({ email: "test@example.com", note: "test" });
+      expect(await ds.isEmailAllowed("test@example.com")).toBe(true);
+
+      const result = await ds.deleteAllowedEmailByEmail("test@example.com");
+      expect(result).toBe(true);
+      expect(await ds.isEmailAllowed("test@example.com")).toBe(false);
+    });
+
+    it("deleteAllowedEmailByEmail は存在しないメールでfalseを返す", async () => {
+      const result = await ds.deleteAllowedEmailByEmail("nonexistent@example.com");
+      expect(result).toBe(false);
+    });
+  });
 });

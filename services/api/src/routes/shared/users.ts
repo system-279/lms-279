@@ -182,6 +182,14 @@ router.delete("/admin/users/:id", requireAdmin, async (req: Request, res: Respon
   }
 
   await ds.deleteUser(id);
+
+  // allowed_emailsも同時削除（削除後の再ログインによるユーザー復活を防止）
+  try {
+    await ds.deleteAllowedEmailByEmail(existing.email);
+  } catch (e) {
+    console.error("[Users] Failed to delete allowed_email for:", existing.email, e);
+  }
+
   res.status(204).send();
 });
 
