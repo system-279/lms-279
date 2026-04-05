@@ -456,6 +456,16 @@ export class FirestoreDataSource implements DataSource {
     return true;
   }
 
+  async deleteAllowedEmailByEmail(email: string): Promise<boolean> {
+    const snapshot = await this.collection("allowed_emails")
+      .where("email", "==", email)
+      .limit(1)
+      .get();
+    if (snapshot.empty) return false;
+    await snapshot.docs[0].ref.delete();
+    return true;
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private toAllowedEmail(id: string, data: any): AllowedEmail {
     return {

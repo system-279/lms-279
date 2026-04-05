@@ -508,6 +508,14 @@ export class InMemoryDataSource implements DataSource {
     return true;
   }
 
+  async deleteAllowedEmailByEmail(email: string): Promise<boolean> {
+    this.throwIfReadOnly();
+    const index = this.allowedEmails.findIndex((e) => e.email === email);
+    if (index === -1) return false;
+    this.allowedEmails.splice(index, 1);
+    return true;
+  }
+
   // Notification Policies
   async getNotificationPolicies(filter?: NotificationPolicyFilter): Promise<NotificationPolicy[]> {
     let result = [...this.notificationPolicies];

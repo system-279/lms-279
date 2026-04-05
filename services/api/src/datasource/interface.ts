@@ -100,6 +100,7 @@ export interface DataSource {
   isEmailAllowed(email: string): Promise<boolean>;
   createAllowedEmail(data: Omit<AllowedEmail, "id" | "createdAt">): Promise<AllowedEmail>;
   deleteAllowedEmail(id: string): Promise<boolean>;
+  deleteAllowedEmailByEmail(email: string): Promise<boolean>;
 
   // Notification Policies
   getNotificationPolicies(filter?: NotificationPolicyFilter): Promise<NotificationPolicy[]>;
