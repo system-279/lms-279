@@ -18,6 +18,8 @@ import {
   ClipboardList,
   Mail,
   Play,
+  Calendar,
+  Building2,
 } from "lucide-react";
 
 // ─── 型定義 ─────────────────────────────────
@@ -86,9 +88,37 @@ const screenSections: ScreenSection[] = [
         linkable: true,
       },
       {
+        name: "テナント管理",
+        url: "/super/tenants",
+        description: "テナントの作成・管理",
+        icon: <Building2 className="size-4" />,
+        linkable: true,
+      },
+      {
+        name: "受講状況",
+        url: "/super/progress",
+        description: "全テナントの受講進捗確認",
+        icon: <BarChart3 className="size-4" />,
+        linkable: true,
+      },
+      {
+        name: "出席レポート",
+        url: "/super/attendance",
+        description: "テナント横断の出席記録・PDF出力",
+        icon: <ClipboardList className="size-4" />,
+        linkable: true,
+      },
+      {
+        name: "受講期間管理",
+        url: "/super/enrollments",
+        description: "テナント別の受講開始日・アクセス期限設定",
+        icon: <Calendar className="size-4" />,
+        linkable: true,
+      },
+      {
         name: "設定",
         url: "/super/settings",
-        description: "テナント管理",
+        description: "スーパー管理者の追加・削除",
         icon: <Settings className="size-4" />,
         linkable: true,
       },
