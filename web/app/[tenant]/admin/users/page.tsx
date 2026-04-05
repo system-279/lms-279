@@ -363,6 +363,22 @@ export default function UsersPage() {
               <br />
               <span className="text-xs">※ 値にカンマや改行を含めないでください。上限500行。</span>
             </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const csv = "email,name,role\nuser@example.com,山田太郎,student\n";
+                const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "users_template.csv";
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+            >
+              テンプレートCSVをダウンロード
+            </Button>
             <input
               type="file"
               accept=".csv,text/csv"
