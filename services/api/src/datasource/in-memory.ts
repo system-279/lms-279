@@ -492,8 +492,10 @@ export class InMemoryDataSource implements DataSource {
 
   async createAllowedEmail(data: Omit<AllowedEmail, "id" | "createdAt">): Promise<AllowedEmail> {
     this.throwIfReadOnly();
+    // 防御的正規化（ADR-031 必須条件 #3）。firestore.ts と同じ処理を in-memory でも実施。
     const allowedEmail: AllowedEmail = {
       ...data,
+      email: data.email.trim().toLowerCase(),
       id: InMemoryDataSource.uniqueId("allowed"),
       createdAt: new Date().toISOString(),
     };

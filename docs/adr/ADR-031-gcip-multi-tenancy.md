@@ -61,14 +61,15 @@ Firebase Authentication を Google Cloud Identity Platform（GCIP）のマルチ
 | email_verified チェック | ✅ 実装済み（Issue #286 / PR #288: `findOrCreateTenantUser` + Issue #289: `superAdminAuthMiddleware` の 2 経路で必須化） | `help-role.ts` / `tenants.ts` 等の `verifyIdToken` 直接呼び出し箇所にも適用（後続 Issue） |
 | sign_in_provider 制限 | ✅ 実装済み（Issue #286 / PR #288 + Issue #289: 上記 2 経路で `firebase.sign_in_provider === "google.com"` のみ許可） | 同上 |
 | checkRevoked=true（即時失効） | ✅ 実装済み（B-1: `tenantAwareAuthMiddleware` + Issue #289: `superAdminAuthMiddleware` の 2 経路で `verifyIdToken(..., true)`） | 同上 |
+| メール正規化 | ✅ `.trim().toLowerCase()` で統一（PR #277 で route/middleware 層、Issue #278 / PR #284 で DataSource 層に拡張） | 維持 |
 
 > **適用スコープ注記**: 上記 ✅ は `tenantAwareAuthMiddleware` (`middleware/tenant-auth.ts`) と `superAdminAuthMiddleware` (`middleware/super-admin.ts`) の 2 経路に限定。`routes/help-role.ts` および `routes/tenants.ts` 冒頭には `verifyIdToken(idToken)` の直接呼び出しが残っており、同等ガードは未適用（後続 Issue で対応）。
 
 > **Firestore 障害時の挙動 (Issue #293 / PR)**: `getSuperAdminsFromFirestore` は Firestore アクセス失敗時に空配列を silent に返していたため、env に未登録の super-admin が silent に 403 で締め出される「部分 fail-open + ユーザー欺瞞」状態だった。
 > - 修正後: `SuperAdminFirestoreUnavailableError` を throw し、`superAdminAuthMiddleware`（super-admin 専用 endpoint）は 503 Service Unavailable で返却（env 高速パスで通過済みのケースはここに到達しない）
 > - `tenantAwareAuthMiddleware#checkSuperAdmin` / `routes/help-role.ts` は既存の try/catch で障害を吸収し、従来どおり権限縮小して継続する（**セキュリティ境界として fail-open には戻らないが**、Firestore 登録 super-admin がテナント API / help 画面で一時的に通常ロール扱いになる silent UX degradation は残る。#292 等の後続 Issue で UX 改善検討）
-| メール正規化 | 🟡 `toLowerCase()` のみ（trim未実装） | `.trim().toLowerCase()` に統一 |
 | (tenantId, email) 認可単位 | ✅ 実装済み（テナントスコープの allowed_emails） | 維持 |
+| **認可チェック毎リクエスト実施** | ✅ **Issue #278 で対応済み**（既存 user 経路 4 箇所すべてに allowed_emails 再チェックを追加。スーパー管理者のみ例外） | 維持 |
 | クライアント Firestore 直接アクセス禁止 | ✅ 実装済み（`web/` 配下で `firebase/firestore` import ゼロ） | 維持 |
 | Custom Claims 利用 | ✅ 未使用（Claims 再発行問題なし） | 維持 |
 

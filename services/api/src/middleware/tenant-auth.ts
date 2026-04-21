@@ -149,6 +149,42 @@ async function checkSuperAdmin(email: string | undefined): Promise<boolean> {
   }
 }
 
+/**
+ * 継続的認可境界（ADR-006 / ADR-031 必須条件 #5）：
+ * allowed_emails を毎リクエスト再チェックし、未登録なら TenantAccessDeniedError を投げる。
+ *
+ * スーパー管理者は呼び出し側で判定済みの前提（本関数では判定しない）。
+ * 既存ユーザー経路（firebaseUid 一致 / email 一致 / x-user-id 一致）でも、
+ * allowed_emails から email が削除されていれば次回リクエストで 403 を返すことで、
+ * 「削除後の既存セッション継続」を防ぐ。
+ */
+async function ensureAllowlisted(
+  req: Request,
+  email: string | undefined
+): Promise<void> {
+  const ds = req.dataSource!;
+  const allowed = email ? await ds.isEmailAllowed(email) : false;
+  if (!allowed) {
+    const tenantId = req.tenantContext?.tenantId ?? "unknown";
+    throw new TenantAccessDeniedError(
+      `このメールアドレス (${email ?? "未設定"}) はテナント「${tenantId}」へのアクセスが許可されていません。`,
+      email ?? undefined,
+      tenantId
+    );
+  }
+}
+
+/**
+ * DB ユーザー email を allowlist チェック用に正規化する。
+ * 初期投入時に大文字/前後空白が残っている既存データへの防御的処理。
+ * 詳細: ADR-031 必須条件 #3（`.trim().toLowerCase()` のみ適用）。
+ */
+function normalizeStoredEmail(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  return normalized.length === 0 ? undefined : normalized;
+}
+
 async function findOrCreateTenantUser(
   req: Request,
   decodedToken: DecodedIdToken
@@ -179,13 +215,16 @@ async function findOrCreateTenantUser(
     );
   }
 
-  // firebaseUidでユーザーを検索（テナント内の既存ユーザーは常に許可）
+  // firebaseUidでユーザーを検索（継続的認可境界: allowed_emails を毎リクエスト再チェック）
   const existingByUid = await ds.getUserByFirebaseUid(uid);
   if (existingByUid) {
-    // 既にadminならスーパー管理者チェック不要
-    const superAdminAccess = existingByUid.role === "admin"
-      ? false
-      : await checkSuperAdmin(email);
+    // allowlist バイパスは super admin のみの特権なので、role にかかわらず判定する。
+    // （旧実装は role=admin で checkSuperAdmin をスキップしており、admin role の
+    //   super admin が allowlist 再チェックに引っかかる不整合があった）
+    const superAdminAccess = await checkSuperAdmin(email);
+    if (!superAdminAccess) {
+      await ensureAllowlisted(req, email ?? normalizeStoredEmail(existingByUid.email));
+    }
     return buildAuthUser(req, existingByUid, superAdminAccess, { firebaseUid: uid });
   }
 
@@ -193,11 +232,12 @@ async function findOrCreateTenantUser(
   if (email) {
     const existingByEmail = await ds.getUserByEmail(email);
     if (existingByEmail) {
-      // firebaseUidを設定
+      const superAdminAccess = await checkSuperAdmin(email);
+      // firebaseUid 設定前に authorization を確定させる（未許可ユーザーにUIDを書き込まない）
+      if (!superAdminAccess) {
+        await ensureAllowlisted(req, email);
+      }
       await ds.updateUser(existingByEmail.id, { firebaseUid: uid });
-      const superAdminAccess = existingByEmail.role === "admin"
-        ? false
-        : await checkSuperAdmin(email);
       return buildAuthUser(req, existingByEmail, superAdminAccess, { firebaseUid: uid });
     }
   }
@@ -253,13 +293,14 @@ async function findOrCreateDevUser(
 ): Promise<AuthUser | null> {
   const ds = req.dataSource!;
 
-  // メールアドレスで既存ユーザーを検索（テナント内にユーザーがいれば優先）
+  // メールアドレスで既存ユーザーを検索（継続的認可境界: allowed_emails を毎リクエスト再チェック）
   const existingByEmail = await ds.getUserByEmail(email);
   if (existingByEmail) {
-    // 既にadminならスーパー管理者チェック不要
-    const superAdminAccess = existingByEmail.role === "admin"
-      ? false
-      : await checkSuperAdmin(email);
+    // allowlist バイパスは super admin のみ（role=admin は全テナントバイパスではない）
+    const superAdminAccess = await checkSuperAdmin(email);
+    if (!superAdminAccess) {
+      await ensureAllowlisted(req, email);
+    }
     return buildAuthUser(req, existingByEmail, superAdminAccess);
   }
 
@@ -334,11 +375,24 @@ export const tenantAwareAuthMiddleware = async (
       // テナント内のユーザーとして検証
       const existingUser = await req.dataSource.getUserById(headerId);
       if (existingUser) {
-        req.user = {
-          id: existingUser.id,
-          role: existingUser.role,
-          email: existingUser.email ?? undefined,
-        };
+        // 継続的認可境界: dev 経路でも production と同等に allowlist を再チェック。
+        // スーパー管理者判定用 email は、ヘッダ email を優先し、なければ DB email を正規化して使用。
+        const resolvedEmail =
+          normalizeStoredEmail(headerEmail) ?? normalizeStoredEmail(existingUser.email);
+        // allowlist バイパスは super admin のみ（role=admin は allowlist 対象）
+        const superAdminAccess = await checkSuperAdmin(resolvedEmail);
+        if (!superAdminAccess) {
+          try {
+            await ensureAllowlisted(req, resolvedEmail);
+          } catch (error) {
+            if (error instanceof TenantAccessDeniedError) {
+              await handleTenantAccessDenied(error, req, res);
+              return;
+            }
+            throw error;
+          }
+        }
+        req.user = buildAuthUser(req, existingUser, superAdminAccess);
         return next();
       }
 

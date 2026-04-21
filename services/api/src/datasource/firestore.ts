@@ -440,9 +440,13 @@ export class FirestoreDataSource implements DataSource {
   }
 
   async createAllowedEmail(data: Omit<AllowedEmail, "id" | "createdAt">): Promise<AllowedEmail> {
+    // 防御的正規化: route 側 `parseEmailInput` に加え datasource 層でも
+    // `.trim().toLowerCase()` を徹底し、スクリプト/一括投入/将来の新規 caller 経由
+    // でも未正規化レコードが混入しないようにする（ADR-031 必須条件 #3）。
     const docRef = this.collection("allowed_emails").doc();
     await docRef.set({
       ...data,
+      email: data.email.trim().toLowerCase(),
       createdAt: new Date(),
     });
     const doc = await docRef.get();
