@@ -486,7 +486,8 @@ export class InMemoryDataSource implements DataSource {
   }
 
   async isEmailAllowed(email: string): Promise<boolean> {
-    return this.allowedEmails.some((e) => e.email === email);
+    const normalized = email.trim().toLowerCase();
+    return this.allowedEmails.some((e) => e.email.trim().toLowerCase() === normalized);
   }
 
   async createAllowedEmail(data: Omit<AllowedEmail, "id" | "createdAt">): Promise<AllowedEmail> {

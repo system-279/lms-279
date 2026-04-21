@@ -431,8 +431,9 @@ export class FirestoreDataSource implements DataSource {
   }
 
   async isEmailAllowed(email: string): Promise<boolean> {
+    const normalized = email.trim().toLowerCase();
     const snapshot = await this.collection("allowed_emails")
-      .where("email", "==", email)
+      .where("email", "==", normalized)
       .limit(1)
       .get();
     return !snapshot.empty;
