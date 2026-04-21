@@ -5,6 +5,8 @@
 
 import { Router, Request, Response } from "express";
 import { requireUser, requireAdmin } from "../../middleware/auth.js";
+import { revokeRefreshTokensByEmail } from "../../services/auth-revoke.js";
+import { logger } from "../../utils/logger.js";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VALID_ROLES = ["admin", "teacher", "student"] as const;
@@ -188,6 +190,16 @@ router.delete("/admin/users/:id", requireAdmin, async (req: Request, res: Respon
     await ds.deleteAllowedEmailByEmail(existing.email);
   } catch (e) {
     console.error("[Users] Failed to delete allowed_email for:", existing.email, e);
+  }
+
+  // Firebase Auth セッションを即時失効させる（削除と allowed_email 除去と同じ安全境界）
+  try {
+    await revokeRefreshTokensByEmail(existing.email);
+  } catch (e) {
+    logger.warn("Failed to revoke refresh tokens after user deletion", {
+      email: existing.email,
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 
   res.status(204).send();

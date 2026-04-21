@@ -54,7 +54,17 @@ export class TenantAccessDeniedError extends Error {
  * テナントアクセス拒否エラーをログ出力してレスポンスを返す
  * Firestoreに認証エラーログを保存（非同期、エラーでも処理を止めない）
  */
-async function handleTenantAccessDenied(
+/**
+ * テナントアクセス拒否時の共通ハンドラ。
+ *
+ * - レスポンス `message` はユーザー列挙防止のため固定の一般化文言。
+ * - 詳細な email / tenantId / 原因メッセージは logger.warn と
+ *   auth_error_logs コレクションに記録される。
+ *
+ * `export` しているのは単体テスト（tenant-auth-error-response.test.ts）から
+ * 直接呼び出すためで、外部モジュールから通常の経路として呼ぶことは想定していない。
+ */
+export async function handleTenantAccessDenied(
   error: TenantAccessDeniedError,
   req: Request,
   res: Response
@@ -91,9 +101,11 @@ async function handleTenantAccessDenied(
     }
   }
 
+  // ユーザー列挙防止のためレスポンス文言は一般化する。
+  // 詳細（email/tenantId/原因メッセージ）は logger.warn と auth_error_logs に記録済み。
   res.status(403).json({
     error: "tenant_access_denied",
-    message: error.message,
+    message: "アクセス権限がありません。管理者にお問い合わせください。",
   });
 }
 
@@ -143,7 +155,7 @@ async function findOrCreateTenantUser(
 ): Promise<AuthUser> {
   const ds = req.dataSource!;
   const uid = decodedToken.uid;
-  const email = decodedToken.email?.toLowerCase();
+  const email = decodedToken.email?.trim().toLowerCase();
 
   // firebaseUidでユーザーを検索（テナント内の既存ユーザーは常に許可）
   const existingByUid = await ds.getUserByFirebaseUid(uid);
