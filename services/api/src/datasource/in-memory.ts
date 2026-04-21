@@ -511,7 +511,10 @@ export class InMemoryDataSource implements DataSource {
 
   async deleteAllowedEmailByEmail(email: string): Promise<boolean> {
     this.throwIfReadOnly();
-    const index = this.allowedEmails.findIndex((e) => e.email === email);
+    const normalized = email.trim().toLowerCase();
+    const index = this.allowedEmails.findIndex(
+      (e) => e.email.trim().toLowerCase() === normalized
+    );
     if (index === -1) return false;
     this.allowedEmails.splice(index, 1);
     return true;

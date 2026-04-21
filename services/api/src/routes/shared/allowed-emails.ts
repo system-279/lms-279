@@ -92,9 +92,11 @@ router.delete("/admin/allowed-emails/:id", requireAdmin, async (req: Request, re
   try {
     await revokeRefreshTokensByEmail(existing.email);
   } catch (error) {
-    logger.warn("Failed to revoke refresh tokens after allowed-email deletion", {
+    // セキュリティ操作の失敗は ERROR レベル。stack trace を保持するため error をそのまま渡す。
+    logger.error("Failed to revoke refresh tokens after allowed-email deletion", {
+      allowedEmailId: id,
       email: existing.email,
-      error: error instanceof Error ? error.message : String(error),
+      error,
     });
   }
 
