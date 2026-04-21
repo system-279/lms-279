@@ -127,6 +127,11 @@ function initializeFirebase(): void {
   }
 }
 
+type SuperAdminsResult = {
+  emails: string[];
+  firestoreFetchFailed: boolean;
+};
+
 /**
  * 環境変数 + Firestore ルート superAdmins コレクション + 手動追加分の union を返す。
  * middleware/super-admin.ts の getAllSuperAdmins と同じ情報源。
@@ -134,12 +139,16 @@ function initializeFirebase(): void {
  * strict=true（--execute 時）の場合は Firestore 取得失敗で throw する。
  * これによりスーパー管理者のメールが誤って tenant の allowed_emails に追加される
  * セキュリティモデル汚染を防ぐ（Evaluator HIGH 指摘）。
+ *
+ * strict=false（dry-run 時）の場合は続行するが、firestoreFetchFailed フラグを立てて
+ * 呼び出し側がレポート冒頭・Summary 両方に警告を出せるようにする。
  */
 async function collectSuperAdmins(
   extra: string[],
   strict: boolean
-): Promise<string[]> {
+): Promise<SuperAdminsResult> {
   const result = new Set<string>();
+  let firestoreFetchFailed = false;
 
   const envCsv = process.env.SUPER_ADMIN_EMAILS ?? "";
   for (const email of envCsv.split(",")) {
@@ -159,8 +168,9 @@ async function collectSuperAdmins(
         `Firestore superAdmins コレクション取得失敗（--execute 時は fatal）: ${String(error)}`
       );
     }
+    firestoreFetchFailed = true;
     console.warn(
-      `⚠️  Firestore superAdmins コレクションの取得に失敗しました（dry-run のため続行）: ${String(error)}`
+      `⚠️  Firestore superAdmins コレクションの取得に失敗しました（dry-run のため続行、レポート汚染リスクあり）: ${String(error)}`
     );
   }
 
@@ -169,16 +179,27 @@ async function collectSuperAdmins(
     if (n) result.add(n);
   }
 
-  return Array.from(result).sort();
+  return { emails: Array.from(result).sort(), firestoreFetchFailed };
 }
+
+type AuthMetadataEnrichment = {
+  users: AuditUserInput[];
+  failedBatches: number;
+  affectedUidsOnFailure: number;
+  notFoundUids: string[];
+};
 
 /**
  * users に firebaseUid がある場合、Firebase Auth から lastSignInTime をバッチ取得する。
  * getUsers は最大 100 件/リクエスト。
+ *
+ * 返り値には失敗バッチ件数と notFound UID を含める。呼び出し側は
+ * Summary で可視化し、--execute 時は失敗ゼロを前提に fatal チェックする
+ * （silent failure 指摘 C1 対応: lastSignInTime 欠損は退職者判定の誤誘導を招く）。
  */
 async function enrichUsersWithAuthMetadata(
   users: AuditUserInput[]
-): Promise<AuditUserInput[]> {
+): Promise<AuthMetadataEnrichment> {
   const uids = Array.from(
     new Set(
       users
@@ -186,32 +207,51 @@ async function enrichUsersWithAuthMetadata(
         .filter((uid): uid is string => typeof uid === "string" && uid.length > 0)
     )
   );
-  if (uids.length === 0) return users;
 
   const lastSignInByUid = new Map<string, string>();
-  const auth = getAuth();
+  let failedBatches = 0;
+  let affectedUidsOnFailure = 0;
+  const notFoundUids: string[] = [];
 
-  for (let i = 0; i < uids.length; i += 100) {
-    const chunk = uids.slice(i, i + 100);
-    try {
-      const result = await auth.getUsers(chunk.map((uid) => ({ uid })));
-      for (const user of result.users) {
-        const t = user.metadata?.lastSignInTime;
-        if (t) lastSignInByUid.set(user.uid, t);
+  if (uids.length > 0) {
+    const auth = getAuth();
+
+    for (let i = 0; i < uids.length; i += 100) {
+      const chunk = uids.slice(i, i + 100);
+      try {
+        const result = await auth.getUsers(chunk.map((uid) => ({ uid })));
+        for (const user of result.users) {
+          const t = user.metadata?.lastSignInTime;
+          if (t) lastSignInByUid.set(user.uid, t);
+        }
+        for (const nf of result.notFound) {
+          if ("uid" in nf && typeof nf.uid === "string") {
+            notFoundUids.push(nf.uid);
+          }
+        }
+      } catch (error) {
+        failedBatches++;
+        affectedUidsOnFailure += chunk.length;
+        console.warn(
+          `⚠️  Firebase Auth getUsers バッチ取得に失敗 range=${i}-${i + chunk.length}: ${String(error)}`
+        );
       }
-    } catch (error) {
-      console.warn(
-        `⚠️  Firebase Auth getUsers バッチ取得に失敗（続行）: ${String(error)}`
-      );
     }
   }
 
-  return users.map((u) => ({
+  const enriched = users.map((u) => ({
     ...u,
     lastSignInTime: u.firebaseUid
       ? (lastSignInByUid.get(u.firebaseUid) ?? null)
       : null,
   }));
+
+  return {
+    users: enriched,
+    failedBatches,
+    affectedUidsOnFailure,
+    notFoundUids,
+  };
 }
 
 function printTenantReport(tenantId: string, report: AuditReport): void {
@@ -310,7 +350,9 @@ async function applyFix(
   }
 
   const pendingBatches: WriteBatch[] = [];
+  const pendingBatchEmails: string[][] = [];
   let currentBatch = db.batch();
+  let currentBatchEmails: string[] = [];
   let opCount = 0;
   let applied = 0;
   let skippedExisting = 0;
@@ -337,13 +379,16 @@ async function applyFix(
         note,
         createdAt: new Date(),
       });
+      currentBatchEmails.push(entry.email);
       opCount++;
       applied++;
       existingEmails.add(entry.email); // 同一 run 内での重複防止
 
       if (opCount >= WRITE_BATCH_LIMIT) {
         pendingBatches.push(currentBatch);
+        pendingBatchEmails.push(currentBatchEmails);
         currentBatch = db.batch();
+        currentBatchEmails = [];
         opCount = 0;
       }
     }
@@ -351,14 +396,22 @@ async function applyFix(
 
   if (execute && opCount > 0) {
     pendingBatches.push(currentBatch);
+    pendingBatchEmails.push(currentBatchEmails);
   }
 
   for (let i = 0; i < pendingBatches.length; i++) {
     try {
       await pendingBatches[i].commit();
     } catch (error) {
+      const remaining = pendingBatches.length - i - 1;
+      const failedEmails = pendingBatchEmails[i].join(", ");
       console.error(
-        `[BATCH FAILED] tenant=${tenantId} batch=${i + 1}/${pendingBatches.length} (既にコミット済みのバッチはロールバックされません): ${String(error)}`
+        `[BATCH FAILED] tenant=${tenantId} batch=${i + 1}/${pendingBatches.length}\n` +
+        `  committed so far: ${i} batch(es)\n` +
+        `  failed batch emails (${pendingBatchEmails[i].length} 件): ${failedEmails}\n` +
+        `  remaining batches: ${remaining} (not attempted)\n` +
+        `  再実行時は skippedExisting で冪等。失敗原因を解消してから再実行してください。\n` +
+        `  error: ${String(error)}`
       );
       throw error;
     }
@@ -412,11 +465,17 @@ async function main(options: CliOptions): Promise<void> {
     console.log(`Filter: tenant=${options.tenantFilter}`);
   }
 
-  const superAdmins = await collectSuperAdmins(
+  const superAdminsResult = await collectSuperAdmins(
     options.extraSuperAdmins,
     writeMode
   );
+  const superAdmins = superAdminsResult.emails;
   console.log(`SuperAdmins (union): ${superAdmins.length} 件`);
+  if (superAdminsResult.firestoreFetchFailed) {
+    console.warn(
+      "⚠️  Firestore superAdmins 取得失敗のためレポートのスーパー管理者リストが不完全です。本レポートで本番判断する前に原因を解消してください。"
+    );
+  }
   if (superAdmins.length === 0) {
     console.warn(
       "⚠️  スーパー管理者が1件も検出されませんでした。SUPER_ADMIN_EMAILS 環境変数と Firestore superAdmins コレクションを確認してください。"
@@ -435,57 +494,89 @@ async function main(options: CliOptions): Promise<void> {
 
   const note = buildAuditFixNote();
   let totalUsersWithoutAllowedEmail = 0;
+  let totalInvalid = 0;
+  let totalAuthMetadataFailedBatches = 0;
+  let totalAuthMetadataAffectedUids = 0;
+  let totalAuthNotFoundUids = 0;
   let totalApplied = 0;
   let totalSkippedExisting = 0;
   const tenantsWithDiff: string[] = [];
+  const failedTenants: Array<{ tenantId: string; error: string }> = [];
 
   for (const tenantDoc of targetTenants) {
     const tenantId = tenantDoc.id;
 
-    const [usersSnap, allowedSnap] = await Promise.all([
-      db.collection(`tenants/${tenantId}/users`).get(),
-      db.collection(`tenants/${tenantId}/allowed_emails`).get(),
-    ]);
+    try {
+      const [usersSnap, allowedSnap] = await Promise.all([
+        db.collection(`tenants/${tenantId}/users`).get(),
+        db.collection(`tenants/${tenantId}/allowed_emails`).get(),
+      ]);
 
-    const rawUsers: AuditUserInput[] = usersSnap.docs.map((d) => {
-      const data = d.data();
-      return {
-        id: d.id,
-        email: (data.email as string | null | undefined) ?? null,
-        firebaseUid: (data.firebaseUid as string | undefined) ?? undefined,
-        role: (data.role as string | undefined) ?? "student",
-        createdAt: toISOOptional(data.createdAt) ?? "unknown",
-      };
-    });
+      const rawUsers: AuditUserInput[] = usersSnap.docs.map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          email: (data.email as string | null | undefined) ?? null,
+          firebaseUid: (data.firebaseUid as string | undefined) ?? undefined,
+          role: (data.role as string | undefined) ?? "student",
+          createdAt: toISOOptional(data.createdAt) ?? "unknown",
+        };
+      });
 
-    warnDuplicateUsers(tenantId, rawUsers);
+      warnDuplicateUsers(tenantId, rawUsers);
 
-    const users = options.skipAuthMetadata
-      ? rawUsers.map((u) => ({ ...u, lastSignInTime: null }))
-      : await enrichUsersWithAuthMetadata(rawUsers);
+      let users: AuditUserInput[];
+      if (options.skipAuthMetadata) {
+        users = rawUsers.map((u) => ({ ...u, lastSignInTime: null }));
+      } else {
+        const enrichment = await enrichUsersWithAuthMetadata(rawUsers);
+        users = enrichment.users;
+        totalAuthMetadataFailedBatches += enrichment.failedBatches;
+        totalAuthMetadataAffectedUids += enrichment.affectedUidsOnFailure;
+        totalAuthNotFoundUids += enrichment.notFoundUids.length;
 
-    const allowedEmails: AuditAllowedEmailInput[] = allowedSnap.docs.map((d) => ({
-      id: d.id,
-      email: (d.data().email as string | null | undefined) ?? null,
-    }));
+        if (writeMode && enrichment.failedBatches > 0) {
+          throw new Error(
+            `tenant=${tenantId}: Firebase Auth metadata 取得失敗 ${enrichment.failedBatches} バッチ (${enrichment.affectedUidsOnFailure} UID)。` +
+              `--execute 時は lastSignInTime 欠損のまま書き込みを行わない設計のため中断します。`
+          );
+        }
+      }
 
-    const report = planAudit(users, allowedEmails, superAdmins);
-    printTenantReport(tenantId, report);
-
-    totalUsersWithoutAllowedEmail += report.usersWithoutAllowedEmail.length;
-    if (report.usersWithoutAllowedEmail.length > 0) {
-      tenantsWithDiff.push(tenantId);
-    }
-
-    if (options.fix) {
-      const { applied, skippedExisting } = await applyFix(
-        tenantId,
-        report,
-        note,
-        options.execute
+      const allowedEmails: AuditAllowedEmailInput[] = allowedSnap.docs.map(
+        (d) => ({
+          id: d.id,
+          email: (d.data().email as string | null | undefined) ?? null,
+        })
       );
-      totalApplied += applied;
-      totalSkippedExisting += skippedExisting;
+
+      const report = planAudit(users, allowedEmails, superAdmins);
+      printTenantReport(tenantId, report);
+
+      totalUsersWithoutAllowedEmail += report.usersWithoutAllowedEmail.length;
+      totalInvalid += report.invalid.length;
+      if (report.usersWithoutAllowedEmail.length > 0) {
+        tenantsWithDiff.push(tenantId);
+      }
+
+      if (options.fix) {
+        const { applied, skippedExisting } = await applyFix(
+          tenantId,
+          report,
+          note,
+          options.execute
+        );
+        totalApplied += applied;
+        totalSkippedExisting += skippedExisting;
+      }
+    } catch (error) {
+      const msg = String(error);
+      console.error(`[TENANT FAILED] tenant=${tenantId}: ${msg}`);
+      failedTenants.push({ tenantId, error: msg });
+      // writeMode 時は他テナント処理を続けず即中断（データ整合性を優先）
+      if (writeMode) {
+        throw error;
+      }
     }
   }
 
@@ -498,6 +589,37 @@ async function main(options: CliOptions): Promise<void> {
   console.log(
     `totalUsersWithoutAllowedEmail  : ${totalUsersWithoutAllowedEmail}`
   );
+  console.log(`totalInvalid                   : ${totalInvalid}`);
+  if (totalInvalid > 0) {
+    console.log(
+      "  ⚠️  データ破損の可能性（email が空/null の users または allowed_emails）。原因調査を推奨。"
+    );
+  }
+
+  if (!options.skipAuthMetadata) {
+    console.log(
+      `authMetadataFailedBatches      : ${totalAuthMetadataFailedBatches} (affected uids: ${totalAuthMetadataAffectedUids})`
+    );
+    console.log(`authNotFoundUids               : ${totalAuthNotFoundUids}`);
+    if (totalAuthMetadataFailedBatches > 0) {
+      console.warn(
+        "  ⚠️  Firebase Auth metadata 取得に失敗したバッチがあります。対象ユーザーは lastSignInTime=unknown として扱われており、退職者判定の根拠にできません。"
+      );
+    }
+  }
+
+  if (superAdminsResult.firestoreFetchFailed) {
+    console.warn(
+      `⚠️  Firestore superAdmins 取得失敗のためスーパー管理者リストが不完全なまま走査しました。`
+    );
+  }
+
+  if (failedTenants.length > 0) {
+    console.error(`\n[FAILED TENANTS] ${failedTenants.length} 件`);
+    for (const ft of failedTenants) {
+      console.error(`  - ${ft.tenantId}: ${ft.error}`);
+    }
+  }
 
   if (options.fix) {
     if (options.execute) {

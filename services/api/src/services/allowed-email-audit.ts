@@ -65,12 +65,17 @@ export type InvalidEntry = {
   reason: string;
 };
 
+export type ExcludedSuperAdminEntry = {
+  userId: string;
+  email: string;
+};
+
 export type AuditReport = {
   matched: MatchedEntry[];
   usersWithoutAllowedEmail: UserWithoutAllowedEmailEntry[];
   allowedEmailsWithoutUser: AllowedEmailWithoutUserEntry[];
   invalid: InvalidEntry[];
-  excludedSuperAdmins: Array<{ userId: string; email: string }>;
+  excludedSuperAdmins: ExcludedSuperAdminEntry[];
 };
 
 function normalizeEmail(raw: string | null | undefined): string {
@@ -132,7 +137,7 @@ export function planAudit(
 
   const matched: MatchedEntry[] = [];
   const usersWithoutAllowedEmail: UserWithoutAllowedEmailEntry[] = [];
-  const excludedSuperAdmins: Array<{ userId: string; email: string }> = [];
+  const excludedSuperAdmins: ExcludedSuperAdminEntry[] = [];
 
   for (const [n, u] of usersByNormalized) {
     const ae = allowedByNormalized.get(n);
