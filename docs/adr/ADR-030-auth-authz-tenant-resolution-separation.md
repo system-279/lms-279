@@ -26,7 +26,8 @@
 **責務**: 何ができるかの判定
 - テナント内のロール（admin / teacher / student）
 - 実装: `tenants/{tenantId}/users` の `role` フィールド
-- ミドルウェア: `services/api/src/middleware/auth.ts` の `requireAdmin` 等
+- ミドルウェア: `services/api/src/middleware/auth.ts` の `requireUser` / `requireAdmin`
+- teacher/student のロール別判定はルートハンドラ内で `req.user.role` を直接参照する設計（専用ミドルウェアは未提供）
 
 ### レイヤー3: テナント解決（Tenant Resolution）
 **責務**: どのテナントに属するユーザーかの判定
@@ -37,10 +38,13 @@
 
 ### レイヤー4: Workspace連携（API代行）
 **責務**: サーバーサイドでのGoogle Drive/Docs APIアクセス
-- 認証方式: サービスアカウント Domain-Wide Delegation
+- 認証方式: サービスアカウント Domain-Wide Delegation（DWD）
 - 対象ドメイン: 279279.net限定
-- サービスアカウント: `dwd-workspace@lms-279.iam.gserviceaccount.com`
-- 実装: `services/api/src/services/google-drive.ts`、`google-docs.ts`
+- サービスアカウント鍵: Secret Manager シークレット `dwd-workspace-key` から実行時取得（`google-auth.ts` 参照）
+- 実装:
+  - `services/api/src/services/google-auth.ts`: DWD JWT認証の実体（`getDriveClient()` / `getDocsClient()`）
+  - `services/api/src/services/google-drive.ts`: Drive API呼び出し（認証経路は google-auth.ts に委譲）
+  - `services/api/src/services/google-docs.ts`: Docs API呼び出し（同上）
 - **エンドユーザー認証経路とは完全に独立**
 
 ## 根拠
@@ -52,8 +56,9 @@
 ## 影響
 - ドキュメント `docs/architecture.md` に4レイヤー図を追加
 - 新規エンジニアオンボーディング時に本ADRを必読資料として提示
-- OAuthクライアントIDの命名規則: `lms-279-auth-*`（認証用）、`lms-279-dwd-*`（DWD用）とプレフィックスで区別
-- 監査ログ: レイヤーごとに別ログストリーム（Cloud Logging の label で識別）
+- OAuthクライアントIDの命名規則（**新規作成時のみ適用**）: `lms-279-auth-*`（認証用）、`lms-279-dwd-*`（DWD用）とプレフィックスで区別
+  - 既存クライアントの改名は不要（ラベルで識別を補完する運用）
+- 監査ログ: 現状の Cloud Logging ログに `layer` ラベル（`auth` / `authz` / `tenant` / `workspace`）を追加する方針。新規ログバケット作成は不要
 
 ## 参考
 - インシデント契機: 2026-04-21 外部ドメインユーザーのログイン不可（403 org_internal）
