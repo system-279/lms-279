@@ -5,6 +5,8 @@
 
 import { Router, Request, Response } from "express";
 import { requireUser, requireAdmin } from "../../middleware/auth.js";
+import { revokeRefreshTokensByEmail } from "../../services/auth-revoke.js";
+import { logger } from "../../utils/logger.js";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VALID_ROLES = ["admin", "teacher", "student"] as const;
@@ -181,13 +183,36 @@ router.delete("/admin/users/:id", requireAdmin, async (req: Request, res: Respon
     return;
   }
 
-  await ds.deleteUser(id);
-
-  // allowed_emailsも同時削除（削除後の再ログインによるユーザー復活を防止）
+  // 1. allowed_emails を先に除去する。
+  //    user を先に消すと「削除済みなのに allowed_email が残存 → 再ログインで復活」という
+  //    セキュリティ境界の破れが発生するため、失敗時は user 削除を行わず 500 を返す。
   try {
     await ds.deleteAllowedEmailByEmail(existing.email);
   } catch (e) {
-    console.error("[Users] Failed to delete allowed_email for:", existing.email, e);
+    logger.error("Failed to delete allowed_email; aborting user deletion", {
+      userId: id,
+      email: existing.email,
+      error: e,
+    });
+    res.status(500).json({
+      error: "deletion_partial_failure",
+      message: "ユーザー削除に失敗しました。時間をおいて再実行してください。",
+    });
+    return;
+  }
+
+  // 2. user 本体を削除
+  await ds.deleteUser(id);
+
+  // 3. Firebase Auth のセッションを即時失効（ベストエフォート）
+  try {
+    await revokeRefreshTokensByEmail(existing.email);
+  } catch (e) {
+    logger.error("Failed to revoke refresh tokens after user deletion", {
+      userId: id,
+      email: existing.email,
+      error: e,
+    });
   }
 
   res.status(204).send();

@@ -5,8 +5,18 @@
 
 import { Router, Request, Response } from "express";
 import { requireAdmin } from "../../middleware/auth.js";
+import { revokeRefreshTokensByEmail } from "../../services/auth-revoke.js";
+import { logger } from "../../utils/logger.js";
+import { normalizeEmail } from "../../utils/tenant-id.js";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function parseEmailInput(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const normalized = normalizeEmail(raw);
+  if (normalized.length === 0 || !EMAIL_REGEX.test(normalized)) return null;
+  return normalized;
+}
 
 const router = Router();
 
@@ -34,9 +44,10 @@ router.get("/admin/allowed-emails", requireAdmin, async (req: Request, res: Resp
  */
 router.post("/admin/allowed-emails", requireAdmin, async (req: Request, res: Response) => {
   const ds = req.dataSource!;
-  const { email, note } = req.body;
+  const { email: rawEmail, note } = req.body;
+  const email = parseEmailInput(rawEmail);
 
-  if (!email || !EMAIL_REGEX.test(email)) {
+  if (!email) {
     res.status(400).json({ error: "invalid_email", message: "Valid email is required" });
     return;
   }
@@ -63,7 +74,7 @@ router.post("/admin/allowed-emails", requireAdmin, async (req: Request, res: Res
 });
 
 /**
- * 管理者向け: 許可メール削除
+ * 管理者向け: 許可メール削除 + Firebase Auth セッション即時失効（ベストエフォート）
  * DELETE /admin/allowed-emails/:id
  */
 router.delete("/admin/allowed-emails/:id", requireAdmin, async (req: Request, res: Response) => {
@@ -77,6 +88,18 @@ router.delete("/admin/allowed-emails/:id", requireAdmin, async (req: Request, re
   }
 
   await ds.deleteAllowedEmail(id);
+
+  try {
+    await revokeRefreshTokensByEmail(existing.email);
+  } catch (error) {
+    // セキュリティ操作の失敗は ERROR レベル。stack trace を保持するため error をそのまま渡す。
+    logger.error("Failed to revoke refresh tokens after allowed-email deletion", {
+      allowedEmailId: id,
+      email: existing.email,
+      error,
+    });
+  }
+
   res.status(204).send();
 });
 

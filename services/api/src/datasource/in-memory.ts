@@ -486,7 +486,8 @@ export class InMemoryDataSource implements DataSource {
   }
 
   async isEmailAllowed(email: string): Promise<boolean> {
-    return this.allowedEmails.some((e) => e.email === email);
+    const normalized = email.trim().toLowerCase();
+    return this.allowedEmails.some((e) => e.email.trim().toLowerCase() === normalized);
   }
 
   async createAllowedEmail(data: Omit<AllowedEmail, "id" | "createdAt">): Promise<AllowedEmail> {
@@ -510,7 +511,10 @@ export class InMemoryDataSource implements DataSource {
 
   async deleteAllowedEmailByEmail(email: string): Promise<boolean> {
     this.throwIfReadOnly();
-    const index = this.allowedEmails.findIndex((e) => e.email === email);
+    const normalized = email.trim().toLowerCase();
+    const index = this.allowedEmails.findIndex(
+      (e) => e.email.trim().toLowerCase() === normalized
+    );
     if (index === -1) return false;
     this.allowedEmails.splice(index, 1);
     return true;
