@@ -365,7 +365,9 @@ export const tenantAwareAuthMiddleware = async (
 
     const idToken = authHeader.slice(7);
     try {
-      const decodedToken = await getAuth().verifyIdToken(idToken);
+      // 第2引数 checkRevoked=true により、revokeRefreshTokens 後の既発行 ID token も
+      // auth/id-token-revoked で拒否される（B-1「即時失効」の実効性担保）。
+      const decodedToken = await getAuth().verifyIdToken(idToken, true);
       req.user = await findOrCreateTenantUser(req, decodedToken);
     } catch (error) {
       if (error instanceof TenantAccessDeniedError) {

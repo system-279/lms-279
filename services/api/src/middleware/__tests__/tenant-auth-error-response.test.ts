@@ -10,6 +10,7 @@ import {
   TenantAccessDeniedError,
   handleTenantAccessDenied,
 } from "../tenant-auth.js";
+import { logger } from "../../utils/logger.js";
 
 function buildReq(overrides: Partial<Request> = {}): Request {
   return {
@@ -74,6 +75,28 @@ describe("handleTenantAccessDenied", () => {
     expect(logged.tenantId).toBe("acme");
     expect(logged.errorType).toBe("tenant_access_denied");
     expect(logged.errorMessage).toContain("user@example.com");
+  });
+
+  it("logger.warn にも email / tenantId を含む詳細が記録される（CG-3）", async () => {
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const err = new TenantAccessDeniedError(
+      "このメールアドレス (trace@example.com) はテナント「trace」へのアクセスが許可されていません。",
+      "trace@example.com",
+      "trace"
+    );
+    const req = buildReq({ dataSource: { createAuthErrorLog } as never });
+    const { res } = buildRes();
+
+    await handleTenantAccessDenied(err, req, res);
+
+    expect(warnSpy).toHaveBeenCalled();
+    const context = warnSpy.mock.calls[0][1] as Record<string, unknown>;
+    expect(context).toMatchObject({
+      email: "trace@example.com",
+      tenantId: "trace",
+      errorType: "tenant_access_denied",
+    });
+    warnSpy.mockRestore();
   });
 
   it("auth_error_logs 保存が失敗してもレスポンスは返る", async () => {
