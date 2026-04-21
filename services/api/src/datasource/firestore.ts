@@ -440,9 +440,9 @@ export class FirestoreDataSource implements DataSource {
   }
 
   async createAllowedEmail(data: Omit<AllowedEmail, "id" | "createdAt">): Promise<AllowedEmail> {
-    // 防御的正規化: route 側 `parseEmailInput` に加え datasource 層でも
-    // `.trim().toLowerCase()` を徹底し、スクリプト/一括投入/将来の新規 caller 経由
-    // でも未正規化レコードが混入しないようにする（ADR-031 必須条件 #3）。
+    // 防御的正規化（ADR-031 必須条件 #3）。route 層の入力検証とは独立に、
+    // スクリプト/一括投入/将来の新規 caller 経由でも未正規化レコードが混入しないよう
+    // DataSource 層でも `.trim().toLowerCase()` を適用する。
     const docRef = this.collection("allowed_emails").doc();
     await docRef.set({
       ...data,

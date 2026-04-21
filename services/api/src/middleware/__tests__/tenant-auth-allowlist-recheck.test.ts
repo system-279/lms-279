@@ -231,4 +231,97 @@ describe("tenantAwareAuthMiddleware — allowed_emails continuous re-check (Issu
       expect(res.body.user.role).toBe("admin");
     });
   });
+
+  describe("メール正規化の網羅（ADR-031 必須条件 #3）", () => {
+    it("createAllowedEmail に大文字混在を渡しても保存時に小文字化される（storage-side normalization）", async () => {
+      const { ds } = await buildApp("firebase");
+      const created = await ds.createAllowedEmail({
+        email: "  Mixed-Case@Example.COM  ",
+        note: null,
+      });
+      // DataSource 層の防御的正規化により保存結果が小文字化されていること
+      expect(created.email).toBe("mixed-case@example.com");
+      expect(await ds.isEmailAllowed("mixed-case@example.com")).toBe(true);
+    });
+
+    it("前後空白・大文字混在のトークン email を正規化して allowlist 一致判定する（query-side normalization）", async () => {
+      const { app, ds } = await buildApp("firebase");
+      await ds.createAllowedEmail({ email: "mixed-case@example.com", note: null });
+      await ds.createUser({
+        email: "mixed-case@example.com",
+        name: "Mixed",
+        role: "student",
+        firebaseUid: "uid-mixed",
+      });
+
+      // トークン側の email は大文字混在・前後空白あり → middleware で正規化される
+      mockVerifyIdToken.mockResolvedValue({
+        uid: "uid-mixed",
+        email: "  Mixed-CASE@Example.COM  ",
+      });
+
+      const res = await supertest(app).get("/me").set("authorization", "Bearer tok");
+      expect(res.status).toBe(200);
+      expect(res.body.user.email).toBe("mixed-case@example.com");
+    });
+  });
+
+  describe("email 不在分岐（fail-closed）", () => {
+    it("firebase mode: トークンに email が無く、DB user.email もない → 403", async () => {
+      const { app, ds } = await buildApp("firebase");
+      // DB に email 空で user を作成（マイグレーション前データ想定）
+      const user = await ds.createUser({
+        email: "",
+        name: "NoEmail",
+        role: "student",
+        firebaseUid: "uid-no-email",
+      });
+      // email 未登録のまま再チェック走る
+      mockVerifyIdToken.mockResolvedValue({
+        uid: user.firebaseUid,
+      });
+
+      const res = await supertest(app).get("/me").set("authorization", "Bearer tok");
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe("tenant_access_denied");
+    });
+
+    it("dev x-user-id 経路: DB user.email もヘッダ email も無い → 403", async () => {
+      const { app, ds } = await buildApp("dev");
+      const user = await ds.createUser({
+        email: "",
+        name: "NoEmail",
+        role: "student",
+      });
+
+      const res = await supertest(app).get("/me").set("x-user-id", user.id);
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe("admin role + super admin の組合せ", () => {
+    it("admin role の super admin は allowlist 不在でも 200（旧短絡除去の回帰テスト）", async () => {
+      // 旧実装は role=admin で checkSuperAdmin をスキップしていたため、
+      // admin role + super admin（env/Firestore）のケースで allowlist に引っかかっていた。
+      // 本PR の短絡除去でこのケースが 200 になることを保証する。
+      const { app, ds } = await buildApp("firebase");
+      const user = await ds.createUser({
+        email: "admin-super@example.com",
+        name: "AdminSuper",
+        role: "admin",
+        firebaseUid: "uid-admin-super",
+      });
+      // allowed_emails 空
+      mockIsSuperAdmin.mockResolvedValue(true);
+      mockVerifyIdToken.mockResolvedValue({
+        uid: "uid-admin-super",
+        email: "admin-super@example.com",
+      });
+
+      const res = await supertest(app).get("/me").set("authorization", "Bearer tok");
+      expect(res.status).toBe(200);
+      expect(res.body.user.id).toBe(user.id);
+      expect(res.body.isSuperAdminAccess).toBe(true);
+    });
+  });
 });

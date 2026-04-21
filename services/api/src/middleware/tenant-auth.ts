@@ -390,10 +390,8 @@ export const tenantAwareAuthMiddleware = async (
         // allowlist バイパスは super admin のみ（role=admin は allowlist 対象）
         const superAdminAccess = await checkSuperAdmin(resolvedEmail);
         if (!superAdminAccess) {
-          // x-user-id 経路は後続の findOrCreateDevUser フォールバック経路と異なり、
-          // middleware 内で完結するため throw を外側 catch で受けられない。
-          // この経路固有の try-catch で TenantAccessDeniedError をハンドルし、
-          // return next() が 403 レスポンス後に実行されないよう制御する。
+          // この分岐は `return next()` で即完了するため、
+          // 403 応答後に next() が踏まれないようこの経路固有で try-catch する。
           try {
             await ensureAllowlisted(req, resolvedEmail);
           } catch (error) {
