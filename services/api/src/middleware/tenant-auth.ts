@@ -166,6 +166,14 @@ async function ensureAllowlisted(
   const allowed = email ? await ds.isEmailAllowed(email) : false;
   if (!allowed) {
     const tenantId = req.tenantContext?.tenantId ?? "unknown";
+    // email 不在時は運用診断のため WARN を追加で出す（403 の原因が「未登録」か「email 未設定」かを切り分け）。
+    // auth_error_logs には handleTenantAccessDenied 側で記録されるため、ここでは application log のみ。
+    if (!email) {
+      logger.warn("Allowlist check skipped due to missing email", {
+        tenantId,
+        path: req.path,
+      });
+    }
     throw new TenantAccessDeniedError(
       `このメールアドレス (${email ?? "未設定"}) はテナント「${tenantId}」へのアクセスが許可されていません。`,
       email ?? undefined,
@@ -382,6 +390,10 @@ export const tenantAwareAuthMiddleware = async (
         // allowlist バイパスは super admin のみ（role=admin は allowlist 対象）
         const superAdminAccess = await checkSuperAdmin(resolvedEmail);
         if (!superAdminAccess) {
+          // x-user-id 経路は後続の findOrCreateDevUser フォールバック経路と異なり、
+          // middleware 内で完結するため throw を外側 catch で受けられない。
+          // この経路固有の try-catch で TenantAccessDeniedError をハンドルし、
+          // return next() が 403 レスポンス後に実行されないよう制御する。
           try {
             await ensureAllowlisted(req, resolvedEmail);
           } catch (error) {
