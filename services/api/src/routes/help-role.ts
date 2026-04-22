@@ -30,7 +30,24 @@ router.get("/role", async (req: Request, res: Response) => {
         return;
       }
       const idToken = authHeader.slice(7);
-      const decoded = await getAuth().verifyIdToken(idToken);
+      // Issue #294 / ADR-031 境界統一:
+      //   - checkRevoked=true で revoke 後の既発行トークンも拒否
+      //   - email_verified=true と sign_in_provider=google.com を必須化し、
+      //     不適合なら super/admin 昇格を許さず "student" フォールバックする
+      //     （ヘルプ画面自体は閲覧可能にして UX 劣化を避ける）
+      const decoded = await getAuth().verifyIdToken(idToken, true);
+      if (
+        decoded.email_verified !== true ||
+        decoded.firebase?.sign_in_provider !== "google.com"
+      ) {
+        logger.warn("Help role check falling back to student (guard failed)", {
+          uid: decoded.uid,
+          emailVerified: decoded.email_verified === true,
+          signInProvider: decoded.firebase?.sign_in_provider ?? null,
+        });
+        res.json({ helpLevel: "student" as HelpLevel });
+        return;
+      }
       email = decoded.email;
     } else {
       // 開発モード: X-User-Emailヘッダを使用

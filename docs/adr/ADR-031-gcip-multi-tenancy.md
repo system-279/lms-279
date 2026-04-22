@@ -58,9 +58,9 @@ Firebase Authentication を Google Cloud Identity Platform（GCIP）のマルチ
 ### As-Is 実装状況（2026-04-22更新、Phase 3 補強対象の明示）
 | 項目 | 現状 | Phase 3 必須対応 |
 |------|------|-----------------|
-| email_verified チェック | ✅ 実装済み（Issue #286 / PR #288: `findOrCreateTenantUser` + Issue #289: `superAdminAuthMiddleware` の 2 経路で必須化） | `help-role.ts` / `tenants.ts` 等の `verifyIdToken` 直接呼び出し箇所にも適用（後続 Issue） |
-| sign_in_provider 制限 | ✅ 実装済み（Issue #286 / PR #288 + Issue #289: 上記 2 経路で `firebase.sign_in_provider === "google.com"` のみ許可） | 同上 |
-| checkRevoked=true（即時失効） | ✅ 実装済み（B-1: `tenantAwareAuthMiddleware` + Issue #289: `superAdminAuthMiddleware` の 2 経路で `verifyIdToken(..., true)`） | 同上 |
+| email_verified チェック | ✅ 実装済み（Issue #286 / PR #288: `findOrCreateTenantUser` + Issue #289 / PR #291: `superAdminAuthMiddleware` + **Issue #294: `routes/help-role.ts` / `routes/tenants.ts` の直接 `verifyIdToken` 経路にも拡張**） | 維持 |
+| sign_in_provider 制限 | ✅ 実装済み（Issue #286 / PR #288 + Issue #289 / PR #291 + **Issue #294: `help-role.ts` / `tenants.ts` にも `firebase.sign_in_provider === "google.com"` ガード拡張**） | 維持 |
+| checkRevoked=true（即時失効） | ✅ 実装済み（B-1: `tenantAwareAuthMiddleware` + Issue #289 / PR #291: `superAdminAuthMiddleware` + **Issue #294: `help-role.ts` / `tenants.ts` も `verifyIdToken(..., true)` に統一**） | 維持 |
 | メール正規化（allowed_emails） | ✅ `.trim().toLowerCase()` で統一（PR #277 で route/middleware 層、Issue #278 / PR #284 で DataSource 層に拡張） | 維持 |
 | メール正規化（users） | ✅ マイグレーションスクリプト実装済み（Issue #285 / PR #287: `scripts/normalize-users-email.ts`） | 本番 dry-run → 補正実施（Phase 3 着手前の前提作業） |
 | (tenantId, email) 認可単位 | ✅ 実装済み（テナントスコープの allowed_emails） | 維持 |
@@ -69,7 +69,13 @@ Firebase Authentication を Google Cloud Identity Platform（GCIP）のマルチ
 | クライアント Firestore 直接アクセス禁止 | ✅ 実装済み（`web/` 配下で `firebase/firestore` import ゼロ） | 維持 |
 | Custom Claims 利用 | ✅ 未使用（Claims 再発行問題なし） | 維持 |
 
-> **適用スコープ注記**: 上記 ✅ は `tenantAwareAuthMiddleware` (`middleware/tenant-auth.ts`) と `superAdminAuthMiddleware` (`middleware/super-admin.ts`) の 2 経路に限定。`routes/help-role.ts` および `routes/tenants.ts` 冒頭には `verifyIdToken(idToken)` の直接呼び出しが残っており、同等ガードは未適用（後続 Issue で対応）。
+> **適用スコープ (2026-04-22 Issue #294 で拡張)**: `email_verified` / `sign_in_provider` / `checkRevoked=true` の 3 ガードは以下 4 経路すべてに適用済み:
+> - `middleware/tenant-auth.ts` (`tenantAwareAuthMiddleware`) — Issue #286 / PR #288
+> - `middleware/super-admin.ts` (`superAdminAuthMiddleware`) — Issue #289 / PR #291
+> - `routes/help-role.ts` (`GET /api/v2/help/role`) — Issue #294（不適合時は super/admin 昇格させず "student" フォールバック）
+> - `routes/tenants.ts` (`verifyAuthToken`) — Issue #294（不適合時は 403 でテナント作成/一覧取得を拒否）
+>
+> 4 経路で同じパターンが重複しているため、将来の共通ヘルパー化は別 Issue で検討予定。
 
 > **Firestore 障害時の挙動 (Issue #293 / PR)**: `getSuperAdminsFromFirestore` は Firestore アクセス失敗時に空配列を silent に返していたため、env に未登録の super-admin が silent に 403 で締め出される「部分 fail-open + ユーザー欺瞞」状態だった。
 > - 修正後: `SuperAdminFirestoreUnavailableError` を throw し、`superAdminAuthMiddleware`（super-admin 専用 endpoint）は 503 Service Unavailable で返却（env 高速パスで通過済みのケースはここに到達しない）
