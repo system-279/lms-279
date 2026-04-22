@@ -2,12 +2,13 @@
 
 ## TL;DR
 
-**4 PR 連続マージ + main CI 完全緑化**。Session 5 の handoff で「次候補」として残っていた **Issue #299 (platform_auth_error_logs 読み取り経路)** と **#290 follow-up (deploy.yml NODE_ENV=production 明示)** を完了。加えて session 開始時点で main に残っていた E2E Tests の 7連続 failure（Session 5 handoff に未記載）を 2 PR で緑化。Issue Net は +1（後述）だが、起票はいずれも triage 基準該当（CI 性能 / ADR-031 既記載の後続対応）。
+**4 PR 連続マージ + main CI 完全緑化**。Session 5 の handoff で「次候補」として残っていた **Issue #299 (platform_auth_error_logs 読み取り経路)** と **#290 follow-up (deploy.yml NODE_ENV=production 明示)** を完了。加えて session 開始時点で main に残っていた E2E Tests の **9連続 failure**（`88a90cb` 〜 `786655e`、Session 5 handoff に未記載）を 2 PR で緑化。Issue Net は +1（後述）だが、起票はいずれも triage 基準該当（CI 性能 / ADR-031 既記載の後続対応）。
 
 - **マージ完了** (今セッション): PR #305, #306, #307, #309
 - **新規 Issue**: 2 件 (#308 CI 性能, #310 transient/permanent)
 - **Close**: 1 件 (#299)
 - **Issue Net**: +1（triage 基準該当の起票、詳細は下記）
+- **Open 推移**: Session 5 末 6 件 → Session 6 末 7 件 (P0:1 / P2:6)
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -93,7 +94,7 @@ gh run list --branch main --limit 3
 | `npm run type-check` | ✅ PASS (4 workspaces) |
 | `npm test` | ✅ API 571 PASS + Web 33 PASS（Session 5 541 → Session 6 571、+30 新規: 14 route + 7 firestore + 7 in-memory + 2 NaN guard） |
 | CI (PR #305 / #306 / #307 / #309) | ✅ Lint / Type Check / Test / Build 全 PASS |
-| **main E2E Tests** | ✅ **全緑（PR #305/#307 で 8連続 failure を解消、#309 マージ後も緑維持）** |
+| **main E2E Tests** | ✅ **全緑（PR #305/#307 で 9連続 failure を解消、#309 マージ後も緑維持）** |
 | Quality Gate | ✅ Evaluator 分離 + /review-pr 4 agent + Codex plan review の三重検証 |
 
 ## main 現状
@@ -109,6 +110,7 @@ b4489e9 fix(e2e): PAUSE_TIMEOUT_MS 設定削除で CI フレーク解消 (#305)
 - CI: ✅ CI / Deploy to Cloud Run / E2E Tests すべて success（24769482587 / 24769482597 / 24769482602）
 - Firestore indexes: ✅ `platform_auth_error_logs` 複合 index 自動デプロイ済み
 - Cloud Run: ✅ API service に `NODE_ENV=production` 反映予定（次回 API デプロイ時に適用、本 session で触れたのは deploy.yml のみ）
+  - 次セッション確認コマンド: `gcloud run services describe api --region=asia-northeast1 --format='value(spec.template.spec.containers[0].env)' | grep NODE_ENV`
 
 ## 次セッションの着手候補（優先度順）
 
