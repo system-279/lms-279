@@ -16,6 +16,7 @@
     "type-check": "npm run type-check --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test -w @lms-279/api -w @lms-279/notification -w @lms-279/web",
+    "test:scripts": "for f in scripts/__tests__/*.smoke.ts; do echo \"\\n=== $f ===\"; npx tsx \"$f\" || exit 1; done",
     "test:e2e": "npm run test -w @lms-279/e2e"
   },
   "devDependencies": {
