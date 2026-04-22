@@ -3,7 +3,12 @@
  * Issue #157: QA手動検証の自動化
  *
  * e2e-test テナント（InMemoryDataSource, 書き込み可能）を使用。
- * PAUSE_TIMEOUT_MS=5000（5秒）でpause timeoutを高速テスト。
+ * PAUSE_TIMEOUT_MS はデフォルト（15分）を使用する。
+ * 旧 PAUSE_TIMEOUT_MS=5000 設定では CI 遅延により正常遷移テスト
+ * （項目3/項目7）が force-exit を誤発動していたため、デフォルトに戻した。
+ * 項目4（pause_timeout 強制退室）は現在 test.skip 済み。CI で有効化する際は
+ * playwright.config.ts の webServer.env に PAUSE_TIMEOUT_MS=5000 を再注入する
+ * （video-events.ts:17 は起動時1回だけ env を読むため test.use() では届かない）。
  */
 
 import { test, expect } from "@playwright/test";
