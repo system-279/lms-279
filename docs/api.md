@@ -301,6 +301,43 @@
 ```
 
 
+### 公開テナント情報（認証不要）
+
+ベースURL: `/api/v2/public/`
+
+ADR-031 Phase 3 Sub-Issue B。FE が GCIP 経路のログイン前に `auth.tenantId` へ `gcipTenantId` をセットするための認証不要エンドポイント。
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/tenants/:tenantId` | テナントの公開情報取得（認証不要） |
+
+#### レスポンス
+
+```json
+// GET /public/tenants/:tenantId (200)
+{
+  "tenant": {
+    "id": "test-tenant",
+    "name": "Test Organization",
+    "status": "active",
+    "gcipTenantId": "tenant-gcip-xyz",
+    "useGcip": true
+  }
+}
+```
+
+#### セキュリティ設計
+
+- **情報漏洩防止**: `ownerId` / `ownerEmail` / `userCount` / `createdAt` / `updatedAt` は含めない
+- **Enumeration 防止**: 未登録 / `RESERVED_TENANT_IDS` / 不正フォーマットは全て `404 tenant_not_found` で統一
+- **suspended テナント**: 200 で返却し `status: "suspended"` を含める（FE はメンテ画面切替に使用）
+- **status の fail-closed 判定**: `"active"` / `"suspended"` 以外の値（データ破損・未設定）は `suspended` にフォールバック（active 漏洩防止）
+- **レート制限**: `authLimiter` 流用（10 req/min/IP）
+- **Firestore 障害時**: `503 firestore_unavailable`（silent 空応答にしない）
+- **HTTP キャッシュ**: 成功時 `Cache-Control: public, max-age=60, stale-while-revalidate=300`、404 時 `public, max-age=30`、503 時 `no-store`（障害回復後に古い応答を再提示しない）
+
+関連: ADR-031、Issue #320、親 Issue #272
+
 ### プラットフォーム認証エラーログ（Super Admin）
 
 ベースURL: `/api/v2/super/`

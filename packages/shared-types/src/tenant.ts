@@ -48,3 +48,26 @@ export interface SuperTenantDetailResponse {
     lessonCount: number;
   };
 }
+
+/**
+ * 認証不要の公開テナント情報（ADR-031 Phase 3 / Sub-Issue B）
+ *
+ * `GET /api/v2/public/tenants/:tenantId` のレスポンスボディ。
+ * FE が GCIP 経路のログイン前に `auth.tenantId` へ `gcipTenantId` をセットするために使用する。
+ *
+ * 情報漏洩防止のため、`ownerId` / `ownerEmail` / `userCount` /
+ * `createdAt` / `updatedAt` は**意図的に含めない**。
+ */
+export interface PublicTenantInfo {
+  id: string;
+  name: string;
+  status: TenantStatus;
+  /** GCIP Tenant ID（ADR-031 Phase 3）。非 GCIP 経路の場合は null */
+  gcipTenantId: string | null;
+  /** GCIP 経路を有効化するか（ADR-031 Phase 3、feature flag） */
+  useGcip: boolean;
+}
+
+export interface PublicTenantInfoResponse {
+  tenant: PublicTenantInfo;
+}
