@@ -599,8 +599,8 @@ export class InMemoryDataSource implements DataSource {
 
   /**
    * プラットフォーム（テナント非依存）認証エラーログを作成 (Issue #292)
-   * Issue #299 以降は in-memory 配列に push して `getPlatformAuthErrorLogs`
-   * で読み取れるようにする（統合テストで read-after-write を再現するため）。
+   * 統合テストで read-after-write を再現するため、配列に push して
+   * `getPlatformAuthErrorLogs` から読める状態にする。
    */
   async createPlatformAuthErrorLog(data: Omit<AuthErrorLog, "id">): Promise<AuthErrorLog> {
     this.throwIfReadOnly();
@@ -616,8 +616,19 @@ export class InMemoryDataSource implements DataSource {
    * プラットフォーム（テナント非依存）認証エラーログを取得 (Issue #299)
    * in-memory 配列から occurredAt 降順で返す。tenant-scoped `auth_error_logs`
    * には触らない。
+   *
+   * 無効な Date (`new Date("invalid")` で `NaN`) は route 層で 400 にしているが、
+   * 直接呼び出し経路での silent drop（`NaN >= NaN` が常に false で結果が空配列化）
+   * を防ぐため、DataSource 層でも明示的に throw する。
    */
   async getPlatformAuthErrorLogs(filter?: AuthErrorLogFilter): Promise<AuthErrorLog[]> {
+    if (filter?.startDate && Number.isNaN(filter.startDate.getTime())) {
+      throw new Error("InMemoryDataSource.getPlatformAuthErrorLogs: invalid startDate (NaN)");
+    }
+    if (filter?.endDate && Number.isNaN(filter.endDate.getTime())) {
+      throw new Error("InMemoryDataSource.getPlatformAuthErrorLogs: invalid endDate (NaN)");
+    }
+
     let result = [...this.platformAuthErrorLogs];
 
     if (filter?.email) {
@@ -634,8 +645,8 @@ export class InMemoryDataSource implements DataSource {
 
     result.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
 
-    // route 層で clamp 済みの値が渡る前提だが、直接呼び出し経路の誤用（負数で
-    // slice(0, -1) → 末尾1件欠落）を防ぐため DataSource 内でもガードする。
+    // 直接呼び出し経路の誤用（負数で slice(0, -1) → 末尾1件欠落）を防ぐため
+    // DataSource 内でも limit をガードする。route 経由では既に clamp 済み。
     const rawLimit = filter?.limit ?? 100;
     const limit = rawLimit < 1 ? 100 : rawLimit;
     return result.slice(0, limit);

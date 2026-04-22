@@ -839,5 +839,25 @@ describe("InMemoryDataSource", () => {
       const logs = await ds.getPlatformAuthErrorLogs();
       expect(logs).toEqual([]);
     });
+
+    it("NaN startDate は throw（silent drop を防ぐ）", async () => {
+      await expect(
+        ds.getPlatformAuthErrorLogs({ startDate: new Date("invalid") })
+      ).rejects.toThrow(/invalid startDate/);
+    });
+
+    it("NaN endDate は throw（silent drop を防ぐ）", async () => {
+      await expect(
+        ds.getPlatformAuthErrorLogs({ endDate: new Date("invalid") })
+      ).rejects.toThrow(/invalid endDate/);
+    });
+
+    it("limit < 1 はデフォルト 100 にフォールバック", async () => {
+      for (let i = 0; i < 3; i++) {
+        await ds.createPlatformAuthErrorLog({ ...baseLog, occurredAt: `2026-04-22T1${i}:00:00.000Z` });
+      }
+      const logs = await ds.getPlatformAuthErrorLogs({ limit: -1 });
+      expect(logs).toHaveLength(3); // 3 件 < 100 なので全件
+    });
   });
 });

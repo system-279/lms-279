@@ -789,11 +789,21 @@ router.get("/platform/auth-errors", async (req: Request, res: Response) => {
       })),
     });
   } catch (e) {
-    // 既存 super-admin ハンドラと同じく logger.error + 500 で返す。
-    // Firestore 障害時のレスポンス形式を保証する（Issue #299 evaluator 指摘）。
+    // Firestore 障害時のレスポンス形式を保証する（AC: 500 fetch_failed）。
+    // transient (UNAVAILABLE/DEADLINE_EXCEEDED) と permanent の分離は
+    // ADR-031 Phase 1 制約で別 Issue 対応予定。現状は一律 500 を返す。
+    // ログは errorType + firebaseErrorCode + 入力パラメータで再現性を確保する
+    // （`/admins/:email` DELETE と同等の構造化レベル）。
+    const err = e as { code?: string } | undefined;
     logger.error("Failed to fetch platform auth error logs", {
+      errorType: "platform_auth_errors_fetch_failed",
       error: e instanceof Error ? e : new Error(String(e)),
+      firebaseErrorCode: typeof err?.code === "string" ? err.code : null,
       operatorEmail: req.superAdmin?.email,
+      filterEmail: email ?? null,
+      filterStartDate: startDateStr ?? null,
+      filterEndDate: endDateStr ?? null,
+      filterLimit: limit,
     });
     res.status(500).json({
       error: "fetch_failed",

@@ -610,7 +610,10 @@ export class FirestoreDataSource implements DataSource {
   /**
    * プラットフォーム（テナント非依存）認証エラーログを取得 (Issue #299)
    * ルートコレクション `platform_auth_error_logs` から `occurredAt desc` で取得。
-   * tenant 用 `auth_error_logs` (collection path は `this.collection(...)` 経由) には一切触らない。
+   * tenant-scoped `auth_error_logs` には触らない（境界を混ぜない）。
+   *
+   * 複合 index: `(email ASC, occurredAt DESC)` を `firestore.indexes.json` に宣言。
+   * `email` equality + `occurredAt` range/orderBy の組み合わせに必要。
    */
   async getPlatformAuthErrorLogs(filter?: AuthErrorLogFilter): Promise<AuthErrorLog[]> {
     let query = this.db.collection("platform_auth_error_logs").orderBy("occurredAt", "desc");
