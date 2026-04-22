@@ -2,9 +2,10 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
-  // CI の 1 リクエスト当たり 7-9 秒の遅延（要調査、Issue 別起票）で 60秒は不足。
+  // CI の 1 リクエスト当たり 7-9 秒の遅延（Issue #308 で根本調査中）で 60秒は不足。
   // 項目3/7 等のマルチリクエスト test が 60秒を超えて Request context disposed に
   // なるのを回避するため 180秒に拡大。ローカルは fast path で影響なし。
+  // webServer.timeout (60000) は起動タイムアウトで据え置き — test timeout と意図的な差分。
   timeout: 180000,
   retries: 1,
   use: {
