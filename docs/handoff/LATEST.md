@@ -1,12 +1,12 @@
-# Session Handoff — 2026-04-22
+# Session Handoff — 2026-04-22 (Session 3)
 
 ## TL;DR
 
-Issue #279（本番 allowed_emails 棚卸しスクリプト）の実装完了。**PR #280 作成・CI green・MERGEABLE**。Issue #278（案B 既存 users 経路再チェック）の前提条件が揃った。PR #277（セッション即時失効）は引き続きマージ待ち。
+**4 PR 連続マージ達成**。Issue #278 前提の周辺 security 強化を完了。ADR-031 allowed_emails 境界の必須条件 #1/#2/#3 は `tenantAwareAuthMiddleware` + `superAdminAuthMiddleware` の 2 経路で実装済み。Firestore 障害時の silent 403 も fail-closed 化。
 
-- **PR #277**: マージ待ち（本番 `normalize-allowed-emails.ts` dry-run/execute をデプロイ前に実行）
-- **PR #280**: マージ待ち（本番 `audit-users-vs-allowed-emails.ts` dry-run → 人手レビュー → `--fix --execute` 補正）
-- **Issue #281 (新規)**: 構造リファクタ（純粋関数切り出し・discriminated union・brand 型）を P2 として分離、#278 マージ後でも可
+- **マージ完了** (今セッション): PR #287 / #288 / #291 / #295
+- **要対応**: PR #284 は **CONFLICTING** (main 更新による衝突) → **次セッション冒頭で rebase 必須**
+- **残タスク**: 新規 Issue 5 件（#292 P1 / #290 P2 / #294 P2 / #296 P2 / 既存 #281 P2）+ ユーザー作業（#272 Phase 1, PR #284 棚卸し）
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -14,142 +14,139 @@ Issue #279（本番 allowed_emails 棚卸しスクリプト）の実装完了。
 # 1. 状況復元
 cat docs/handoff/LATEST.md
 
-# 2. 現在の OPEN PR
-gh pr list --state open
-# PR #277: マージ待ち (allowed_emails 削除時セッション即時失効 + email 正規化)
-# PR #280: マージ待ち (allowed_emails 棚卸しスクリプト Issue #279)
-# PR #273: Draft (Phase 3 実装完了まで保留)
+# 2. 現在の OPEN PR / Issue
+gh pr list --state open           # #284 (DRAFT, CONFLICTING)
+gh issue list --state open --limit 15
 
-# 3. 方針確定済み Issue の確認
-gh issue view 278  # 案B + 案② 確定、実装スコープ明記
-gh issue view 279  # PR #280 でクローズ予定
-gh issue view 281  # 構造リファクタ (P2、#278 後でも可)
+# 3. PR #284 の衝突解消（最優先）
+git checkout fix/issue-278-allowlist-recheck
+git fetch origin && git rebase origin/main
+# tenant-auth.ts は PR #288 の email_verified / sign_in_provider ガード追加済み
+# #284 側の allowlist 再チェック処理が新ガードの後に位置するよう conflict 解消
+# ADR-031 As-Is 表も #288/#291/#295 の追記と衝突するので手動 merge
+npm run lint && npm run type-check && npm test
+git push --force-with-lease
 ```
 
-実装着手順序（推奨）:
-1. **PR #277 マージ**（本番 `normalize-allowed-emails.ts` dry-run/execute → マージ）
-2. **PR #280 マージ**（本番 `audit-users-vs-allowed-emails.ts` dry-run → レビュー → `--fix --execute`）
-3. **Issue #278 実装**（`/impl-plan` → TDD → Evaluator 分離）
-4. **Issue #272 Phase 1.1–1.3**（GCP Console 操作、ユーザー作業）
-
 ---
 
-## セッション成果物（2026-04-22）
+## セッション成果物 (2026-04-22 Session 3)
 
-### PR
-| # | Title | State | CI | 次アクション |
-|---|-------|-------|----|--------------|
-| **#280** | feat(auth): allowed_emails 棚卸しスクリプト (Issue #279) | OPEN (MERGEABLE / CLEAN) | ✅ Lint/Type/Test/Build 全 PASS | 本番で dry-run → 補正 → マージ |
-| #277 | fix(auth): allowed_emails 削除時のセッション即時失効とメール正規化統一 | OPEN (MERGEABLE) | ✅ | 本番 `normalize-allowed-emails.ts` 実行 → マージ |
-| #273 | docs(adr): ADR-030/031 Draft | DRAFT | ✅ | Phase 3 実装完了まで Draft 維持 |
+### マージ完了 PR
 
-### PR #280 変更内訳 (4 files, +1366)
+| # | Issue | Title | Merge Commit |
+|---|-------|-------|-------------|
+| #287 | #285 | feat(auth): users.email 正規化マイグレーションスクリプト | `90d35fd` |
+| #288 | #286 | feat(auth): email_verified と sign_in_provider の必須チェック追加 | `c2d3511` |
+| #291 | #289 | feat(auth): super-admin 経路に email_verified / sign_in_provider / checkRevoked 追加 | `606e96b` |
+| #295 | #293 | feat(auth): getSuperAdminsFromFirestore を fail-closed 化 | `f106d75` |
 
-**実装**:
-- `services/api/src/services/allowed-email-audit.ts` (新規): 純粋関数 `planAudit` / `buildAuditFixNote` + 型定義（AuditUserInput / MatchedEntry / UserWithoutAllowedEmailEntry / ExcludedSuperAdminEntry 等）
-- `scripts/audit-users-vs-allowed-emails.ts` (新規): CLI wrapper。Firestore IO + Firebase Auth metadata 取得 + 出力 + 書き込み担当
-- `services/api/src/services/__tests__/allowed-email-audit.test.ts` (新規): 17 tests
-- `docs/runbook/allowed-emails-audit.md` (新規): 運用手順書
+### 主要変更の要点
 
-**設計のポイント**:
-- 純粋ロジックを `services/api` 配下に置いて標準 `npm test` でカバー（scripts/ は workspace 化されていない）
-- スーパー管理者判定は `middleware/super-admin.ts` と同じ情報源（env + Firestore superAdmins + `--super-admins`）
-- セーフガード多重化: dry-run 既定 / `--execute` 単体 reject / `--execute` 時の superAdmins 取得失敗 fatal / applyFix 直前の再取得で重複防止 / WriteBatch 450件/commit / 同一 email 重複 users レコードは警告ログ
-- Summary に `totalInvalid` / `authMetadataFailedBatches` / `authNotFoundUids` / `firestoreFetchFailed` を集約し、silent failure を可視化
+#### PR #287 (Issue #285): users.email 正規化スクリプト
+- `scripts/normalize-users-email.ts` 新規（PR #277 `normalize-allowed-emails.ts` と同パターン）
+- 重複検出時は skip + 警告（人物同一判定はスクリプトで行わない）
+- `scripts/__tests__/normalize-users-email.smoke.ts` (9 ケース、`npm run test:scripts`)
+- `docs/runbook/normalize-users-email.md` に手動マージ手順含む運用手順
+- ADR-031 Phase 3 (GCIP 移行) 前提作業
 
-**品質保証レイヤー**:
-1. TDD（17 tests 実装）
-2. Simplify レビュー（3エージェント並列: reuse/quality/efficiency）→ HIGH 2 + MEDIUM 3 対応
-3. Evaluator 分離プロトコル → REQUEST_CHANGES → ブロッカー2 + MEDIUM 3 対応で APPROVE 相当
-4. `/review-pr`（6エージェント並列: code-reviewer / comment-analyzer / pr-test-analyzer / silent-failure-hunter / type-design-analyzer / code-simplifier）→ マージブロッカー3 + コスト低改善5 対応
-5. 品質ゲート: lint / type-check / test 全 PASS（414 tests、うち新規 17）
+#### PR #288 (Issue #286): tenantAwareAuthMiddleware ガード
+- `findOrCreateTenantUser` 冒頭に 2 ガード追加（既存ユーザー検索より**前**）
+  - `decodedToken.email_verified === true` 必須
+  - `decodedToken.firebase?.sign_in_provider === "google.com"` のみ許可
+- `tenant-auth-firebase.test.ts` 12 ケース（既存ユーザー経路 / super-admin 経路 / firebase undefined も固定）
+- ADR-031 As-Is 表 ❌ → ✅
 
-### Issue 変動
-| # | Title | 意味 |
-|---|-------|------|
-| **#281** (新規, P2) | [refactor] allowed_emails 監査 CLI の純粋関数分割と型強化 | PR #280 レビューで挙がった構造リファクタ（planApplyFix/mergeSuperAdmins/parseArgs 純粋関数化、CliOptions discriminated union、NormalizedEmail brand 型、Gmail dot trick テスト、require() 撤廃）。本 PR スコープ外として分離 |
-| #279 (P0) | PR #280 でクローズ予定 | Closes #279 |
-| #278 (P0) | 前提（#279）完了、次実装候補 | PR #280 マージ後に `/impl-plan` で着手 |
-| #272 (P0) | Phase 1 ユーザー操作待ち | 1.1 OAuth External化 / 1.2 Authorized Domains / 1.3 sayori-maeda@kanjikai.or.jp 再ログイン依頼 |
-| #274/#275/#276 (P2) | Phase 5 実装 | 未着手 |
+#### PR #291 (Issue #289): superAdminAuthMiddleware ガード
+- `verifyIdToken(idToken, true)` で checkRevoked=true 化（B-1 即時失効を super-admin に拡張）
+- email_verified / sign_in_provider 2 ガード追加（`isSuperAdmin` より前）
+- `email!` non-null assertion 除去 + email 欠落時の 403 明示化
+- `super-admin-firebase.test.ts` 9 ケース新規
+- ADR-031 As-Is 表に 3 行追記 + スコープ注記（help-role.ts / tenants.ts 残存）
 
----
+#### PR #295 (Issue #293): Firestore fail-closed
+- `SuperAdminFirestoreUnavailableError` クラス追加（Error.cause 保持 + Firebase FirestoreError code）
+- `getSuperAdminsFromFirestore`: 空配列 return → throw に変更
+- `superAdminAuthMiddleware` (dev / firebase 両モード): catch して 503 返却
+- `tenantAwareAuthMiddleware#checkSuperAdmin` / `routes/help-role.ts` は既存 try/catch で吸収 (セキュリティ境界は fail-open しないが silent UX degradation は残る → #292 で改善検討)
+- `super-admin-firestore-failure.test.ts` 10 ケース（firebase 4 + dev 3 + unit 3）
+
+### 新規 Issue 起票 (今セッション)
+
+| # | P | カテゴリ | タイトル | 根拠 |
+|---|---|---------|---------|------|
+| #290 | P2 | security | AUTH_MODE=dev 本番誤有効化 fail-safe (起動時 assertion) | PR #288 silent-failure C-3 |
+| #292 | P1 | observability | super-admin / tenant-auth の認証拒否ログを構造化 + 拒否理由区別 | PR #291 silent-failure CRITICAL-1/HIGH-1 + codex P2 |
+| #294 | P2 | security | help-role.ts / tenants.ts の verifyIdToken に同等ガード適用 | PR #291 codex P2 |
+| #296 | P2 | ux | getAllSuperAdmins の silent fallback で管理 API 誤 404 リスク | PR #295 code-reviewer I-2 + silent-failure #7 |
 
 ## 品質ゲート結果
 
 | ゲート | 結果 |
 |--------|------|
-| `npm run lint` | ✅ PASS |
+| `npm run lint` | ✅ PASS (全マージで 0 error) |
 | `npm run type-check` | ✅ PASS (4 workspaces) |
-| `npm run test -w @lms-279/api` | ✅ 414 tests PASS（うち新規 17） |
-| GitHub Actions CI (PR #280) | ✅ Lint 29s / Type Check 46s / Test 1m0s / Build 52s 全 PASS |
-| CLI 動作確認 | ✅ `--help` / `--execute` 単体 reject / 位置引数 reject |
-| Simplify レビュー | ✅ HIGH 2 / MEDIUM 3 対応 |
-| Evaluator 分離プロトコル | ✅ AC 10 項目 PASS、ブロッカー2 + MEDIUM 3 対応 |
-| `/review-pr`（6エージェント並列） | ✅ マージブロッカー3 + コスト低改善5 対応、構造リファクタは #281 に分離 |
+| `npm test` | ✅ API 470 PASS + Web 33 PASS (累積 +28 新規テスト: smoke 9 / tenant-auth +5 / super-admin-firebase 9 / super-admin-firestore 10) |
+| CI (PR #287/#288/#291/#295) | ✅ Lint / Type Check / Test / Build 全 PASS |
+| TDD RED→GREEN | ✅ 全 PR で実施 |
+| `/review-pr` + `/codex review` | ✅ 各 PR でマージブロッカーなし判定 |
 
----
+## 次セッションの着手候補 (優先度順)
 
-## 次セッションの着手候補（優先度順）
+### 🔴 最優先（次セッション冒頭必須）
+1. **PR #284 rebase** — main との衝突解消（tenant-auth.ts + ADR-031 As-Is 表）
 
-### 🔴 最優先（ユーザー作業）
-1. **PR #277 マージ** — 本番で `normalize-allowed-emails.ts` dry-run → execute → マージ
-2. **PR #280 マージ** — 本番で `audit-users-vs-allowed-emails.ts` dry-run → 人手レビュー（退職者除外判定） → `--fix --execute` → マージ
-3. **Issue #272 Phase 1.1–1.3**（GCP Console 操作）
+### 🟠 ユーザー作業待ち（並行）
+2. **PR #284 本番棚卸し**: `scripts/normalize-allowed-emails.ts` + `scripts/audit-users-vs-allowed-emails.ts` を本番で実行 → Ready for Review 化 → マージ
+3. **Issue #272 Phase 1.1–1.3**: GCP Console 操作（OAuth External 化, Authorized Domains 確認, sayori-maeda@kanjikai.or.jp 再ログイン）
 
-### 🟠 高優先（PR #277 + PR #280 マージ後）
-4. **Issue #278**: 案B 実装 — `/impl-plan` → TDD → Evaluator 分離
-5. **Issue #272 Phase 3**: GCIP 移行実装
+### 🟢 並行着手可能（Prerequisite なし）
+4. **Issue #292 (P1 observability)**: super-admin / tenant-auth 認証拒否ログを logger + reason 細分化 + auth_error_logs 設計変更
+5. **Issue #294 (P2 security)**: help-role.ts / tenants.ts に email_verified / sign_in_provider / checkRevoked 適用（#288/#291 と同パターン）
+6. **Issue #290 (P2 security)**: AUTH_MODE=dev 起動時 assertion
+7. **Issue #296 (P2 ux)**: getAllSuperAdmins fail-closed 化 (選択肢 A/B/C のどれを採用するか設計判断から)
+8. **Issue #281 (P2 refactor)**: allowed_emails 監査 CLI 純粋関数分割
 
-### 🟡 中優先（Phase 5 / リファクタ）
-6. **Issue #281**: allowed_emails 監査 CLI の構造リファクタ（純粋関数切り出し + discriminated union + brand 型）
-7. Issue #276: Cloud Scheduler 化 + GCIP Tenant 対応
-8. Issue #275: 管理画面UX
-9. Issue #274: 運用可視化
-
----
+### 🟡 Phase 3 / Phase 5
+9. **Issue #278 案 B 本実装** (PR #284 マージ後)
+10. **Issue #272 Phase 3**: GCIP 移行本体（#285/#286/#289 完了済みで前提揃う）
+11. Issue #276 / #275 / #274: Phase 5 各種
 
 ## ブロッカー / ユーザー側タスク
 
 | 項目 | 内容 | 影響 |
 |------|------|------|
+| 本番 Firestore 棚卸し 2 スクリプト | PR #284 マージ前提（`normalize-allowed-emails.ts` + `audit-users-vs-allowed-emails.ts`） | Issue #278 デプロイ時の一斉ブロック防止 |
 | GCP Console: OAuth 同意画面 External 化 | Issue #272 Phase 1.1 | sayori-maeda@kanjikai.or.jp のログイン復旧 |
-| Firebase Console: Authorized Domains 確認 | Issue #272 Phase 1.2 | 同上 |
-| 本番 Firestore で `normalize-allowed-emails.ts` dry-run / execute | PR #277 マージ前 | 既存大文字混入データの救済 |
-| 本番 Firestore で `audit-users-vs-allowed-emails.ts` dry-run → 人手レビュー → `--fix --execute` | PR #280 マージ前 | Issue #278 デプロイ時の一斉ブロック防止 |
+| 本番 `normalize-users-email.ts` dry-run / execute | PR #287 マージ済み、本番実行は任意（GCIP 移行前に推奨） | users.email 大文字/空白混入の正規化 |
 
----
+## ADR / ドキュメント状態
+
+- **ADR-031** 更新済み (As-Is 表 ❌ → ✅ を 3 行 + Firestore 障害時の挙動補足)
+- **ドキュメント整合性**: CLAUDE.md は phase 11 完了、本セッションでの変更なし（#272 Phase 3 未着手）
+- **handoff サイズ**: 本ファイル 約 130 行（<500 行目標 OK）
 
 ## 作業ブランチ状態
 
 ```
-fix/allowed-emails-security-hardening (PR #277, OPEN, MERGEABLE, CI green)
-  ├─ ee2c042 fix(auth): allowed_emails削除時のセッション即時失効とメール正規化統一
-  ├─ 11247a4 fix(auth): レビュー対応 - CRITICAL/HIGH 指摘と追加テスト
-  └─ （本ハンドオフ更新コミット）
+main: f106d75 feat(auth): getSuperAdminsFromFirestore を fail-closed 化 (Issue #293) (#295)
 
-feat/issue-279-allowed-emails-audit (PR #280, OPEN, MERGEABLE/CLEAN, CI green)  ← main 起点
-  ├─ 67e7f15 feat(auth): allowed_emails 棚卸しスクリプトを追加
-  └─ 526fe86 fix(auth): PR #280 レビュー対応 - runbook 修正 + silent failure 対策
-
-feat/adr-030-031-gcip-multi-tenancy (PR #273, DRAFT)
+fix/issue-278-allowlist-recheck (PR #284, DRAFT, CONFLICTING)
+  ├─ main 起点の古い branch
+  ├─ tenant-auth.ts で PR #288 と衝突
+  └─ ADR-031 As-Is 表で PR #288/#291/#295 と衝突
+  →  次セッション冒頭で rebase 必須
 ```
 
-main push なし、destructive 操作なし。各ブランチ clean。
+main push なし、destructive 操作なし、残留 Node プロセスなし。
 
-**注意**: PR #280 は main 起点で作成したため、PR #277 の `normalize-allowed-emails.ts` を参照できない状態で runbook に記載されていたバグを第2コミット（526fe86）で修正済み（PR #277 マージ後前提を runbook に明記）。
+## 参考: 今セッションで使った規範 / スキル
 
----
-
-## 参考: 本セッションで使った規範 / スキル
-
-- `rules/quality-gate.md` — Evaluator 分離プロトコル（新規機能追加のため発動）
-- `rules/error-handling.md` §1 — 「状態復旧 > ログ記録 > 通知」で tenant ループの try/catch 設計
-- `rules/testing.md` §6 — AAA / 自己完結 / 1テスト1検証 / モック最小化
-- `rules/production-data-safety.md` — `applyFix` は新規 doc 作成のみで Partial Update 対象外、undefined 混入リスクなし
-- CLAUDE.md「Executing actions with care」— PR マージはユーザー承認待ちで停止
-- CLAUDE.md「公式に存在しないメカニズムを前提にした設計は禁止」— runbook の存在しないスクリプト参照を修正（PR #277 マージ後前提を明記）
-- `/impl-plan` — Issue #279 実装計画
-- `/codex plan` — 計画のセカンドオピニオン（5点の設計判断）
-- `/simplify` — 3エージェント並列レビュー
-- `/review-pr` (pr-review-toolkit) — 6エージェント並列
+- `rules/quality-gate.md` — Evaluator 分離プロトコル（5 ファイル未満でも `/review-pr` は全 PR で実行）
+- `rules/testing.md` §6 — AAA / DAMP / 1テスト1検証
+- `rules/error-handling.md` §2 — Error.cause による stack chain 保持 (PR #295)
+- `rules/production-data-safety.md` — PR #287 `normalize-users-email.ts` は新規 doc ではなく既存 user の partial update、undefined サニタイズ不要（`update({email: n})` 単一フィールドのみ）
+- `feedback_pr_merge_authorization.md` — PR 番号単位で明示認可を受けてからマージ（ユーザーから「マージ OK」指示を PR 番号ごとに取得）
+- `feedback_issue_triage.md` — review agent Rating 5-6 は Issue 化せず PR コメント / TODO 扱い
+- `/codex review` — PR #287/#288/#291/#295 でセカンドオピニオン（いずれもマージブロッカーなし）
+- `/review-pr` (pr-review-toolkit) — 3-5 エージェント並列、各 PR でレビュー
