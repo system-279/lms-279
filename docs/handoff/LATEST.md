@@ -104,7 +104,7 @@ gh issue view 272  # Phase 3 親 Issue (進捗トラッキング)
 |--------|------|
 | `npm run lint` | ✅ PASS |
 | `npm run type-check` (全 4 workspace) | ✅ PASS |
-| `npm test -w @lms-279/api` (sequential) | ✅ 583 passed (既存 571 + 新規 12 for PR #315、PR #314 merge 後の main は別計測) |
+| `npm test -w @lms-279/api` (sequential) | ✅ PR #315 ブランチ単独計測: 583 passed (既存 571 + 新規 12)。main の正確な合計は次セッション開始時に `npm test` で再計測 |
 | main CI (PR #314 / #315 両 push 時) | ✅ 全 SUCCESS (Build 53s / Lint 36-38s / Test 55-59s / Type Check 39-42s) |
 
 **Known issue**: ローカル並列テスト実行は flaky (Issue #308 の CI 遅延と同根)。sequential (`--fileParallelism=false`) または単独ファイル実行で全 PASS を確認。CI clean 環境では常時 PASS。
@@ -130,6 +130,8 @@ fdbbdc8 docs(handoff): Session 6 (2026-04-22) ハンドオフ更新 (#311)
 
 ### 🟡 P1 候補 (Phase 3 Sub-Issue、着手可能)
 
+以下の表は **2026-04-22 Session 7 終了時点** のスナップショット。起票後は最新状況を `gh issue list -l P1` で確認すること。
+
 | # | Sub-Issue | 内容 | 依存 |
 |---|-----------|------|------|
 | **#316** | Sub-Issue C follow-up | 初回 create 経路の並行 race 対応（sentinel doc / atomic `findOrCreateUserByEmailAndUid`） | Sub-Issue C (#313) マージ済（前提充足） |
@@ -144,7 +146,7 @@ fdbbdc8 docs(handoff): Session 6 (2026-04-22) ハンドオフ更新 (#311)
 
 ### 🟢 P2 残 (Phase 3 と並行可)
 
-- **#308**: E2E CI リクエスト遅延 7-9 秒/request 根本調査（CLAUDE.md Debug Protocol 3 件目警告対象）
+- **#308**: E2E CI リクエスト遅延 7-9 秒/request 根本調査（#305/#307 で 2 件連続暫定対処済み。次回 CI 遅延修正 PR が出れば CLAUDE.md Debug Protocol 「同一機能 3 件連続 → 元 PR 再レビュー」発動対象）
 - **#310**: platform_auth_error_logs 読み取り時の transient/permanent 分離 (503 vs 500)
 - **#281**: allowed_emails 監査 CLI refactor
 - **#274 / #275 / #276**: Phase 5 allowed_emails 運用改善 (可視化 / UX / セッション失効)
