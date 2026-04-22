@@ -63,6 +63,10 @@ Firebase Authentication を Google Cloud Identity Platform（GCIP）のマルチ
 | checkRevoked=true（即時失効） | ✅ 実装済み（B-1: `tenantAwareAuthMiddleware` + Issue #289: `superAdminAuthMiddleware` の 2 経路で `verifyIdToken(..., true)`） | 同上 |
 
 > **適用スコープ注記**: 上記 ✅ は `tenantAwareAuthMiddleware` (`middleware/tenant-auth.ts`) と `superAdminAuthMiddleware` (`middleware/super-admin.ts`) の 2 経路に限定。`routes/help-role.ts` および `routes/tenants.ts` 冒頭には `verifyIdToken(idToken)` の直接呼び出しが残っており、同等ガードは未適用（後続 Issue で対応）。
+
+> **Firestore 障害時の挙動 (Issue #293 / PR)**: `getSuperAdminsFromFirestore` は Firestore アクセス失敗時に空配列を silent に返していたため、env に未登録の super-admin が silent に 403 で締め出される「部分 fail-open + ユーザー欺瞞」状態だった。
+> - 修正後: `SuperAdminFirestoreUnavailableError` を throw し、`superAdminAuthMiddleware`（super-admin 専用 endpoint）は 503 Service Unavailable で返却（env 高速パスで通過済みのケースはここに到達しない）
+> - `tenantAwareAuthMiddleware#checkSuperAdmin` / `routes/help-role.ts` は既存の try/catch で障害を吸収し、従来どおり権限縮小して継続する（**セキュリティ境界として fail-open には戻らないが**、Firestore 登録 super-admin がテナント API / help 画面で一時的に通常ロール扱いになる silent UX degradation は残る。#292 等の後続 Issue で UX 改善検討）
 | メール正規化 | 🟡 `toLowerCase()` のみ（trim未実装） | `.trim().toLowerCase()` に統一 |
 | (tenantId, email) 認可単位 | ✅ 実装済み（テナントスコープの allowed_emails） | 維持 |
 | クライアント Firestore 直接アクセス禁止 | ✅ 実装済み（`web/` 配下で `firebase/firestore` import ゼロ） | 維持 |
