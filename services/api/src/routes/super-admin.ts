@@ -626,7 +626,19 @@ router.post("/admins", async (req: Request, res: Response) => {
  * 取得し、Firestore 障害時は 503 を返して再試行を促す。
  */
 router.delete("/admins/:email", async (req: Request, res: Response) => {
-  const email = decodeURIComponent(req.params.email as string);
+  // Issue #296 silent-failure-hunter H-2: decodeURIComponent は不正入力
+  // ("%" 単体など) で URIError を投げる。構造化ログなしに 500 に落とさず
+  // 400 で早期返却する。
+  let email: string;
+  try {
+    email = decodeURIComponent(req.params.email as string);
+  } catch {
+    res.status(400).json({
+      error: "invalid_email",
+      message: "メールアドレスの形式が正しくありません。",
+    });
+    return;
+  }
 
   let admins: SuperAdminRecord[];
   try {
@@ -645,7 +657,23 @@ router.delete("/admins/:email", async (req: Request, res: Response) => {
       });
       return;
     }
-    throw error;
+    // Issue #296 silent-failure-hunter H-1: 想定外例外が Express default
+    // handler に素通しで流れると、operatorEmail / targetEmail / errorType が
+    // Cloud Logging から串刺しできず削除操作の証跡が欠落する。構造化ログを
+    // 残したうえで 500 を明示返却する (error handler への委譲は行わない)。
+    const err = error as { code?: unknown };
+    logger.error("Super admin DELETE unexpected failure", {
+      errorType: "super_admin_delete_internal_error",
+      operatorEmail: req.superAdmin?.email,
+      targetEmail: email,
+      firebaseErrorCode: typeof err.code === "string" ? err.code : null,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      error: "internal_error",
+      message: "削除中にエラーが発生しました。再度お試しください。",
+    });
+    return;
   }
 
   const targetAdmin = admins.find((a) => a.email === email.toLowerCase());
