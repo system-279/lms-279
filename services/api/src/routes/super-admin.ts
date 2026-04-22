@@ -472,6 +472,10 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
   }
 
   // ADR-031 Phase 3: gcipTenantId バリデーション（null または非空 string のみ許可）
+  // 通過時は trim 済みの値を normalizedGcipTenantId に格納し、以降の比較・更新で使用する。
+  // trim せずに保存すると Phase 3 の `decodedToken.firebase.tenant === gcipTenantId` 照合
+  // （完全一致比較）で永久に通らなくなる（GCIP 発行 Tenant ID に前後空白は含まれない）。
+  let normalizedGcipTenantId: string | null | undefined = gcipTenantId;
   if (gcipTenantId !== undefined) {
     if (gcipTenantId !== null && typeof gcipTenantId !== "string") {
       res.status(400).json({
@@ -480,12 +484,16 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
       });
       return;
     }
-    if (typeof gcipTenantId === "string" && gcipTenantId.trim().length === 0) {
-      res.status(400).json({
-        error: "invalid_gcip_tenant_id",
-        message: "gcipTenantId に空文字は指定できません。解除する場合は null を指定してください。",
-      });
-      return;
+    if (typeof gcipTenantId === "string") {
+      const trimmed = gcipTenantId.trim();
+      if (trimmed.length === 0) {
+        res.status(400).json({
+          error: "invalid_gcip_tenant_id",
+          message: "gcipTenantId に空文字は指定できません。解除する場合は null を指定してください。",
+        });
+        return;
+      }
+      normalizedGcipTenantId = trimmed;
     }
   }
 
@@ -535,7 +543,7 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
     parseTenantGcipFields(previousData);
 
   const nextGcipTenantId =
-    gcipTenantId !== undefined ? gcipTenantId : previousGcipTenantId;
+    normalizedGcipTenantId !== undefined ? normalizedGcipTenantId : previousGcipTenantId;
   const nextUseGcip = useGcip !== undefined ? useGcip : previousUseGcip;
 
   // useGcip=true は gcipTenantId !== null を要求。以下 2 ケースで発動:
@@ -551,10 +559,13 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
     return;
   }
 
-  if (gcipTenantId !== undefined && gcipTenantId !== previousGcipTenantId) {
-    updateData.gcipTenantId = gcipTenantId;
+  if (
+    normalizedGcipTenantId !== undefined &&
+    normalizedGcipTenantId !== previousGcipTenantId
+  ) {
+    updateData.gcipTenantId = normalizedGcipTenantId;
     changes.push(
-      `gcipTenantId: ${JSON.stringify(previousGcipTenantId)} -> ${JSON.stringify(gcipTenantId)}`
+      `gcipTenantId: ${JSON.stringify(previousGcipTenantId)} -> ${JSON.stringify(normalizedGcipTenantId)}`
     );
   }
 

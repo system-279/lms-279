@@ -25,6 +25,7 @@ const mockRunTransaction = vi.fn(async (cb: (tx: unknown) => Promise<void>) => {
   await cb({ create: mockTransactionCreate, set: mockTransactionSet });
 });
 const mockTenantDocGet = vi.fn();
+const mockTenantDocUpdate = vi.fn();
 const mockSuperAdminsCollectionGet = vi.fn().mockResolvedValue({ docs: [] });
 const mockGetUserByEmail = vi.fn();
 
@@ -41,7 +42,7 @@ vi.mock("firebase-admin/firestore", () => {
   const makeTenantDoc = (id?: string) => ({
     id: id ?? "generated-doc-id",
     get: mockTenantDocGet,
-    update: vi.fn(),
+    update: mockTenantDocUpdate,
     collection: () => makeSubCollection(),
   });
   const makeCollection = (path: string) => {
@@ -139,6 +140,146 @@ describe("PATCH /api/v2/super/tenants/:id — GCIP フィールドバリデー�
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("gcip_tenant_id_required");
+  });
+});
+
+describe("PATCH /api/v2/super/tenants/:id — GCIP 正常系・Partial Update (Issue #312)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubEnv("AUTH_MODE", "dev");
+    vi.stubEnv("SUPER_ADMIN_EMAILS", "super@example.com");
+    mockTenantDocGet.mockReset();
+    mockTenantDocUpdate.mockReset().mockResolvedValue(undefined);
+    mockSuperAdminsCollectionGet.mockResolvedValue({ docs: [] });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("useGcip: true + gcipTenantId: 'gcip-xyz' を指定すると 200 + Firestore に両フィールド反映", async () => {
+    // previous: 非 GCIP、updated: GCIP 有効
+    mockTenantDocGet
+      .mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          id: "tenant-a",
+          name: "Tenant A",
+          ownerId: "uid-1",
+          ownerEmail: "owner@example.com",
+          status: "active",
+          gcipTenantId: null,
+          useGcip: false,
+        }),
+      })
+      .mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          id: "tenant-a",
+          name: "Tenant A",
+          ownerId: "uid-1",
+          ownerEmail: "owner@example.com",
+          status: "active",
+          gcipTenantId: "gcip-xyz",
+          useGcip: true,
+        }),
+      });
+
+    const app = await buildApp();
+    const res = await supertest(app)
+      .patch("/api/v2/super/tenants/tenant-a")
+      .set("X-User-Email", "super@example.com")
+      .send({ useGcip: true, gcipTenantId: "gcip-xyz" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.tenant.gcipTenantId).toBe("gcip-xyz");
+    expect(res.body.tenant.useGcip).toBe(true);
+
+    // Firestore update に両フィールドが渡されている
+    expect(mockTenantDocUpdate).toHaveBeenCalledTimes(1);
+    const updateData = mockTenantDocUpdate.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(updateData.gcipTenantId).toBe("gcip-xyz");
+    expect(updateData.useGcip).toBe(true);
+  });
+
+  it("gcipTenantId に前後空白付きを指定すると trim された値が保存される (Phase 3 照合整合性)", async () => {
+    mockTenantDocGet
+      .mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          id: "tenant-a",
+          name: "Tenant A",
+          ownerId: "uid-1",
+          ownerEmail: "owner@example.com",
+          status: "active",
+          gcipTenantId: null,
+          useGcip: false,
+        }),
+      })
+      .mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          id: "tenant-a",
+          name: "Tenant A",
+          ownerId: "uid-1",
+          ownerEmail: "owner@example.com",
+          status: "active",
+          gcipTenantId: "gcip-xyz",
+          useGcip: false,
+        }),
+      });
+
+    const app = await buildApp();
+    const res = await supertest(app)
+      .patch("/api/v2/super/tenants/tenant-a")
+      .set("X-User-Email", "super@example.com")
+      .send({ gcipTenantId: "  gcip-xyz  " });
+
+    expect(res.status).toBe(200);
+    const updateData = mockTenantDocUpdate.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(updateData.gcipTenantId).toBe("gcip-xyz");
+  });
+
+  it("Partial Update: gcipTenantId のみ PATCH すると useGcip は updateData に含まれない (既存値保持)", async () => {
+    // previous: 既存 GCIP 設定あり (useGcip: true, gcipTenantId: "old-xyz")
+    mockTenantDocGet
+      .mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          id: "tenant-a",
+          name: "Tenant A",
+          ownerId: "uid-1",
+          ownerEmail: "owner@example.com",
+          status: "active",
+          gcipTenantId: "old-xyz",
+          useGcip: true,
+        }),
+      })
+      .mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          id: "tenant-a",
+          name: "Tenant A",
+          ownerId: "uid-1",
+          ownerEmail: "owner@example.com",
+          status: "active",
+          gcipTenantId: "new-abc",
+          useGcip: true,
+        }),
+      });
+
+    const app = await buildApp();
+    const res = await supertest(app)
+      .patch("/api/v2/super/tenants/tenant-a")
+      .set("X-User-Email", "super@example.com")
+      .send({ gcipTenantId: "new-abc" });
+
+    expect(res.status).toBe(200);
+    const updateData = mockTenantDocUpdate.mock.calls[0]?.[0] as Record<string, unknown>;
+    // gcipTenantId は更新される
+    expect(updateData.gcipTenantId).toBe("new-abc");
+    // useGcip は updateData に含まれない (既存値保持)
+    expect(updateData.useGcip).toBeUndefined();
   });
 });
 
