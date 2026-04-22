@@ -26,7 +26,7 @@ import {
 import type { TenantMetadata, TenantStatus } from "../types/tenant.js";
 import { masterRouter } from "./super-admin-master.js";
 import { calculateDefaultDeadlines } from "../services/enrollment.js";
-import { generateTenantId, normalizeEmail } from "../utils/tenant-id.js";
+import { generateTenantId, normalizeEmail, parseTenantGcipFields } from "../utils/tenant-id.js";
 import { logger } from "../utils/logger.js";
 import { getPlatformDataSource } from "../middleware/platform-datasource.js";
 
@@ -150,9 +150,7 @@ router.get("/tenants", async (req: Request, res: Response) => {
       ownerEmail: data.ownerEmail ?? "",
       status: data.status ?? "active",
       userCount: userCounts[i].data().count,
-      // ADR-031 Phase 3: 既存ドキュメントに欠落時は非 GCIP（false / null）扱い
-      gcipTenantId: typeof data.gcipTenantId === "string" ? data.gcipTenantId : null,
-      useGcip: data.useGcip === true,
+      ...parseTenantGcipFields(data),
       createdAt: data.createdAt?.toDate?.()?.toISOString() ?? null,
       updatedAt: data.updatedAt?.toDate?.()?.toISOString() ?? null,
     };
@@ -386,10 +384,7 @@ router.get("/tenants/:id", async (req: Request, res: Response) => {
       ownerId: tenantData.ownerId ?? "",
       ownerEmail: tenantData.ownerEmail ?? "",
       status: tenantData.status ?? "active",
-      // ADR-031 Phase 3: 既存ドキュメントに欠落時は非 GCIP 扱い
-      gcipTenantId:
-        typeof tenantData.gcipTenantId === "string" ? tenantData.gcipTenantId : null,
-      useGcip: tenantData.useGcip === true,
+      ...parseTenantGcipFields(tenantData),
       createdAt: tenantData.createdAt?.toDate?.()?.toISOString() ?? null,
       updatedAt: tenantData.updatedAt?.toDate?.()?.toISOString() ?? null,
     },
@@ -536,15 +531,17 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
   }
 
   // ADR-031 Phase 3: GCIP フィールドの更新と整合性ガード
-  const previousGcipTenantId =
-    typeof previousData.gcipTenantId === "string" ? previousData.gcipTenantId : null;
-  const previousUseGcip = previousData.useGcip === true;
+  const { gcipTenantId: previousGcipTenantId, useGcip: previousUseGcip } =
+    parseTenantGcipFields(previousData);
 
   const nextGcipTenantId =
     gcipTenantId !== undefined ? gcipTenantId : previousGcipTenantId;
   const nextUseGcip = useGcip !== undefined ? useGcip : previousUseGcip;
 
-  // useGcip=true は gcipTenantId !== null を要求（カナリア時の不整合を防ぐ）
+  // useGcip=true は gcipTenantId !== null を要求。以下 2 ケースで発動:
+  //   a) 新規に useGcip: true + gcipTenantId 非 null を指定（カナリア開始）
+  //   b) 既に useGcip=true のテナントで gcipTenantId: null PATCH（ID を外す試み）
+  // (b) の場合は GCIP 認証経路が破壊されるため拒否。GCIP 解除は useGcip: false を先に適用してから。
   if (nextUseGcip && nextGcipTenantId === null) {
     res.status(400).json({
       error: "gcip_tenant_id_required",
@@ -592,9 +589,7 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
       ownerId: updatedData.ownerId ?? "",
       ownerEmail: updatedData.ownerEmail ?? "",
       status: updatedData.status ?? "active",
-      gcipTenantId:
-        typeof updatedData.gcipTenantId === "string" ? updatedData.gcipTenantId : null,
-      useGcip: updatedData.useGcip === true,
+      ...parseTenantGcipFields(updatedData),
       createdAt: updatedData.createdAt?.toDate?.()?.toISOString() ?? null,
       updatedAt: updatedData.updatedAt?.toDate?.()?.toISOString() ?? null,
     },

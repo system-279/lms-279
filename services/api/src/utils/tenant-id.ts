@@ -61,3 +61,20 @@ export function validateOrganizationName(name: unknown): string | null {
 export function normalizeEmail(email: string): string {
   return email.toLowerCase().trim();
 }
+
+/**
+ * Firestore tenant ドキュメントから GCIP フィールド（`gcipTenantId` / `useGcip`）を
+ * 安全に読み取る。既存ドキュメントに欠落している場合は非 GCIP の default（`null` / `false`）を返す。
+ *
+ * ADR-031 Phase 3: スキーマに 2 フィールドが追加されたが、既存テナントは backfill 前。
+ * 読み取り箇所（GET 一覧 / GET 詳細 / PATCH previous / PATCH response）で default 値読み取りが
+ * 4 箇所に重複していたため抽出。
+ */
+export function parseTenantGcipFields(
+  data: Record<string, unknown>
+): { gcipTenantId: string | null; useGcip: boolean } {
+  return {
+    gcipTenantId: typeof data.gcipTenantId === "string" ? data.gcipTenantId : null,
+    useGcip: data.useGcip === true,
+  };
+}
