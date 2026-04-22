@@ -108,8 +108,14 @@ Firebase Authentication を Google Cloud Identity Platform（GCIP）のマルチ
 `req.dataSource` が super-admin 経路で注入されない課題に対しては、`middleware/platform-datasource.ts` で **プロセス単位の singleton** (`getPlatformDataSource()`) として提供し、`AUTH_MODE=firebase` なら `FirestoreDataSource(tenantId="__platform__")`、それ以外（dev/test）なら `InMemoryDataSource` を返す。テストでは `setPlatformDataSourceForTest()` でモック差し替え可能。
 
 #### `AuthErrorLog` スキーマ拡張
-- `reason: string | null`（旧レコード互換のため nullable）
+- `reason: string | null`（旧レコード互換のため nullable。middleware 側 union 型 `TenantAccessDenialReason` / `SuperAdminDenialReason` の代表値を格納。catch 節では null）
 - `firebaseErrorCode: string | null`（403 等の分岐では null、catch 節で Firebase SDK エラーコードを格納）
+
+#### Phase 1 の制約（次 Issue で拡張予定）
+- `platform_auth_error_logs` を **admin UI から参照する経路は未実装**。Phase 1 では Cloud Logging（`logger.warn/error` の構造化出力）経由で確認する前提
+- `getPlatformAuthErrorLogs()` / super-admin 画面 UI は別 Issue で追加（PR #298 code-reviewer H1 指摘）
+- `SuperAdminFirestoreUnavailableError` の transient (`unavailable`/`deadline-exceeded`) と permanent (`permission-denied` 等) の区別は現状未実装。すべて 503 を返すが、permanent は 500 相当（別 Issue 推奨）
+- `tenant-auth.ts:checkSuperAdmin` が `SuperAdminFirestoreUnavailableError` も false fallback に潰している点（Issue #293 の silent 権限剥奪を tenant 経路では部分的に残す）も別 Issue で対応
 
 ### UID保持戦略
 - GCIP Tenant ごとにユーザーサイロが分かれるため、新UIDが発行される

@@ -50,9 +50,11 @@ export interface AuthErrorLog {
   tenantId: string;
   errorType: string;
   /**
-   * 拒否理由の細分化（Issue #292）。未設定（null）は旧レコード互換。
-   * tenant 経路の代表値: `email_not_verified` / `non_google_provider` / `email_missing` / `not_in_allowlist`
-   * super-admin 経路の代表値: 上記 + `not_super_admin` / `no_auth_header` / `firebase_claim_missing`
+   * 拒否理由の細分化（Issue #292）。未設定（null）は旧レコード互換。catch 節（token error）では null。
+   * 実装上の代表値は middleware 側 union 型を参照（ここでは `string | null` に緩めて
+   * 将来の reason 追加を schema 互換のまま許容）:
+   *   - tenant 経路: `TenantAccessDenialReason`（`middleware/tenant-auth.ts`）
+   *   - super-admin 経路: `SuperAdminDenialReason`（`middleware/super-admin.ts`）
    */
   reason: string | null;
   errorMessage: string;

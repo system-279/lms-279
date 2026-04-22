@@ -145,6 +145,27 @@ describe("superAdminAuthMiddleware — Issue #292 structured denial logging", ()
       expect(createPlatformAuthErrorLog.mock.calls[0][0].reason).toBe("email_missing");
     });
 
+    it("email_missing: email 空文字 → reason=email_missing（H1 境界値）", async () => {
+      const { app, createPlatformAuthErrorLog } = await buildHarness("firebase");
+      mockVerifyIdToken.mockResolvedValue(makeToken({ email: "" }));
+
+      const res = await supertest(app).get("/me").set("authorization", "Bearer tok");
+      expect(res.status).toBe(403);
+
+      expect(createPlatformAuthErrorLog.mock.calls[0][0].reason).toBe("email_missing");
+    });
+
+    it("non_google_provider: firebase キー自体が欠落 → reason=non_google_provider（H2 境界値）", async () => {
+      const { app, createPlatformAuthErrorLog } = await buildHarness("firebase");
+      mockVerifyIdToken.mockResolvedValue(makeToken({ firebase: undefined }));
+
+      const res = await supertest(app).get("/me").set("authorization", "Bearer tok");
+      expect(res.status).toBe(403);
+
+      expect(createPlatformAuthErrorLog.mock.calls[0][0].reason).toBe("non_google_provider");
+      expect(createPlatformAuthErrorLog.mock.calls[0][0].errorMessage).toContain("provider=unknown");
+    });
+
     it("not_super_admin: 検証済みメールだが super admin 登録なし → reason=not_super_admin", async () => {
       const { app, createPlatformAuthErrorLog } = await buildHarness("firebase");
       mockVerifyIdToken.mockResolvedValue(makeToken({ email: "nobody@example.com" }));

@@ -144,6 +144,36 @@ describe("tenantAwareAuthMiddleware — Issue #292 structured denial logging", (
     expect(createAuthErrorLogSpy.mock.calls[0][0].reason).toBe("email_missing");
   });
 
+  it("ensureAllowlisted 経由: 既存 user + allowed_emails 削除後 → reason=not_in_allowlist（H3）", async () => {
+    // ADR-031 継続的認可境界の本丸: 既存ユーザー経路で reason が記録されることを構造化ログ観点で検証
+    const { app, ds, createAuthErrorLogSpy } = await buildApp();
+    await ds.createAllowedEmail({ email: "existing@example.com", note: null });
+    await ds.createUser({
+      email: "existing@example.com",
+      name: "Existing",
+      role: "student",
+      firebaseUid: "uid-existing",
+    });
+    // allowed_emails 削除
+    const allowed = (await ds.getAllowedEmails()).find((a) => a.email === "existing@example.com")!;
+    await ds.deleteAllowedEmail(allowed.id);
+
+    mockVerifyIdToken.mockResolvedValue({
+      uid: "uid-existing",
+      email: "existing@example.com",
+      email_verified: true,
+      firebase: { sign_in_provider: "google.com" },
+    });
+
+    const res = await supertest(app).get("/me").set("authorization", "Bearer tok");
+    expect(res.status).toBe(403);
+    expect(createAuthErrorLogSpy.mock.calls[0][0]).toMatchObject({
+      errorType: "tenant_access_denied",
+      reason: "not_in_allowlist",
+      email: "existing@example.com",
+    });
+  });
+
   it("catch 節: verifyIdToken 失敗 → logger.error + firebaseErrorCode", async () => {
     const { app } = await buildApp();
     const err = Object.assign(new Error("revoked"), { code: "auth/id-token-revoked" });

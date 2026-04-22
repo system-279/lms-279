@@ -8,7 +8,7 @@ import { getApps, initializeApp, cert } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { logger } from "../utils/logger.js";
-import { getPlatformDataSource } from "./platform-datasource.js";
+import { getPlatformDataSource, PLATFORM_TENANT_ID } from "./platform-datasource.js";
 
 /**
  * Super admin 経路の拒否理由（Issue #292）。
@@ -59,7 +59,7 @@ async function recordSuperAdminAuthEvent(
     const ds = getPlatformDataSource();
     await ds.createPlatformAuthErrorLog({
       email: payload.email ?? "unknown",
-      tenantId: "__platform__",
+      tenantId: PLATFORM_TENANT_ID,
       errorType: payload.errorType,
       reason: payload.reason,
       errorMessage: payload.errorMessage,
@@ -71,9 +71,22 @@ async function recordSuperAdminAuthEvent(
       occurredAt: new Date().toISOString(),
     });
   } catch (persistError) {
-    // 記録失敗は警告のみ、API 応答には影響させない。
-    logger.warn("Failed to persist platform auth error log", {
-      error: persistError instanceof Error ? persistError.message : String(persistError),
+    // Issue #292 silent-failure 指摘 C-1 対応: persist 失敗時に元イベントコンテキスト
+    // (errorType/reason/email/firebaseErrorCode/path 等) が logger.warn の "error" フィールド
+    // だけに畳み込まれて落ちると、Firestore 障害中の拒否イベントが完全に失われる。
+    // 元 payload を展開して logger.error に残し、最低限 application log での forensics を維持する。
+    const pe = persistError as { code?: unknown };
+    logger.error("Failed to persist platform auth error log", {
+      originalErrorType: payload.errorType,
+      originalReason: payload.reason,
+      email: payload.email ?? "unknown",
+      firebaseErrorCode: payload.firebaseErrorCode,
+      path: req.path,
+      method: req.method,
+      ipAddress: req.ip,
+      persistErrorCode: typeof pe.code === "string" ? pe.code : null,
+      persistErrorMessage:
+        persistError instanceof Error ? persistError.message : String(persistError),
     });
   }
 }

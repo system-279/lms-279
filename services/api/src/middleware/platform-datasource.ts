@@ -6,7 +6,11 @@
  * このヘルパでプロセス単位の DataSource を singleton 提供し、
  * `createPlatformAuthErrorLog` 経由で root コレクション `platform_auth_error_logs` に書き込む。
  *
- * - `AUTH_MODE=firebase` → `FirestoreDataSource`（tenantId="__platform__" は未使用のため任意値）
+ * - `AUTH_MODE=firebase` → `FirestoreDataSource`
+ *   （`FirestoreDataSource` の tenantId は `tenants/{tenantId}/` path 解決にのみ使われる。
+ *   `createPlatformAuthErrorLog` は root コレクションに書き込むため tenant path を利用せず、
+ *   ここに渡す `PLATFORM_TENANT_ID` は書き込みルーティングに影響しない識別子。
+ *   なお super-admin.ts 側では `AuthErrorLog.tenantId` フィールドにも同じ識別子を明示的に格納する）
  * - それ以外（dev/test）→ `InMemoryDataSource`
  * - テストから `setPlatformDataSourceForTest()` で差し替え可能
  */
@@ -15,6 +19,12 @@ import { FirestoreDataSource } from "../datasource/firestore.js";
 import { InMemoryDataSource } from "../datasource/in-memory.js";
 import type { DataSource } from "../datasource/interface.js";
 
+/**
+ * Platform スコープ識別子。`AuthErrorLog.tenantId` フィールドの sentinel 値として使用する。
+ * Cloud Logging / BigQuery 上で「platform レベル vs tenant レベル」の拒否を分離する際のキー。
+ */
+export const PLATFORM_TENANT_ID = "__platform__" as const;
+
 let cached: DataSource | null = null;
 
 export function getPlatformDataSource(): DataSource {
@@ -22,7 +32,7 @@ export function getPlatformDataSource(): DataSource {
   const mode = process.env.AUTH_MODE ?? "dev";
   cached =
     mode === "firebase"
-      ? new FirestoreDataSource(getFirestore(), "__platform__")
+      ? new FirestoreDataSource(getFirestore(), PLATFORM_TENANT_ID)
       : new InMemoryDataSource({ readOnly: false });
   return cached;
 }

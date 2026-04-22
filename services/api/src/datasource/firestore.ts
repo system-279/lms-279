@@ -594,6 +594,9 @@ export class FirestoreDataSource implements DataSource {
   /**
    * プラットフォーム（テナント非依存）認証エラーログを作成 (Issue #292)
    * ルートコレクション `platform_auth_error_logs` に書き込み、tenant スコープを使わない。
+   *
+   * serverTimestamp を使っていないため、書き込み後の read-after-write は行わず、
+   * 入力 `data` と生成 `id` から直接復元する（レイテンシ半減 + transient 再読失敗で silent drop する矛盾を回避）。
    */
   async createPlatformAuthErrorLog(data: Omit<AuthErrorLog, "id">): Promise<AuthErrorLog> {
     const docRef = this.db.collection("platform_auth_error_logs").doc();
@@ -601,8 +604,7 @@ export class FirestoreDataSource implements DataSource {
       ...data,
       occurredAt: Timestamp.fromDate(new Date(data.occurredAt)),
     });
-    const doc = await docRef.get();
-    return this.toAuthErrorLog(doc.id, doc.data()!);
+    return { ...data, id: docRef.id };
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -117,8 +117,19 @@ export async function handleTenantAccessDenied(
         occurredAt: new Date().toISOString(),
       });
     } catch (logError) {
-      // ログ保存失敗は警告のみ、レスポンスには影響させない
-      logger.warn("Failed to save auth error log", { error: logError });
+      // Issue #292 silent-failure 指摘 H-1 対応: persist 失敗時に Error を raw で渡すと
+      // logger 実装次第で {} に潰れ、かつ email/tenantId/reason の元コンテキストが失われる。
+      // 元 payload を展開して logger.error に残し、Firestore 障害中の拒否イベント追跡を維持する。
+      logger.error("Failed to save auth error log", {
+        originalErrorType: "tenant_access_denied",
+        originalReason: error.reason,
+        email,
+        tenantId,
+        path: req.path,
+        method: req.method,
+        persistErrorMessage:
+          logError instanceof Error ? logError.message : String(logError),
+      });
     }
   }
 
