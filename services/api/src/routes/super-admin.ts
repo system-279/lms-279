@@ -60,6 +60,8 @@ interface TenantListItem {
   ownerEmail: string;
   status: TenantStatus;
   userCount: number;
+  gcipTenantId: string | null;
+  useGcip: boolean;
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -148,6 +150,9 @@ router.get("/tenants", async (req: Request, res: Response) => {
       ownerEmail: data.ownerEmail ?? "",
       status: data.status ?? "active",
       userCount: userCounts[i].data().count,
+      // ADR-031 Phase 3: 既存ドキュメントに欠落時は非 GCIP（false / null）扱い
+      gcipTenantId: typeof data.gcipTenantId === "string" ? data.gcipTenantId : null,
+      useGcip: data.useGcip === true,
       createdAt: data.createdAt?.toDate?.()?.toISOString() ?? null,
       updatedAt: data.updatedAt?.toDate?.()?.toISOString() ?? null,
     };
@@ -267,6 +272,9 @@ router.post("/tenants", async (req: Request, res: Response) => {
         ownerId: ownerUid ?? "",
         ownerEmail: normalizedOwnerEmail,
         status: "active" as TenantStatus,
+        // ADR-031 Phase 3: 新規テナントは default で非 GCIP（カナリア展開前）
+        gcipTenantId: null,
+        useGcip: false,
         createdAt: now,
         updatedAt: now,
       });
@@ -338,6 +346,8 @@ router.post("/tenants", async (req: Request, res: Response) => {
       ownerId: ownerUid ?? "",
       ownerEmail: normalizedOwnerEmail,
       status: "active",
+      gcipTenantId: null,
+      useGcip: false,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     },
@@ -376,6 +386,10 @@ router.get("/tenants/:id", async (req: Request, res: Response) => {
       ownerId: tenantData.ownerId ?? "",
       ownerEmail: tenantData.ownerEmail ?? "",
       status: tenantData.status ?? "active",
+      // ADR-031 Phase 3: 既存ドキュメントに欠落時は非 GCIP 扱い
+      gcipTenantId:
+        typeof tenantData.gcipTenantId === "string" ? tenantData.gcipTenantId : null,
+      useGcip: tenantData.useGcip === true,
       createdAt: tenantData.createdAt?.toDate?.()?.toISOString() ?? null,
       updatedAt: tenantData.updatedAt?.toDate?.()?.toISOString() ?? null,
     },
@@ -396,6 +410,10 @@ interface TenantUpdateRequest {
   name?: string;
   ownerEmail?: string;
   status?: TenantStatus;
+  /** GCIP Tenant ID（ADR-031 Phase 3）。null で明示的に解除可能、空文字は拒否 */
+  gcipTenantId?: string | null;
+  /** GCIP 経路を有効化するか（ADR-031 Phase 3）。true の場合は `gcipTenantId` 非 null が必須 */
+  useGcip?: boolean;
 }
 
 /**
@@ -404,12 +422,20 @@ interface TenantUpdateRequest {
  */
 router.patch("/tenants/:id", async (req: Request, res: Response) => {
   const id = req.params.id as string;
-  const { name, ownerEmail, status } = req.body as TenantUpdateRequest;
+  const { name, ownerEmail, status, gcipTenantId, useGcip } =
+    req.body as TenantUpdateRequest;
 
-  if (name === undefined && ownerEmail === undefined && status === undefined) {
+  if (
+    name === undefined &&
+    ownerEmail === undefined &&
+    status === undefined &&
+    gcipTenantId === undefined &&
+    useGcip === undefined
+  ) {
     res.status(400).json({
       error: "no_fields",
-      message: "更新するフィールド（name, ownerEmail, status）を少なくとも1つ指定してください。",
+      message:
+        "更新するフィールド（name, ownerEmail, status, gcipTenantId, useGcip）を少なくとも1つ指定してください。",
     });
     return;
   }
@@ -450,6 +476,32 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
     return;
   }
 
+  // ADR-031 Phase 3: gcipTenantId バリデーション（null または非空 string のみ許可）
+  if (gcipTenantId !== undefined) {
+    if (gcipTenantId !== null && typeof gcipTenantId !== "string") {
+      res.status(400).json({
+        error: "invalid_gcip_tenant_id",
+        message: "gcipTenantId は null または非空文字列を指定してください。",
+      });
+      return;
+    }
+    if (typeof gcipTenantId === "string" && gcipTenantId.trim().length === 0) {
+      res.status(400).json({
+        error: "invalid_gcip_tenant_id",
+        message: "gcipTenantId に空文字は指定できません。解除する場合は null を指定してください。",
+      });
+      return;
+    }
+  }
+
+  if (useGcip !== undefined && typeof useGcip !== "boolean") {
+    res.status(400).json({
+      error: "invalid_use_gcip",
+      message: "useGcip は boolean を指定してください。",
+    });
+    return;
+  }
+
   const db = getFirestore();
   const tenantRef = db.collection("tenants").doc(id);
   const tenantDoc = await tenantRef.get();
@@ -483,6 +535,37 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
     changes.push(`status: "${previousData.status}" -> "${status}"`);
   }
 
+  // ADR-031 Phase 3: GCIP フィールドの更新と整合性ガード
+  const previousGcipTenantId =
+    typeof previousData.gcipTenantId === "string" ? previousData.gcipTenantId : null;
+  const previousUseGcip = previousData.useGcip === true;
+
+  const nextGcipTenantId =
+    gcipTenantId !== undefined ? gcipTenantId : previousGcipTenantId;
+  const nextUseGcip = useGcip !== undefined ? useGcip : previousUseGcip;
+
+  // useGcip=true は gcipTenantId !== null を要求（カナリア時の不整合を防ぐ）
+  if (nextUseGcip && nextGcipTenantId === null) {
+    res.status(400).json({
+      error: "gcip_tenant_id_required",
+      message:
+        "useGcip を true にするには gcipTenantId を非 null で指定してください（ADR-031 Phase 3）。",
+    });
+    return;
+  }
+
+  if (gcipTenantId !== undefined && gcipTenantId !== previousGcipTenantId) {
+    updateData.gcipTenantId = gcipTenantId;
+    changes.push(
+      `gcipTenantId: ${JSON.stringify(previousGcipTenantId)} -> ${JSON.stringify(gcipTenantId)}`
+    );
+  }
+
+  if (useGcip !== undefined && useGcip !== previousUseGcip) {
+    updateData.useGcip = useGcip;
+    changes.push(`useGcip: ${previousUseGcip} -> ${useGcip}`);
+  }
+
   if (changes.length === 0) {
     res.status(400).json({
       error: "no_changes",
@@ -509,6 +592,9 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
       ownerId: updatedData.ownerId ?? "",
       ownerEmail: updatedData.ownerEmail ?? "",
       status: updatedData.status ?? "active",
+      gcipTenantId:
+        typeof updatedData.gcipTenantId === "string" ? updatedData.gcipTenantId : null,
+      useGcip: updatedData.useGcip === true,
       createdAt: updatedData.createdAt?.toDate?.()?.toISOString() ?? null,
       updatedAt: updatedData.updatedAt?.toDate?.()?.toISOString() ?? null,
     },

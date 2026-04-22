@@ -226,6 +226,9 @@ router.post("/", async (req: Request, res: Response) => {
         ownerId: uid,
         ownerEmail: normalizedEmail,
         status: "active",
+        // ADR-031 Phase 3: 新規テナントは default で非 GCIP（カナリア展開前）
+        gcipTenantId: null,
+        useGcip: false,
         createdAt: now,
         updatedAt: now,
       };
@@ -275,6 +278,8 @@ router.post("/", async (req: Request, res: Response) => {
     ownerId: uid,
     ownerEmail: normalizedEmail,
     status: "active",
+    gcipTenantId: null,
+    useGcip: false,
     createdAt: now,
     updatedAt: now,
   };

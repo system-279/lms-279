@@ -10,6 +10,16 @@ export interface SuperTenantListItem {
   ownerEmail: string;
   status: TenantStatus;
   userCount: number;
+  /**
+   * GCIP Tenant ID（ADR-031 Phase 3）
+   * null の場合は旧 Firebase Auth 経路。
+   */
+  gcipTenantId: string | null;
+  /**
+   * GCIP 経路を有効化するか（ADR-031 Phase 3、feature flag）
+   * テナント単位のカナリア展開用。
+   */
+  useGcip: boolean;
   createdAt: string | null;
   updatedAt: string | null;
 }
