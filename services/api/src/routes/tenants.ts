@@ -9,6 +9,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import type { TenantMetadata, CreateTenantRequest } from "../types/tenant.js";
 import { RESERVED_TENANT_IDS, generateTenantId, validateOrganizationName, normalizeEmail } from "../utils/tenant-id.js";
+import { logger } from "../utils/logger.js";
 
 const router = Router();
 
@@ -70,10 +71,56 @@ async function verifyAuthToken(
 
   const idToken = authHeader.slice(7);
   try {
-    const decodedToken = await getAuth().verifyIdToken(idToken);
+    // Issue #294 / ADR-031 境界統一:
+    //   - checkRevoked=true で revoke 後の既発行トークンを拒否
+    //   - email_verified=true と sign_in_provider=google.com を必須化し、
+    //     非 Google / 未検証メールでのテナント作成経路をブロックする。
+    //   - レスポンスはユーザー列挙防止のため既存の文言「認証トークンが無効です」で統一
+    //     （status は tenant-auth.ts と同じ分類で 401: トークン検証失敗 / 403: guard 拒否）、
+    //     詳細は構造化 logger.warn に errorType / reason で残す (Issue #292 と同形式)。
+    const decodedToken = await getAuth().verifyIdToken(idToken, true);
+    if (decodedToken.email_verified !== true) {
+      logger.warn("Tenant auth denied: email_not_verified", {
+        errorType: "tenant_creation_denied",
+        reason: "email_not_verified",
+        uid: decodedToken.uid,
+        path: req.path,
+        method: req.method,
+      });
+      return {
+        success: false,
+        error: "認証トークンが無効です。再ログインしてください。",
+        status: 403,
+      };
+    }
+    if (decodedToken.firebase?.sign_in_provider !== "google.com") {
+      logger.warn("Tenant auth denied: non_google_provider", {
+        errorType: "tenant_creation_denied",
+        reason: "non_google_provider",
+        uid: decodedToken.uid,
+        provider: decodedToken.firebase?.sign_in_provider ?? null,
+        path: req.path,
+        method: req.method,
+      });
+      return {
+        success: false,
+        error: "認証トークンが無効です。再ログインしてください。",
+        status: 403,
+      };
+    }
     return { success: true, token: decodedToken };
   } catch (error) {
-    console.error("Token verification failed:", error);
+    // 分類: トークン署名不正/期限切れ/revoke 済み → 401。
+    // `email_verified` / `sign_in_provider` ガード拒否（上の 2 分岐）→ 403。
+    // `middleware/tenant-auth.ts` の分類（検証失敗 401 / ガード拒否 403）と揃えている。
+    const err = error as { code?: unknown; message?: unknown };
+    logger.error("Tenant token verification failed", {
+      errorType: "tenant_token_error",
+      firebaseErrorCode: typeof err.code === "string" ? err.code : null,
+      errorMessage: typeof err.message === "string" ? err.message : String(error),
+      path: req.path,
+      method: req.method,
+    });
     return {
       success: false,
       error: "認証トークンが無効です。再ログインしてください。",
