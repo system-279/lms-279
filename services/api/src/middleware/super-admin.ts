@@ -189,8 +189,37 @@ export const superAdminAuthMiddleware = async (
 
     const idToken = authHeader.slice(7);
     try {
-      const decodedToken = await getAuth().verifyIdToken(idToken);
+      // Issue #289 / ADR-031 allowed_emails 境界:
+      //   #1: email_verified=true 必須（未検証メール詐称の防止）
+      //   #2: sign_in_provider=google.com のみ許可（IdP 追加時の allowlist バイパス防止）
+      //   + checkRevoked=true で B-1「即時失効」を super-admin 経路にも適用
+      // いずれも super-admin 判定より前に実行してホワイトリスト主義を徹底する。
+      // レスポンス文言は既存の 403「スーパー管理者権限が必要です」で統一（ユーザー列挙防止）。
+      const decodedToken = await getAuth().verifyIdToken(idToken, true);
+
+      if (decodedToken.email_verified !== true) {
+        return res.status(403).json({
+          error: "forbidden",
+          message: "スーパー管理者権限が必要です",
+        });
+      }
+      if (decodedToken.firebase?.sign_in_provider !== "google.com") {
+        return res.status(403).json({
+          error: "forbidden",
+          message: "スーパー管理者権限が必要です",
+        });
+      }
+
       const email = decodedToken.email;
+      // Google sign-in なら email は必須だが、将来の SDK 仕様変更や特殊トークンで
+      // 欠落した場合は fail-closed で 403 を返し、non-null assertion による
+      // サイレント TypeError を防ぐ。
+      if (!email) {
+        return res.status(403).json({
+          error: "forbidden",
+          message: "スーパー管理者権限が必要です",
+        });
+      }
 
       const isAdmin = await isSuperAdmin(email);
       if (!isAdmin) {
@@ -201,7 +230,7 @@ export const superAdminAuthMiddleware = async (
       }
 
       req.superAdmin = {
-        email: email!.toLowerCase(),
+        email: email.toLowerCase(),
         firebaseUid: decodedToken.uid,
       };
       return next();
