@@ -27,6 +27,7 @@ const mockRunTransaction = vi.fn(async (cb: (tx: unknown) => Promise<void>) => {
 const mockTenantDocGet = vi.fn();
 const mockTenantDocUpdate = vi.fn();
 const mockSuperAdminsCollectionGet = vi.fn().mockResolvedValue({ docs: [] });
+const mockGcipTenantIdQuery = vi.fn().mockResolvedValue({ docs: [] });
 const mockGetUserByEmail = vi.fn();
 
 vi.mock("firebase-admin/auth", () => ({
@@ -52,6 +53,7 @@ vi.mock("firebase-admin/firestore", () => {
     return {
       doc: (id?: string) => makeTenantDoc(id),
       where: () => ({
+        limit: () => ({ get: () => mockGcipTenantIdQuery() }),
         count: () => ({ get: vi.fn().mockResolvedValue({ data: () => ({ count: 0 }) }) }),
       }),
     };
@@ -178,6 +180,7 @@ describe("PATCH /api/v2/super/tenants/:id — GCIP 正常系・Partial Update (I
     mockTenantDocGet.mockReset();
     mockTenantDocUpdate.mockReset().mockResolvedValue(undefined);
     mockSuperAdminsCollectionGet.mockResolvedValue({ docs: [] });
+    mockGcipTenantIdQuery.mockReset().mockResolvedValue({ docs: [] });
   });
 
   afterEach(() => {
@@ -265,6 +268,79 @@ describe("PATCH /api/v2/super/tenants/:id — GCIP 正常系・Partial Update (I
     expect(res.status).toBe(200);
     const updateData = mockTenantDocUpdate.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(updateData.gcipTenantId).toBe("gcip-xyz");
+  });
+
+  it("gcipTenantId 一意性: 別テナントが既に同じ gcipTenantId を使用中なら 409 gcip_tenant_id_conflict (Codex review 指摘)", async () => {
+    // tenant-a は非 GCIP、tenant-b が既に "gcip-shared" を使用中
+    mockTenantDocGet.mockResolvedValue({
+      exists: true,
+      data: () => ({
+        id: "tenant-a",
+        name: "Tenant A",
+        ownerId: "uid-1",
+        ownerEmail: "owner@example.com",
+        status: "active",
+        gcipTenantId: null,
+        useGcip: false,
+      }),
+    });
+    // 一意性 query: tenant-b が "gcip-shared" を使用中
+    mockGcipTenantIdQuery.mockResolvedValue({
+      docs: [{ id: "tenant-b", data: () => ({ gcipTenantId: "gcip-shared" }) }],
+    });
+
+    const app = await buildApp();
+    const res = await supertest(app)
+      .patch("/api/v2/super/tenants/tenant-a")
+      .set("X-User-Email", "super@example.com")
+      .send({ gcipTenantId: "gcip-shared" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("gcip_tenant_id_conflict");
+    // Firestore 書き込みが発生しないこと（サイロ分離が保たれる）
+    expect(mockTenantDocUpdate).not.toHaveBeenCalled();
+  });
+
+  it("gcipTenantId 一意性: 自分自身のみが該当 gcipTenantId を使用中なら通過 (self 許容)", async () => {
+    // tenant-a が既に "gcip-own" を使用中で、useGcip を true に切り替える
+    mockTenantDocGet
+      .mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          id: "tenant-a",
+          name: "Tenant A",
+          ownerId: "uid-1",
+          ownerEmail: "owner@example.com",
+          status: "active",
+          gcipTenantId: "gcip-own",
+          useGcip: false,
+        }),
+      })
+      .mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          id: "tenant-a",
+          name: "Tenant A",
+          ownerId: "uid-1",
+          ownerEmail: "owner@example.com",
+          status: "active",
+          gcipTenantId: "gcip-own",
+          useGcip: true,
+        }),
+      });
+    // 一意性 query は呼ばれない想定（gcipTenantId 変更なし）だが、念のため self のみ返す
+    mockGcipTenantIdQuery.mockResolvedValue({
+      docs: [{ id: "tenant-a", data: () => ({ gcipTenantId: "gcip-own" }) }],
+    });
+
+    const app = await buildApp();
+    const res = await supertest(app)
+      .patch("/api/v2/super/tenants/tenant-a")
+      .set("X-User-Email", "super@example.com")
+      .send({ useGcip: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.tenant.useGcip).toBe(true);
   });
 
   it("Partial Update: gcipTenantId のみ PATCH すると useGcip は updateData に含まれない (既存値保持)", async () => {

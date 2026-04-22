@@ -560,6 +560,39 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
     return;
   }
 
+  // ADR-031 一意性制約: gcipTenantId を非 null に設定・変更する場合、他テナントとの重複を拒否。
+  // ADR-031 の「テナント単位の認証サイロ分離」原則により、同じ gcipTenantId を 2 つの Firestore
+  // tenant が保持すると、同じ GCIP tenant 発行の ID token が両方の URL テナントで
+  // `decodedToken.firebase.tenant === gcipTenantId` 照合（Phase 3 Sub-Issue E）を通過し、
+  // 同じメールが両テナントの allowed_emails に登録されている場合に分離が事実上崩れる。
+  if (
+    normalizedGcipTenantId !== undefined &&
+    normalizedGcipTenantId !== null &&
+    normalizedGcipTenantId !== previousGcipTenantId
+  ) {
+    const duplicateSnapshot = await db
+      .collection("tenants")
+      .where("gcipTenantId", "==", normalizedGcipTenantId)
+      .limit(2)
+      .get();
+    const conflictingTenant = duplicateSnapshot.docs.find((doc) => doc.id !== id);
+    if (conflictingTenant) {
+      logger.warn("gcipTenantId uniqueness violation blocked", {
+        errorType: "gcip_tenant_id_conflict",
+        tenantId: id,
+        gcipTenantId: normalizedGcipTenantId,
+        conflictingTenantId: conflictingTenant.id,
+        operatorEmail: req.superAdmin?.email,
+      });
+      res.status(409).json({
+        error: "gcip_tenant_id_conflict",
+        message:
+          "指定された gcipTenantId は既に別のテナントで使用されています（ADR-031 認証サイロ分離の要件）。",
+      });
+      return;
+    }
+  }
+
   if (
     normalizedGcipTenantId !== undefined &&
     normalizedGcipTenantId !== previousGcipTenantId
