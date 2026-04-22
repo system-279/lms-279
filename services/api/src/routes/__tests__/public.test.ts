@@ -1,13 +1,16 @@
 /**
  * GET /api/v2/public/tenants/:tenantId (routes/public.ts) の統合テスト
  *
- * ADR-031 Phase 3 Sub-Issue B: 認証不要の公開テナント情報 endpoint。
+ * 認証不要の公開テナント情報 endpoint（ADR-031）。
  *
  * 検証対象:
  *   - 正常系: active / suspended の両方で 200 を返す
- *   - 404: 未登録 / RESERVED_TENANT_IDS / 不正フォーマット（enumeration 防止のため同一レスポンス）
- *   - 503: Firestore 障害時
- *   - 情報漏洩防止: ownerId / ownerEmail / createdAt / updatedAt が含まれない
+ *   - 404: 未登録 / RESERVED_TENANT_IDS / 不正フォーマット全経路が
+ *     body / headers 完全一致（enumeration 防止の回帰防止）
+ *   - 503: Firestore 障害時に logger.error + Cache-Control: no-store
+ *   - 情報漏洩防止: 応答は id / status / gcipTenantId / useGcip のみ
+ *   - 観測性: status / name / 503 path で logger.warn/error が発火する契約
+ *   - Wiring: authLimiter が publicRouter の前段に mount されている
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
@@ -46,8 +49,8 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
     mockDocGet.mockReset();
   });
 
-  describe("正常系 (AC-1, AC-5)", () => {
-    it("active テナントで 200 + PublicTenantInfo を返す", async () => {
+  describe("正常系", () => {
+    it("active テナントで 200 + id/status/gcipTenantId/useGcip を返す", async () => {
       mockDocGet.mockResolvedValue(
         makeSnapshot({
           name: "Test Tenant",
@@ -67,7 +70,6 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
       expect(res.status).toBe(200);
       expect(res.body.tenant).toEqual({
         id: "test-tenant",
-        name: "Test Tenant",
         status: "active",
         gcipTenantId: "gcip-xyz",
         useGcip: true,
@@ -77,7 +79,6 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
     it("suspended テナントでも 200 を返す（FE がメンテ画面切替判断に使用）", async () => {
       mockDocGet.mockResolvedValue(
         makeSnapshot({
-          name: "Paused Tenant",
           status: "suspended",
           gcipTenantId: null,
           useGcip: false,
@@ -96,7 +97,6 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
     it("gcipTenantId が未設定のテナント（非 GCIP 経路）でも 200 を返す", async () => {
       mockDocGet.mockResolvedValue(
         makeSnapshot({
-          name: "Legacy Tenant",
           status: "active",
           gcipTenantId: null,
           useGcip: false,
@@ -112,11 +112,11 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
     });
   });
 
-  describe("情報漏洩防止 (AC-2)", () => {
-    it("レスポンスに ownerId / ownerEmail / createdAt / updatedAt / userCount が含まれない", async () => {
+  describe("情報漏洩防止", () => {
+    it("応答に name / ownerId / ownerEmail / createdAt / updatedAt / userCount が含まれない", async () => {
       mockDocGet.mockResolvedValue(
         makeSnapshot({
-          name: "Test",
+          name: "Corporate Acme",
           status: "active",
           gcipTenantId: null,
           useGcip: false,
@@ -132,12 +132,17 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
       const res = await supertest(app).get("/api/v2/public/tenants/test");
 
       expect(res.status).toBe(200);
-      const tenantKeys = Object.keys(res.body.tenant).sort();
-      expect(tenantKeys).toEqual(["gcipTenantId", "id", "name", "status", "useGcip"]);
+      expect(Object.keys(res.body).sort()).toEqual(["tenant"]);
+      expect(Object.keys(res.body.tenant).sort()).toEqual([
+        "gcipTenantId",
+        "id",
+        "status",
+        "useGcip",
+      ]);
     });
   });
 
-  describe("404 系 (AC-3, AC-4)", () => {
+  describe("404 経路の完全等価性（enumeration 防止）", () => {
     it("未登録 tenantId は 404 tenant_not_found", async () => {
       mockDocGet.mockResolvedValue(makeSnapshot(null));
 
@@ -153,7 +158,6 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
       const res = await supertest(app).get("/api/v2/public/tenants/admin");
 
       expect(res.status).toBe(404);
-      expect(res.body.error).toBe("tenant_not_found");
       expect(mockDocGet).not.toHaveBeenCalled();
     });
 
@@ -162,7 +166,6 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
       const res = await supertest(app).get("/api/v2/public/tenants/super");
 
       expect(res.status).toBe(404);
-      expect(res.body.error).toBe("tenant_not_found");
       expect(mockDocGet).not.toHaveBeenCalled();
     });
 
@@ -171,7 +174,6 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
       const res = await supertest(app).get("/api/v2/public/tenants/public");
 
       expect(res.status).toBe(404);
-      expect(res.body.error).toBe("tenant_not_found");
       expect(mockDocGet).not.toHaveBeenCalled();
     });
 
@@ -180,7 +182,6 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
       const res = await supertest(app).get("/api/v2/public/tenants/BadCase");
 
       expect(res.status).toBe(404);
-      expect(res.body.error).toBe("tenant_not_found");
       expect(mockDocGet).not.toHaveBeenCalled();
     });
 
@@ -189,7 +190,6 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
       const res = await supertest(app).get("/api/v2/public/tenants/invalid%20id");
 
       expect(res.status).toBe(404);
-      expect(res.body.error).toBe("tenant_not_found");
       expect(mockDocGet).not.toHaveBeenCalled();
     });
 
@@ -202,10 +202,33 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
       expect(res.status).toBe(404);
       expect(res.body.error).toBe("tenant_not_found");
     });
+
+    it("全 404 経路で body / Cache-Control / status が完全一致（enumeration 防止の回帰防止）", async () => {
+      const app = await buildApp();
+
+      mockDocGet.mockResolvedValue(makeSnapshot(null));
+      const notFound = await supertest(app).get("/api/v2/public/tenants/nonexistent");
+
+      mockDocGet.mockReset();
+      const reserved = await supertest(app).get("/api/v2/public/tenants/admin");
+
+      mockDocGet.mockReset();
+      const badFormat = await supertest(app).get("/api/v2/public/tenants/BadCase");
+
+      mockDocGet.mockReset();
+      mockDocGet.mockResolvedValueOnce({ exists: true, data: () => undefined });
+      const staleDoc = await supertest(app).get("/api/v2/public/tenants/stale");
+
+      for (const other of [reserved, badFormat, staleDoc]) {
+        expect(other.status).toBe(notFound.status);
+        expect(other.body).toEqual(notFound.body);
+        expect(other.headers["cache-control"]).toBe(notFound.headers["cache-control"]);
+      }
+    });
   });
 
-  describe("503 系 (AC-7)", () => {
-    it("Firestore が throw した場合 503 firestore_unavailable", async () => {
+  describe("503 系", () => {
+    it("Firestore が throw した場合 503 firestore_unavailable + Cache-Control: no-store", async () => {
       mockDocGet.mockRejectedValue(new Error("firestore timeout"));
 
       const app = await buildApp();
@@ -213,15 +236,6 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
 
       expect(res.status).toBe(503);
       expect(res.body.error).toBe("firestore_unavailable");
-    });
-
-    it("503 時は Cache-Control: no-store を付与（障害回復後に古い応答を返さない）", async () => {
-      mockDocGet.mockRejectedValue(new Error("firestore timeout"));
-
-      const app = await buildApp();
-      const res = await supertest(app).get("/api/v2/public/tenants/test");
-
-      expect(res.status).toBe(503);
       expect(res.headers["cache-control"]).toBe("no-store");
     });
   });
@@ -230,7 +244,6 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
     it("status が不正値の場合は suspended にフェイルクローズ（active 漏洩防止）", async () => {
       mockDocGet.mockResolvedValue(
         makeSnapshot({
-          name: "Test",
           status: "unknown_status",
           gcipTenantId: null,
           useGcip: false,
@@ -247,7 +260,6 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
     it("status が欠落している場合も suspended にフェイルクローズ", async () => {
       mockDocGet.mockResolvedValue(
         makeSnapshot({
-          name: "Test",
           gcipTenantId: null,
           useGcip: false,
         })
@@ -263,7 +275,6 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
     it("gcipTenantId が非 string の場合は null（parseTenantGcipFields 経由）", async () => {
       mockDocGet.mockResolvedValue(
         makeSnapshot({
-          name: "Test",
           status: "active",
           gcipTenantId: 12345,
           useGcip: true,
@@ -277,43 +288,9 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
       expect(res.body.tenant.gcipTenantId).toBeNull();
     });
 
-    it("name が欠落している場合は空文字列にフォールバック（data 破損可視化のため warn）", async () => {
-      mockDocGet.mockResolvedValue(
-        makeSnapshot({
-          status: "active",
-          gcipTenantId: null,
-          useGcip: false,
-        })
-      );
-
-      const app = await buildApp();
-      const res = await supertest(app).get("/api/v2/public/tenants/test");
-
-      expect(res.status).toBe(200);
-      expect(res.body.tenant.name).toBe("");
-    });
-
-    it("name が非 string の場合も空文字列にフォールバック", async () => {
-      mockDocGet.mockResolvedValue(
-        makeSnapshot({
-          name: 42,
-          status: "active",
-          gcipTenantId: null,
-          useGcip: false,
-        })
-      );
-
-      const app = await buildApp();
-      const res = await supertest(app).get("/api/v2/public/tenants/test");
-
-      expect(res.status).toBe(200);
-      expect(res.body.tenant.name).toBe("");
-    });
-
     it("useGcip が truthy だが非 boolean の場合は false", async () => {
       mockDocGet.mockResolvedValue(
         makeSnapshot({
-          name: "Test",
           status: "active",
           gcipTenantId: "gcip-x",
           useGcip: "true",
@@ -329,41 +306,93 @@ describe("GET /api/v2/public/tenants/:tenantId", () => {
   });
 
   describe("HTTP キャッシュヘッダ", () => {
-    it("成功時は Cache-Control: public, max-age=60, stale-while-revalidate=300 を付与", async () => {
+    it("200 / 404 の Cache-Control が同一（public, max-age=60）", async () => {
+      const app = await buildApp();
+
       mockDocGet.mockResolvedValue(
         makeSnapshot({
-          name: "Test",
           status: "active",
           gcipTenantId: null,
           useGcip: false,
         })
       );
+      const found = await supertest(app).get("/api/v2/public/tenants/found");
 
-      const app = await buildApp();
-      const res = await supertest(app).get("/api/v2/public/tenants/test");
-
-      expect(res.status).toBe(200);
-      expect(res.headers["cache-control"]).toBe(
-        "public, max-age=60, stale-while-revalidate=300"
-      );
-    });
-
-    it("404 時は Cache-Control: public, max-age=30 を付与（enumeration 攻撃時の Firestore read 抑制）", async () => {
+      mockDocGet.mockReset();
       mockDocGet.mockResolvedValue(makeSnapshot(null));
+      const notFound = await supertest(app).get("/api/v2/public/tenants/missing");
+
+      expect(found.headers["cache-control"]).toBe("public, max-age=60");
+      expect(notFound.headers["cache-control"]).toBe("public, max-age=60");
+    });
+  });
+
+  describe("観測性（logger 契約）", () => {
+    it("status 不正値で logger.warn が errorType=tenant_status_invalid で呼ばれる", async () => {
+      const { logger } = await import("../../utils/logger.js");
+      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+      mockDocGet.mockResolvedValue(
+        makeSnapshot({ status: "bogus", gcipTenantId: null, useGcip: false })
+      );
 
       const app = await buildApp();
-      const res = await supertest(app).get("/api/v2/public/tenants/nonexistent");
+      await supertest(app).get("/api/v2/public/tenants/test");
 
-      expect(res.status).toBe(404);
-      expect(res.headers["cache-control"]).toBe("public, max-age=30");
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("status"),
+        expect.objectContaining({
+          errorType: "tenant_status_invalid",
+          tenantId: "test",
+          actualValue: "bogus",
+        })
+      );
+      warnSpy.mockRestore();
     });
 
-    it("RESERVED_TENANT_IDS の 404 にも Cache-Control を付与", async () => {
-      const app = await buildApp();
-      const res = await supertest(app).get("/api/v2/public/tenants/admin");
+    it("503 経路で logger.error が firestoreErrorCode 付きで呼ばれる", async () => {
+      const { logger } = await import("../../utils/logger.js");
+      const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
 
-      expect(res.status).toBe(404);
-      expect(res.headers["cache-control"]).toBe("public, max-age=30");
+      const firestoreErr = Object.assign(new Error("IAM"), { code: "permission-denied" });
+      mockDocGet.mockRejectedValue(firestoreErr);
+
+      const app = await buildApp();
+      await supertest(app).get("/api/v2/public/tenants/test");
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Firestore"),
+        expect.objectContaining({
+          errorType: "public_tenant_firestore_error",
+          tenantId: "test",
+          firestoreErrorCode: "permission-denied",
+        })
+      );
+      errorSpy.mockRestore();
+    });
+  });
+
+  describe("Wiring (authLimiter が mount されている)", () => {
+    it("authLimiter 配下では 11 リクエスト目で 429 を返す", async () => {
+      // 実際の index.ts と同じ middleware 順序を再現して実挙動で wiring を確認する。
+      const { authLimiter } = await import("../../middleware/rate-limiter.js");
+      const { publicRouter } = await import("../public.js");
+      const app = express();
+      app.use(express.json());
+      app.use("/api/v2/public", authLimiter, publicRouter);
+
+      mockDocGet.mockResolvedValue(
+        makeSnapshot({ status: "active", gcipTenantId: null, useGcip: false })
+      );
+
+      const agent = supertest.agent(app);
+      for (let i = 0; i < 10; i++) {
+        const ok = await agent.get("/api/v2/public/tenants/test");
+        expect(ok.status).toBe(200);
+      }
+
+      const overflow = await agent.get("/api/v2/public/tenants/test");
+      expect(overflow.status).toBe(429);
     });
   });
 });

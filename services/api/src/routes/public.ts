@@ -1,5 +1,5 @@
 /**
- * 認証不要の公開 API（ADR-031: GCIP マルチテナント対応の一部）
+ * 認証不要の公開 API（ADR-031: GCIP マルチテナント対応）
  *
  * `GET /api/v2/public/tenants/:tenantId`
  *   FE が GCIP 経路のログイン前に `auth.tenantId` へ GCIP Tenant ID を
@@ -22,15 +22,48 @@ const ALLOWED_STATUSES = new Set<TenantStatus>(["active", "suspended"]);
 
 /** 認証不要 endpoint の HTTP キャッシュ方針
  *
- * 公開情報のみで機密は含まれないため、ブラウザ / CDN での短期キャッシュを許可し
- * Firestore read と hot-path レイテンシを抑制する。値が変わるのは super-admin の
- * 操作時のみのため、60 秒の max-age と 300 秒の SWR で UX 影響なし。
+ * 200 と 404 は同一の `Cache-Control` を返し、header から存在有無が推測
+ * できないようにする。503 は `no-store` で障害回復後に古い応答を再提示しない。
+ * `stale-while-revalidate` は付与しない（super-admin の suspend 操作が
+ * 最大 SWR 期間分遅延するのを避けるため）。
  */
-const CACHE_CONTROL_FOUND = "public, max-age=60, stale-while-revalidate=300";
-const CACHE_CONTROL_NOT_FOUND = "public, max-age=30";
+const CACHE_CONTROL_DEFAULT = "public, max-age=60";
+const CACHE_CONTROL_UNAVAILABLE = "no-store";
+
+/**
+ * 公開レスポンス用テナント情報の構築。
+ *
+ * ここを単一の audit point として、`TenantMetadata` から外に出してよい
+ * フィールドだけを明示的に pick する。新しい `TenantMetadata` フィールドが
+ * 追加されても、この関数を通過しない限り公開 response には含まれない。
+ * `status` は fail-closed: 想定外の値はすべて `"suspended"` に正規化する。
+ */
+function toPublicTenantInfo(
+  tenantId: string,
+  data: Partial<TenantMetadata>
+): PublicTenantInfo {
+  const rawStatus = data.status;
+  let status: TenantStatus;
+  if (typeof rawStatus === "string" && ALLOWED_STATUSES.has(rawStatus)) {
+    status = rawStatus;
+  } else {
+    logger.warn("Tenant status has invalid value; falling back to suspended", {
+      errorType: "tenant_status_invalid",
+      tenantId,
+      actualValue: typeof rawStatus === "string" ? rawStatus : typeof rawStatus,
+    });
+    status = "suspended";
+  }
+
+  return {
+    id: tenantId,
+    status,
+    ...parseTenantGcipFields({ ...data, id: tenantId }),
+  };
+}
 
 function sendNotFound(res: Response): void {
-  res.set("Cache-Control", CACHE_CONTROL_NOT_FOUND);
+  res.set("Cache-Control", CACHE_CONTROL_DEFAULT);
   res.status(404).json({
     error: "tenant_not_found",
     message: "Tenant not found",
@@ -56,12 +89,21 @@ router.get("/tenants/:tenantId", async (req: Request, res: Response) => {
   try {
     snapshot = await db.collection("tenants").doc(tenantId).get();
   } catch (err) {
-    logger.warn("Public tenant lookup failed (Firestore error)", {
+    // 5xx は運用上のインシデント（IAM regression / quota / 一時障害 等）に
+    // 相当するため error 重大度で記録し、SDK の構造化エラー情報を保持する。
+    const firestoreErrorCode =
+      err && typeof err === "object" && "code" in err
+        ? ((err as { code?: unknown }).code ?? null)
+        : null;
+    logger.error("Public tenant lookup failed (Firestore error)", {
+      errorType: "public_tenant_firestore_error",
       tenantId,
-      error: String(err),
+      firestoreErrorCode,
+      errorMessage: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
     });
     // 障害回復後に古い 503 が CDN/ブラウザで再提示されないよう明示的にキャッシュ無効化
-    res.set("Cache-Control", "no-store");
+    res.set("Cache-Control", CACHE_CONTROL_UNAVAILABLE);
     res.status(503).json({
       error: "firestore_unavailable",
       message: "Tenant directory is temporarily unavailable. Please retry.",
@@ -80,42 +122,9 @@ router.get("/tenants/:tenantId", async (req: Request, res: Response) => {
     return;
   }
 
-  // status は fail-closed で判定する。`active` への silent fallback は
-  // データ破損時に suspended テナントが active として漏洩するリスクがあるため、
-  // 想定外の値はすべて suspended 扱いでメンテ状態を返す。
-  const rawStatus = data.status;
-  let status: TenantStatus;
-  if (typeof rawStatus === "string" && ALLOWED_STATUSES.has(rawStatus)) {
-    status = rawStatus;
-  } else {
-    logger.warn("Tenant status has invalid value; falling back to suspended", {
-      errorType: "tenant_status_invalid",
-      tenantId,
-      actualValue: typeof rawStatus === "string" ? rawStatus : typeof rawStatus,
-    });
-    status = "suspended";
-  }
+  const tenant = toPublicTenantInfo(tenantId, data);
 
-  let name: string;
-  if (typeof data.name === "string") {
-    name = data.name;
-  } else {
-    logger.warn("Tenant name has invalid value; falling back to empty string", {
-      errorType: "tenant_name_invalid",
-      tenantId,
-      actualType: typeof data.name,
-    });
-    name = "";
-  }
-
-  const tenant: PublicTenantInfo = {
-    id: tenantId,
-    name,
-    status,
-    ...parseTenantGcipFields({ ...data, id: tenantId }),
-  };
-
-  res.set("Cache-Control", CACHE_CONTROL_FOUND);
+  res.set("Cache-Control", CACHE_CONTROL_DEFAULT);
   const response: PublicTenantInfoResponse = { tenant };
   res.status(200).json(response);
 });
