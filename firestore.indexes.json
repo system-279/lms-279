@@ -172,6 +172,14 @@
       ]
     },
     {
+      "collectionGroup": "platform_auth_error_logs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "email", "order": "ASCENDING" },
+        { "fieldPath": "occurredAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "lesson_sessions",
       "queryScope": "COLLECTION",
       "fields": [

@@ -133,6 +133,18 @@ export interface DataSource {
    */
   createPlatformAuthErrorLog(data: Omit<AuthErrorLog, "id">): Promise<AuthErrorLog>;
 
+  /**
+   * プラットフォーム（テナント非依存）認証エラーログを取得 (Issue #299)
+   *
+   * ルートコレクション `platform_auth_error_logs` を `occurredAt` 降順で返す。
+   * tenant スコープの `auth_error_logs` には触らない（境界を混ぜない）。
+   * super-admin 専用 API (`GET /api/v2/super/platform/auth-errors`) から呼び出される。
+   *
+   * filter の `email` / `startDate` / `endDate` / `limit` は `getAuthErrorLogs` と同じ意味論。
+   * `startDate > endDate` の場合は空配列を返す（400 を返さず、クライアント側の意図に委ねる）。
+   */
+  getPlatformAuthErrorLogs(filter?: AuthErrorLogFilter): Promise<AuthErrorLog[]>;
+
   // User Settings
   getUserSettings(userId: string): Promise<UserSettings | null>;
   upsertUserSettings(userId: string, data: Partial<UserSettings>): Promise<UserSettings>;

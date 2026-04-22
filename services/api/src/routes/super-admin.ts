@@ -28,6 +28,7 @@ import { masterRouter } from "./super-admin-master.js";
 import { calculateDefaultDeadlines } from "../services/enrollment.js";
 import { generateTenantId, normalizeEmail } from "../utils/tenant-id.js";
 import { logger } from "../utils/logger.js";
+import { getPlatformDataSource } from "../middleware/platform-datasource.js";
 
 const router = Router();
 
@@ -712,6 +713,103 @@ router.delete("/admins/:email", async (req: Request, res: Response) => {
   res.json({
     message: "スーパー管理者を削除しました。",
   });
+});
+
+// ============================================================
+// プラットフォーム認証エラーログ (Issue #299)
+// ============================================================
+
+/**
+ * プラットフォーム認証エラーログ一覧取得
+ * GET /api/v2/super/platform/auth-errors
+ *
+ * super-admin 経路の認証拒否ログ（ルートコレクション `platform_auth_error_logs`）を
+ * occurredAt 降順で返す。tenant-scoped `auth_error_logs` には触らない（境界分離）。
+ *
+ * クエリパラメータ:
+ *   - email: メールアドレス完全一致フィルタ
+ *   - startDate: 開始日時（ISO 8601）
+ *   - endDate: 終了日時（ISO 8601）— startDate > endDate の場合は空配列を返す
+ *   - limit: 1〜500 (デフォルト 100, 範囲外は clamp)
+ */
+router.get("/platform/auth-errors", async (req: Request, res: Response) => {
+  const email = req.query.email as string | undefined;
+  const startDateStr = req.query.startDate as string | undefined;
+  const endDateStr = req.query.endDate as string | undefined;
+  const limitStr = req.query.limit as string | undefined;
+
+  const startDate = startDateStr ? new Date(startDateStr) : undefined;
+  const endDate = endDateStr ? new Date(endDateStr) : undefined;
+
+  if (startDateStr && Number.isNaN(startDate!.getTime())) {
+    res.status(400).json({
+      error: "invalid_start_date",
+      message: "startDate must be a valid ISO 8601 date",
+    });
+    return;
+  }
+  if (endDateStr && Number.isNaN(endDate!.getTime())) {
+    res.status(400).json({
+      error: "invalid_end_date",
+      message: "endDate must be a valid ISO 8601 date",
+    });
+    return;
+  }
+
+  let limit = limitStr ? parseInt(limitStr, 10) : 100;
+  if (Number.isNaN(limit) || limit < 1) {
+    limit = 100;
+  } else if (limit > 500) {
+    limit = 500;
+  }
+
+  try {
+    const ds = getPlatformDataSource();
+    const logs = await ds.getPlatformAuthErrorLogs({
+      email,
+      startDate,
+      endDate,
+      limit,
+    });
+
+    res.json({
+      platformAuthErrorLogs: logs.map((log) => ({
+        id: log.id,
+        email: log.email,
+        tenantId: log.tenantId,
+        errorType: log.errorType,
+        reason: log.reason,
+        errorMessage: log.errorMessage,
+        path: log.path,
+        method: log.method,
+        userAgent: log.userAgent,
+        ipAddress: log.ipAddress,
+        firebaseErrorCode: log.firebaseErrorCode,
+        occurredAt: log.occurredAt,
+      })),
+    });
+  } catch (e) {
+    // Firestore 障害時のレスポンス形式を保証する（AC: 500 fetch_failed）。
+    // transient (UNAVAILABLE/DEADLINE_EXCEEDED) と permanent の分離は
+    // ADR-031 Phase 1 制約で別 Issue 対応予定。現状は一律 500 を返す。
+    // ログは errorType + firebaseErrorCode + 入力パラメータで再現性を確保する
+    // （`/admins/:email` DELETE と同等の構造化レベル）。
+    const err = e as { code?: string } | undefined;
+    logger.error("Failed to fetch platform auth error logs", {
+      errorType: "platform_auth_errors_fetch_failed",
+      error: e instanceof Error ? e : new Error(String(e)),
+      firebaseErrorCode: typeof err?.code === "string" ? err.code : null,
+      operatorEmail: req.superAdmin?.email,
+      filterEmail: email ?? null,
+      filterStartDate: startDateStr ?? null,
+      filterEndDate: endDateStr ?? null,
+      filterLimit: limit,
+    });
+    res.status(500).json({
+      error: "fetch_failed",
+      message: "認証エラーログの取得に失敗しました。再度お試しください。",
+    });
+  }
 });
 
 // ============================================================

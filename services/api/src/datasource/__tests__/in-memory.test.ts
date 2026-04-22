@@ -747,4 +747,117 @@ describe("InMemoryDataSource", () => {
       expect(result).toBe(false);
     });
   });
+
+  // -----------------------------------------------
+  // PlatformAuthErrorLog (Issue #299)
+  // -----------------------------------------------
+
+  describe("PlatformAuthErrorLog", () => {
+    let ds: InMemoryDataSource;
+
+    const baseLog = {
+      email: "denied@example.com",
+      tenantId: "__platform__",
+      errorType: "super_admin_denied",
+      reason: "not_super_admin" as string | null,
+      errorMessage: "not registered",
+      path: "/api/v2/super/tenants",
+      method: "GET",
+      userAgent: null as string | null,
+      ipAddress: null as string | null,
+      firebaseErrorCode: null as string | null,
+      occurredAt: "2026-04-22T12:00:00.000Z",
+    };
+
+    beforeEach(() => {
+      ds = new InMemoryDataSource({ readOnly: false });
+    });
+
+    it("createPlatformAuthErrorLog で書いた log が getPlatformAuthErrorLogs で読める（read-after-write）", async () => {
+      await ds.createPlatformAuthErrorLog(baseLog);
+      const logs = await ds.getPlatformAuthErrorLogs();
+      expect(logs).toHaveLength(1);
+      expect(logs[0].email).toBe("denied@example.com");
+      expect(logs[0].id).toMatch(/^platform-auth-error-/);
+    });
+
+    it("getPlatformAuthErrorLogs は occurredAt 降順で返す", async () => {
+      await ds.createPlatformAuthErrorLog({ ...baseLog, occurredAt: "2026-04-22T10:00:00.000Z" });
+      await ds.createPlatformAuthErrorLog({ ...baseLog, occurredAt: "2026-04-22T12:00:00.000Z" });
+      await ds.createPlatformAuthErrorLog({ ...baseLog, occurredAt: "2026-04-22T11:00:00.000Z" });
+
+      const logs = await ds.getPlatformAuthErrorLogs();
+      expect(logs.map((l) => l.occurredAt)).toEqual([
+        "2026-04-22T12:00:00.000Z",
+        "2026-04-22T11:00:00.000Z",
+        "2026-04-22T10:00:00.000Z",
+      ]);
+    });
+
+    it("email filter は完全一致", async () => {
+      await ds.createPlatformAuthErrorLog({ ...baseLog, email: "a@example.com" });
+      await ds.createPlatformAuthErrorLog({ ...baseLog, email: "b@example.com" });
+
+      const logs = await ds.getPlatformAuthErrorLogs({ email: "a@example.com" });
+      expect(logs).toHaveLength(1);
+      expect(logs[0].email).toBe("a@example.com");
+    });
+
+    it("startDate/endDate filter は inclusive で範囲外を除外", async () => {
+      await ds.createPlatformAuthErrorLog({ ...baseLog, occurredAt: "2026-04-20T00:00:00.000Z" });
+      await ds.createPlatformAuthErrorLog({ ...baseLog, occurredAt: "2026-04-21T00:00:00.000Z" });
+      await ds.createPlatformAuthErrorLog({ ...baseLog, occurredAt: "2026-04-23T00:00:00.000Z" });
+
+      const logs = await ds.getPlatformAuthErrorLogs({
+        startDate: new Date("2026-04-21T00:00:00.000Z"),
+        endDate: new Date("2026-04-22T00:00:00.000Z"),
+      });
+      expect(logs).toHaveLength(1);
+      expect(logs[0].occurredAt).toBe("2026-04-21T00:00:00.000Z");
+    });
+
+    it("startDate > endDate は空配列", async () => {
+      await ds.createPlatformAuthErrorLog({ ...baseLog, occurredAt: "2026-04-22T00:00:00.000Z" });
+      const logs = await ds.getPlatformAuthErrorLogs({
+        startDate: new Date("2026-04-25T00:00:00.000Z"),
+        endDate: new Date("2026-04-20T00:00:00.000Z"),
+      });
+      expect(logs).toEqual([]);
+    });
+
+    it("limit で件数制限（降順で最新を残す）", async () => {
+      for (let i = 0; i < 5; i++) {
+        await ds.createPlatformAuthErrorLog({ ...baseLog, occurredAt: `2026-04-22T1${i}:00:00.000Z` });
+      }
+      const logs = await ds.getPlatformAuthErrorLogs({ limit: 2 });
+      expect(logs).toHaveLength(2);
+      expect(logs[0].occurredAt).toBe("2026-04-22T14:00:00.000Z");
+      expect(logs[1].occurredAt).toBe("2026-04-22T13:00:00.000Z");
+    });
+
+    it("空結果時は空配列を返す", async () => {
+      const logs = await ds.getPlatformAuthErrorLogs();
+      expect(logs).toEqual([]);
+    });
+
+    it("NaN startDate は throw（silent drop を防ぐ）", async () => {
+      await expect(
+        ds.getPlatformAuthErrorLogs({ startDate: new Date("invalid") })
+      ).rejects.toThrow(/invalid startDate/);
+    });
+
+    it("NaN endDate は throw（silent drop を防ぐ）", async () => {
+      await expect(
+        ds.getPlatformAuthErrorLogs({ endDate: new Date("invalid") })
+      ).rejects.toThrow(/invalid endDate/);
+    });
+
+    it("limit < 1 はデフォルト 100 にフォールバック", async () => {
+      for (let i = 0; i < 3; i++) {
+        await ds.createPlatformAuthErrorLog({ ...baseLog, occurredAt: `2026-04-22T1${i}:00:00.000Z` });
+      }
+      const logs = await ds.getPlatformAuthErrorLogs({ limit: -1 });
+      expect(logs).toHaveLength(3); // 3 件 < 100 なので全件
+    });
+  });
 });
