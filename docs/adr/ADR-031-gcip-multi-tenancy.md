@@ -55,11 +55,11 @@ Firebase Authentication を Google Cloud Identity Platform（GCIP）のマルチ
 5. **認可チェックは毎リクエスト実施**（キャッシュ依存禁止、削除後の既存セッションでアクセスが残るのを防ぐ）
 6. **クライアントから Firestore 直接アクセスは引き続き禁止**（全アクセスは API 経由の Admin SDK のみ。Firestore Security Rules 不要）
 
-### As-Is 実装状況（2026-04-21時点、Phase 3 補強対象の明示）
+### As-Is 実装状況（2026-04-22更新、Phase 3 補強対象の明示）
 | 項目 | 現状 | Phase 3 必須対応 |
 |------|------|-----------------|
-| email_verified チェック | ❌ 未実装 | `middleware/tenant-auth.ts` に追加 |
-| sign_in_provider 制限 | ❌ 未実装（Firebase Console側でGoogleのみ有効化に依存） | 同上 |
+| email_verified チェック | ✅ 実装済み（Issue #286 / PR #288: `findOrCreateTenantUser` 冒頭で必須化） | 維持 |
+| sign_in_provider 制限 | ✅ 実装済み（Issue #286 / PR #288: `firebase.sign_in_provider === "google.com"` のみ許可） | 維持 |
 | メール正規化 | 🟡 `toLowerCase()` のみ（trim未実装） | `.trim().toLowerCase()` に統一 |
 | (tenantId, email) 認可単位 | ✅ 実装済み（テナントスコープの allowed_emails） | 維持 |
 | クライアント Firestore 直接アクセス禁止 | ✅ 実装済み（`web/` 配下で `firebase/firestore` import ゼロ） | 維持 |
