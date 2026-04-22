@@ -194,6 +194,7 @@ export class InMemoryDataSource implements DataSource {
   private users: User[] = [...initialUsers];
   private notificationPolicies: NotificationPolicy[] = [...initialNotificationPolicies];
   private allowedEmails: AllowedEmail[] = [...initialAllowedEmails];
+  private platformAuthErrorLogs: AuthErrorLog[] = [];
   private userSettings: Map<string, UserSettings> = new Map();
   private videos: Video[] = [];
   private videoEvents: VideoEvent[] = [];
@@ -598,14 +599,43 @@ export class InMemoryDataSource implements DataSource {
 
   /**
    * プラットフォーム（テナント非依存）認証エラーログを作成 (Issue #292)
-   * InMemory ではテスト時の spy 対象として返却のみ行う（永続化なし）。
+   * Issue #299 以降は in-memory 配列に push して `getPlatformAuthErrorLogs`
+   * で読み取れるようにする（統合テストで read-after-write を再現するため）。
    */
   async createPlatformAuthErrorLog(data: Omit<AuthErrorLog, "id">): Promise<AuthErrorLog> {
     this.throwIfReadOnly();
-    return {
+    const log: AuthErrorLog = {
       ...data,
       id: InMemoryDataSource.uniqueId("platform-auth-error"),
     };
+    this.platformAuthErrorLogs.push(log);
+    return log;
+  }
+
+  /**
+   * プラットフォーム（テナント非依存）認証エラーログを取得 (Issue #299)
+   * in-memory 配列から occurredAt 降順で返す。tenant-scoped `auth_error_logs`
+   * には触らない。
+   */
+  async getPlatformAuthErrorLogs(filter?: AuthErrorLogFilter): Promise<AuthErrorLog[]> {
+    let result = [...this.platformAuthErrorLogs];
+
+    if (filter?.email) {
+      result = result.filter((log) => log.email === filter.email);
+    }
+    if (filter?.startDate) {
+      const startMs = filter.startDate.getTime();
+      result = result.filter((log) => new Date(log.occurredAt).getTime() >= startMs);
+    }
+    if (filter?.endDate) {
+      const endMs = filter.endDate.getTime();
+      result = result.filter((log) => new Date(log.occurredAt).getTime() <= endMs);
+    }
+
+    result.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
+
+    const limit = filter?.limit ?? 100;
+    return result.slice(0, limit);
   }
 
   // User Settings

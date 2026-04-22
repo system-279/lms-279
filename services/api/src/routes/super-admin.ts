@@ -28,6 +28,7 @@ import { masterRouter } from "./super-admin-master.js";
 import { calculateDefaultDeadlines } from "../services/enrollment.js";
 import { generateTenantId, normalizeEmail } from "../utils/tenant-id.js";
 import { logger } from "../utils/logger.js";
+import { getPlatformDataSource } from "../middleware/platform-datasource.js";
 
 const router = Router();
 
@@ -711,6 +712,80 @@ router.delete("/admins/:email", async (req: Request, res: Response) => {
 
   res.json({
     message: "スーパー管理者を削除しました。",
+  });
+});
+
+// ============================================================
+// プラットフォーム認証エラーログ (Issue #299)
+// ============================================================
+
+/**
+ * プラットフォーム認証エラーログ一覧取得
+ * GET /api/v2/super/platform/auth-errors
+ *
+ * super-admin 経路の認証拒否ログ（ルートコレクション `platform_auth_error_logs`）を
+ * occurredAt 降順で返す。tenant-scoped `auth_error_logs` には触らない（境界分離）。
+ *
+ * クエリパラメータ:
+ *   - email: メールアドレス完全一致フィルタ
+ *   - startDate: 開始日時（ISO 8601）
+ *   - endDate: 終了日時（ISO 8601）— startDate > endDate の場合は空配列を返す
+ *   - limit: 1〜500 (デフォルト 100, 範囲外は clamp)
+ */
+router.get("/platform/auth-errors", async (req: Request, res: Response) => {
+  const email = req.query.email as string | undefined;
+  const startDateStr = req.query.startDate as string | undefined;
+  const endDateStr = req.query.endDate as string | undefined;
+  const limitStr = req.query.limit as string | undefined;
+
+  const startDate = startDateStr ? new Date(startDateStr) : undefined;
+  const endDate = endDateStr ? new Date(endDateStr) : undefined;
+
+  if (startDateStr && Number.isNaN(startDate!.getTime())) {
+    res.status(400).json({
+      error: "invalid_start_date",
+      message: "startDate must be a valid ISO 8601 date",
+    });
+    return;
+  }
+  if (endDateStr && Number.isNaN(endDate!.getTime())) {
+    res.status(400).json({
+      error: "invalid_end_date",
+      message: "endDate must be a valid ISO 8601 date",
+    });
+    return;
+  }
+
+  let limit = limitStr ? parseInt(limitStr, 10) : 100;
+  if (Number.isNaN(limit) || limit < 1) {
+    limit = 100;
+  } else if (limit > 500) {
+    limit = 500;
+  }
+
+  const ds = getPlatformDataSource();
+  const logs = await ds.getPlatformAuthErrorLogs({
+    email,
+    startDate,
+    endDate,
+    limit,
+  });
+
+  res.json({
+    platformAuthErrorLogs: logs.map((log) => ({
+      id: log.id,
+      email: log.email,
+      tenantId: log.tenantId,
+      errorType: log.errorType,
+      reason: log.reason,
+      errorMessage: log.errorMessage,
+      path: log.path,
+      method: log.method,
+      userAgent: log.userAgent,
+      ipAddress: log.ipAddress,
+      firebaseErrorCode: log.firebaseErrorCode,
+      occurredAt: log.occurredAt,
+    })),
   });
 });
 

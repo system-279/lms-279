@@ -118,8 +118,9 @@ Firebase Authentication を Google Cloud Identity Platform（GCIP）のマルチ
 - `firebaseErrorCode: string | null`（403 等の分岐では null、catch 節で Firebase SDK エラーコードを格納）
 
 #### Phase 1 の制約（次 Issue で拡張予定）
-- `platform_auth_error_logs` を **admin UI から参照する経路は未実装**。Phase 1 では Cloud Logging（`logger.warn/error` の構造化出力）経由で確認する前提
-- `getPlatformAuthErrorLogs()` / super-admin 画面 UI は別 Issue で追加（PR #298 code-reviewer H1 指摘）
+- ~~`platform_auth_error_logs` を **admin UI から参照する経路は未実装**。Phase 1 では Cloud Logging（`logger.warn/error` の構造化出力）経由で確認する前提~~
+- ~~`getPlatformAuthErrorLogs()` / super-admin 画面 UI は別 Issue で追加（PR #298 code-reviewer H1 指摘）~~
+- **Issue #299 で解消（2026-04-22）**: `DataSource.getPlatformAuthErrorLogs()` を I/F / Firestore / InMemory の 3 実装に追加し、`GET /api/v2/super/platform/auth-errors` (super-admin のみ) で admin API 経由の読み取りが可能になった。FE 管理画面 UI は引き続き別 Issue
 - `SuperAdminFirestoreUnavailableError` の transient (`unavailable`/`deadline-exceeded`) と permanent (`permission-denied` 等) の区別は現状未実装。すべて 503 を返すが、permanent は 500 相当（別 Issue 推奨）
 - `tenant-auth.ts:checkSuperAdmin` が `SuperAdminFirestoreUnavailableError` も false fallback に潰している点（Issue #293 の silent 権限剥奪を tenant 経路では部分的に残す）も別 Issue で対応
 

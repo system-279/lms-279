@@ -607,6 +607,35 @@ export class FirestoreDataSource implements DataSource {
     return { ...data, id: docRef.id };
   }
 
+  /**
+   * プラットフォーム（テナント非依存）認証エラーログを取得 (Issue #299)
+   * ルートコレクション `platform_auth_error_logs` から `occurredAt desc` で取得。
+   * tenant 用 `auth_error_logs` (collection path は `this.collection(...)` 経由) には一切触らない。
+   */
+  async getPlatformAuthErrorLogs(filter?: AuthErrorLogFilter): Promise<AuthErrorLog[]> {
+    let query = this.db.collection("platform_auth_error_logs").orderBy("occurredAt", "desc");
+
+    if (filter?.email) {
+      query = query.where("email", "==", filter.email);
+    }
+    if (filter?.startDate) {
+      query = query.where("occurredAt", ">=", Timestamp.fromDate(filter.startDate));
+    }
+    if (filter?.endDate) {
+      query = query.where("occurredAt", "<=", Timestamp.fromDate(filter.endDate));
+    }
+
+    const limit = filter?.limit ?? 100;
+    query = query.limit(limit);
+
+    const snapshot = await query.get();
+    return mapDocsResilient(
+      snapshot.docs,
+      (id, data) => this.toAuthErrorLog(id, data),
+      "PlatformAuthErrorLog",
+    );
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private toAuthErrorLog(id: string, data: any): AuthErrorLog {
     return {

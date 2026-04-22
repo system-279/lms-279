@@ -299,3 +299,48 @@
   }
 }
 ```
+
+
+### プラットフォーム認証エラーログ（Super Admin）
+
+ベースURL: `/api/v2/super/`
+
+super-admin 経路の認証拒否（tenant スコープ外）を root コレクション `platform_auth_error_logs` に記録し、同ルートから参照する。tenant-scoped `/admin/auth-errors` と分離されている（ADR-031）。
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/platform/auth-errors` | プラットフォーム認証エラーログ一覧取得（super-admin のみ） |
+
+#### クエリパラメータ
+- `email`（任意）: メールアドレス完全一致フィルタ
+- `startDate`（任意）: ISO 8601 日時。不正値は 400 `invalid_start_date`
+- `endDate`（任意）: ISO 8601 日時。不正値は 400 `invalid_end_date`。`startDate > endDate` は空配列を返す
+- `limit`（任意）: 1〜500（デフォルト 100、範囲外は clamp、不正値は 100）
+
+```json
+// GET /platform/auth-errors レスポンス（200）
+{
+  "platformAuthErrorLogs": [
+    {
+      "id": "abc123",
+      "email": "denied@example.com",
+      "tenantId": "__platform__",
+      "errorType": "super_admin_denied",
+      "reason": "not_super_admin",
+      "errorMessage": "Email not registered as super admin",
+      "path": "/api/v2/super/tenants",
+      "method": "GET",
+      "userAgent": null,
+      "ipAddress": null,
+      "firebaseErrorCode": null,
+      "occurredAt": "2026-04-22T12:00:00.000Z"
+    }
+  ]
+}
+```
+
+#### 認可
+- `superAdminAuthMiddleware` 配下。非 super-admin は 403 `{ error: "forbidden" }`
+- 認証欠落は 401 `{ error: "unauthorized" }`
+
+関連 Issue: #292（記録側）、#299（読み取り側）
