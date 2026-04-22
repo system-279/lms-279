@@ -211,4 +211,115 @@ describe("tenantAwareAuthMiddleware (firebase mode) — Issue #286: email_verifi
     expect(res.body.user).toBeTruthy();
     expect(res.body.user.email).toBe("google-user@example.com");
   });
+
+  // 配置（findOrCreateTenantUser 冒頭、既存ユーザー検索より前）が security contract。
+  // リファクタで既存ユーザー検索後にガードが移動されると allowlist バイパス攻撃面が
+  // 復活するため、経路別にガードの効き目を固定する。
+  it("既存ユーザー (firebaseUid 一致) でも sign_in_provider=password なら 403（バイパス防止）", async () => {
+    const { app, ds } = await buildApp();
+    // 事前に Google でログイン済みユーザーを作成
+    await ds.createUser({
+      email: "existing@example.com",
+      name: "Existing User",
+      role: "student",
+      firebaseUid: "uid-existing",
+    });
+
+    // その後、password provider で同じ uid のトークンが提示されたシナリオ
+    mockVerifyIdToken.mockResolvedValue(
+      makeDecodedToken({
+        uid: "uid-existing",
+        email: "existing@example.com",
+        firebase: { sign_in_provider: "password", identities: {} },
+      })
+    );
+
+    const res = await supertest(app).get("/me").set("authorization", "Bearer dummy");
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("tenant_access_denied");
+  });
+
+  it("既存ユーザー (firebaseUid 一致) でも email_verified=false なら 403", async () => {
+    const { app, ds } = await buildApp();
+    await ds.createUser({
+      email: "existing2@example.com",
+      name: "Existing User 2",
+      role: "student",
+      firebaseUid: "uid-existing-2",
+    });
+
+    mockVerifyIdToken.mockResolvedValue(
+      makeDecodedToken({
+        uid: "uid-existing-2",
+        email: "existing2@example.com",
+        email_verified: false,
+      })
+    );
+
+    const res = await supertest(app).get("/me").set("authorization", "Bearer dummy");
+
+    expect(res.status).toBe(403);
+  });
+
+  it("スーパー管理者 email でも sign_in_provider=password なら 403（super-admin バイパス防止）", async () => {
+    const { isSuperAdmin } = await import("../super-admin.js");
+    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+    const { app } = await buildApp();
+
+    mockVerifyIdToken.mockResolvedValue(
+      makeDecodedToken({
+        uid: "uid-super",
+        email: "super@example.com",
+        firebase: { sign_in_provider: "password", identities: {} },
+      })
+    );
+
+    const res = await supertest(app).get("/me").set("authorization", "Bearer dummy");
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("tenant_access_denied");
+
+    // 次テストに影響しないようにモック状態を戻す
+    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+  });
+
+  it("スーパー管理者 email でも email_verified=false なら 403", async () => {
+    const { isSuperAdmin } = await import("../super-admin.js");
+    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+    const { app } = await buildApp();
+
+    mockVerifyIdToken.mockResolvedValue(
+      makeDecodedToken({
+        uid: "uid-super-unverified",
+        email: "super-unverified@example.com",
+        email_verified: false,
+      })
+    );
+
+    const res = await supertest(app).get("/me").set("authorization", "Bearer dummy");
+
+    expect(res.status).toBe(403);
+
+    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+  });
+
+  it("decodedToken.firebase 自体が undefined なら 403（fail-closed、SDK 形状変化対策）", async () => {
+    const { app, ds } = await buildApp();
+    await ds.createAllowedEmail({ email: "no-firebase@example.com", note: null });
+
+    mockVerifyIdToken.mockResolvedValue({
+      uid: "uid-no-firebase",
+      email: "no-firebase@example.com",
+      email_verified: true,
+      // firebase フィールドなし（SDK バージョン差 / モックトークン / カスタムトークン想定）
+    });
+
+    const res = await supertest(app).get("/me").set("authorization", "Bearer dummy");
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("tenant_access_denied");
+  });
 });

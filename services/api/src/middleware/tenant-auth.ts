@@ -158,10 +158,11 @@ async function findOrCreateTenantUser(
   const email = decodedToken.email?.trim().toLowerCase();
   const tenantId = req.tenantContext?.tenantId;
 
-  // Issue #286: ADR-031「allowed_emails 境界の必須条件 #1, #2」
-  // 既存ユーザー検索より前に弾く（ホワイトリスト主義の徹底、設定ミスや
-  // 将来のプロバイダ追加で allowlist をバイパスされないための二重防御）。
-  // handleTenantAccessDenied は既存のユーザー列挙防止メッセージで 403 に統一する。
+  // Issue #286 / ADR-031 allowed_emails 境界:
+  //   #1: email_verified=true 必須（未検証メール詐称の防止）
+  //   #2: sign_in_provider=google.com のみ許可（IdP 追加時の allowlist バイパス防止）
+  // 既存ユーザー検索/ super-admin チェックより前に実行し、ホワイトリスト主義を徹底する。
+  // レスポンスは handleTenantAccessDenied 経由の固定 403 文言でユーザー列挙を防ぐ。
   if (decodedToken.email_verified !== true) {
     throw new TenantAccessDeniedError(
       `Email verification required (email=${email ?? "unknown"})`,
