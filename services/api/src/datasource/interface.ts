@@ -63,6 +63,33 @@ export type SetFirebaseUidResult =
   | { status: "not_found" };
 
 /**
+ * `findOrCreateUserByEmailAndUid` の戻り値（ADR-031 Issue #316: 初回 create 経路の race 解消）。
+ *
+ * 既存 user 検索 + 新規 create を同一 transaction で原子化し、4 状態 discriminated union を返す。
+ * `SetFirebaseUidResult` の `not_found` は本メソッドでは返らない（query で見つからなければ
+ * 同 transaction 内で必ず create するため）。
+ *
+ * - `updated`: 既存 user の `firebaseUid` を新 UID に CAS 更新成功
+ * - `already_set_same`: 既に同 UID が紐付き no-op (idempotent)
+ * - `conflict`: 既に別 UID が紐付き拒否（GCIP UID 揺り戻し / 並行ログイン等）
+ * - `created`: 既存 user 不在で新規作成成功（`firebaseUid` 紐付け済）
+ */
+export type FindOrCreateUserResult =
+  | { status: "updated"; user: User }
+  | { status: "already_set_same"; user: User }
+  | { status: "conflict"; existingUid: string }
+  | { status: "created"; user: User };
+
+/**
+ * 新規 create 時に使う user 既定値。
+ * `email` と `firebaseUid` は引数本体で受けるため除外。
+ */
+export interface FindOrCreateUserDefaults {
+  name: string | null;
+  role: User["role"];
+}
+
+/**
  * 更新用の型定義
  * イミュータブルフィールド（id, createdAt, updatedAt）を除外
  */
@@ -115,6 +142,32 @@ export interface DataSource {
     userId: string,
     firebaseUid: string
   ): Promise<SetFirebaseUidResult>;
+  /**
+   * 既存 user (email 一致) に対して `firebaseUid` を CAS、なければ新規作成する原子操作。
+   * ADR-031 Issue #316: `findOrCreateTenantUser` の「両方 miss → createUser」経路で
+   * 並行リクエストが重複 user を作成する race を解消する。
+   *
+   * Firestore 実装: `tenants/{tid}/user_email_locks/{sha256(email)}` sentinel doc を
+   *   transaction 内で read/write し、同一 email の create を直列化する。
+   * InMemory 実装: 同等セマンティクス（process 内 Promise chain による直列化）。
+   *
+   * - 既存 user あり: {@link SetFirebaseUidResult} と同じ `updated`/`already_set_same`/`conflict`
+   * - 既存 user なし: 新規作成して `created` を返す（`firebaseUid` は引数値で紐付け済）
+   * - {@link SetFirebaseUidResult} の `not_found` は構造上発生しない
+   *   （query miss なら同 transaction で create するため）
+   *
+   * 呼び出し側の責務:
+   *   - email を `.trim().toLowerCase()` で正規化済みであること
+   *     （sentinel doc ID が `sha256(email)` のため、正規化漏れは別 lock になり race が残る）
+   *   - `email_verified` / `sign_in_provider` / `isEmailAllowed` の事前チェック
+   *   - super-admin 判定
+   *   （これらの境界は本メソッドの transaction 外で完了させる）
+   */
+  findOrCreateUserByEmailAndUid(
+    email: string,
+    firebaseUid: string,
+    defaults: FindOrCreateUserDefaults
+  ): Promise<FindOrCreateUserResult>;
   deleteUser(id: string): Promise<boolean>;
 
   // Allowed Emails

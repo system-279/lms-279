@@ -10,7 +10,10 @@ import type { AuthUser } from "./auth.js";
 import { isSuperAdmin } from "./super-admin.js";
 import { logger } from "../utils/logger.js";
 import { getPlatformDataSource } from "./platform-datasource.js";
-import type { SetFirebaseUidResult } from "../datasource/interface.js";
+import type {
+  SetFirebaseUidResult,
+  FindOrCreateUserResult,
+} from "../datasource/interface.js";
 
 // Express Request を拡張（スーパー管理者フラグ）
 declare global {
@@ -177,26 +180,37 @@ export async function handleTenantAccessDenied(
 }
 
 /**
- * CAS 結果 (SetFirebaseUidResult) の失敗分岐 (conflict / not_found) を
- * logger.warn + TenantAccessDeniedError.throw に変換する。
- * 成功分岐 (updated / already_set_same) は early return で呼び出し側に処理を戻す。
+ * CAS 結果 ({@link SetFirebaseUidResult} / {@link FindOrCreateUserResult}) の失敗分岐
+ * (conflict / not_found) を logger.warn + TenantAccessDeniedError.throw に変換する。
+ * 成功分岐 (updated / already_set_same / created) は早期 return で呼び出し側に処理を戻す。
+ *
  * Issue #313 ADR-031: UID 紐付け原子性 CAS の post-processing を集約。
+ * Issue #316 ADR-031: findOrCreateUserByEmailAndUid (4 状態) の失敗分岐も同じ helper で吸収。
+ * `not_found` は SetFirebaseUidResult のみ発生（findOrCreate は同 transaction で create するため
+ * 構造上 not_found は返らない）。
  */
-function assertCasSuccessOrThrow(
-  result: SetFirebaseUidResult,
+function assertCasSuccessOrThrow<
+  T extends SetFirebaseUidResult | FindOrCreateUserResult
+>(
+  result: T,
   ctx: {
     email: string | undefined;
     tenantId: string | undefined;
-    userId: string;
+    /** 既知の userId (例: super admin 経路では setUserFirebaseUidIfUnset 呼び出し前に
+     *  existingByEmail.id を保持済)。findOrCreate 経路など事前に判明しない場合は undefined。 */
+    knownUserId?: string;
     attemptedUid: string;
   }
-): void {
+): asserts result is Exclude<
+  T,
+  { status: "conflict" } | { status: "not_found" }
+> {
   if (result.status === "conflict") {
     logger.warn("uid_reassignment_blocked: user already bound to different UID", {
       errorType: "uid_reassignment_blocked",
       tenantId: ctx.tenantId,
       email: ctx.email,
-      userId: ctx.userId,
+      userId: ctx.knownUserId ?? "(unknown)",
       existingUid: result.existingUid,
       attemptedUid: ctx.attemptedUid,
     });
@@ -213,7 +227,7 @@ function assertCasSuccessOrThrow(
       errorType: "uid_cas_user_not_found",
       tenantId: ctx.tenantId,
       email: ctx.email,
-      userId: ctx.userId,
+      userId: ctx.knownUserId ?? "(unknown)",
     });
     throw new TenantAccessDeniedError(
       `User not found during CAS firebaseUid update (email=${ctx.email})`,
@@ -222,7 +236,7 @@ function assertCasSuccessOrThrow(
       ctx.tenantId
     );
   }
-  // status: "updated" | "already_set_same" → 何もしない（呼び出し側で後続処理）
+  // status: "updated" | "already_set_same" | "created" → 何もしない（呼び出し側で後続処理）
 }
 
 /**
@@ -271,11 +285,6 @@ async function persistPlatformUidConflictLog(
   }
 }
 
-/**
- * テナントスコープでユーザーを検索、なければ自動作成
- * 許可リストに含まれていない場合はエラー
- * スーパー管理者は許可リストに関係なくアクセス可能
- */
 /**
  * 既存ユーザーにスーパー管理者オーバーライドを適用してAuthUserを構築
  */
@@ -356,6 +365,19 @@ function normalizeStoredEmail(value: string | null | undefined): string | undefi
   return normalized.length === 0 ? undefined : normalized;
 }
 
+/**
+ * Firebase 認証経路でテナントスコープのユーザーを解決する。
+ *
+ * 早期 return 順序:
+ *   1. email_verified / sign_in_provider 検査 (allowlist バイパス防止)
+ *   2. firebaseUid hit → 既存 user (allowlist 再チェック付き)
+ *   3. email 欠落 → 403 email_missing
+ *   4. super admin → 既存 user に CAS or virtual admin (新規 create はしない)
+ *   5. 通常ユーザー → ensureAllowlisted → atomic findOrCreateUserByEmailAndUid
+ *
+ * ensureAllowlisted を transaction 外で先に走らせ、未許可ユーザーへの
+ * user/lock doc 書き込みを防ぐ (Issue #316 / ADR-031)。
+ */
 async function findOrCreateTenantUser(
   req: Request,
   decodedToken: DecodedIdToken
@@ -401,70 +423,63 @@ async function findOrCreateTenantUser(
     return buildAuthUser(req, existingByUid, superAdminAccess, { firebaseUid: uid });
   }
 
-  // メールアドレスで既存ユーザーを検索（firebaseUidがまだ設定されていない場合）
-  if (email) {
-    const existingByEmail = await ds.getUserByEmail(email);
-    if (existingByEmail) {
-      const superAdminAccess = await checkSuperAdmin(email);
-      // firebaseUid 設定前に authorization を確定させる（未許可ユーザーにUIDを書き込まない）
-      if (!superAdminAccess) {
-        await ensureAllowlisted(req, email);
-      }
-      // ADR-031 Issue #313: CAS (setUserFirebaseUidIfUnset) で UID 紐付け原子性を保証。
-      // 既に別 UID が紐付いているユーザーに新 UID を silent 上書きしない
-      // （並行ログイン / GCIP UID 揺り戻しでの last-write-wins を防止）。
-      // 呼び出し箇所: email fallback 経路（getUserByFirebaseUid hit しなかった既存ユーザー）
-      const casResult = await ds.setUserFirebaseUidIfUnset(existingByEmail.id, uid);
-      assertCasSuccessOrThrow(casResult, {
-        email,
-        tenantId,
-        userId: existingByEmail.id,
-        attemptedUid: uid,
-      });
-      // status: "updated" または "already_set_same" → 正常継続
-      return buildAuthUser(req, existingByEmail, superAdminAccess, { firebaseUid: uid });
-    }
-  }
+  // 以降「getUserByFirebaseUid miss」経路。
+  // super admin は tenant user を新規作成しない (virtual admin) ため、
+  // findOrCreateUserByEmailAndUid を呼ぶ前に分岐させる。
 
-  // テナント内にユーザーが存在しない場合 — スーパー管理者なら仮想adminユーザーとして返す
-  const superAdminAccess = await checkSuperAdmin(email);
-  if (superAdminAccess) {
-    req.isSuperAdminAccess = true;
-    return {
-      id: `super-admin-${uid}`,
-      role: "admin",
-      email: email ?? undefined,
-      firebaseUid: uid,
-    };
-  }
-
-  // 新規ユーザーの場合、テナントの許可リストをチェック
-  const allowed = email ? await ds.isEmailAllowed(email) : false;
-  if (!allowed) {
-    const tenantId = req.tenantContext?.tenantId ?? "unknown";
+  if (!email) {
     throw new TenantAccessDeniedError(
-      `このメールアドレス (${email ?? "未設定"}) はテナント「${tenantId}」へのアクセスが許可されていません。管理者に連絡してください。`,
-      email ? "not_in_allowlist" : "email_missing",
-      email ?? undefined,
+      `Email missing in decoded token (uid=${uid})`,
+      "email_missing",
+      undefined,
       tenantId
     );
   }
 
-  // テナント内に新規ユーザー作成（初回ログイン）
-  // email は isEmailAllowed チェックを通過した時点で必ず存在する
-  const user = await ds.createUser({
-    email: email!,
+  const superAdminAccess = await checkSuperAdmin(email);
+  if (superAdminAccess) {
+    // super admin: 既存テナント user があれば CAS で UID 紐付け、なければ virtual admin。
+    // 新規 create は行わない（テナント外 super admin が誤って tenant user を作らないため）。
+    const existingByEmail = await ds.getUserByEmail(email);
+    if (existingByEmail) {
+      const casResult = await ds.setUserFirebaseUidIfUnset(
+        existingByEmail.id,
+        uid
+      );
+      assertCasSuccessOrThrow(casResult, {
+        email,
+        tenantId,
+        knownUserId: existingByEmail.id,
+        attemptedUid: uid,
+      });
+      // CAS 後の最新 user (updated は新 firebaseUid 反映済) を採用。
+      return buildAuthUser(req, casResult.user, true, { firebaseUid: uid });
+    }
+    req.isSuperAdminAccess = true;
+    return {
+      id: `super-admin-${uid}`,
+      role: "admin",
+      email,
+      firebaseUid: uid,
+    };
+  }
+
+  // ensureAllowlisted を transaction 外で先に走らせ、未許可ユーザーへの user/lock doc 書き込みを防ぐ。
+  await ensureAllowlisted(req, email);
+
+  const result = await ds.findOrCreateUserByEmailAndUid(email, uid, {
     name: decodedToken.name ?? null,
     role: "student",
-    firebaseUid: uid,
   });
-
-  return {
-    id: user.id,
-    role: user.role,
-    email: user.email ?? undefined,
-    firebaseUid: uid,
-  };
+  // findOrCreate 経路では事前に userId を知らないため knownUserId は渡さない
+  // (helper 側で "(unknown)" にフォールバック)。
+  // assertion 後は result.status が updated|already_set_same|created に narrow される。
+  assertCasSuccessOrThrow(result, {
+    email,
+    tenantId,
+    attemptedUid: uid,
+  });
+  return buildAuthUser(req, result.user, false, { firebaseUid: uid });
 }
 
 /**
