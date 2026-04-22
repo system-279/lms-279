@@ -547,7 +547,8 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
   const nextUseGcip = useGcip !== undefined ? useGcip : previousUseGcip;
 
   // useGcip=true は gcipTenantId !== null を要求。以下 2 ケースで発動:
-  //   a) 新規に useGcip: true + gcipTenantId 非 null を指定（カナリア開始）
+  //   a) 非 GCIP テナント（gcipTenantId: null）に useGcip: true のみ PATCH
+  //      （gcipTenantId を同時指定せず有効化しようとする誤設定）
   //   b) 既に useGcip=true のテナントで gcipTenantId: null PATCH（ID を外す試み）
   // (b) の場合は GCIP 認証経路が破壊されるため拒否。GCIP 解除は useGcip: false を先に適用してから。
   if (nextUseGcip && nextGcipTenantId === null) {
