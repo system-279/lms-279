@@ -42,8 +42,11 @@ function makeDecodedToken(overrides: Record<string, unknown> = {}) {
 async function buildApp() {
   const { tenantAwareAuthMiddleware } = await import("../tenant-auth.js");
   const { InMemoryDataSource } = await import("../../datasource/in-memory.js");
+  const { setPlatformDataSourceForTest } = await import("../platform-datasource.js");
 
   const ds = new InMemoryDataSource({ readOnly: false });
+  const platformDs = new InMemoryDataSource({ readOnly: false });
+  setPlatformDataSourceForTest(platformDs);
 
   const app = express();
   app.use(express.json());
@@ -57,7 +60,7 @@ async function buildApp() {
     res.json({ user: req.user ?? null });
   });
 
-  return { app, ds };
+  return { app, ds, platformDs };
 }
 
 describe("tenantAwareAuthMiddleware — email fallback UID CAS (Issue #313)", () => {
@@ -67,8 +70,10 @@ describe("tenantAwareAuthMiddleware — email fallback UID CAS (Issue #313)", ()
     mockVerifyIdToken.mockReset();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.unstubAllEnvs();
+    const { setPlatformDataSourceForTest } = await import("../platform-datasource.js");
+    setPlatformDataSourceForTest(null);
   });
 
   it("firebaseUid 未設定の既存 user に email fallback で CAS 紐付け → 200 + 新 UID 設定", async () => {
@@ -116,8 +121,8 @@ describe("tenantAwareAuthMiddleware — email fallback UID CAS (Issue #313)", ()
     expect(res.body.user.firebaseUid).toBe("uid-same");
   });
 
-  it("既に別 UID 紐付け済み user に異なる UID でログインすると 403 uid_reassignment_blocked", async () => {
-    const { app, ds } = await buildApp();
+  it("既に別 UID 紐付け済み user に異なる UID でログインすると 403 uid_reassignment_blocked + platform_auth_error_logs 記録", async () => {
+    const { app, ds, platformDs } = await buildApp();
     await ds.createAllowedEmail({ email: "conflict@example.com", note: null });
     const existing = await ds.createUser({
       email: "conflict@example.com",
@@ -139,6 +144,14 @@ describe("tenantAwareAuthMiddleware — email fallback UID CAS (Issue #313)", ()
     // 既存 UID が silent に上書きされていないこと（last-write-wins 防止）
     const fetched = await ds.getUserById(existing.id);
     expect(fetched?.firebaseUid).toBe("uid-original");
+
+    // platform_auth_error_logs に tenant 横断監視用の記録が残ること（AC #4）
+    const platformLogs = await platformDs.getPlatformAuthErrorLogs();
+    expect(platformLogs).toHaveLength(1);
+    expect(platformLogs[0].errorType).toBe("tenant_uid_conflict");
+    expect(platformLogs[0].reason).toBe("uid_reassignment_blocked");
+    expect(platformLogs[0].email).toBe("conflict@example.com");
+    expect(platformLogs[0].tenantId).toBe("t1");
   });
 
   it("並行 race: 同じ email で異なる UID の 2 リクエストが同時 → 一方のみ 200、他方は 403", async () => {

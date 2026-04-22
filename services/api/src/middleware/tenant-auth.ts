@@ -9,6 +9,7 @@ import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import type { AuthUser } from "./auth.js";
 import { isSuperAdmin } from "./super-admin.js";
 import { logger } from "../utils/logger.js";
+import { getPlatformDataSource } from "./platform-datasource.js";
 
 // Express Request を拡張（スーパー管理者フラグ）
 declare global {
@@ -74,7 +75,8 @@ export type TenantAccessDenialReason =
   | "non_google_provider"
   | "email_missing"
   | "not_in_allowlist"
-  | "uid_reassignment_blocked";
+  | "uid_reassignment_blocked"
+  | "uid_cas_user_not_found";
 
 export class TenantAccessDeniedError extends Error {
   email?: string;
@@ -157,6 +159,44 @@ export async function handleTenantAccessDenied(
         method: req.method,
         persistErrorMessage:
           logError instanceof Error ? logError.message : String(logError),
+      });
+    }
+  }
+
+  // Issue #313 ADR-031: UID 紐付けインシデントは platform レベルで監視。
+  // テナント単位の auth_error_logs に加え、platform_auth_error_logs にも記録することで
+  // super-admin が全テナント横断で UID 付け替え試行 / 並行 DELETE 等を追跡可能にする。
+  // rules/error-handling.md §1 に従い、platform 書き込み失敗は tenant 書き込みと独立させ、
+  // メインフローを止めない。
+  if (
+    error.reason === "uid_reassignment_blocked" ||
+    error.reason === "uid_cas_user_not_found"
+  ) {
+    try {
+      const platformDs = getPlatformDataSource();
+      await platformDs.createPlatformAuthErrorLog({
+        email,
+        tenantId,
+        errorType: "tenant_uid_conflict",
+        reason: error.reason,
+        errorMessage: error.message,
+        path: req.path,
+        method: req.method,
+        userAgent: req.header("user-agent") ?? null,
+        ipAddress: req.ip ?? null,
+        firebaseErrorCode: null,
+        occurredAt: new Date().toISOString(),
+      });
+    } catch (platformLogError) {
+      logger.error("Failed to save platform auth error log for UID conflict", {
+        originalErrorType: "tenant_uid_conflict",
+        originalReason: error.reason,
+        email,
+        tenantId,
+        persistErrorMessage:
+          platformLogError instanceof Error
+            ? platformLogError.message
+            : String(platformLogError),
       });
     }
   }
@@ -338,7 +378,7 @@ async function findOrCreateTenantUser(
         });
         throw new TenantAccessDeniedError(
           `User not found during CAS firebaseUid update (email=${email})`,
-          "not_in_allowlist",
+          "uid_cas_user_not_found",
           email,
           tenantId
         );
