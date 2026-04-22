@@ -49,6 +49,20 @@ export interface AuthErrorLogFilter {
 }
 
 /**
+ * `setUserFirebaseUidIfUnset` の戻り値（ADR-031 Issue #313: UID 紐付け原子性）。
+ *
+ * - `updated`: 既存 `firebaseUid` が null で、新 UID に CAS 更新成功
+ * - `already_set_same`: 既に同じ UID が紐付いており no-op（idempotent）
+ * - `conflict`: 既に別の UID が紐付いており CAS 拒否（GCIP UID 揺り戻し等）
+ * - `not_found`: user が存在しない（稀: getUserByEmail 後の並行 DELETE）
+ */
+export type SetFirebaseUidResult =
+  | { status: "updated"; user: User }
+  | { status: "already_set_same"; user: User }
+  | { status: "conflict"; existingUid: string }
+  | { status: "not_found" };
+
+/**
  * 更新用の型定義
  * イミュータブルフィールド（id, createdAt, updatedAt）を除外
  */
@@ -92,6 +106,15 @@ export interface DataSource {
   getUserByFirebaseUid(uid: string): Promise<User | null>;
   createUser(data: Omit<User, "id" | "createdAt" | "updatedAt">): Promise<User>;
   updateUser(id: string, data: UserUpdateData): Promise<User | null>;
+  /**
+   * ユーザーの `firebaseUid` を CAS (compare-and-set) セマンティクスで設定する。
+   * ADR-031 Issue #313: 並行ログイン / GCIP UID 揺り戻しによる last-write-wins を防止。
+   * 動作は {@link SetFirebaseUidResult} を参照。
+   */
+  setUserFirebaseUidIfUnset(
+    userId: string,
+    firebaseUid: string
+  ): Promise<SetFirebaseUidResult>;
   deleteUser(id: string): Promise<boolean>;
 
   // Allowed Emails

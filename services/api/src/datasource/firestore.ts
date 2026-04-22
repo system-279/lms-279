@@ -15,6 +15,7 @@ import type {
   LessonUpdateData,
   UserUpdateData,
   NotificationPolicyUpdateData,
+  SetFirebaseUidResult,
 } from "./interface.js";
 import type {
   Course,
@@ -395,6 +396,57 @@ export class FirestoreDataSource implements DataSource {
     await applyUpdate(docRef, data as Record<string, unknown>);
     const updated = await docRef.get();
     return this.toUser(updated.id, updated.data()!);
+  }
+
+  async setUserFirebaseUidIfUnset(
+    userId: string,
+    firebaseUid: string
+  ): Promise<SetFirebaseUidResult> {
+    // 引数 precondition: Firebase Admin SDK は空文字 uid を発行しない。
+    // 仮に空文字が渡された場合、Firestore に "" を書き込むと後段の比較で
+    // normalizeUnset (length > 0 で null 判定) と矛盾が生じるため即座に throw。
+    if (typeof firebaseUid !== "string" || firebaseUid.length === 0) {
+      throw new Error("setUserFirebaseUidIfUnset: firebaseUid must be a non-empty string");
+    }
+
+    const docRef = this.collection("users").doc(userId);
+    return this.db.runTransaction(async (tx) => {
+      const doc = await tx.get(docRef);
+      if (!doc.exists) return { status: "not_found" as const };
+      const data = doc.data()!;
+      const rawExisting = data.firebaseUid;
+      // 型不整合 (数値 / object / boolean 等) は silent 上書きを禁じ、破損として throw。
+      // 「"" or undefined or null = 未設定」「string(>0) = 設定済」の 2 分類のみ許容。
+      // rules/error-handling.md §2: 型チェックを通る silent fallback は避ける。
+      if (
+        rawExisting !== undefined &&
+        rawExisting !== null &&
+        typeof rawExisting !== "string"
+      ) {
+        logger.error("Corrupt firebaseUid type in Firestore — CAS aborted", {
+          errorType: "firebase_uid_type_corruption",
+          userId: doc.id,
+          rawType: typeof rawExisting,
+        });
+        throw new Error(
+          `Corrupt firebaseUid type for user=${doc.id} (type=${typeof rawExisting})`
+        );
+      }
+      const existingUid =
+        typeof rawExisting === "string" && rawExisting.length > 0 ? rawExisting : null;
+
+      if (existingUid === firebaseUid) {
+        return { status: "already_set_same" as const, user: this.toUser(doc.id, data) };
+      }
+      if (existingUid !== null) {
+        return { status: "conflict" as const, existingUid };
+      }
+
+      const updatedAt = new Date();
+      tx.update(docRef, { firebaseUid, updatedAt });
+      const updatedData = { ...data, firebaseUid, updatedAt };
+      return { status: "updated" as const, user: this.toUser(doc.id, updatedData) };
+    });
   }
 
   async deleteUser(id: string): Promise<boolean> {
