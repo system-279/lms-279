@@ -37,16 +37,33 @@ if (authMode === "firebase" && getApps().length === 0) {
 
 /**
  * アクセス拒否エラー
+ *
+ * `reason` は Issue #292 で導入: Cloud Logging / auth_error_logs 上で拒否理由を
+ * 機械的に区別可能にするため、分岐ごとに固定の文字列を付与する。
+ * レスポンス文言はユーザー列挙防止のため共通化するが、reason はログ専用フィールド。
  */
+export type TenantAccessDenialReason =
+  | "email_not_verified"
+  | "non_google_provider"
+  | "email_missing"
+  | "not_in_allowlist";
+
 export class TenantAccessDeniedError extends Error {
   email?: string;
   tenantId?: string;
+  reason: TenantAccessDenialReason;
 
-  constructor(message: string, email?: string, tenantId?: string) {
+  constructor(
+    message: string,
+    reason: TenantAccessDenialReason,
+    email?: string,
+    tenantId?: string
+  ) {
     super(message);
     this.name = "TenantAccessDeniedError";
     this.email = email;
     this.tenantId = tenantId;
+    this.reason = reason;
   }
 }
 
@@ -74,11 +91,13 @@ export async function handleTenantAccessDenied(
 
   logger.warn("Tenant access denied", {
     errorType: "tenant_access_denied",
+    reason: error.reason,
     tenantId,
     email,
     path: req.path,
     method: req.method,
     userAgent: req.header("user-agent"),
+    ipAddress: req.ip,
   });
 
   // Firestoreに認証エラーログを保存（非同期、失敗しても処理を止めない）
@@ -88,11 +107,13 @@ export async function handleTenantAccessDenied(
         email,
         tenantId,
         errorType: "tenant_access_denied",
+        reason: error.reason,
         errorMessage: error.message,
         path: req.path,
         method: req.method,
         userAgent: req.header("user-agent") ?? null,
         ipAddress: req.ip ?? null,
+        firebaseErrorCode: null,
         occurredAt: new Date().toISOString(),
       });
     } catch (logError) {
@@ -176,6 +197,7 @@ async function ensureAllowlisted(
     }
     throw new TenantAccessDeniedError(
       `このメールアドレス (${email ?? "未設定"}) はテナント「${tenantId}」へのアクセスが許可されていません。`,
+      email ? "not_in_allowlist" : "email_missing",
       email ?? undefined,
       tenantId
     );
@@ -210,6 +232,7 @@ async function findOrCreateTenantUser(
   if (decodedToken.email_verified !== true) {
     throw new TenantAccessDeniedError(
       `Email verification required (email=${email ?? "unknown"})`,
+      "email_not_verified",
       email,
       tenantId
     );
@@ -218,6 +241,7 @@ async function findOrCreateTenantUser(
   if (signInProvider !== "google.com") {
     throw new TenantAccessDeniedError(
       `Only Google sign-in is allowed (provider=${signInProvider ?? "unknown"})`,
+      "non_google_provider",
       email,
       tenantId
     );
@@ -268,6 +292,7 @@ async function findOrCreateTenantUser(
     const tenantId = req.tenantContext?.tenantId ?? "unknown";
     throw new TenantAccessDeniedError(
       `このメールアドレス (${email ?? "未設定"}) はテナント「${tenantId}」へのアクセスが許可されていません。管理者に連絡してください。`,
+      email ? "not_in_allowlist" : "email_missing",
       email ?? undefined,
       tenantId
     );
@@ -329,6 +354,7 @@ async function findOrCreateDevUser(
     const tenantId = req.tenantContext?.tenantId ?? "unknown";
     throw new TenantAccessDeniedError(
       `このメールアドレス (${email}) はテナント「${tenantId}」へのアクセスが許可されていません。`,
+      "not_in_allowlist",
       email,
       tenantId
     );
@@ -460,8 +486,19 @@ export const tenantAwareAuthMiddleware = async (
         await handleTenantAccessDenied(error, req, res);
         return;
       }
-      // トークン検証失敗時は req.user を設定しない（401はrequireUserで処理）
-      console.error("Firebase token verification failed:", error);
+      // トークン検証失敗時は req.user を設定しない（401はrequireUserで処理）。
+      // Issue #292: Cloud Logging でフィルタ可能な構造化ログに切り替え、
+      // firebaseErrorCode (auth/id-token-revoked など) で原因を機械的に区別する。
+      const err = error as { code?: unknown; message?: unknown };
+      logger.error("Tenant token verification failed", {
+        errorType: "tenant_token_error",
+        firebaseErrorCode: typeof err.code === "string" ? err.code : null,
+        errorMessage: typeof err.message === "string" ? err.message : String(error),
+        tenantId: req.tenantContext?.tenantId ?? "unknown",
+        path: req.path,
+        method: req.method,
+        ipAddress: req.ip,
+      });
     }
     return next();
   }

@@ -49,11 +49,23 @@ export interface AuthErrorLog {
   email: string;
   tenantId: string;
   errorType: string;
+  /**
+   * 拒否理由の細分化（Issue #292）。未設定（null）は旧レコード互換。
+   * tenant 経路の代表値: `email_not_verified` / `non_google_provider` / `email_missing` / `not_in_allowlist`
+   * super-admin 経路の代表値: 上記 + `not_super_admin` / `no_auth_header` / `firebase_claim_missing`
+   */
+  reason: string | null;
   errorMessage: string;
   path: string;
   method: string;
   userAgent: string | null;
   ipAddress: string | null;
+  /**
+   * Firebase Admin SDK の verifyIdToken 失敗時のエラーコード（Issue #292）。
+   * 例: `auth/id-token-revoked` / `auth/id-token-expired` / `auth/internal-error`
+   * 拒否（403）の場合は null。
+   */
+  firebaseErrorCode: string | null;
   occurredAt: string;
 }
 

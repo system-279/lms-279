@@ -591,6 +591,20 @@ export class FirestoreDataSource implements DataSource {
     return this.toAuthErrorLog(doc.id, doc.data()!);
   }
 
+  /**
+   * プラットフォーム（テナント非依存）認証エラーログを作成 (Issue #292)
+   * ルートコレクション `platform_auth_error_logs` に書き込み、tenant スコープを使わない。
+   */
+  async createPlatformAuthErrorLog(data: Omit<AuthErrorLog, "id">): Promise<AuthErrorLog> {
+    const docRef = this.db.collection("platform_auth_error_logs").doc();
+    await docRef.set({
+      ...data,
+      occurredAt: Timestamp.fromDate(new Date(data.occurredAt)),
+    });
+    const doc = await docRef.get();
+    return this.toAuthErrorLog(doc.id, doc.data()!);
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private toAuthErrorLog(id: string, data: any): AuthErrorLog {
     return {
@@ -598,11 +612,13 @@ export class FirestoreDataSource implements DataSource {
       email: data.email,
       tenantId: data.tenantId,
       errorType: data.errorType,
+      reason: data.reason ?? null,
       errorMessage: data.errorMessage,
       path: data.path,
       method: data.method,
       userAgent: data.userAgent ?? null,
       ipAddress: data.ipAddress ?? null,
+      firebaseErrorCode: data.firebaseErrorCode ?? null,
       occurredAt: toISOStrict(data.occurredAt, "AuthErrorLog.occurredAt"),
     };
   }

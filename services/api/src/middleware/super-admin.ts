@@ -7,6 +7,76 @@ import type { Request, Response, NextFunction } from "express";
 import { getApps, initializeApp, cert } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
+import { logger } from "../utils/logger.js";
+import { getPlatformDataSource } from "./platform-datasource.js";
+
+/**
+ * Super admin 経路の拒否理由（Issue #292）。
+ * Cloud Logging / platform_auth_error_logs で機械的にフィルタ可能にするため固定値で列挙する。
+ */
+export type SuperAdminDenialReason =
+  | "no_auth_header"
+  | "email_not_verified"
+  | "non_google_provider"
+  | "email_missing"
+  | "not_super_admin";
+
+/**
+ * Super admin 経路の認証拒否/エラーを構造化ログ + platform_auth_error_logs に記録する (Issue #292)。
+ * - `logger.warn`: 403 分岐（拒否理由を reason で区別）
+ * - `logger.error`: catch 節（firebaseErrorCode 付き）
+ *
+ * Firestore 書き込みは失敗しても API 応答を止めない（logger.warn だけ残す）。
+ * `req.dataSource` は super-admin 経路では注入されないため、`getPlatformDataSource()` 経由でアクセスする。
+ */
+async function recordSuperAdminAuthEvent(
+  req: Request,
+  payload: {
+    errorType: "super_admin_denied" | "super_admin_token_error";
+    reason: SuperAdminDenialReason | null;
+    email: string | undefined;
+    errorMessage: string;
+    firebaseErrorCode: string | null;
+  }
+): Promise<void> {
+  const logFields = {
+    errorType: payload.errorType,
+    reason: payload.reason,
+    email: payload.email ?? "unknown",
+    firebaseErrorCode: payload.firebaseErrorCode,
+    path: req.path,
+    method: req.method,
+    userAgent: req.header("user-agent"),
+    ipAddress: req.ip,
+  };
+  if (payload.errorType === "super_admin_denied") {
+    logger.warn("Super admin access denied", logFields);
+  } else {
+    logger.error("Super admin token verification failed", logFields);
+  }
+
+  try {
+    const ds = getPlatformDataSource();
+    await ds.createPlatformAuthErrorLog({
+      email: payload.email ?? "unknown",
+      tenantId: "__platform__",
+      errorType: payload.errorType,
+      reason: payload.reason,
+      errorMessage: payload.errorMessage,
+      path: req.path,
+      method: req.method,
+      userAgent: req.header("user-agent") ?? null,
+      ipAddress: req.ip ?? null,
+      firebaseErrorCode: payload.firebaseErrorCode,
+      occurredAt: new Date().toISOString(),
+    });
+  } catch (persistError) {
+    // 記録失敗は警告のみ、API 応答には影響させない。
+    logger.warn("Failed to persist platform auth error log", {
+      error: persistError instanceof Error ? persistError.message : String(persistError),
+    });
+  }
+}
 
 const authMode = process.env.AUTH_MODE ?? "dev";
 
@@ -187,6 +257,13 @@ export const superAdminAuthMiddleware = async (
     const headerEmail = req.header("x-user-email");
 
     if (!headerEmail) {
+      await recordSuperAdminAuthEvent(req, {
+        errorType: "super_admin_denied",
+        reason: "no_auth_header",
+        email: undefined,
+        errorMessage: "X-User-Email header missing (dev mode)",
+        firebaseErrorCode: null,
+      });
       return res.status(401).json({
         error: "unauthorized",
         message: "認証情報がありません",
@@ -196,6 +273,13 @@ export const superAdminAuthMiddleware = async (
     try {
       const isAdmin = await isSuperAdmin(headerEmail);
       if (!isAdmin) {
+        await recordSuperAdminAuthEvent(req, {
+          errorType: "super_admin_denied",
+          reason: "not_super_admin",
+          email: headerEmail,
+          errorMessage: "Email not registered as super admin (dev mode)",
+          firebaseErrorCode: null,
+        });
         return res.status(403).json({
           error: "forbidden",
           message: "スーパー管理者権限が必要です",
@@ -208,7 +292,13 @@ export const superAdminAuthMiddleware = async (
       // Issue #293: Firestore 障害時は env に載っていない super-admin を silent に 403 で
       // 締め出さず、503 を返して再試行を促す。
       if (error instanceof SuperAdminFirestoreUnavailableError) {
-        console.error("Super admin Firestore check unavailable (dev mode):", error);
+        logger.error("Super admin Firestore check unavailable", {
+          errorType: "super_admin_firestore_unavailable",
+          authMode: "dev",
+          firebaseErrorCode: error.code ?? null,
+          path: req.path,
+          method: req.method,
+        });
         return res.status(503).json({
           error: "service_unavailable",
           message: "一時的に利用できません。再度お試しください。",
@@ -222,6 +312,13 @@ export const superAdminAuthMiddleware = async (
     // Firebase認証: Authorization: Bearer <ID Token>
     const authHeader = req.header("authorization");
     if (!authHeader?.startsWith("Bearer ")) {
+      await recordSuperAdminAuthEvent(req, {
+        errorType: "super_admin_denied",
+        reason: "no_auth_header",
+        email: undefined,
+        errorMessage: "Authorization header missing or not Bearer",
+        firebaseErrorCode: null,
+      });
       return res.status(401).json({
         error: "unauthorized",
         message: "認証情報がありません",
@@ -239,12 +336,26 @@ export const superAdminAuthMiddleware = async (
       const decodedToken = await getAuth().verifyIdToken(idToken, true);
 
       if (decodedToken.email_verified !== true) {
+        await recordSuperAdminAuthEvent(req, {
+          errorType: "super_admin_denied",
+          reason: "email_not_verified",
+          email: decodedToken.email,
+          errorMessage: `Email verification required (uid=${decodedToken.uid})`,
+          firebaseErrorCode: null,
+        });
         return res.status(403).json({
           error: "forbidden",
           message: "スーパー管理者権限が必要です",
         });
       }
       if (decodedToken.firebase?.sign_in_provider !== "google.com") {
+        await recordSuperAdminAuthEvent(req, {
+          errorType: "super_admin_denied",
+          reason: "non_google_provider",
+          email: decodedToken.email,
+          errorMessage: `Only Google sign-in is allowed (provider=${decodedToken.firebase?.sign_in_provider ?? "unknown"})`,
+          firebaseErrorCode: null,
+        });
         return res.status(403).json({
           error: "forbidden",
           message: "スーパー管理者権限が必要です",
@@ -256,6 +367,13 @@ export const superAdminAuthMiddleware = async (
       // 欠落した場合は fail-closed で 403 を返し、non-null assertion による
       // サイレント TypeError を防ぐ。
       if (!email) {
+        await recordSuperAdminAuthEvent(req, {
+          errorType: "super_admin_denied",
+          reason: "email_missing",
+          email: undefined,
+          errorMessage: `Decoded token is missing email claim (uid=${decodedToken.uid})`,
+          firebaseErrorCode: null,
+        });
         return res.status(403).json({
           error: "forbidden",
           message: "スーパー管理者権限が必要です",
@@ -264,6 +382,13 @@ export const superAdminAuthMiddleware = async (
 
       const isAdmin = await isSuperAdmin(email);
       if (!isAdmin) {
+        await recordSuperAdminAuthEvent(req, {
+          errorType: "super_admin_denied",
+          reason: "not_super_admin",
+          email,
+          errorMessage: "Email not registered as super admin",
+          firebaseErrorCode: null,
+        });
         return res.status(403).json({
           error: "forbidden",
           message: "スーパー管理者権限が必要です",
@@ -279,13 +404,31 @@ export const superAdminAuthMiddleware = async (
       // Issue #293: Firestore 障害時は 503 で返す（env フォールバックで既に通過済みの
       // ケースはここに来ない）。通常の token 検証失敗は従来通り 401。
       if (error instanceof SuperAdminFirestoreUnavailableError) {
-        console.error("Super admin Firestore check unavailable (firebase mode):", error);
+        logger.error("Super admin Firestore check unavailable", {
+          errorType: "super_admin_firestore_unavailable",
+          authMode: "firebase",
+          firebaseErrorCode: error.code ?? null,
+          path: req.path,
+          method: req.method,
+        });
         return res.status(503).json({
           error: "service_unavailable",
           message: "一時的に利用できません。再度お試しください。",
         });
       }
-      console.error("Firebase token verification failed:", error);
+      // Issue #292: verifyIdToken 失敗を構造化ログ + platform_auth_error_logs に記録。
+      // firebaseErrorCode (auth/id-token-revoked, auth/id-token-expired, auth/internal-error 等) で
+      // 原因を機械的に区別できるようにする。
+      const err = error as { code?: unknown; message?: unknown };
+      const firebaseErrorCode = typeof err.code === "string" ? err.code : null;
+      const errorMessage = typeof err.message === "string" ? err.message : String(error);
+      await recordSuperAdminAuthEvent(req, {
+        errorType: "super_admin_token_error",
+        reason: null,
+        email: undefined,
+        errorMessage,
+        firebaseErrorCode,
+      });
       return res.status(401).json({
         error: "unauthorized",
         message: "認証に失敗しました",
