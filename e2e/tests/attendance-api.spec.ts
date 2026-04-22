@@ -4,8 +4,11 @@
  *
  * e2e-test テナント（InMemoryDataSource, 書き込み可能）を使用。
  * PAUSE_TIMEOUT_MS はデフォルト（15分）を使用する。
- * 項目4（pause_timeout 強制退室）は CI では test.skip 済みのため、
- * 正常遷移テストが CI 遅延で 5秒超過して force-exit が発動するフレークを回避。
+ * 旧 PAUSE_TIMEOUT_MS=5000 設定では CI 遅延により正常遷移テスト
+ * （項目3/項目7）が force-exit を誤発動していたため、デフォルトに戻した。
+ * 項目4（pause_timeout 強制退室）は現在 test.skip 済み。CI で有効化する際は
+ * playwright.config.ts の webServer.env に PAUSE_TIMEOUT_MS=5000 を再注入する
+ * （video-events.ts:17 は起動時1回だけ env を読むため test.use() では届かない）。
  */
 
 import { test, expect } from "@playwright/test";
