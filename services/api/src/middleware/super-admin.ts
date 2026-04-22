@@ -47,7 +47,26 @@ declare global {
 }
 
 /**
+ * Firestore アクセスが一時的に失敗した場合に throw される識別可能エラー (Issue #293)。
+ * 呼び出し側（super-admin middleware）で catch し 503 として返すためのマーカー。
+ */
+export class SuperAdminFirestoreUnavailableError extends Error {
+  readonly code: string | number | undefined;
+  constructor(cause: unknown) {
+    const c = cause as { code?: string | number; message?: string };
+    super(`SUPER_ADMIN_FIRESTORE_UNAVAILABLE: ${c?.code ?? "unknown"}`);
+    this.name = "SuperAdminFirestoreUnavailableError";
+    this.code = c?.code;
+  }
+}
+
+/**
  * Firestoreからスーパー管理者一覧を取得
+ *
+ * Issue #293: Firestore 障害時に空配列を返すと、登録 super-admin が silent に
+ * 403 で締め出されて「権限剥奪？」と誤認される事故につながる。
+ * エラーを SuperAdminFirestoreUnavailableError として上位に伝播させ、
+ * 呼び出し側で 503 Service Unavailable を返す設計に変更する。
  */
 export async function getSuperAdminsFromFirestore(): Promise<string[]> {
   try {
@@ -56,23 +75,27 @@ export async function getSuperAdminsFromFirestore(): Promise<string[]> {
     return snapshot.docs.map((doc) => doc.id.toLowerCase());
   } catch (error) {
     console.error("Failed to fetch super admins from Firestore:", error);
-    return [];
+    throw new SuperAdminFirestoreUnavailableError(error);
   }
 }
 
 /**
  * メールアドレスがスーパー管理者か判定（環境変数 + Firestore両方チェック）
+ *
+ * env フォールバックに載っている場合は Firestore アクセスなしで true を返す（高速パス）。
+ * Firestore 障害時は SuperAdminFirestoreUnavailableError を throw するため、
+ * 呼び出し側で catch して 503 として返却する必要がある。
  */
 export async function isSuperAdmin(email: string | undefined): Promise<boolean> {
   if (!email) return false;
   const normalizedEmail = email.toLowerCase();
 
-  // 環境変数でチェック（高速パス）
+  // 環境変数でチェック（高速パス。Firestore 障害でも通過する）
   if (envSuperAdminEmails.includes(normalizedEmail)) {
     return true;
   }
 
-  // Firestoreでチェック
+  // Firestore でチェック（障害時は throw → 呼び出し側で 503）
   const firestoreAdmins = await getSuperAdminsFromFirestore();
   return firestoreAdmins.includes(normalizedEmail);
 }
@@ -165,16 +188,29 @@ export const superAdminAuthMiddleware = async (
       });
     }
 
-    const isAdmin = await isSuperAdmin(headerEmail);
-    if (!isAdmin) {
-      return res.status(403).json({
-        error: "forbidden",
-        message: "スーパー管理者権限が必要です",
-      });
-    }
+    try {
+      const isAdmin = await isSuperAdmin(headerEmail);
+      if (!isAdmin) {
+        return res.status(403).json({
+          error: "forbidden",
+          message: "スーパー管理者権限が必要です",
+        });
+      }
 
-    req.superAdmin = { email: headerEmail.toLowerCase() };
-    return next();
+      req.superAdmin = { email: headerEmail.toLowerCase() };
+      return next();
+    } catch (error) {
+      // Issue #293: Firestore 障害時は env に載っていない super-admin を silent に 403 で
+      // 締め出さず、503 を返して再試行を促す。
+      if (error instanceof SuperAdminFirestoreUnavailableError) {
+        console.error("Super admin Firestore check unavailable (dev mode):", error);
+        return res.status(503).json({
+          error: "service_unavailable",
+          message: "一時的に利用できません。再度お試しください。",
+        });
+      }
+      throw error;
+    }
   }
 
   if (authMode === "firebase") {
@@ -235,6 +271,15 @@ export const superAdminAuthMiddleware = async (
       };
       return next();
     } catch (error) {
+      // Issue #293: Firestore 障害時は 503 で返す（env フォールバックで既に通過済みの
+      // ケースはここに来ない）。通常の token 検証失敗は従来通り 401。
+      if (error instanceof SuperAdminFirestoreUnavailableError) {
+        console.error("Super admin Firestore check unavailable (firebase mode):", error);
+        return res.status(503).json({
+          error: "service_unavailable",
+          message: "一時的に利用できません。再度お試しください。",
+        });
+      }
       console.error("Firebase token verification failed:", error);
       return res.status(401).json({
         error: "unauthorized",
