@@ -92,7 +92,47 @@ describe.each([
   it("NODE_ENV 未設定 + AUTH_MODE=dev は起動成功（production 明示でない限り通す）", async () => {
     vi.stubEnv("NODE_ENV", "");
     vi.stubEnv("AUTH_MODE", "dev");
+    vi.stubEnv("K_SERVICE", "");
 
     await expect(import(modulePath)).resolves.toBeDefined();
+  });
+
+  // Issue #290 codex 指摘 HIGH: deploy.yml が NODE_ENV=production を設定していない時代の
+  // 回帰防止。Cloud Run は K_SERVICE を自動注入するため、NODE_ENV 欠落でも本番と判定する。
+  it("K_SERVICE 設定済み (Cloud Run 自動注入) + AUTH_MODE=dev なら throw", async () => {
+    vi.stubEnv("NODE_ENV", "");
+    vi.stubEnv("AUTH_MODE", "dev");
+    vi.stubEnv("K_SERVICE", "api");
+
+    await expect(import(modulePath)).rejects.toThrow(
+      /AUTH_MODE must be "firebase" in production/
+    );
+  });
+
+  it("K_SERVICE 設定済み + AUTH_MODE=firebase なら起動成功", async () => {
+    vi.stubEnv("NODE_ENV", "");
+    vi.stubEnv("AUTH_MODE", "firebase");
+    vi.stubEnv("K_SERVICE", "api");
+
+    await expect(import(modulePath)).resolves.toBeDefined();
+  });
+
+  // silent-failure-hunter 指摘 M-1: NODE_ENV 文字列バリエーション耐性
+  it("NODE_ENV='Production' (大文字始まり) + AUTH_MODE=dev でも throw (正規化)", async () => {
+    vi.stubEnv("NODE_ENV", "Production");
+    vi.stubEnv("AUTH_MODE", "dev");
+
+    await expect(import(modulePath)).rejects.toThrow(
+      /AUTH_MODE must be "firebase" in production/
+    );
+  });
+
+  it("NODE_ENV='production ' (末尾空白) + AUTH_MODE=dev でも throw (trim)", async () => {
+    vi.stubEnv("NODE_ENV", "production ");
+    vi.stubEnv("AUTH_MODE", "dev");
+
+    await expect(import(modulePath)).rejects.toThrow(
+      /AUTH_MODE must be "firebase" in production/
+    );
   });
 });

@@ -1,6 +1,15 @@
 # Runbook: 本番 AUTH_MODE=firebase 確認手順
 
-Issue #290 で導入した起動時 fail-safe の運用手順。`NODE_ENV=production` かつ `AUTH_MODE !== "firebase"` の状態で API サービスがロードされると、`services/api/src/middleware/tenant-auth.ts` と `services/api/src/middleware/super-admin.ts` がモジュールトップレベルで `Error` を throw し、Cloud Run インスタンスは起動失敗する。
+Issue #290 で導入した起動時 fail-safe の運用手順。**本番 runtime** と判定され、かつ `AUTH_MODE !== "firebase"` の状態で API サービスがロードされると、`services/api/src/middleware/tenant-auth.ts` と `services/api/src/middleware/super-admin.ts` がモジュールトップレベルで `Error` を throw し、Cloud Run インスタンスは起動失敗する。
+
+### 本番 runtime 判定 (Issue #290 codex 指摘反映)
+
+以下のいずれかを満たすと「本番」と判定される（defense-in-depth）:
+
+1. `NODE_ENV` を trim + lowercase で正規化した値が `"production"`
+2. `K_SERVICE` 環境変数が設定されている（Cloud Run が自動注入。[Container Contract](https://cloud.google.com/run/docs/container-contract#services-env-vars) 参照）
+
+→ deploy.yml で `NODE_ENV=production` を明示し忘れても、Cloud Run 上では `K_SERVICE` で自動検知される。
 
 ## なぜこの fail-safe が必要か
 
