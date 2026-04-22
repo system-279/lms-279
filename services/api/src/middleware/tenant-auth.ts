@@ -156,6 +156,27 @@ async function findOrCreateTenantUser(
   const ds = req.dataSource!;
   const uid = decodedToken.uid;
   const email = decodedToken.email?.trim().toLowerCase();
+  const tenantId = req.tenantContext?.tenantId;
+
+  // Issue #286: ADR-031「allowed_emails 境界の必須条件 #1, #2」
+  // 既存ユーザー検索より前に弾く（ホワイトリスト主義の徹底、設定ミスや
+  // 将来のプロバイダ追加で allowlist をバイパスされないための二重防御）。
+  // handleTenantAccessDenied は既存のユーザー列挙防止メッセージで 403 に統一する。
+  if (decodedToken.email_verified !== true) {
+    throw new TenantAccessDeniedError(
+      `Email verification required (email=${email ?? "unknown"})`,
+      email,
+      tenantId
+    );
+  }
+  const signInProvider = decodedToken.firebase?.sign_in_provider;
+  if (signInProvider !== "google.com") {
+    throw new TenantAccessDeniedError(
+      `Only Google sign-in is allowed (provider=${signInProvider ?? "unknown"})`,
+      email,
+      tenantId
+    );
+  }
 
   // firebaseUidでユーザーを検索（テナント内の既存ユーザーは常に許可）
   const existingByUid = await ds.getUserByFirebaseUid(uid);
