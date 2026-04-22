@@ -211,6 +211,15 @@ export const superAdminAuthMiddleware = async (
       }
 
       const email = decodedToken.email;
+      // Google sign-in なら email は必須だが、将来の SDK 仕様変更や特殊トークンで
+      // 欠落した場合は fail-closed で 403 を返し、non-null assertion による
+      // サイレント TypeError を防ぐ。
+      if (!email) {
+        return res.status(403).json({
+          error: "forbidden",
+          message: "スーパー管理者権限が必要です",
+        });
+      }
 
       const isAdmin = await isSuperAdmin(email);
       if (!isAdmin) {
@@ -221,7 +230,7 @@ export const superAdminAuthMiddleware = async (
       }
 
       req.superAdmin = {
-        email: email!.toLowerCase(),
+        email: email.toLowerCase(),
         firebaseUid: decodedToken.uid,
       };
       return next();

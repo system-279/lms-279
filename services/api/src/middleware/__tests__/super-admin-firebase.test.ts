@@ -195,4 +195,20 @@ describe("superAdminAuthMiddleware (firebase mode) — Issue #289: email_verifie
     expect(res.status).toBe(401);
     expect(res.body.error).toBe("unauthorized");
   });
+
+  it("decodedToken.email 不在でも 403 (非 super-admin として拒否、non-null assertion 回避)", async () => {
+    const { app } = await buildApp();
+
+    mockVerifyIdToken.mockResolvedValue(
+      makeDecodedToken({
+        uid: "uid-no-email",
+        // email フィールドなし
+      })
+    );
+
+    const res = await supertest(app).get("/me").set("authorization", "Bearer dummy");
+
+    expect(res.status).toBe(403);
+    expect(res.body.message).toContain("スーパー管理者権限が必要です");
+  });
 });
