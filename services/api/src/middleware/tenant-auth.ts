@@ -21,6 +21,33 @@ declare global {
 
 const authMode = process.env.AUTH_MODE ?? "dev";
 
+// Issue #290 / ADR-031: 本番 runtime では AUTH_MODE=firebase を必須化。
+// デフォルト値 "dev" のまま本番デプロイすると、ヘッダ疑似認証 (X-User-Email) が
+// 無検証で信頼されるため、email_verified / sign_in_provider / allowed_emails
+// 境界 (Issue #286 / #294) が全てバイパスされる。環境変数欠落 / IaC ドリフト /
+// Cloud Run リビジョン切り戻しによる欠落を、モジュールロード時に fail-fast で検知する。
+//
+// 本番 runtime 判定:
+//   - NODE_ENV を trim + lowercase で正規化（"Production " 末尾空白/大文字ケース耐性）
+//   - かつ Cloud Run が自動注入する K_SERVICE を併用（NODE_ENV 未設定の IaC でも発火）
+//     参考: https://cloud.google.com/run/docs/container-contract#services-env-vars
+//   - どちらも検出しない場合のみローカル/CI とみなして assertion をスキップ
+if (isProductionRuntime() && authMode !== "firebase") {
+  throw new Error(
+    `FATAL: AUTH_MODE must be "firebase" in production (got "${authMode}"). ` +
+      `This would allow header-based authentication bypass. ` +
+      `Check Cloud Run env vars or IaC configuration (docs/runbook/auth-mode-production-check.md).`
+  );
+}
+
+function isProductionRuntime(): boolean {
+  const nodeEnv = process.env.NODE_ENV?.trim().toLowerCase();
+  if (nodeEnv === "production") return true;
+  // Cloud Run は起動時に K_SERVICE を必ず注入する。NODE_ENV 設定漏れ時の保険。
+  if (typeof process.env.K_SERVICE === "string" && process.env.K_SERVICE.length > 0) return true;
+  return false;
+}
+
 // Firebase Admin SDK初期化（firebase モードの場合のみ）
 if (authMode === "firebase" && getApps().length === 0) {
   const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT;
