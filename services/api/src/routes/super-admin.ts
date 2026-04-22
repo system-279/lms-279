@@ -17,8 +17,11 @@ import type { SuperAttendanceResponse, SuperStudentProgressResponse, TenantEnrol
 import {
   superAdminAuthMiddleware,
   getAllSuperAdmins,
+  getAllSuperAdminsStrict,
   addSuperAdmin,
   removeSuperAdmin,
+  SuperAdminFirestoreUnavailableError,
+  type SuperAdminRecord,
 } from "../middleware/super-admin.js";
 import type { TenantMetadata, TenantStatus } from "../types/tenant.js";
 import { masterRouter } from "./super-admin-master.js";
@@ -615,11 +618,36 @@ router.post("/admins", async (req: Request, res: Response) => {
 /**
  * スーパー管理者を削除
  * DELETE /api/v2/super/admins/:email
+ *
+ * Issue #296: Firestore 障害中に silent fallback で「env 分のみ」の一覧と
+ * `.find()` を組み合わせると、実在する firestore admin が 404 誤認され、
+ * オペレータが「既に削除済」と判断して二重操作や対象取り違えを起こす事故
+ * リスクがある。破壊的操作なので getAllSuperAdminsStrict で fail-closed に
+ * 取得し、Firestore 障害時は 503 を返して再試行を促す。
  */
 router.delete("/admins/:email", async (req: Request, res: Response) => {
   const email = decodeURIComponent(req.params.email as string);
 
-  const admins = await getAllSuperAdmins();
+  let admins: SuperAdminRecord[];
+  try {
+    admins = await getAllSuperAdminsStrict();
+  } catch (error) {
+    if (error instanceof SuperAdminFirestoreUnavailableError) {
+      logger.error("Super admin DELETE blocked by Firestore unavailability", {
+        errorType: "super_admin_delete_firestore_unavailable",
+        firebaseErrorCode: error.code ?? null,
+        operatorEmail: req.superAdmin?.email,
+        targetEmail: email,
+      });
+      res.status(503).json({
+        error: "service_unavailable",
+        message: "一時的に利用できません。再度お試しください。",
+      });
+      return;
+    }
+    throw error;
+  }
+
   const targetAdmin = admins.find((a) => a.email === email.toLowerCase());
 
   if (!targetAdmin) {
@@ -648,7 +676,10 @@ router.delete("/admins/:email", async (req: Request, res: Response) => {
 
   await removeSuperAdmin(email);
 
-  console.log(`[SuperAdmin] Admin removed: ${email} by ${req.superAdmin?.email}`);
+  logger.info("Super admin removed", {
+    operatorEmail: req.superAdmin?.email,
+    targetEmail: email,
+  });
 
   res.json({
     message: "スーパー管理者を削除しました。",

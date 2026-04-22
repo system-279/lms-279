@@ -220,7 +220,7 @@ export async function addSuperAdmin(email: string, addedBy: string): Promise<voi
     addedBy,
     addedAt: new Date().toISOString(),
   });
-  console.log(`Super admin added: ${normalizedEmail} by ${addedBy}`);
+  logger.info("Super admin added", { email: normalizedEmail, addedBy });
 }
 
 /**
@@ -230,51 +230,92 @@ export async function removeSuperAdmin(email: string): Promise<void> {
   const db = getFirestore();
   const normalizedEmail = email.toLowerCase();
   await db.collection("superAdmins").doc(normalizedEmail).delete();
-  console.log(`Super admin removed: ${normalizedEmail}`);
+  logger.info("Super admin removed", { email: normalizedEmail });
 }
 
-/**
- * 全スーパー管理者一覧を取得（環境変数 + Firestore）
- */
-export async function getAllSuperAdmins(): Promise<Array<{
+export type SuperAdminRecord = {
   email: string;
   source: "env" | "firestore";
   addedAt?: string;
   addedBy?: string;
-}>> {
-  const result: Array<{
-    email: string;
-    source: "env" | "firestore";
-    addedAt?: string;
-    addedBy?: string;
-  }> = [];
+};
 
-  // 環境変数からの管理者
+/**
+ * env + Firestore snapshot からスーパー管理者一覧を構築する private helper。
+ *
+ * Issue #296: `getAllSuperAdmins` (silent fallback) と `getAllSuperAdminsStrict`
+ * (fail-closed) で内部ループが完全一致していた負債を解消する共通化。catch の
+ * 扱いだけを各公開関数で変え、ループ本体の同期漏れリスクをなくす。
+ */
+function buildSuperAdminList(
+  snapshot: FirebaseFirestore.QuerySnapshot
+): SuperAdminRecord[] {
+  const result: SuperAdminRecord[] = [];
+
   for (const email of envSuperAdminEmails) {
     result.push({ email, source: "env" });
   }
 
-  // Firestoreからの管理者
-  try {
-    const db = getFirestore();
-    const snapshot = await db.collection("superAdmins").get();
-    for (const doc of snapshot.docs) {
-      const data = doc.data();
-      // 環境変数と重複していない場合のみ追加
-      if (!envSuperAdminEmails.includes(doc.id)) {
-        result.push({
-          email: doc.id,
-          source: "firestore",
-          addedAt: data.addedAt,
-          addedBy: data.addedBy,
-        });
-      }
+  for (const doc of snapshot.docs) {
+    const data = doc.data();
+    // 環境変数と重複していない場合のみ追加（env 側を優先）
+    if (!envSuperAdminEmails.includes(doc.id)) {
+      result.push({
+        email: doc.id,
+        source: "firestore",
+        addedAt: data.addedAt,
+        addedBy: data.addedBy,
+      });
     }
-  } catch (error) {
-    console.error("Failed to fetch super admins from Firestore:", error);
   }
 
   return result;
+}
+
+/**
+ * 全スーパー管理者一覧を取得（環境変数 + Firestore）
+ *
+ * Issue #296: Firestore 障害時の挙動は「silent fallback（env 分のみ返却）」を
+ * 維持する（UI 一覧表示の可用性優先）。ただし破壊的操作（削除 / 追加）では
+ * silent に env 以外が消えた状態で find() に通すと 404 誤認事故につながるため、
+ * そちら用には {@link getAllSuperAdminsStrict} を使う。
+ *
+ * console.error から logger.error に移行し、Issue #292 の構造化ログ形式に揃える
+ * （firebaseErrorCode / errorMessage を Cloud Logging で串刺し可能）。
+ */
+export async function getAllSuperAdmins(): Promise<SuperAdminRecord[]> {
+  try {
+    const db = getFirestore();
+    const snapshot = await db.collection("superAdmins").get();
+    return buildSuperAdminList(snapshot);
+  } catch (error) {
+    const err = error as { code?: unknown; message?: unknown };
+    logger.error("Failed to fetch super admins from Firestore (silent fallback)", {
+      errorType: "super_admin_list_firestore_fallback",
+      firebaseErrorCode: typeof err.code === "string" ? err.code : null,
+      errorMessage: typeof err.message === "string" ? err.message : String(error),
+    });
+    // env 分だけで一覧を返す（UI ロード失敗回避のための UX 優先）
+    return envSuperAdminEmails.map((email) => ({ email, source: "env" }) as const);
+  }
+}
+
+/**
+ * 全スーパー管理者一覧を fail-closed で取得する（Issue #296）。
+ *
+ * Firestore 障害時に {@link SuperAdminFirestoreUnavailableError} を throw する。
+ * 破壊的操作（削除・追加）の前段で「env 分のみ」に縮退した状態で find() に
+ * 通すと、実在する firestore admin を 404 で「見つからない」と誤認させ
+ * インシデント時に危険な操作判断につながるため、これらの経路では本関数を使う。
+ */
+export async function getAllSuperAdminsStrict(): Promise<SuperAdminRecord[]> {
+  try {
+    const db = getFirestore();
+    const snapshot = await db.collection("superAdmins").get();
+    return buildSuperAdminList(snapshot);
+  } catch (error) {
+    throw new SuperAdminFirestoreUnavailableError(error);
+  }
 }
 
 /**
