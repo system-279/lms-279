@@ -763,30 +763,43 @@ router.get("/platform/auth-errors", async (req: Request, res: Response) => {
     limit = 500;
   }
 
-  const ds = getPlatformDataSource();
-  const logs = await ds.getPlatformAuthErrorLogs({
-    email,
-    startDate,
-    endDate,
-    limit,
-  });
+  try {
+    const ds = getPlatformDataSource();
+    const logs = await ds.getPlatformAuthErrorLogs({
+      email,
+      startDate,
+      endDate,
+      limit,
+    });
 
-  res.json({
-    platformAuthErrorLogs: logs.map((log) => ({
-      id: log.id,
-      email: log.email,
-      tenantId: log.tenantId,
-      errorType: log.errorType,
-      reason: log.reason,
-      errorMessage: log.errorMessage,
-      path: log.path,
-      method: log.method,
-      userAgent: log.userAgent,
-      ipAddress: log.ipAddress,
-      firebaseErrorCode: log.firebaseErrorCode,
-      occurredAt: log.occurredAt,
-    })),
-  });
+    res.json({
+      platformAuthErrorLogs: logs.map((log) => ({
+        id: log.id,
+        email: log.email,
+        tenantId: log.tenantId,
+        errorType: log.errorType,
+        reason: log.reason,
+        errorMessage: log.errorMessage,
+        path: log.path,
+        method: log.method,
+        userAgent: log.userAgent,
+        ipAddress: log.ipAddress,
+        firebaseErrorCode: log.firebaseErrorCode,
+        occurredAt: log.occurredAt,
+      })),
+    });
+  } catch (e) {
+    // 既存 super-admin ハンドラと同じく logger.error + 500 で返す。
+    // Firestore 障害時のレスポンス形式を保証する（Issue #299 evaluator 指摘）。
+    logger.error("Failed to fetch platform auth error logs", {
+      error: e instanceof Error ? e : new Error(String(e)),
+      operatorEmail: req.superAdmin?.email,
+    });
+    res.status(500).json({
+      error: "fetch_failed",
+      message: "認証エラーログの取得に失敗しました。再度お試しください。",
+    });
+  }
 });
 
 // ============================================================

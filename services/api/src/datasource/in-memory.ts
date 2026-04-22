@@ -634,7 +634,10 @@ export class InMemoryDataSource implements DataSource {
 
     result.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
 
-    const limit = filter?.limit ?? 100;
+    // route 層で clamp 済みの値が渡る前提だが、直接呼び出し経路の誤用（負数で
+    // slice(0, -1) → 末尾1件欠落）を防ぐため DataSource 内でもガードする。
+    const rawLimit = filter?.limit ?? 100;
+    const limit = rawLimit < 1 ? 100 : rawLimit;
     return result.slice(0, limit);
   }
 

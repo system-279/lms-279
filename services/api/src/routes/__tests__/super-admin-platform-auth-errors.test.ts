@@ -181,10 +181,8 @@ describe("GET /api/v2/super/platform/auth-errors (Issue #299)", () => {
     expect(res.body.platformAuthErrorLogs).toEqual([]);
   });
 
-  it("AC9: limit 上限 (500) 超過は clamp", async () => {
+  it("AC9: limit 明示指定 (1) で 1 件のみ返る", async () => {
     // super@example.com は env fast path で super-admin 判定される
-    // limit=501 が clamp されていることは query で確認（500 件以上は生成コストが高いのでロジック確認のみ）
-    // ds に 3 件だけ入れ、limit=1 で 1 件返ることを確認（clamp の逆方向）
     await ds.createPlatformAuthErrorLog(makeLog({ occurredAt: "2026-04-22T10:00:00.000Z" }));
     await ds.createPlatformAuthErrorLog(makeLog({ occurredAt: "2026-04-22T11:00:00.000Z" }));
     await ds.createPlatformAuthErrorLog(makeLog({ occurredAt: "2026-04-22T12:00:00.000Z" }));
@@ -196,6 +194,23 @@ describe("GET /api/v2/super/platform/auth-errors (Issue #299)", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.platformAuthErrorLogs).toHaveLength(1);
+  });
+
+  it("AC9: limit=501 は 500 に clamp される（HTTP 端点）", async () => {
+    // 501 件作成して clamp 動作を実測
+    for (let i = 0; i < 501; i++) {
+      const hour = String(Math.floor(i / 60)).padStart(2, "0");
+      const min = String(i % 60).padStart(2, "0");
+      await ds.createPlatformAuthErrorLog(makeLog({ occurredAt: `2026-04-22T${hour}:${min}:00.000Z` }));
+    }
+
+    const app = await buildApp(ds);
+    const res = await supertest(app)
+      .get("/api/v2/super/platform/auth-errors?limit=501")
+      .set("X-User-Email", "super@example.com");
+
+    expect(res.status).toBe(200);
+    expect(res.body.platformAuthErrorLogs).toHaveLength(500);
   });
 
   it("AC9: limit 不正値 (文字列 abc) は 100 にフォールバック", async () => {
@@ -236,7 +251,7 @@ describe("GET /api/v2/super/platform/auth-errors (Issue #299)", () => {
 
   it("AC12: response は PII (email) を含むが、super-admin のみアクセス可能 (AC3 の裏付け)", async () => {
     // super@example.com は env fast path で super-admin 判定される
-    await ds.createPlatformAuthErrorLog(makeLog({ email: "pii@example.com" }));
+    await ds.createPlatformAuthErrorLog(makeLog({ email: "pii@example.com", firebaseErrorCode: "auth/id-token-revoked" }));
 
     const app = await buildApp(ds);
     const res = await supertest(app)
@@ -246,6 +261,24 @@ describe("GET /api/v2/super/platform/auth-errors (Issue #299)", () => {
     expect(res.status).toBe(200);
     const logs = res.body.platformAuthErrorLogs as AuthErrorLog[];
     expect(logs[0].email).toBe("pii@example.com");
-    expect(logs[0].firebaseErrorCode).toBeDefined();
+    expect(logs[0].firebaseErrorCode).toBe("auth/id-token-revoked");
+  });
+
+  it("DataSource 障害時は 500 fetch_failed を返す（evaluator 指摘）", async () => {
+    // super@example.com は env fast path で super-admin 判定される
+    // getPlatformAuthErrorLogs を reject させる
+    const brokenDs = {
+      ...ds,
+      getPlatformAuthErrorLogs: vi.fn().mockRejectedValue(new Error("Firestore unavailable")),
+      createPlatformAuthErrorLog: ds.createPlatformAuthErrorLog.bind(ds),
+    } as unknown as InMemoryDataSource;
+
+    const app = await buildApp(brokenDs);
+    const res = await supertest(app)
+      .get("/api/v2/super/platform/auth-errors")
+      .set("X-User-Email", "super@example.com");
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe("fetch_failed");
   });
 });
