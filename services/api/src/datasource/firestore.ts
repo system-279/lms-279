@@ -4,6 +4,7 @@
  */
 
 import { Firestore, Timestamp, type QueryDocumentSnapshot } from "firebase-admin/firestore";
+import { createHash } from "node:crypto";
 import { logger } from "../utils/logger.js";
 import type {
   DataSource,
@@ -16,6 +17,8 @@ import type {
   UserUpdateData,
   NotificationPolicyUpdateData,
   SetFirebaseUidResult,
+  FindOrCreateUserResult,
+  FindOrCreateUserDefaults,
 } from "./interface.js";
 import type {
   Course,
@@ -446,6 +449,117 @@ export class FirestoreDataSource implements DataSource {
       tx.update(docRef, { firebaseUid, updatedAt });
       const updatedData = { ...data, firebaseUid, updatedAt };
       return { status: "updated" as const, user: this.toUser(doc.id, updatedData) };
+    });
+  }
+
+  async findOrCreateUserByEmailAndUid(
+    email: string,
+    firebaseUid: string,
+    defaults: FindOrCreateUserDefaults
+  ): Promise<FindOrCreateUserResult> {
+    // 引数 precondition (Issue #316 / ADR-031): InMemory 実装と同契約
+    if (typeof email !== "string" || email.length === 0) {
+      throw new Error(
+        "findOrCreateUserByEmailAndUid: email must be a non-empty string"
+      );
+    }
+    if (typeof firebaseUid !== "string" || firebaseUid.length === 0) {
+      throw new Error(
+        "findOrCreateUserByEmailAndUid: firebaseUid must be a non-empty string"
+      );
+    }
+
+    // Sentinel doc 直列化:
+    //   tenants/{tid}/user_email_locks/{sha256(email)} を transaction 内で read/write し、
+    //   同一 email の create を直列化する。
+    //   - email を doc ID にすると Firestore の制約 (max 1500 bytes / 禁止文字) と
+    //     PII 保存リスクがあるため SHA-256 で hash 化（一方向、衝突は事実上ゼロ）。
+    //   - 同一 lockRef を transaction read することで、Firestore の serializable isolation /
+    //     contention resolution の対象になる。並行 commit は待機・retry・ABORTED の
+    //     いずれかで解決され、重複 create が防がれる
+    //     (https://firebase.google.com/docs/firestore/transaction-data-contention)。
+    //   - lock doc の永続化は将来 #276 (Phase 5) で TTL/cleanup 自動化（本 PR スコープ外）。
+    //     既存 user に対する CAS path では lock doc を書かず、user doc 自体への tx.update が
+    //     contention 検出のターゲットになる (CAS の冪等性で吸収)。
+    const emailHash = createHash("sha256").update(email).digest("hex");
+    const lockRef = this.collection("user_email_locks").doc(emailHash);
+    const usersCol = this.collection("users");
+
+    return this.db.runTransaction(async (tx) => {
+      // lock doc read (tx 参加で conflict detection 対象化) + email query を並列実行
+      const [, existingSnap] = await Promise.all([
+        tx.get(lockRef),
+        tx.get(usersCol.where("email", "==", email).limit(1)),
+      ]);
+
+      if (!existingSnap.empty) {
+        // 既存 user → CAS path (setUserFirebaseUidIfUnset と同じセマンティクス)。
+        // この経路では lock doc を read のみで書かず、user doc への tx.update 自体が
+        // optimistic lock conflict のターゲットになる（CAS の冪等性で吸収）。
+        const doc = existingSnap.docs[0];
+        const data = doc.data();
+        const rawExisting = data.firebaseUid;
+        if (
+          rawExisting !== undefined &&
+          rawExisting !== null &&
+          typeof rawExisting !== "string"
+        ) {
+          logger.error("Corrupt firebaseUid type in Firestore — CAS aborted", {
+            errorType: "firebase_uid_type_corruption",
+            userId: doc.id,
+            rawType: typeof rawExisting,
+          });
+          throw new Error(
+            `Corrupt firebaseUid type for user=${doc.id} (type=${typeof rawExisting})`
+          );
+        }
+        const existingUid =
+          typeof rawExisting === "string" && rawExisting.length > 0
+            ? rawExisting
+            : null;
+
+        if (existingUid === firebaseUid) {
+          return {
+            status: "already_set_same" as const,
+            user: this.toUser(doc.id, data),
+          };
+        }
+        if (existingUid !== null) {
+          return { status: "conflict" as const, existingUid };
+        }
+
+        const updatedAt = new Date();
+        tx.update(doc.ref, { firebaseUid, updatedAt });
+        const updatedData = { ...data, firebaseUid, updatedAt };
+        return {
+          status: "updated" as const,
+          user: this.toUser(doc.id, updatedData),
+        };
+      }
+
+      // 既存 user なし → 新規作成 (transaction 内で sentinel + user 同時 set)
+      const newDocRef = usersCol.doc();
+      const now = new Date();
+      const newData = {
+        email,
+        name: defaults.name,
+        role: defaults.role,
+        firebaseUid,
+        createdAt: now,
+        updatedAt: now,
+      };
+      tx.set(newDocRef, newData);
+      // sentinel doc を「占有マーク」として書き込む。次回以降の同 email transaction が
+      // このドキュメントを read することで、create 経路の serializability を維持。
+      tx.set(lockRef, {
+        lastUserId: newDocRef.id,
+        lockedAt: now,
+      });
+
+      return {
+        status: "created" as const,
+        user: this.toUser(newDocRef.id, newData),
+      };
     });
   }
 

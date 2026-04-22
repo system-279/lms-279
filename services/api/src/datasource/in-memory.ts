@@ -14,6 +14,8 @@ import type {
   UserUpdateData,
   NotificationPolicyUpdateData,
   SetFirebaseUidResult,
+  FindOrCreateUserResult,
+  FindOrCreateUserDefaults,
 } from "./interface.js";
 import { ReadOnlyDataSourceError } from "./interface.js";
 import type {
@@ -510,6 +512,77 @@ export class InMemoryDataSource implements DataSource {
     };
     this.users[index] = updated;
     return { status: "updated", user: updated };
+  }
+
+  async findOrCreateUserByEmailAndUid(
+    email: string,
+    firebaseUid: string,
+    defaults: FindOrCreateUserDefaults
+  ): Promise<FindOrCreateUserResult> {
+    this.throwIfReadOnly();
+    // 引数 precondition (Issue #316 / ADR-031): Firestore 実装と同契約
+    if (typeof email !== "string" || email.length === 0) {
+      throw new Error(
+        "findOrCreateUserByEmailAndUid: email must be a non-empty string"
+      );
+    }
+    if (typeof firebaseUid !== "string" || firebaseUid.length === 0) {
+      throw new Error(
+        "findOrCreateUserByEmailAndUid: firebaseUid must be a non-empty string"
+      );
+    }
+
+    // 同一プロセス・シングルスレッドの InMemory では、本メソッド body 内に
+    // await を一切置かないことで find + CAS or create を原子化する
+    // (async 関数は最初の await まで同期実行される性質を利用)。
+    // Promise.all で 2 本同時実行しても、call1 の return まで一切の中断点が
+    // 入らないため、call2 開始時点で call1 の状態変更は完了している。
+    const index = this.users.findIndex((u) => u.email === email);
+    if (index !== -1) {
+      // 既存 user → CAS path (setUserFirebaseUidIfUnset と同じセマンティクス)
+      const existing = this.users[index];
+      const rawExisting = existing.firebaseUid;
+      if (
+        rawExisting !== undefined &&
+        rawExisting !== null &&
+        typeof rawExisting !== "string"
+      ) {
+        throw new Error(
+          `Corrupt firebaseUid type for user=${existing.id} (type=${typeof rawExisting})`
+        );
+      }
+      const existingUid =
+        typeof rawExisting === "string" && rawExisting.length > 0
+          ? rawExisting
+          : null;
+
+      if (existingUid === firebaseUid) {
+        return { status: "already_set_same", user: existing };
+      }
+      if (existingUid !== null) {
+        return { status: "conflict", existingUid };
+      }
+      const updated: User = {
+        ...existing,
+        firebaseUid,
+        updatedAt: new Date().toISOString(),
+      };
+      this.users[index] = updated;
+      return { status: "updated", user: updated };
+    }
+
+    // 既存 user なし → 新規作成
+    const created: User = {
+      id: InMemoryDataSource.uniqueId("user"),
+      email,
+      name: defaults.name,
+      role: defaults.role,
+      firebaseUid,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    this.users.push(created);
+    return { status: "created", user: created };
   }
 
   async deleteUser(id: string): Promise<boolean> {
