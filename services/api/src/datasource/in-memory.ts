@@ -596,6 +596,18 @@ export class InMemoryDataSource implements DataSource {
     };
   }
 
+  /**
+   * プラットフォーム（テナント非依存）認証エラーログを作成 (Issue #292)
+   * InMemory ではテスト時の spy 対象として返却のみ行う（永続化なし）。
+   */
+  async createPlatformAuthErrorLog(data: Omit<AuthErrorLog, "id">): Promise<AuthErrorLog> {
+    this.throwIfReadOnly();
+    return {
+      ...data,
+      id: InMemoryDataSource.uniqueId("platform-auth-error"),
+    };
+  }
+
   // User Settings
   async getUserSettings(userId: string): Promise<UserSettings | null> {
     return this.userSettings.get(userId) ?? null;

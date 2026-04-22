@@ -124,6 +124,15 @@ export interface DataSource {
    */
   createAuthErrorLog(data: Omit<AuthErrorLog, "id">): Promise<AuthErrorLog>;
 
+  /**
+   * プラットフォーム（テナント非依存）認証エラーログを作成 (Issue #292)
+   *
+   * super-admin 経路の認証拒否はテナントスコープ外のため、`auth_error_logs` ではなく
+   * ルートコレクション `platform_auth_error_logs` に記録する。
+   * `tenantId` は便宜上 `"__platform__"` を設定する（Firestore スキーマ互換維持）。
+   */
+  createPlatformAuthErrorLog(data: Omit<AuthErrorLog, "id">): Promise<AuthErrorLog>;
+
   // User Settings
   getUserSettings(userId: string): Promise<UserSettings | null>;
   upsertUserSettings(userId: string, data: Partial<UserSettings>): Promise<UserSettings>;

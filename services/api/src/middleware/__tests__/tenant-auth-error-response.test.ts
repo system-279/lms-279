@@ -39,6 +39,7 @@ describe("handleTenantAccessDenied", () => {
   it("レスポンス message は固定の一般化文言（ユーザー列挙防止）", async () => {
     const err = new TenantAccessDeniedError(
       "このメールアドレス (leak@example.com) はテナント「leak-tenant」へのアクセスが許可されていません。",
+      "not_in_allowlist",
       "leak@example.com",
       "leak-tenant"
     );
@@ -61,6 +62,7 @@ describe("handleTenantAccessDenied", () => {
   it("auth_error_logs には詳細（email / tenantId / errorMessage）が保存される", async () => {
     const err = new TenantAccessDeniedError(
       "このメールアドレス (user@example.com) はテナント「acme」へのアクセスが許可されていません。",
+      "not_in_allowlist",
       "user@example.com",
       "acme"
     );
@@ -74,13 +76,16 @@ describe("handleTenantAccessDenied", () => {
     expect(logged.email).toBe("user@example.com");
     expect(logged.tenantId).toBe("acme");
     expect(logged.errorType).toBe("tenant_access_denied");
+    expect(logged.reason).toBe("not_in_allowlist");
+    expect(logged.firebaseErrorCode).toBeNull();
     expect(logged.errorMessage).toContain("user@example.com");
   });
 
-  it("logger.warn にも email / tenantId を含む詳細が記録される（CG-3）", async () => {
+  it("logger.warn にも email / tenantId / reason を含む詳細が記録される（CG-3 + Issue #292）", async () => {
     const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
     const err = new TenantAccessDeniedError(
       "このメールアドレス (trace@example.com) はテナント「trace」へのアクセスが許可されていません。",
+      "not_in_allowlist",
       "trace@example.com",
       "trace"
     );
@@ -95,12 +100,13 @@ describe("handleTenantAccessDenied", () => {
       email: "trace@example.com",
       tenantId: "trace",
       errorType: "tenant_access_denied",
+      reason: "not_in_allowlist",
     });
     warnSpy.mockRestore();
   });
 
   it("auth_error_logs 保存が失敗してもレスポンスは返る", async () => {
-    const err = new TenantAccessDeniedError("denied", "user@example.com", "acme");
+    const err = new TenantAccessDeniedError("denied", "not_in_allowlist", "user@example.com", "acme");
     const failingDs = {
       createAuthErrorLog: vi.fn().mockRejectedValue(new Error("firestore down")),
     };

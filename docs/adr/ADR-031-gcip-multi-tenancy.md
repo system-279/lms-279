@@ -83,6 +83,40 @@ Firebase Authentication を Google Cloud Identity Platform（GCIP）のマルチ
 | `dev` x-user-id | ✅ 再チェック対象（ヘッダ email を優先し、無ければ DB email を使用） |
 | `dev` demo（`demoAuthMiddleware` が `req.user` をプリセット） | ⚠️ **バイパス**（tenant-auth は `req.user` 設定済みならスキップ）。DEMO_ENABLED は production で無効化する運用前提 |
 
+### 認証拒否ログの構造化設計（Issue #292、2026-04-22 追補）
+
+ホワイトリスト主義の運用では「誰が・なぜ拒否されたか」の可視化が攻撃検知・インシデント対応の要となる。Issue #292 で以下を実装した:
+
+#### tenant-auth 経路（`middleware/tenant-auth.ts`）
+- `TenantAccessDeniedError` に `reason: TenantAccessDenialReason` フィールドを追加
+- reason 値: `email_not_verified` / `non_google_provider` / `email_missing` / `not_in_allowlist`
+- `handleTenantAccessDenied` が `logger.warn` と `auth_error_logs` 両方に reason を記録
+- `verifyIdToken` 失敗 catch 節は `logger.error` + `firebaseErrorCode`（`auth/id-token-revoked` 等）で Cloud Logging から原因特定可能
+
+#### super-admin 経路（`middleware/super-admin.ts`）
+- 全 403/401 分岐（`no_auth_header` / `email_not_verified` / `non_google_provider` / `email_missing` / `not_super_admin`）に `logger.warn` + reason 付与
+- `verifyIdToken` 失敗 catch 節は `logger.error` + `firebaseErrorCode` で構造化
+- Firestore 記録は **ルートコレクション `platform_auth_error_logs`**（tenant スコープ外の super-admin 拒否を tenant の `auth_error_logs` と分離）
+
+#### Firestore 記録方式の選択肢と決定
+| 選択肢 | 採否 | 理由 |
+|--------|-----|------|
+| A: `platform_auth_error_logs` コレクション + `DataSource.createPlatformAuthErrorLog` | ✅ **採用** | 既存 `AuthErrorLog` スキーマと一貫、InMemory/Firestore 両実装でテスト可能、tenant と platform のログを分離できる |
+| B: super-admin 経路の前段に `platformDataSource` 注入ミドルウェアを追加 | 不採用 | 既存の `tenantMiddleware` と二重化し、DI 経路が複雑化する。tenant スコープ外のログに tenant DataSource を流用するのは設計上の混乱を招く |
+| C: `getFirestore()` を super-admin 内で直接呼ぶ | 不採用 | テスト時の mock が firebase-admin 全体モックとなり脆く、InMemory モードでの検証ができない |
+
+`req.dataSource` が super-admin 経路で注入されない課題に対しては、`middleware/platform-datasource.ts` で **プロセス単位の singleton** (`getPlatformDataSource()`) として提供し、`AUTH_MODE=firebase` なら `FirestoreDataSource(tenantId="__platform__")`、それ以外（dev/test）なら `InMemoryDataSource` を返す。テストでは `setPlatformDataSourceForTest()` でモック差し替え可能。
+
+#### `AuthErrorLog` スキーマ拡張
+- `reason: string | null`（旧レコード互換のため nullable。middleware 側 union 型 `TenantAccessDenialReason` / `SuperAdminDenialReason` の代表値を格納。catch 節では null）
+- `firebaseErrorCode: string | null`（403 等の分岐では null、catch 節で Firebase SDK エラーコードを格納）
+
+#### Phase 1 の制約（次 Issue で拡張予定）
+- `platform_auth_error_logs` を **admin UI から参照する経路は未実装**。Phase 1 では Cloud Logging（`logger.warn/error` の構造化出力）経由で確認する前提
+- `getPlatformAuthErrorLogs()` / super-admin 画面 UI は別 Issue で追加（PR #298 code-reviewer H1 指摘）
+- `SuperAdminFirestoreUnavailableError` の transient (`unavailable`/`deadline-exceeded`) と permanent (`permission-denied` 等) の区別は現状未実装。すべて 503 を返すが、permanent は 500 相当（別 Issue 推奨）
+- `tenant-auth.ts:checkSuperAdmin` が `SuperAdminFirestoreUnavailableError` も false fallback に潰している点（Issue #293 の silent 権限剥奪を tenant 経路では部分的に残す）も別 Issue で対応
+
 ### UID保持戦略
 - GCIP Tenant ごとにユーザーサイロが分かれるため、新UIDが発行される
 - `tenant-auth.ts` の `findOrCreateTenantUser` 関数内の **email ベースフォールバック検索** がテナント単位の DataSource 内で移行時の橋渡しをする:
