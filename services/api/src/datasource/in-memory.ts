@@ -475,10 +475,24 @@ export class InMemoryDataSource implements DataSource {
     firebaseUid: string
   ): Promise<SetFirebaseUidResult> {
     this.throwIfReadOnly();
+    // 引数 precondition: Firestore 実装と同じ契約（rules/error-handling.md §2）
+    if (typeof firebaseUid !== "string" || firebaseUid.length === 0) {
+      throw new Error("setUserFirebaseUidIfUnset: firebaseUid must be a non-empty string");
+    }
     const index = this.users.findIndex((u) => u.id === userId);
     if (index === -1) return { status: "not_found" };
     const existing = this.users[index];
     const rawExisting = existing.firebaseUid;
+    // 型不整合検知（Firestore と同じ契約）
+    if (
+      rawExisting !== undefined &&
+      rawExisting !== null &&
+      typeof rawExisting !== "string"
+    ) {
+      throw new Error(
+        `Corrupt firebaseUid type for user=${userId} (type=${typeof rawExisting})`
+      );
+    }
     const existingUid =
       typeof rawExisting === "string" && rawExisting.length > 0 ? rawExisting : null;
 

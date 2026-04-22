@@ -154,6 +154,34 @@ describe("tenantAwareAuthMiddleware — email fallback UID CAS (Issue #313)", ()
     expect(platformLogs[0].tenantId).toBe("t1");
   });
 
+  it("platform_auth_error_logs 書き込み失敗でも 403 は返り、tenant auth_error_logs は記録される (rules/error-handling.md §1 独立 try/catch)", async () => {
+    const { app, ds, platformDs } = await buildApp();
+    await ds.createAllowedEmail({ email: "platform-down@example.com", note: null });
+    await ds.createUser({
+      email: "platform-down@example.com",
+      name: null,
+      role: "student",
+      firebaseUid: "uid-original",
+    });
+
+    // platform 側の書き込みのみ失敗させる (例: Firestore platform DS outage)
+    const platformSpy = vi
+      .spyOn(platformDs, "createPlatformAuthErrorLog")
+      .mockRejectedValueOnce(new Error("platform firestore down"));
+
+    mockVerifyIdToken.mockResolvedValue(
+      makeDecodedToken({ uid: "uid-different", email: "platform-down@example.com" })
+    );
+
+    const res = await supertest(app).get("/me").set("authorization", "Bearer dummy");
+
+    // main フローは影響を受けず 403 を返す (platform 書き込み例外が main を壊さない)
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("tenant_access_denied");
+    // platform 書き込みが試行されたこと (try/catch で吸収され、main は継続)
+    expect(platformSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("並行 race: 同じ email で異なる UID の 2 リクエストが同時 → 一方のみ 200、他方は 403", async () => {
     const { app, ds } = await buildApp();
     await ds.createAllowedEmail({ email: "race@example.com", note: null });

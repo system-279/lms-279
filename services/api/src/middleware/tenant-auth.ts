@@ -10,6 +10,7 @@ import type { AuthUser } from "./auth.js";
 import { isSuperAdmin } from "./super-admin.js";
 import { logger } from "../utils/logger.js";
 import { getPlatformDataSource } from "./platform-datasource.js";
+import type { SetFirebaseUidResult } from "../datasource/interface.js";
 
 // Express Request を拡張（スーパー管理者フラグ）
 declare global {
@@ -163,43 +164,9 @@ export async function handleTenantAccessDenied(
     }
   }
 
-  // Issue #313 ADR-031: UID 紐付けインシデントは platform レベルで監視。
-  // テナント単位の auth_error_logs に加え、platform_auth_error_logs にも記録することで
-  // super-admin が全テナント横断で UID 付け替え試行 / 並行 DELETE 等を追跡可能にする。
-  // rules/error-handling.md §1 に従い、platform 書き込み失敗は tenant 書き込みと独立させ、
-  // メインフローを止めない。
-  if (
-    error.reason === "uid_reassignment_blocked" ||
-    error.reason === "uid_cas_user_not_found"
-  ) {
-    try {
-      const platformDs = getPlatformDataSource();
-      await platformDs.createPlatformAuthErrorLog({
-        email,
-        tenantId,
-        errorType: "tenant_uid_conflict",
-        reason: error.reason,
-        errorMessage: error.message,
-        path: req.path,
-        method: req.method,
-        userAgent: req.header("user-agent") ?? null,
-        ipAddress: req.ip ?? null,
-        firebaseErrorCode: null,
-        occurredAt: new Date().toISOString(),
-      });
-    } catch (platformLogError) {
-      logger.error("Failed to save platform auth error log for UID conflict", {
-        originalErrorType: "tenant_uid_conflict",
-        originalReason: error.reason,
-        email,
-        tenantId,
-        persistErrorMessage:
-          platformLogError instanceof Error
-            ? platformLogError.message
-            : String(platformLogError),
-      });
-    }
-  }
+  // Issue #313 ADR-031: UID 紐付けインシデントは platform レベルで監視（super-admin が全テナント横断追跡）。
+  // 独立 try/catch 化は persistPlatformUidConflictLog 内部で実施 (rules/error-handling.md §1)。
+  await persistPlatformUidConflictLog(error, req, email, tenantId);
 
   // ユーザー列挙防止のためレスポンス文言は一般化する。
   // 詳細（email/tenantId/原因メッセージ）は logger.warn と auth_error_logs に記録済み。
@@ -207,6 +174,101 @@ export async function handleTenantAccessDenied(
     error: "tenant_access_denied",
     message: "アクセス権限がありません。管理者にお問い合わせください。",
   });
+}
+
+/**
+ * CAS 結果 (SetFirebaseUidResult) の失敗分岐 (conflict / not_found) を
+ * logger.warn + TenantAccessDeniedError.throw に変換する。
+ * 成功分岐 (updated / already_set_same) は early return で呼び出し側に処理を戻す。
+ * Issue #313 ADR-031: UID 紐付け原子性 CAS の post-processing を集約。
+ */
+function assertCasSuccessOrThrow(
+  result: SetFirebaseUidResult,
+  ctx: {
+    email: string | undefined;
+    tenantId: string | undefined;
+    userId: string;
+    attemptedUid: string;
+  }
+): void {
+  if (result.status === "conflict") {
+    logger.warn("uid_reassignment_blocked: user already bound to different UID", {
+      errorType: "uid_reassignment_blocked",
+      tenantId: ctx.tenantId,
+      email: ctx.email,
+      userId: ctx.userId,
+      existingUid: result.existingUid,
+      attemptedUid: ctx.attemptedUid,
+    });
+    throw new TenantAccessDeniedError(
+      `UID reassignment blocked for email=${ctx.email} (existing=${result.existingUid}, attempted=${ctx.attemptedUid})`,
+      "uid_reassignment_blocked",
+      ctx.email,
+      ctx.tenantId
+    );
+  }
+  if (result.status === "not_found") {
+    // 稀: getUserByEmail 後の並行 DELETE 等
+    logger.warn("user disappeared during CAS firebaseUid update", {
+      errorType: "uid_cas_user_not_found",
+      tenantId: ctx.tenantId,
+      email: ctx.email,
+      userId: ctx.userId,
+    });
+    throw new TenantAccessDeniedError(
+      `User not found during CAS firebaseUid update (email=${ctx.email})`,
+      "uid_cas_user_not_found",
+      ctx.email,
+      ctx.tenantId
+    );
+  }
+  // status: "updated" | "already_set_same" → 何もしない（呼び出し側で後続処理）
+}
+
+/**
+ * UID conflict 系拒否を platform_auth_error_logs にも記録（Issue #313 ADR-031）。
+ * tenant 書き込み (createAuthErrorLog) と独立した try/catch でメインフロー継続を保証する
+ * (rules/error-handling.md §1 エラーハンドラのエラー耐性)。
+ */
+async function persistPlatformUidConflictLog(
+  error: TenantAccessDeniedError,
+  req: Request,
+  email: string,
+  tenantId: string
+): Promise<void> {
+  if (
+    error.reason !== "uid_reassignment_blocked" &&
+    error.reason !== "uid_cas_user_not_found"
+  ) {
+    return;
+  }
+  try {
+    const platformDs = getPlatformDataSource();
+    await platformDs.createPlatformAuthErrorLog({
+      email,
+      tenantId,
+      errorType: "tenant_uid_conflict",
+      reason: error.reason,
+      errorMessage: error.message,
+      path: req.path,
+      method: req.method,
+      userAgent: req.header("user-agent") ?? null,
+      ipAddress: req.ip ?? null,
+      firebaseErrorCode: null,
+      occurredAt: new Date().toISOString(),
+    });
+  } catch (platformLogError) {
+    logger.error("Failed to save platform auth error log for UID conflict", {
+      originalErrorType: "tenant_uid_conflict",
+      originalReason: error.reason,
+      email,
+      tenantId,
+      persistErrorMessage:
+        platformLogError instanceof Error
+          ? platformLogError.message
+          : String(platformLogError),
+    });
+  }
 }
 
 /**
@@ -348,41 +410,17 @@ async function findOrCreateTenantUser(
       if (!superAdminAccess) {
         await ensureAllowlisted(req, email);
       }
-      // ADR-031 Issue #313: CAS で UID 紐付け原子性を保証。
+      // ADR-031 Issue #313: CAS (setUserFirebaseUidIfUnset) で UID 紐付け原子性を保証。
       // 既に別 UID が紐付いているユーザーに新 UID を silent 上書きしない
       // （並行ログイン / GCIP UID 揺り戻しでの last-write-wins を防止）。
+      // 呼び出し箇所: email fallback 経路（getUserByFirebaseUid hit しなかった既存ユーザー）
       const casResult = await ds.setUserFirebaseUidIfUnset(existingByEmail.id, uid);
-      if (casResult.status === "conflict") {
-        logger.warn("uid_reassignment_blocked: user already bound to different UID", {
-          errorType: "uid_reassignment_blocked",
-          tenantId,
-          email,
-          userId: existingByEmail.id,
-          existingUid: casResult.existingUid,
-          attemptedUid: uid,
-        });
-        throw new TenantAccessDeniedError(
-          `UID reassignment blocked for email=${email} (existing=${casResult.existingUid}, attempted=${uid})`,
-          "uid_reassignment_blocked",
-          email,
-          tenantId
-        );
-      }
-      if (casResult.status === "not_found") {
-        // 稀: getUserByEmail 後の並行 DELETE など
-        logger.warn("user disappeared during CAS firebaseUid update", {
-          errorType: "uid_cas_user_not_found",
-          tenantId,
-          email,
-          userId: existingByEmail.id,
-        });
-        throw new TenantAccessDeniedError(
-          `User not found during CAS firebaseUid update (email=${email})`,
-          "uid_cas_user_not_found",
-          email,
-          tenantId
-        );
-      }
+      assertCasSuccessOrThrow(casResult, {
+        email,
+        tenantId,
+        userId: existingByEmail.id,
+        attemptedUid: uid,
+      });
       // status: "updated" または "already_set_same" → 正常継続
       return buildAuthUser(req, existingByEmail, superAdminAccess, { firebaseUid: uid });
     }

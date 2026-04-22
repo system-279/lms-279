@@ -2,10 +2,12 @@
  * setUserFirebaseUidIfUnset の CAS セマンティクステスト (Issue #313 / ADR-031)
  *
  * 並行ログイン / GCIP UID 揺り戻しによる last-write-wins を防止する CAS (compare-and-set)
- * 動作を検証する。Firestore / InMemory の両実装で同じセマンティクスを保証する。
+ * 動作を検証する。
  *
- * Firestore の runTransaction 挙動は本テストでは検証せず、InMemory 実装で
- * 論理的なセマンティクスを担保する。Firestore 固有の race 検証は統合環境で実施。
+ * 注: 本ファイルは InMemory 実装のみ検証する。CAS の I/F 契約 (SetFirebaseUidResult の
+ * 4 状態 + precondition) は Firestore / InMemory 両実装で共有しているが、Firestore の
+ * runTransaction による実際の race セマンティクスは JS シングルスレッド環境では再現不能で、
+ * Sub-Issue H の Staging 統合環境で別途検証する（ADR-028 テスト戦略に準拠）。
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { InMemoryDataSource } from "../in-memory.js";
@@ -80,6 +82,34 @@ describe("InMemoryDataSource.setUserFirebaseUidIfUnset (Issue #313 CAS セマン
     const result = await ds.setUserFirebaseUidIfUnset("user-nonexistent", "uid-new");
 
     expect(result.status).toBe("not_found");
+  });
+
+  it("firebaseUid が空文字で保存された user は 'unset' とみなされ CAS で updated (backfill 前の移行アーティファクト防御)", async () => {
+    const user = await ds.createUser({
+      email: "empty@example.com",
+      name: null,
+      role: "student",
+      firebaseUid: "" as unknown as string,
+    });
+
+    const result = await ds.setUserFirebaseUidIfUnset(user.id, "uid-new");
+
+    expect(result.status).toBe("updated");
+    const fetched = await ds.getUserById(user.id);
+    expect(fetched?.firebaseUid).toBe("uid-new");
+  });
+
+  it("引数 firebaseUid が空文字 → precondition エラー throw", async () => {
+    const user = await ds.createUser({
+      email: "bad-arg@example.com",
+      name: null,
+      role: "student",
+      firebaseUid: undefined,
+    });
+
+    await expect(ds.setUserFirebaseUidIfUnset(user.id, "")).rejects.toThrow(
+      /non-empty string/
+    );
   });
 
   it("並行 race: Promise.all で 2 本同時実行 → 勝者 1 本のみ updated、敗者は conflict", async () => {
