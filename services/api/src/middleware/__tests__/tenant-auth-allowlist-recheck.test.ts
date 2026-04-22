@@ -84,6 +84,8 @@ describe("tenantAwareAuthMiddleware — allowed_emails continuous re-check (Issu
       mockVerifyIdToken.mockResolvedValue({
         uid: "uid-1",
         email: "user@example.com",
+        email_verified: true,
+        firebase: { sign_in_provider: "google.com" },
         name: "User",
       });
 
@@ -124,6 +126,8 @@ describe("tenantAwareAuthMiddleware — allowed_emails continuous re-check (Issu
       mockVerifyIdToken.mockResolvedValue({
         uid: "uid-new",
         email: "no-allowed@example.com",
+        email_verified: true,
+        firebase: { sign_in_provider: "google.com" },
       });
 
       const res = await supertest(app).get("/me").set("authorization", "Bearer tok");
@@ -149,6 +153,8 @@ describe("tenantAwareAuthMiddleware — allowed_emails continuous re-check (Issu
       mockVerifyIdToken.mockResolvedValue({
         uid: "uid-super",
         email: "super@example.com",
+        email_verified: true,
+        firebase: { sign_in_provider: "google.com" },
       });
 
       // allowed_emails に一切登録がない状態
@@ -172,6 +178,8 @@ describe("tenantAwareAuthMiddleware — allowed_emails continuous re-check (Issu
       mockVerifyIdToken.mockResolvedValue({
         uid: "uid-admin-new",
         email: "admin@example.com",
+        email_verified: true,
+        firebase: { sign_in_provider: "google.com" },
       });
 
       const res = await supertest(app).get("/me").set("authorization", "Bearer tok");
@@ -258,6 +266,8 @@ describe("tenantAwareAuthMiddleware — allowed_emails continuous re-check (Issu
       mockVerifyIdToken.mockResolvedValue({
         uid: "uid-mixed",
         email: "  Mixed-CASE@Example.COM  ",
+        email_verified: true,
+        firebase: { sign_in_provider: "google.com" },
       });
 
       const res = await supertest(app).get("/me").set("authorization", "Bearer tok");
@@ -279,6 +289,8 @@ describe("tenantAwareAuthMiddleware — allowed_emails continuous re-check (Issu
       // email 未登録のまま再チェック走る
       mockVerifyIdToken.mockResolvedValue({
         uid: user.firebaseUid,
+        email_verified: true,
+        firebase: { sign_in_provider: "google.com" },
       });
 
       const res = await supertest(app).get("/me").set("authorization", "Bearer tok");
@@ -316,6 +328,8 @@ describe("tenantAwareAuthMiddleware — allowed_emails continuous re-check (Issu
       mockVerifyIdToken.mockResolvedValue({
         uid: "uid-admin-super",
         email: "admin-super@example.com",
+        email_verified: true,
+        firebase: { sign_in_provider: "google.com" },
       });
 
       const res = await supertest(app).get("/me").set("authorization", "Bearer tok");
