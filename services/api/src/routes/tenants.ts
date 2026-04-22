@@ -75,8 +75,9 @@ async function verifyAuthToken(
     //   - checkRevoked=true で revoke 後の既発行トークンを拒否
     //   - email_verified=true と sign_in_provider=google.com を必須化し、
     //     非 Google / 未検証メールでのテナント作成経路をブロックする。
-    //   - レスポンスはユーザー列挙防止のため既存の 401 文言「認証トークンが無効です」で統一し、
-    //     詳細は console.warn に残す。
+    //   - レスポンスはユーザー列挙防止のため既存の文言「認証トークンが無効です」で統一
+    //     （status は tenant-auth.ts と同じ分類で 401: トークン検証失敗 / 403: guard 拒否）、
+    //     詳細は構造化 logger.warn に errorType / reason で残す (Issue #292 と同形式)。
     const decodedToken = await getAuth().verifyIdToken(idToken, true);
     if (decodedToken.email_verified !== true) {
       logger.warn("Tenant auth denied: email_not_verified", {

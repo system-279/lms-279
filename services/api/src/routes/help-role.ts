@@ -35,14 +35,24 @@ router.get("/role", async (req: Request, res: Response) => {
       //   - email_verified=true と sign_in_provider=google.com を必須化し、
       //     不適合なら super/admin 昇格を許さず "student" フォールバックする
       //     （ヘルプ画面自体は閲覧可能にして UX 劣化を避ける）
+      //   - reason は email_not_verified / non_google_provider で区別し、
+      //     外側 catch の "help_role_fallback_error"（Firestore 例外等）と
+      //     errorType で切り分け可能にする（Cloud Logging 検索・集計用）。
       const decoded = await getAuth().verifyIdToken(idToken, true);
-      if (
-        decoded.email_verified !== true ||
-        decoded.firebase?.sign_in_provider !== "google.com"
-      ) {
-        logger.warn("Help role check falling back to student (guard failed)", {
+      if (decoded.email_verified !== true) {
+        logger.warn("Help role guard failed", {
+          errorType: "help_role_guard_failed",
+          reason: "email_not_verified",
           uid: decoded.uid,
-          emailVerified: decoded.email_verified === true,
+        });
+        res.json({ helpLevel: "student" as HelpLevel });
+        return;
+      }
+      if (decoded.firebase?.sign_in_provider !== "google.com") {
+        logger.warn("Help role guard failed", {
+          errorType: "help_role_guard_failed",
+          reason: "non_google_provider",
+          uid: decoded.uid,
           signInProvider: decoded.firebase?.sign_in_provider ?? null,
         });
         res.json({ helpLevel: "student" as HelpLevel });
@@ -73,10 +83,16 @@ router.get("/role", async (req: Request, res: Response) => {
 
     res.json({ helpLevel });
   } catch (error) {
-    logger.error("Help role check failed", {
+    // Issue #294: 意図的な guard フォールバック (errorType=help_role_guard_failed) と
+    // 区別するため、想定外の例外（Firestore 障害 / verifyIdToken の auth/internal-error 等）
+    // は errorType=help_role_fallback_error で構造化ログに残す。
+    // レスポンス形状は UX 維持のため student で揃えるが、Cloud Logging 上では分離できる。
+    const err = error as { code?: unknown };
+    logger.error("Help role fallback due to unexpected error", {
+      errorType: "help_role_fallback_error",
+      firebaseErrorCode: typeof err.code === "string" ? err.code : null,
       error: error instanceof Error ? error.message : String(error),
     });
-    // エラー時はstudentレベルにフォールバック
     res.json({ helpLevel: "student" as HelpLevel });
   }
 });
