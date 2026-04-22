@@ -21,6 +21,19 @@ declare global {
 
 const authMode = process.env.AUTH_MODE ?? "dev";
 
+// Issue #290 / ADR-031: NODE_ENV=production では AUTH_MODE=firebase を必須化。
+// デフォルト値 "dev" のまま本番デプロイすると、ヘッダ疑似認証 (X-User-Email) が
+// 無検証で信頼されるため、email_verified / sign_in_provider / allowed_emails
+// 境界 (Issue #286 / #294) が全てバイパスされる。環境変数欠落 / IaC ドリフト /
+// Cloud Run リビジョン切り戻しによる欠落を、モジュールロード時に fail-fast で検知する。
+if (process.env.NODE_ENV === "production" && authMode !== "firebase") {
+  throw new Error(
+    `FATAL: AUTH_MODE must be "firebase" in production (got "${authMode}"). ` +
+      `This would allow header-based authentication bypass. ` +
+      `Check Cloud Run env vars or IaC configuration (docs/runbook/auth-mode-production-check.md).`
+  );
+}
+
 // Firebase Admin SDK初期化（firebase モードの場合のみ）
 if (authMode === "firebase" && getApps().length === 0) {
   const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT;

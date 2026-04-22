@@ -93,6 +93,18 @@ async function recordSuperAdminAuthEvent(
 
 const authMode = process.env.AUTH_MODE ?? "dev";
 
+// Issue #290 / ADR-031: NODE_ENV=production では AUTH_MODE=firebase を必須化。
+// super-admin 経路も dev モードでは X-User-Email を無検証で信頼するため、同等の
+// fail-fast ガードが必要。tenant-auth.ts と独立モジュールのため両方で assertion する。
+// 詳細: docs/runbook/auth-mode-production-check.md
+if (process.env.NODE_ENV === "production" && authMode !== "firebase") {
+  throw new Error(
+    `FATAL: AUTH_MODE must be "firebase" in production (got "${authMode}"). ` +
+      `Super-admin endpoints would accept unverified X-User-Email headers. ` +
+      `Check Cloud Run env vars or IaC configuration (docs/runbook/auth-mode-production-check.md).`
+  );
+}
+
 // 環境変数からのスーパー管理者（フォールバック/ブートストラップ用）
 const envSuperAdminEmails: string[] = (process.env.SUPER_ADMIN_EMAILS ?? "")
   .split(",")
