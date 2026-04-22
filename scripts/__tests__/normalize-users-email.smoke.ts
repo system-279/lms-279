@@ -72,13 +72,18 @@ const cases: Case[] = [
     },
   },
   {
-    name: "空 email / undefined / null は無視",
+    name: "空 email / undefined は無視",
     input: [
       { id: "u1", email: "" },
       { id: "u2", email: undefined },
-      // null 相当（Firestore から undefined で降ってくる想定）
-      { id: "u3", email: undefined },
     ],
+    expected: { updates: 0, skips: 0 },
+  },
+  {
+    name: "null が UserEmailDoc.email に入っても crash せず無視（Firestore null 防御）",
+    // main() 側で `typeof raw === "string"` を通るため null は届かないが、
+    // planNormalization 単体に null が渡るリグレッションに備えた defensive test。
+    input: [{ id: "u1", email: null as unknown as undefined }],
     expected: { updates: 0, skips: 0 },
   },
   {

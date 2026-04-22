@@ -97,7 +97,12 @@ async function main(execute: boolean): Promise<number> {
       );
     } else {
       initializeApp();
-      console.log("[auth] using Application Default Credentials (ADC)");
+      const resolvedProject =
+        getApps()[0]?.options?.projectId ??
+        process.env.FIREBASE_PROJECT_ID ??
+        process.env.GOOGLE_CLOUD_PROJECT ??
+        "unknown";
+      console.log(`[auth] using Application Default Credentials (ADC) (project=${resolvedProject})`);
     }
   }
 
@@ -115,10 +120,12 @@ async function main(execute: boolean): Promise<number> {
       const usersSnap = await db.collection(`tenants/${tenantId}/users`).get();
       const refById = new Map(usersSnap.docs.map((d) => [d.id, d.ref] as const));
 
-      const docs: UserEmailDoc[] = usersSnap.docs.map((d) => ({
-        id: d.id,
-        email: d.data().email as string | undefined,
-      }));
+      const docs: UserEmailDoc[] = usersSnap.docs.map((d) => {
+        const raw = d.data().email;
+        // Firestore では null / number / 空 object など予期しない型が入ることがある。
+        // string 以外は undefined に寄せて planNormalization 内で空扱いにする（.trim() 呼び出しでの crash 防止）。
+        return { id: d.id, email: typeof raw === "string" ? raw : undefined };
+      });
       const plan = planNormalization(docs);
 
       for (const u of plan.updates) {
