@@ -1,14 +1,14 @@
-# Session Handoff — 2026-04-22 (Session 6)
+# Session Handoff — 2026-04-22 (Session 7)
 
 ## TL;DR
 
-**4 PR 連続マージ + main CI 完全緑化**。Session 5 の handoff で「次候補」として残っていた **Issue #299 (platform_auth_error_logs 読み取り経路)** と **#290 follow-up (deploy.yml NODE_ENV=production 明示)** を完了。加えて session 開始時点で main に残っていた E2E Tests の **9連続 failure**（`88a90cb` 〜 `786655e`、Session 5 handoff に未記載）を 2 PR で緑化。Issue Net は +1（後述）だが、起票はいずれも triage 基準該当（CI 性能 / ADR-031 既記載の後続対応）。
+**ADR-031 Phase 3 (GCIP マルチテナント移行) 着手 + 2 Sub-Issue 連続 merge**。Issue #272 Phase 3 の実装計画を `/impl-plan` で策定し、9 Sub-Issue に分解。完全独立な Sub-Issue A (Tenant スキーマ拡張) と Sub-Issue C (UID 紐付け原子性 CAS) を並行実装、両方 merge 完了。Quality Gate は **5-6 層検証プロトコル** (impl-plan → simplify → safe-refactor → Evaluator → review-pr 6 並列 → codex review) で、Evaluator REQUEST_CHANGES + Codex APPROVE_WITH_REVISIONS の指摘をすべて反映 or follow-up Issue 化。
 
-- **マージ完了** (今セッション): PR #305, #306, #307, #309
-- **新規 Issue**: 2 件 (#308 CI 性能, #310 transient/permanent)
-- **Close**: 1 件 (#299)
-- **Issue Net**: +1（triage 基準該当の起票、詳細は下記）
-- **Open 推移**: Session 5 末 6 件 → Session 6 末 7 件 (P0:1 / P2:6)
+- **マージ完了** (今セッション): PR #314, PR #315
+- **新規 Issue**: 3 件 (#312 Sub-Issue A / #313 Sub-Issue C / #316 Codex follow-up)
+- **Close**: 2 件 (#312, #313)
+- **Issue Net**: +1（#316 のみ残存、全起票 triage 基準該当）
+- **Open 推移**: Session 6 末 7 件 → Session 7 末 8 件 (P0:1 / P1:1 / P2:6)
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -16,174 +16,199 @@
 # 1. 状況復元
 cat docs/handoff/LATEST.md
 
-# 2. 現在の OPEN Issue（P0: 1 / P1: 0 / P2: 6）
+# 2. 現在の OPEN Issue（P0: 1 / P1: 1 / P2: 6）
 gh issue list --state open --limit 15
 
 # 3. main CI が緑であることを確認
 gh run list --branch main --limit 3
+
+# 4. 次セッション候補 Issue のコンテキスト
+gh issue view 316  # Sub-Issue C follow-up (最優先候補)
+gh issue view 272  # Phase 3 親 Issue (進捗トラッキング)
 ```
 
 ---
 
-## セッション成果物 (2026-04-22 Session 6)
+## セッション成果物 (2026-04-22 Session 7)
 
 ### マージ完了 PR
 
 | # | Issue | Title | Merge Commit |
 |---|-------|-------|-------------|
-| #305 | - | fix(e2e): PAUSE_TIMEOUT_MS 設定削除で CI フレーク解消 | `b4489e9` |
-| #306 | #290 follow-up | feat(deploy): API ENV_VARS に NODE_ENV=production を明示 | `786655e` |
-| #307 | - | fix(e2e): playwright test timeout を 60s → 180s に拡大 | `7cd3c6f` |
-| #309 | #299 | feat(super-admin): platform_auth_error_logs 読み取り API 追加 | `094ce4d` |
+| #314 | #312 | feat(tenant): Tenant スキーマに gcipTenantId + useGcip 追加 | `a7b9116` |
+| #315 | #313 | feat(auth): findOrCreateTenantUser の UID 紐付け原子性 CAS 化 | `24b49b6` |
 
 ### 起票 Issue
 
 | # | Title | Label | 起票理由（triage 基準） |
 |---|-------|-------|----------------------|
-| #308 | E2E CI でリクエスト遅延 7-9 秒/request の根本調査 | P2, enhancement | **#3 CI/リリース判断を壊す可能性**（PR #307 で暫定対処済みだが、timeout を重ねる対症療法を止めるため根本調査が必要） |
-| #310 | platform_auth_error_logs 読み取り時の transient/permanent 分離 (503 vs 500) | P2, enhancement | **#4 silent-failure-hunter rating 7** + **ADR-031 Phase 1 制約に既記載の後続対応** |
+| #312 | Sub-Issue A: Tenant スキーマ拡張 (gcipTenantId + useGcip) | P1 | **#5 ユーザー明示指示**（`/impl-plan` で分解 + 並行実装合意） |
+| #313 | Sub-Issue C: UID 紐付け原子性 (CAS + 監査) | P1 | **#5 ユーザー明示指示**（同上） |
+| #316 | Sub-Issue C follow-up: 初回 create 経路の並行 race 対応 | P1 | **#4 Codex review rating 7 + confidence 80**（PR #315 レビュー時に発見、ADR-031 §UID保持戦略の未対応部分） |
 
 ### 主要変更の要点
 
-#### PR #305 (E2E 409 session_force_exited 解消)
-- `e2e/playwright.config.ts` から `PAUSE_TIMEOUT_MS: "5000"` 設定を削除（デフォルト 15分を使用）
-- 項目4 (pause_timeout 強制退室) は `test.skip` 済みで短縮設定不要だったが、CI の allowlist 再チェック追加 (PR #284) で pause→play 間隔が 5秒を超えて force-exit 誤発動していた
-- `e2e/tests/attendance-api.spec.ts` のヘッダコメントを時制明確化 + 項目4 復活時の再注入手順を明記
+#### PR #314 (Sub-Issue A: Tenant スキーマ拡張)
+- `TenantMetadata` + `SuperTenantListItem` に `gcipTenantId: string | null` + `useGcip: boolean` 追加
+- 新規テナント作成時の初期値は `{null, false}`（非 GCIP でカナリア展開前）
+- `PATCH /super/tenants/:id` で 2 フィールド更新可能（super-admin のみ）:
+  - 整合性ガード: `useGcip=true` は `gcipTenantId !== null` を要求（400 `gcip_tenant_id_required`）
+  - 前後空白は自動 trim、空文字/whitespace-only は 400 `invalid_gcip_tenant_id`
+  - **Firestore 内一意性検証**: 他テナント重複時 409 `gcip_tenant_id_conflict`（Codex BLOCKING 指摘対応、ADR-031 認証サイロ分離原則）
+- `parseTenantGcipFields` helper で default 値読み取りを 4 箇所で統一（/simplify 指摘反映）
+- 11 テスト追加（バリデーション 4 + POST 初期値 1 + PATCH 正常系 3 + 一意性 2 + Partial Update 1）
 
-#### PR #306 (Issue #290 follow-up: NODE_ENV=production 明示)
-- `.github/workflows/deploy.yml` の API service `ENV_VARS` の先頭に `NODE_ENV=production` を追加
-- K_SERVICE 自動注入で既に fail-safe は発火するが、ローカル再現・他デプロイ経路での defense-in-depth 強化
-- コメントで意図（Issue #290 fail-safe の二重防御）を明示
+#### PR #315 (Sub-Issue C: UID 紐付け原子性 CAS)
+- `DataSource.setUserFirebaseUidIfUnset` を I/F + Firestore (`runTransaction`) + InMemory の 3 実装で追加
+- `SetFirebaseUidResult` discriminated union (4 状態: updated / already_set_same / conflict / not_found)
+- `tenant-auth.ts` の email fallback で `updateUser({firebaseUid})` を CAS 呼び出しに置換
+  - `status: conflict` → 403 `uid_reassignment_blocked`（既存 UID と異なる UID は silent 上書きしない）
+  - `status: not_found` → 403 `uid_cas_user_not_found`（稀: 並行 DELETE）
+  - `TenantAccessDenialReason` union に 2 reason 追加
+- UID 紐付けインシデントは `platform_auth_error_logs` にも tenant 横断で記録（super-admin 監視用、Evaluator BLOCKING 指摘対応）
+- 型不整合 `firebaseUid` 検知 throw + 空文字引数 precondition throw（silent-failure-hunter 指摘反映）
+- `assertCasSuccessOrThrow` + `persistPlatformUidConflictLog` helper 抽出（code-simplifier 指摘反映）
+- 12 テスト追加（DataSource CAS 7 + tenant-auth 5）
 
-#### PR #307 (E2E Request context disposed 解消)
-- `e2e/playwright.config.ts` の `timeout: 60000` → `180000`（3分）
-- PR #305 で 409 は解消したが、CI の 1 リクエスト当たり 7-9 秒遅延で 60秒 timeout を超過 → `apiRequestContext.get: Request context disposed` が発生
-- Issue #308 として根本調査を別 Issue 化（allowed_emails 再チェック O(n) / logger 同期書き込み等の切り分け）
-- 備考: CLAUDE.md Debug Protocol「同一機能 3件連続 → 元 PR 再レビュー」の 2件目（#305 → #307）。3件目で tenant-auth.ts の allowlist 再チェック設計自体を再評価
+### Quality Gate 検証結果
 
-#### PR #309 (Issue #299: platform_auth_error_logs 読み取り API)
-- `DataSource.getPlatformAuthErrorLogs(filter?)` を I/F / Firestore / InMemory の 3 実装に追加
-- `GET /api/v2/super/platform/auth-errors` を super-admin 限定で公開
-  - filter: email / startDate / endDate / limit
-  - invalid date → 400 `invalid_start_date` / `invalid_end_date`
-  - limit 1-500 clamp、不正値で 100 フォールバック
-  - startDate > endDate → 空配列（400 を返さない）
-  - Response key `platformAuthErrorLogs`（tenant scoped と明示分離）
-- `firestore.indexes.json` に `(email ASC, occurredAt DESC)` 複合 index を宣言（CI/CD で自動デプロイ済み）
-- ADR-031 Phase 1 制約の「admin UI 未実装」記述を打消線 + 解消記述へ更新
-- docs/api.md に Super Admin プラットフォーム認証エラーログ API セクション追加
-- Evaluator 指摘（try-catch / limit=501 端点 / InMemory clamp guard）反映済み
-- silent-failure-hunter 指摘（エラーログ情報強化 / NaN Date guard）反映済み、transient/permanent 分離は Issue #310 に分離
+| ゲート | #314 | #315 |
+|-------|------|------|
+| `/simplify` (reuse/quality/efficiency 3 並列) | ✅ helper 抽出 / 整合性コメント強化 | ✅ helper 抽出 / 型不整合 guard |
+| `/safe-refactor` (型安全性・エラー処理) | ✅ gcipTenantId trim 追加 | ✅ 独立 try/catch 確認 |
+| **Evaluator 分離** (5 ファイル+ 新機能) | ✅ APPROVE_WITH_REVISIONS → 反映 | ✅ REQUEST_CHANGES → 反映 |
+| `/review-pr` 6 エージェント並列 | ✅ Critical 2 + Important 2 反映 | ✅ Important 6 反映 |
+| `/codex review` セカンドオピニオン | ✅ BLOCKING 1 (gcipTenantId 一意性) 反映 | ✅ IMPORTANT 1 (初回 create race) → #316 follow-up |
+| CI (Build / Lint / Test / Type Check) | ✅ 全 PASS | ✅ 全 PASS |
 
 ### レビュー対応サマリ
 
-- **PR #305 / #306 / #307**: code-reviewer レビュー（小規模のため単独エージェント）
-  - #305: CLAUDE.md 準拠確認、Suggestion 3 件（項目4 復活手順 / Issue 番号参照 / webServer.timeout 整合）反映
-  - #306: Suggestion 4 件すべて confidence 低で非ブロッキング、既存 pattern と整合
-  - #307: Suggestion 3 件（Issue #308 起票と番号参照 / webServer.timeout 差分注記）反映
-- **PR #309**: **Codex plan 相談 + Evaluator 分離 + /review-pr 4 エージェント = 計 6 レビュー**
-  - Codex plan (AC 拡充): `startDate > endDate` / `limit` clamp / invalid date / 空結果 / PII 境界 を AC に追加（AC6→AC13）
-  - Evaluator: `APPROVE_WITH_REVISIONS` → **try-catch 追加 / limit=501 HTTP 端点テスト / InMemory `<1` clamp guard / `firebaseErrorCode` assertion 強化** を全反映
-  - /review-pr (code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer): **Important 指摘反映**（エラーログ errorType + firebaseErrorCode + filter パラメータ追加 / InMemory NaN Date guard / コメント rot 修正 3 箇所）、**transient/permanent 分離は Issue #310 に分離**
+#### PR #314 の BLOCKING / Critical 対応
+1. **Evaluator BLOCKING**: AC#7 統合テスト 5 パターン不整合（「true 正常」「Partial Update 保持」未テスト） → 正常系 3 テスト追加
+2. **Evaluator IMPORTANT**: gcipTenantId trim なし保存 → Phase 3 照合整合性のため自動 trim 追加
+3. **comment-analyzer Critical**: PATCH ガード「ケース a」コメント誤記 → 修正
+4. **pr-test-analyzer Critical (rating 8)**: Case (b) 未テスト → 拒否テスト追加
+5. **Codex BLOCKING (REJECT)**: gcipTenantId 一意性制約未実装 → PATCH で Firestore query + 409 拒否 + 2 テスト
 
-## 品質ゲート結果
+#### PR #315 の BLOCKING / Important 対応
+1. **Evaluator BLOCKING**: AC#4 `platform_auth_error_logs` 未記録 → `handleTenantAccessDenied` に platform 書き込み追加
+2. **Evaluator Critical**: `not_found` 時の reason 誤マップ → `uid_cas_user_not_found` 専用 reason 追加
+3. **silent-failure-hunter I-2**: 型不整合 firebaseUid の silent 受け入れ → throw + logger.error
+4. **type-design #2 / pr-test #1**: firebaseUid 空文字引数 + テスト → precondition throw + 2 テスト追加
+5. **pr-test #2**: platform 書き込み失敗時の main フロー継続テスト追加
+6. **code-simplifier HIGH**: `assertCasSuccessOrThrow` + `persistPlatformUidConflictLog` helper 抽出
+
+## 品質ゲート結果 (最終)
 
 | ゲート | 結果 |
 |--------|------|
 | `npm run lint` | ✅ PASS |
-| `npm run type-check` | ✅ PASS (4 workspaces) |
-| `npm test` | ✅ API 571 PASS + Web 33 PASS（Session 5 541 → Session 6 571、+30 新規: 14 route + 7 firestore + 7 in-memory + 2 NaN guard） |
-| CI (PR #305 / #306 / #307 / #309) | ✅ Lint / Type Check / Test / Build 全 PASS |
-| **main E2E Tests** | ✅ **全緑（PR #305/#307 で 9連続 failure を解消、#309 マージ後も緑維持）** |
-| Quality Gate | ✅ Evaluator 分離 + /review-pr 4 agent + Codex plan review の三重検証 |
+| `npm run type-check` (全 4 workspace) | ✅ PASS |
+| `npm test -w @lms-279/api` (sequential) | ✅ 583 passed (既存 571 + 新規 12 for PR #315、PR #314 merge 後の main は別計測) |
+| main CI (PR #314 / #315 両 push 時) | ✅ 全 SUCCESS (Build 53s / Lint 36-38s / Test 55-59s / Type Check 39-42s) |
+
+**Known issue**: ローカル並列テスト実行は flaky (Issue #308 の CI 遅延と同根)。sequential (`--fileParallelism=false`) または単独ファイル実行で全 PASS を確認。CI clean 環境では常時 PASS。
 
 ## main 現状
 
 ```
+24b49b6 feat(auth): findOrCreateTenantUser の UID 紐付け原子性 CAS 化 (Issue #313) (#315)
+a7b9116 feat(tenant): Tenant スキーマに gcipTenantId + useGcip 追加 (Issue #312) (#314)
+fdbbdc8 docs(handoff): Session 6 (2026-04-22) ハンドオフ更新 (#311)
 094ce4d feat(super-admin): platform_auth_error_logs 読み取り API 追加 (Issue #299) (#309)
-7cd3c6f fix(e2e): playwright test timeout を 60s → 180s に拡大（CI flake 解消） (#307)
-786655e feat(deploy): API ENV_VARS に NODE_ENV=production を明示 (Issue #290 follow-up) (#306)
-b4489e9 fix(e2e): PAUSE_TIMEOUT_MS 設定削除で CI フレーク解消 (#305)
-4b16bd1 docs(handoff): Session 5 (2026-04-22) ハンドオフ更新 (#304)
 ```
 
-- CI: ✅ CI / Deploy to Cloud Run / E2E Tests すべて success（24769482587 / 24769482597 / 24769482602）
-- Firestore indexes: ✅ `platform_auth_error_logs` 複合 index 自動デプロイ済み
-- Cloud Run: ✅ API service に `NODE_ENV=production` 反映予定（次回 API デプロイ時に適用、本 session で触れたのは deploy.yml のみ）
-  - 次セッション確認コマンド: `gcloud run services describe api --region=asia-northeast1 --format='value(spec.template.spec.containers[0].env)' | grep NODE_ENV`
+- **working tree**: clean
+- **残留 Node プロセス**: なし ✅
+- **Deploy to Cloud Run**: PR #315 merge 時に自動実行中（次セッション開始時に CI 状態確認推奨）
 
 ## 次セッションの着手候補（優先度順）
 
 ### 🔴 P0 残
 
-1. **Issue #272 Phase 3** (GCIP 移行本体) — `/impl-plan` で計画化が必要
-   - 前提作業: ADR-031 As-Is 表の 🟡「UID 紐付けの原子性」のみ残存
-   - **ユーザー側作業待ち**: Phase 1.1 (GCP Console OAuth External 化) + 本番 `normalize-users-email.ts` dry-run
+**Issue #272 Phase 3 (GCIP 移行本体)** — 引き続きクリティカルパス。Phase 1.1 + Phase 3 前提作業はユーザー側ブロッカー継続（下記）。
 
-### 🟢 P2 並行着手可能
+### 🟡 P1 候補 (Phase 3 Sub-Issue、着手可能)
 
-2. **Issue #308** (perf): E2E CI リクエスト遅延 7-9秒/request の根本調査
-   - PR #307 の 180秒 timeout を 90秒に戻せるようにする
-   - allowed_emails 再チェックの O(n) スキャン / in-memory init / logger 書き込み / admin SDK init の切り分け
-3. **Issue #310** (reliability): platform_auth_error_logs 読み取り時の transient/permanent 分離
-   - ADR-031 Phase 1 制約の最後の残り項目を close
-   - `isTransientFirestoreError` util 抽出 → `/admins/:email` DELETE と同等の 503/500 分岐
-4. **Issue #281** (refactor): allowed_emails 監査 CLI の純粋関数分割と型強化（独立性高）
+| # | Sub-Issue | 内容 | 依存 |
+|---|-----------|------|------|
+| **#316** | Sub-Issue C follow-up | 初回 create 経路の並行 race 対応（sentinel doc / atomic `findOrCreateUserByEmailAndUid`） | Sub-Issue C (#313) マージ済（前提充足） |
+| 未起票 | Sub-Issue B | Public tenant-info endpoint (認証不要、ログイン前テナント解決用) | Sub-Issue A (#312) マージ済 |
+| 未起票 | Sub-Issue D | GCIP Tenant 作成スクリプト (scripts/create-gcip-tenants.ts) | Sub-Issue A (#312) マージ済 |
+| 未起票 | Sub-Issue E | BE GCIP 経路の tenant 整合性チェック (`decodedToken.firebase.tenant` 検証) | Sub-Issue A + C マージ済 |
+| 未起票 | Sub-Issue F | FE `auth.tenantId` + ログイン前テナント解決 | Sub-Issue B |
+| 未起票 | Sub-Issue G | tenant 作成時の GCIP 自動化 | Sub-Issue A + E |
+| 未起票 | Sub-Issue H | Staging + カナリア + 全テナント移行 | 全 Sub-Issue |
 
-### 🟡 Phase 5
+**推奨**: 次セッションは **#316 → Sub-Issue B/D 並行 → Sub-Issue E** の順で着手。依存グラフ上のクリティカルパス順。
 
-5. Issue #276 / #275 / #274: Phase 5 運用改善（allowed_emails 削除時のセッション失効 / 管理画面 UX / 可視化）
+### 🟢 P2 残 (Phase 3 と並行可)
+
+- **#308**: E2E CI リクエスト遅延 7-9 秒/request 根本調査（CLAUDE.md Debug Protocol 3 件目警告対象）
+- **#310**: platform_auth_error_logs 読み取り時の transient/permanent 分離 (503 vs 500)
+- **#281**: allowed_emails 監査 CLI refactor
+- **#274 / #275 / #276**: Phase 5 allowed_emails 運用改善 (可視化 / UX / セッション失効)
 
 ## ブロッカー / ユーザー側タスク（継続）
 
 | 項目 | 内容 | 影響 |
 |------|------|------|
-| GCP Console: OAuth 同意画面 External 化 | Issue #272 Phase 1.1 | sayori-maeda@kanjikai.or.jp 再ログイン復旧 + #272 Phase 3 の前提 |
-| 本番 `normalize-users-email.ts` dry-run / execute | PR #287 マージ済み、GCIP 移行前に推奨 | users.email 大文字/空白混入の正規化 |
+| GCP Console: OAuth 同意画面 External 化 | Issue #272 Phase 1.1 | sayori-maeda@kanjikai.or.jp 再ログイン復旧 + Phase 3 前提 |
+| 本番 `normalize-users-email.ts` dry-run / execute | PR #287 マージ済（Session 5）、Phase 3 移行前に推奨 | users.email 大文字/空白混入の正規化 |
+| GCP Identity Platform Essentials+ Tier 有効化 + 費用試算 | Sub-Issue H (Staging) の前提 | MAU 次第で数千円〜数万円/月 |
+| Staging 環境の Identity Platform 有効化 | Sub-Issue H の staging 検証の前提 | - |
 
 ## ADR / ドキュメント状態
 
-- **ADR-031**: Phase 1 制約セクション更新済み (PR #309)
-  - `platform_auth_error_logs` admin UI 読み取り経路の解消を追記（Issue #299 close）
-  - Firestore 複合 index `(email ASC, occurredAt DESC)` 対応根拠を明記
-  - transient/permanent 分離の後続対応として Issue #310 を参照
-- **docs/api.md** 更新済み (PR #309)
-  - Super Admin プラットフォーム認証エラーログ API セクション追加
-  - クエリパラメータ仕様 / レスポンス例 / 認可境界を記載
-- **docs/handoff/LATEST.md**: 本ファイル更新 (Session 6)
-- **handoff サイズ**: 本ファイル（<500 行目標 OK）
+- **ADR-031** As-Is 表更新済み（本 handoff PR で更新）:
+  - 「UID 紐付けの原子性」行: 🟡 → ✅（Issue #313 / PR #315 で対応済み、#316 で follow-up 明記）
+  - 「Tenant スキーマ拡張」行: Sub-Issue A 対応済み（PR #314 で追加）
+- **docs/handoff/LATEST.md**: 本ファイル更新 (Session 7)
+- **handoff サイズ**: 本ファイル（500 行以下目標 OK）
 
 ## Issue Net 変化（CLAUDE.md KPI）
 
 ```
-Close 数: 1 件 (#299)
-起票数: 2 件 (#308, #310)
-Net: +1 件
+Close 数: 2 件 (#312, #313)
+起票数: 3 件 (#312, #313, #316)
+Net: +1 件 (#316 のみ残存)
 ```
 
 **Net +1 の正当性**:
-- **#308** (CI 性能): PR #307 で暫定対処した timeout 拡大の根本原因（CI 1 req 7-9秒遅延）を恒久解消するため。triage #3 (CI/リリース判断を壊す) 該当。対症療法の再発防止に必須。
-- **#310** (transient/permanent 分離): PR #309 silent-failure-hunter Important #1 (rating 7) 反映。ADR-031 Phase 1 制約で既に「別 Issue で対応」と明記されていた既知課題を正式 Issue 化。triage #4 (review agent rating ≥ 7 かつ confidence ≥ 80) 該当。
+- **#312, #313** は同セッション内で起票 → 実装 → close のサイクル完結。`/impl-plan` 分解の成果物として必須の Issue 化（triage #5）
+- **#316** (Codex review IMPORTANT): triage #4 (rating ≥ 7 かつ confidence ≥ 80) 該当。Sub-Issue C スコープ外の新規発見で、ADR-031 §UID保持戦略 の未対応部分を明示化。本来 ADR-031 に暗黙的に含まれていた要件を Issue tracker 上で可視化した形
 
-**rating 5-6 の review agent 提案は全て PR コメント / TODO / 本 handoff に吸収**（pr-test-analyzer の AC4 InMemory tenant 非参照検証 / AC11 Firestore-InMemory 挙動一致 / AC8 inclusive 境界値）。CLAUDE.md `feedback_issue_triage.md` 基準準拠。
+**rating 5-6 の review agent 提案は全て PR コメント / follow-up タスク / 本 handoff に吸収**:
+- type-design-analyzer Important #1 (exhaustiveness check): 5 状態未満で ROI 低、別 PR
+- silent-failure-hunter I-1 (transient/permanent 分類): 既存 PATCH 全体の課題、ADR 横断対応
+- silent-failure-hunter I-3 (構築/書き込み区別): 運用影響軽微、Phase 5 cleanup
+- pr-test-analyzer Gap #3-5 (rollback / dev モード non-CAS / UID hit 経路): regression 発生頻度低、必要時に後続 PR
+- code-reviewer Important #1 (runTransaction retry JSDoc): doc 追加のみ、別 PR
 
 ## 作業ブランチ状態
 
 ```
-main: 094ce4d feat(super-admin): platform_auth_error_logs 読み取り API 追加 (Issue #299) (#309)
+main: 24b49b6 (#315 merged) / a7b9116 (#314 merged)
 
-docs/handoff-session-6-2026-04-22 (本ファイル更新用、PR 作成予定)
+docs/handoff-session-7-2026-04-22 (本ファイル更新用、PR 作成予定)
 ```
 
 main 直接 push なし、destructive 操作なし、残留 Node プロセスなし ✅。
 
 ## 参考: 今セッションで使った規範 / スキル
 
-- `/catchup` — セッション開始時の状況確認 + 次のアクション提示
-- `/impl-plan` — Issue #299 の計画化（AC 13 項目 / タスクグラフ / 影響範囲）
-- `/review-pr` (pr-review-toolkit) — PR #309 で 4 エージェント並列（code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer）
-- `/codex plan` (MCP 版) — Issue #299 計画段階でのセカンドオピニオン（AC 拡充で 6→13 項目）
-- `rules/quality-gate.md` — Evaluator 分離プロトコル（PR #309 で 10 ファイル変更該当、APPROVE_WITH_REVISIONS → 反映）
-- `feedback_pr_merge_authorization.md` — PR 番号単位で明示認可を受けてからマージ（#305/#306/#307/#309 すべてユーザー承認後にマージ）
-- `feedback_issue_triage.md` — Net +1 だが triage 基準該当の起票のみ、rating 5-6 は PR コメント / handoff に吸収
-- `CLAUDE.md` Debug Protocol — 「同一機能 3件連続修正」の 2件目で警戒警告、3件目で allowlist 再チェック設計を再評価
+### 新規に活用した規範・スキル
+- **`/impl-plan`**: Issue #272 Phase 3 を 9 Sub-Issue に分解 + 依存グラフ + AC 策定（本セッションで一番インパクトのあった skill 起動）
+- **`/codex review` (MCP 版)**: PR #314 / #315 両方でセカンドオピニオン取得、実際に BLOCKING 発見（gcipTenantId 一意性、初回 create race）→ 単独 review では見つからない盲点をカバー
+- **Evaluator 分離プロトコル** (`rules/quality-gate.md`): 両 PR で REQUEST_CHANGES / APPROVE_WITH_REVISIONS を受け、すべて反映
+
+### 繰り返し活用した規範
+- **`/review-pr`** 6 エージェント並列: code-reviewer / pr-test-analyzer / silent-failure-hunter / type-design-analyzer / comment-analyzer / code-simplifier
+- **`/simplify`** 3 並列 (reuse / quality / efficiency): helper 抽出の判断に活用
+- **`feedback_pr_merge_authorization.md`**: PR 番号単位で明示認可（#314 / #315 個別に承認取得）
+- **`feedback_issue_triage.md`**: Net +1 だが全起票が triage 基準該当、rating 5-6 は吸収
+
+### 学び / 次セッションへの引き継ぎ
+- **pre-push hook flaky**: Issue #308 既知の並列実行 flaky が pre-push quality check でも block 発生。single fork 実行 or retry で解消可能だが、恒久対応は #308 で
+- **ADR-031 As-Is 表の並行更新**: 同じ行を触る PR 複数並行 (A + C) は conflict リスクあり → C 側は ADR 更新を見送り、handoff PR で一括更新のパターンが実用的
+- **Codex セカンドオピニオンの価値**: 5 層レビュー後でも新しい BLOCKING を発見（Sub-Issue A で gcipTenantId 一意性、Sub-Issue C で初回 create race）。大規模 PR では必須と再確認
