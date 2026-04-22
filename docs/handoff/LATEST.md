@@ -1,12 +1,14 @@
-# Session Handoff — 2026-04-22 (Session 5)
+# Session Handoff — 2026-04-22 (Session 6)
 
 ## TL;DR
 
-**3 PR 連続マージ達成**。Session 4 の P2 security 系 3 件（#294 / #290 / #296）を全てクローズし、ADR-031「allowed_emails 境界」を `middleware/tenant-auth.ts` + `middleware/super-admin.ts` + `routes/help-role.ts` + `routes/tenants.ts` の **4 経路で統一**。本番誤有効化 fail-safe (NODE_ENV=production + K_SERVICE 併用判定) と DELETE /super/admins の fail-closed 化も反映済み。これで **P2 security 系は残り #290 follow-up のみ**、P0 は #272 (GCIP 移行 Phase 3) が引き続き唯一。
+**4 PR 連続マージ + main CI 完全緑化**。Session 5 の handoff で「次候補」として残っていた **Issue #299 (platform_auth_error_logs 読み取り経路)** と **#290 follow-up (deploy.yml NODE_ENV=production 明示)** を完了。加えて session 開始時点で main に残っていた E2E Tests の **9連続 failure**（`88a90cb` 〜 `786655e`、Session 5 handoff に未記載）を 2 PR で緑化。Issue Net は +1（後述）だが、起票はいずれも triage 基準該当（CI 性能 / ADR-031 既記載の後続対応）。
 
-- **マージ完了** (今セッション): PR #301 (#294 Close), PR #302 (#290 Close), PR #303 (#296 Close)
-- **新規 Issue**: 0 件
-- **Issue Net**: -3（Close 3 件 / 起票 0 件）
+- **マージ完了** (今セッション): PR #305, #306, #307, #309
+- **新規 Issue**: 2 件 (#308 CI 性能, #310 transient/permanent)
+- **Close**: 1 件 (#299)
+- **Issue Net**: +1（triage 基準該当の起票、詳細は下記）
+- **Open 推移**: Session 5 末 6 件 → Session 6 末 7 件 (P0:1 / P2:6)
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -14,63 +16,75 @@
 # 1. 状況復元
 cat docs/handoff/LATEST.md
 
-# 2. 現在の OPEN Issue（P0: 1 / P1: 0 / P2: 5）
+# 2. 現在の OPEN Issue（P0: 1 / P1: 0 / P2: 6）
 gh issue list --state open --limit 15
 
-# 3. ユーザー側作業の確認（GCP Console / 本番 Firestore dry-run など）
+# 3. main CI が緑であることを確認
+gh run list --branch main --limit 3
 ```
 
 ---
 
-## セッション成果物 (2026-04-22 Session 5)
+## セッション成果物 (2026-04-22 Session 6)
 
 ### マージ完了 PR
 
 | # | Issue | Title | Merge Commit |
 |---|-------|-------|-------------|
-| #301 | #294 | feat(auth): help-role.ts / tenants.ts に verifyIdToken 境界ガード拡張 | `27b803e` |
-| #302 | #290 | feat(auth): NODE_ENV=production で AUTH_MODE=firebase を必須化 | `1521ef7` |
-| #303 | #296 | feat(auth): DELETE /super/admins を fail-closed 化 + getAllSuperAdminsStrict 追加 | `19580e5` |
+| #305 | - | fix(e2e): PAUSE_TIMEOUT_MS 設定削除で CI フレーク解消 | `b4489e9` |
+| #306 | #290 follow-up | feat(deploy): API ENV_VARS に NODE_ENV=production を明示 | `786655e` |
+| #307 | - | fix(e2e): playwright test timeout を 60s → 180s に拡大 | `7cd3c6f` |
+| #309 | #299 | feat(super-admin): platform_auth_error_logs 読み取り API 追加 | `094ce4d` |
+
+### 起票 Issue
+
+| # | Title | Label | 起票理由（triage 基準） |
+|---|-------|-------|----------------------|
+| #308 | E2E CI でリクエスト遅延 7-9 秒/request の根本調査 | P2, enhancement | **#3 CI/リリース判断を壊す可能性**（PR #307 で暫定対処済みだが、timeout を重ねる対症療法を止めるため根本調査が必要） |
+| #310 | platform_auth_error_logs 読み取り時の transient/permanent 分離 (503 vs 500) | P2, enhancement | **#4 silent-failure-hunter rating 7** + **ADR-031 Phase 1 制約に既記載の後続対応** |
 
 ### 主要変更の要点
 
-#### PR #301 (Issue #294): verifyIdToken 4 経路統一
-- `routes/help-role.ts` と `routes/tenants.ts` の `verifyIdToken` 直接呼び出しに `email_verified=true` / `sign_in_provider="google.com"` / `checkRevoked=true` を追加
-- help-role.ts 不適合時: `helpLevel: "student"` フォールバック（UX 維持）+ `errorType: help_role_guard_failed` / `reason` 構造化ログ
-- tenants.ts 不適合時: 403 で統一文言（ユーザー列挙防止）+ `logger.warn` で `errorType: tenant_creation_denied` / `reason`
-- tenants.ts の `verifyAuthToken` catch/warn を `console.*` → `logger.*` に移行（Issue #292 形式）
-- 新規 integration テスト 14 ケース（`__tests__/help-role.test.ts` + `__tests__/tenants.test.ts`）
-- ADR-031 As-Is 表 + スコープ注記を 4 経路適用済みに更新
+#### PR #305 (E2E 409 session_force_exited 解消)
+- `e2e/playwright.config.ts` から `PAUSE_TIMEOUT_MS: "5000"` 設定を削除（デフォルト 15分を使用）
+- 項目4 (pause_timeout 強制退室) は `test.skip` 済みで短縮設定不要だったが、CI の allowlist 再チェック追加 (PR #284) で pause→play 間隔が 5秒を超えて force-exit 誤発動していた
+- `e2e/tests/attendance-api.spec.ts` のヘッダコメントを時制明確化 + 項目4 復活時の再注入手順を明記
 
-#### PR #302 (Issue #290): 本番誤有効化 fail-safe
-- `middleware/tenant-auth.ts` / `middleware/super-admin.ts` のモジュールトップレベルで `isProductionRuntime() && AUTH_MODE !== "firebase"` を検知して Error throw
-- **本番 runtime 判定**: `NODE_ENV` の `.trim().toLowerCase()` 正規化（Production/末尾空白耐性）**+ Cloud Run 自動注入の `K_SERVICE` 併用** (defense-in-depth)
-  - Codex HIGH 指摘: 現行 `deploy.yml` は `NODE_ENV=production` 未設定 → K_SERVICE フォールバックで抜け穴解消
-- `docs/runbook/auth-mode-production-check.md` 新設（本番デプロイチェックリスト + 本番 runtime 判定 + 復旧手順）
-- 新規テスト 20 ケース（describe.each で 2 モジュール × 10 シナリオ）
-- **follow-up**: `.github/workflows/deploy.yml` への `NODE_ENV=production` 明示追加は PreToolUse hook でブロックされ別 PR に繰り延べ（K_SERVICE フォールバックで HIGH は解消済み）
+#### PR #306 (Issue #290 follow-up: NODE_ENV=production 明示)
+- `.github/workflows/deploy.yml` の API service `ENV_VARS` の先頭に `NODE_ENV=production` を追加
+- K_SERVICE 自動注入で既に fail-safe は発火するが、ローカル再現・他デプロイ経路での defense-in-depth 強化
+- コメントで意図（Issue #290 fail-safe の二重防御）を明示
 
-#### PR #303 (Issue #296): DELETE /super/admins fail-closed 化
-- Firestore 障害時の silent fallback で env admin のみ返却 → DELETE の `.find()` で実在 firestore admin が 404 誤認される事故リスクを解消
-- **採用設計 (選択肢 C)**: GET /admins は silent 維持（UI 可用性）、DELETE /admins は fail-closed（誤判断防止）、API 契約 (`{ admins: SuperAdminRecord[] }`) 変更なし
-- 新関数 `getAllSuperAdminsStrict()`: Firestore 障害時 `SuperAdminFirestoreUnavailableError` throw
-- private helper `buildSuperAdminList(snapshot)` 抽出で silent / strict 両関数のループ重複を解消
-- `addSuperAdmin` / `removeSuperAdmin` / DELETE 成功ログを `console.*` → `logger.*` に統一
-- silent-failure-hunter HIGH 2 件反映:
-  - H-1: DELETE catch の想定外例外に `errorType: super_admin_delete_internal_error` 構造化ログ + 500 明示返却
-  - H-2: `decodeURIComponent` を try で保護し URIError → 400 に変換
-- 新規ユニットテスト 5 ケース
+#### PR #307 (E2E Request context disposed 解消)
+- `e2e/playwright.config.ts` の `timeout: 60000` → `180000`（3分）
+- PR #305 で 409 は解消したが、CI の 1 リクエスト当たり 7-9 秒遅延で 60秒 timeout を超過 → `apiRequestContext.get: Request context disposed` が発生
+- Issue #308 として根本調査を別 Issue 化（allowed_emails 再チェック O(n) / logger 同期書き込み等の切り分け）
+- 備考: CLAUDE.md Debug Protocol「同一機能 3件連続 → 元 PR 再レビュー」の 2件目（#305 → #307）。3件目で tenant-auth.ts の allowlist 再チェック設計自体を再評価
+
+#### PR #309 (Issue #299: platform_auth_error_logs 読み取り API)
+- `DataSource.getPlatformAuthErrorLogs(filter?)` を I/F / Firestore / InMemory の 3 実装に追加
+- `GET /api/v2/super/platform/auth-errors` を super-admin 限定で公開
+  - filter: email / startDate / endDate / limit
+  - invalid date → 400 `invalid_start_date` / `invalid_end_date`
+  - limit 1-500 clamp、不正値で 100 フォールバック
+  - startDate > endDate → 空配列（400 を返さない）
+  - Response key `platformAuthErrorLogs`（tenant scoped と明示分離）
+- `firestore.indexes.json` に `(email ASC, occurredAt DESC)` 複合 index を宣言（CI/CD で自動デプロイ済み）
+- ADR-031 Phase 1 制約の「admin UI 未実装」記述を打消線 + 解消記述へ更新
+- docs/api.md に Super Admin プラットフォーム認証エラーログ API セクション追加
+- Evaluator 指摘（try-catch / limit=501 端点 / InMemory clamp guard）反映済み
+- silent-failure-hunter 指摘（エラーログ情報強化 / NaN Date guard）反映済み、transient/permanent 分離は Issue #310 に分離
 
 ### レビュー対応サマリ
-- **PR #301**: `/review-pr` 5 エージェント (evaluator + code-reviewer + pr-test-analyzer + silent-failure-hunter + comment-analyzer) + `/codex review` = **6 レビュー**
-  - MEDIUM 2 件（logger 統一 / ADR 日付誤記）+ LOW 1 件（tenants.ts コメント誤記）反映済み
-  - Codex GO 判断、4 経路一貫性確認
-- **PR #302**: code-reviewer + silent-failure-hunter + `/codex review`
-  - **Codex HIGH 1 件 (K_SERVICE 抜け穴) 反映**、silent-failure MEDIUM 1 件 (NODE_ENV trim) 反映
-- **PR #303**: code-reviewer + silent-failure-hunter + `/codex review`
-  - code-reviewer HIGH 1 件 (console.log 残存) + MEDIUM 1 件 (DRY 共通化) 反映
-  - silent-failure HIGH 2 件 (throw 構造化ログ + URIError) 反映
-  - Codex GO 判断
+
+- **PR #305 / #306 / #307**: code-reviewer レビュー（小規模のため単独エージェント）
+  - #305: CLAUDE.md 準拠確認、Suggestion 3 件（項目4 復活手順 / Issue 番号参照 / webServer.timeout 整合）反映
+  - #306: Suggestion 4 件すべて confidence 低で非ブロッキング、既存 pattern と整合
+  - #307: Suggestion 3 件（Issue #308 起票と番号参照 / webServer.timeout 差分注記）反映
+- **PR #309**: **Codex plan 相談 + Evaluator 分離 + /review-pr 4 エージェント = 計 6 レビュー**
+  - Codex plan (AC 拡充): `startDate > endDate` / `limit` clamp / invalid date / 空結果 / PII 境界 を AC に追加（AC6→AC13）
+  - Evaluator: `APPROVE_WITH_REVISIONS` → **try-catch 追加 / limit=501 HTTP 端点テスト / InMemory `<1` clamp guard / `firebaseErrorCode` assertion 強化** を全反映
+  - /review-pr (code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer): **Important 指摘反映**（エラーログ errorType + firebaseErrorCode + filter パラメータ追加 / InMemory NaN Date guard / コメント rot 修正 3 箇所）、**transient/permanent 分離は Issue #310 に分離**
 
 ## 品質ゲート結果
 
@@ -78,26 +92,47 @@ gh issue list --state open --limit 15
 |--------|------|
 | `npm run lint` | ✅ PASS |
 | `npm run type-check` | ✅ PASS (4 workspaces) |
-| `npm test` | ✅ API 541 PASS + Web 33 PASS（Session 4 比 +39 新規: 14 + 20 + 5）|
-| CI (PR #301 / #302 / #303) | ✅ Lint / Type Check / Test / Build 全 PASS |
-| Quality Gate | ✅ 6 エージェント + Codex セカンドオピニオンで HIGH 全反映 |
+| `npm test` | ✅ API 571 PASS + Web 33 PASS（Session 5 541 → Session 6 571、+30 新規: 14 route + 7 firestore + 7 in-memory + 2 NaN guard） |
+| CI (PR #305 / #306 / #307 / #309) | ✅ Lint / Type Check / Test / Build 全 PASS |
+| **main E2E Tests** | ✅ **全緑（PR #305/#307 で 9連続 failure を解消、#309 マージ後も緑維持）** |
+| Quality Gate | ✅ Evaluator 分離 + /review-pr 4 agent + Codex plan review の三重検証 |
 
-## 次セッションの着手候補 (優先度順)
+## main 現状
+
+```
+094ce4d feat(super-admin): platform_auth_error_logs 読み取り API 追加 (Issue #299) (#309)
+7cd3c6f fix(e2e): playwright test timeout を 60s → 180s に拡大（CI flake 解消） (#307)
+786655e feat(deploy): API ENV_VARS に NODE_ENV=production を明示 (Issue #290 follow-up) (#306)
+b4489e9 fix(e2e): PAUSE_TIMEOUT_MS 設定削除で CI フレーク解消 (#305)
+4b16bd1 docs(handoff): Session 5 (2026-04-22) ハンドオフ更新 (#304)
+```
+
+- CI: ✅ CI / Deploy to Cloud Run / E2E Tests すべて success（24769482587 / 24769482597 / 24769482602）
+- Firestore indexes: ✅ `platform_auth_error_logs` 複合 index 自動デプロイ済み
+- Cloud Run: ✅ API service に `NODE_ENV=production` 反映予定（次回 API デプロイ時に適用、本 session で触れたのは deploy.yml のみ）
+  - 次セッション確認コマンド: `gcloud run services describe api --region=asia-northeast1 --format='value(spec.template.spec.containers[0].env)' | grep NODE_ENV`
+
+## 次セッションの着手候補（優先度順）
 
 ### 🔴 P0 残
+
 1. **Issue #272 Phase 3** (GCIP 移行本体) — `/impl-plan` で計画化が必要
    - 前提作業: ADR-031 As-Is 表の 🟡「UID 紐付けの原子性」のみ残存
-   - ユーザー側作業待ち: Phase 1.1 (GCP Console OAuth External 化) + 本番 `normalize-users-email.ts` dry-run
+   - **ユーザー側作業待ち**: Phase 1.1 (GCP Console OAuth External 化) + 本番 `normalize-users-email.ts` dry-run
 
 ### 🟢 P2 並行着手可能
 
-2. **#290 follow-up** (小): `.github/workflows/deploy.yml` の ENV_VARS に `NODE_ENV=production` を明示追加（K_SERVICE フォールバックで HIGH は解消済みだが defense-in-depth 推奨。本セッションは PreToolUse hook で未着手）
-3. **Issue #299** (P2 observability): `platform_auth_error_logs` の admin UI 読み取り経路追加（Phase 3 前に解消推奨）
-4. **Issue #281** (P2 refactor): allowed_emails 監査 CLI の純粋関数分割と型強化（独立性高、テスト充実）
-5. **PR #298 H-3** (別 Issue 候補): `super-admin.ts` Firestore transient/permanent 分類（#290 コメントに既出、一律 503 → 分類へ）
+2. **Issue #308** (perf): E2E CI リクエスト遅延 7-9秒/request の根本調査
+   - PR #307 の 180秒 timeout を 90秒に戻せるようにする
+   - allowed_emails 再チェックの O(n) スキャン / in-memory init / logger 書き込み / admin SDK init の切り分け
+3. **Issue #310** (reliability): platform_auth_error_logs 読み取り時の transient/permanent 分離
+   - ADR-031 Phase 1 制約の最後の残り項目を close
+   - `isTransientFirestoreError` util 抽出 → `/admins/:email` DELETE と同等の 503/500 分岐
+4. **Issue #281** (refactor): allowed_emails 監査 CLI の純粋関数分割と型強化（独立性高）
 
 ### 🟡 Phase 5
-6. Issue #276 / #275 / #274: Phase 5 運用改善（allowed_emails 削除時のセッション失効 / 管理画面 UX / 可視化）
+
+5. Issue #276 / #275 / #274: Phase 5 運用改善（allowed_emails 削除時のセッション失効 / 管理画面 UX / 可視化）
 
 ## ブロッカー / ユーザー側タスク（継続）
 
@@ -108,33 +143,36 @@ gh issue list --state open --limit 15
 
 ## ADR / ドキュメント状態
 
-- **ADR-031** 更新済み (PR #301)
-  - As-Is 表の「email_verified チェック」「sign_in_provider 制限」「checkRevoked=true」3 行に Issue #294 の `help-role.ts` / `tenants.ts` 拡張を追記
-  - 「適用スコープ注記」を 4 経路（tenant-auth / super-admin / help-role / tenants）すべて適用済みに更新
-  - 共通ヘルパー化は別 Issue で検討予定を明記
-- **docs/runbook/auth-mode-production-check.md** 新設 (PR #302)
-  - 本番 runtime 判定（NODE_ENV 正規化 + K_SERVICE 併用）
-  - Cloud Run 環境変数の確認コマンド + IaC 設定一致確認
-  - リビジョン切り戻し時の注意 + 起動失敗時の挙動 + 復旧手順
-- **CLAUDE.md**: Phase 11 完了、変更なし
+- **ADR-031**: Phase 1 制約セクション更新済み (PR #309)
+  - `platform_auth_error_logs` admin UI 読み取り経路の解消を追記（Issue #299 close）
+  - Firestore 複合 index `(email ASC, occurredAt DESC)` 対応根拠を明記
+  - transient/permanent 分離の後続対応として Issue #310 を参照
+- **docs/api.md** 更新済み (PR #309)
+  - Super Admin プラットフォーム認証エラーログ API セクション追加
+  - クエリパラメータ仕様 / レスポンス例 / 認可境界を記載
+- **docs/handoff/LATEST.md**: 本ファイル更新 (Session 6)
 - **handoff サイズ**: 本ファイル（<500 行目標 OK）
 
 ## Issue Net 変化（CLAUDE.md KPI）
 
 ```
-Close 数: 3 件 (#294, #290, #296)
-起票数: 0 件
-Net: -3 件
+Close 数: 1 件 (#299)
+起票数: 2 件 (#308, #310)
+Net: +1 件
 ```
 
-✅ **Net ≤ 0 達成**。rating 5-6 の review agent 提案は全て PR コメント / 既存 Issue 追記で処理。HIGH 指摘は PR 内で全修正。
+**Net +1 の正当性**:
+- **#308** (CI 性能): PR #307 で暫定対処した timeout 拡大の根本原因（CI 1 req 7-9秒遅延）を恒久解消するため。triage #3 (CI/リリース判断を壊す) 該当。対症療法の再発防止に必須。
+- **#310** (transient/permanent 分離): PR #309 silent-failure-hunter Important #1 (rating 7) 反映。ADR-031 Phase 1 制約で既に「別 Issue で対応」と明記されていた既知課題を正式 Issue 化。triage #4 (review agent rating ≥ 7 かつ confidence ≥ 80) 該当。
+
+**rating 5-6 の review agent 提案は全て PR コメント / TODO / 本 handoff に吸収**（pr-test-analyzer の AC4 InMemory tenant 非参照検証 / AC11 Firestore-InMemory 挙動一致 / AC8 inclusive 境界値）。CLAUDE.md `feedback_issue_triage.md` 基準準拠。
 
 ## 作業ブランチ状態
 
 ```
-main: 19580e5 feat(auth): DELETE /super/admins を fail-closed 化 (Issue #296) (#303)
+main: 094ce4d feat(super-admin): platform_auth_error_logs 読み取り API 追加 (Issue #299) (#309)
 
-docs/handoff-session-5-2026-04-22 (本ファイル更新用、PR 作成予定)
+docs/handoff-session-6-2026-04-22 (本ファイル更新用、PR 作成予定)
 ```
 
 main 直接 push なし、destructive 操作なし、残留 Node プロセスなし ✅。
@@ -142,9 +180,10 @@ main 直接 push なし、destructive 操作なし、残留 Node プロセスな
 ## 参考: 今セッションで使った規範 / スキル
 
 - `/catchup` — セッション開始時の状況確認 + 次のアクション提示
-- `/review-pr` (pr-review-toolkit) — 複数エージェント並列レビュー（PR #301 は 5 + 1 = 6 レビュー）
-- `/codex review` (MCP 版) — 大規模 PR (3 ファイル+ or 200 行+) のセカンドオピニオン。PR #301-#303 すべてで実施し、**PR #302 で Codex 単独 HIGH 発見 (K_SERVICE 抜け穴)**、他エージェントで検出できなかった観点をカバー
-- `rules/quality-gate.md` — Evaluator 分離プロトコル（PR #301 で発動、5 ファイル変更該当）
-- `feedback_pr_merge_authorization.md` — PR 番号単位で明示認可を受けてからマージ（#301/#302/#303 すべてユーザー承認後にマージ）
-- `feedback_issue_triage.md` — 新規起票ゼロで net -3 達成
-- `rules/error-handling.md` §1 — エラーハンドラ自体のエラー耐性（PR #303 の DELETE catch に構造化ログ後 500 返却）
+- `/impl-plan` — Issue #299 の計画化（AC 13 項目 / タスクグラフ / 影響範囲）
+- `/review-pr` (pr-review-toolkit) — PR #309 で 4 エージェント並列（code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer）
+- `/codex plan` (MCP 版) — Issue #299 計画段階でのセカンドオピニオン（AC 拡充で 6→13 項目）
+- `rules/quality-gate.md` — Evaluator 分離プロトコル（PR #309 で 10 ファイル変更該当、APPROVE_WITH_REVISIONS → 反映）
+- `feedback_pr_merge_authorization.md` — PR 番号単位で明示認可を受けてからマージ（#305/#306/#307/#309 すべてユーザー承認後にマージ）
+- `feedback_issue_triage.md` — Net +1 だが triage 基準該当の起票のみ、rating 5-6 は PR コメント / handoff に吸収
+- `CLAUDE.md` Debug Protocol — 「同一機能 3件連続修正」の 2件目で警戒警告、3件目で allowlist 再チェック設計を再評価
