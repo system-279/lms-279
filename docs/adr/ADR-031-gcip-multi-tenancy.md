@@ -65,7 +65,8 @@ Firebase Authentication を Google Cloud Identity Platform（GCIP）のマルチ
 | メール正規化（users） | ✅ マイグレーションスクリプト実装済み（Issue #285 / PR #287: `scripts/normalize-users-email.ts`） | 本番 dry-run → 補正実施（Phase 3 着手前の前提作業） |
 | (tenantId, email) 認可単位 | ✅ 実装済み（テナントスコープの allowed_emails） | 維持 |
 | **認可チェック毎リクエスト実施** | ✅ **Issue #278 で対応済み**（既存 user 経路 4 箇所すべてに allowed_emails 再チェックを追加。スーパー管理者のみ例外） | 維持 |
-| UID 紐付けの原子性 | 🟡 **未対応**（`getUserByEmail` → `updateUser({firebaseUid})` が非原子的。並行ログイン / GCIP UID 揺り戻しで last-write-wins） | **Phase 3 必須対応**: `email_verified` / provider 制限を先行実装したうえで compare-and-set 的な保護と監査ログを追加 |
+| UID 紐付けの原子性 | 🟡 **未対応**（`getUserByEmail` → `updateUser({firebaseUid})` が非原子的。並行ログイン / GCIP UID 揺り戻しで last-write-wins） | **Phase 3 必須対応**: `email_verified` / provider 制限を先行実装したうえで compare-and-set 的な保護と監査ログを追加（**Issue #313 で対応中**） |
+| Tenant スキーマ拡張（`gcipTenantId`/`useGcip`） | ✅ **Issue #312 で対応済み**（`TenantMetadata` + `SuperTenantListItem` に 2 フィールド追加、POST 作成時の初期値 `{null, false}`、`PATCH /super/tenants/:id` で更新可能、`useGcip: true` は `gcipTenantId` 非 null を要求する整合性ガード付き、**`gcipTenantId` の Firestore 内一意性を PATCH 時に検証（同一 GCIP Tenant を複数 Firestore tenant で共有することによる認証サイロ崩壊を防止）**） | **Phase 3 必須対応**: GCIP 経路での `decodedToken.firebase.tenant` 検証を追加（Sub-Issue E） |
 | クライアント Firestore 直接アクセス禁止 | ✅ 実装済み（`web/` 配下で `firebase/firestore` import ゼロ） | 維持 |
 | Custom Claims 利用 | ✅ 未使用（Claims 再発行問題なし） | 維持 |
 

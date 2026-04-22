@@ -26,7 +26,7 @@ import {
 import type { TenantMetadata, TenantStatus } from "../types/tenant.js";
 import { masterRouter } from "./super-admin-master.js";
 import { calculateDefaultDeadlines } from "../services/enrollment.js";
-import { generateTenantId, normalizeEmail } from "../utils/tenant-id.js";
+import { generateTenantId, normalizeEmail, parseTenantGcipFields } from "../utils/tenant-id.js";
 import { logger } from "../utils/logger.js";
 import { getPlatformDataSource } from "../middleware/platform-datasource.js";
 
@@ -60,6 +60,8 @@ interface TenantListItem {
   ownerEmail: string;
   status: TenantStatus;
   userCount: number;
+  gcipTenantId: string | null;
+  useGcip: boolean;
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -148,6 +150,7 @@ router.get("/tenants", async (req: Request, res: Response) => {
       ownerEmail: data.ownerEmail ?? "",
       status: data.status ?? "active",
       userCount: userCounts[i].data().count,
+      ...parseTenantGcipFields(data),
       createdAt: data.createdAt?.toDate?.()?.toISOString() ?? null,
       updatedAt: data.updatedAt?.toDate?.()?.toISOString() ?? null,
     };
@@ -267,6 +270,9 @@ router.post("/tenants", async (req: Request, res: Response) => {
         ownerId: ownerUid ?? "",
         ownerEmail: normalizedOwnerEmail,
         status: "active" as TenantStatus,
+        // ADR-031 Phase 3: 新規テナントは default で非 GCIP（カナリア展開前）
+        gcipTenantId: null,
+        useGcip: false,
         createdAt: now,
         updatedAt: now,
       });
@@ -338,6 +344,8 @@ router.post("/tenants", async (req: Request, res: Response) => {
       ownerId: ownerUid ?? "",
       ownerEmail: normalizedOwnerEmail,
       status: "active",
+      gcipTenantId: null,
+      useGcip: false,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     },
@@ -376,6 +384,7 @@ router.get("/tenants/:id", async (req: Request, res: Response) => {
       ownerId: tenantData.ownerId ?? "",
       ownerEmail: tenantData.ownerEmail ?? "",
       status: tenantData.status ?? "active",
+      ...parseTenantGcipFields(tenantData),
       createdAt: tenantData.createdAt?.toDate?.()?.toISOString() ?? null,
       updatedAt: tenantData.updatedAt?.toDate?.()?.toISOString() ?? null,
     },
@@ -396,6 +405,10 @@ interface TenantUpdateRequest {
   name?: string;
   ownerEmail?: string;
   status?: TenantStatus;
+  /** GCIP Tenant ID（ADR-031 Phase 3）。null で明示的に解除可能、空文字は拒否 */
+  gcipTenantId?: string | null;
+  /** GCIP 経路を有効化するか（ADR-031 Phase 3）。true の場合は `gcipTenantId` 非 null が必須 */
+  useGcip?: boolean;
 }
 
 /**
@@ -404,12 +417,20 @@ interface TenantUpdateRequest {
  */
 router.patch("/tenants/:id", async (req: Request, res: Response) => {
   const id = req.params.id as string;
-  const { name, ownerEmail, status } = req.body as TenantUpdateRequest;
+  const { name, ownerEmail, status, gcipTenantId, useGcip } =
+    req.body as TenantUpdateRequest;
 
-  if (name === undefined && ownerEmail === undefined && status === undefined) {
+  if (
+    name === undefined &&
+    ownerEmail === undefined &&
+    status === undefined &&
+    gcipTenantId === undefined &&
+    useGcip === undefined
+  ) {
     res.status(400).json({
       error: "no_fields",
-      message: "更新するフィールド（name, ownerEmail, status）を少なくとも1つ指定してください。",
+      message:
+        "更新するフィールド（name, ownerEmail, status, gcipTenantId, useGcip）を少なくとも1つ指定してください。",
     });
     return;
   }
@@ -450,6 +471,40 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
     return;
   }
 
+  // ADR-031 Phase 3: gcipTenantId バリデーション（null または非空 string のみ許可）
+  // 通過時は trim 済みの値を normalizedGcipTenantId に格納し、以降の比較・更新で使用する。
+  // trim せずに保存すると Phase 3 の `decodedToken.firebase.tenant === gcipTenantId` 照合
+  // （完全一致比較）で永久に通らなくなる（GCIP 発行 Tenant ID に前後空白は含まれない）。
+  let normalizedGcipTenantId: string | null | undefined = gcipTenantId;
+  if (gcipTenantId !== undefined) {
+    if (gcipTenantId !== null && typeof gcipTenantId !== "string") {
+      res.status(400).json({
+        error: "invalid_gcip_tenant_id",
+        message: "gcipTenantId は null または非空文字列を指定してください。",
+      });
+      return;
+    }
+    if (typeof gcipTenantId === "string") {
+      const trimmed = gcipTenantId.trim();
+      if (trimmed.length === 0) {
+        res.status(400).json({
+          error: "invalid_gcip_tenant_id",
+          message: "gcipTenantId に空文字は指定できません。解除する場合は null を指定してください。",
+        });
+        return;
+      }
+      normalizedGcipTenantId = trimmed;
+    }
+  }
+
+  if (useGcip !== undefined && typeof useGcip !== "boolean") {
+    res.status(400).json({
+      error: "invalid_use_gcip",
+      message: "useGcip は boolean を指定してください。",
+    });
+    return;
+  }
+
   const db = getFirestore();
   const tenantRef = db.collection("tenants").doc(id);
   const tenantDoc = await tenantRef.get();
@@ -483,6 +538,76 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
     changes.push(`status: "${previousData.status}" -> "${status}"`);
   }
 
+  // ADR-031 Phase 3: GCIP フィールドの更新と整合性ガード
+  const { gcipTenantId: previousGcipTenantId, useGcip: previousUseGcip } =
+    parseTenantGcipFields(previousData);
+
+  const nextGcipTenantId =
+    normalizedGcipTenantId !== undefined ? normalizedGcipTenantId : previousGcipTenantId;
+  const nextUseGcip = useGcip !== undefined ? useGcip : previousUseGcip;
+
+  // useGcip=true は gcipTenantId !== null を要求。以下 2 ケースで発動:
+  //   a) 非 GCIP テナント（gcipTenantId: null）に useGcip: true のみ PATCH
+  //      （gcipTenantId を同時指定せず有効化しようとする誤設定）
+  //   b) 既に useGcip=true のテナントで gcipTenantId: null PATCH（ID を外す試み）
+  // (b) の場合は GCIP 認証経路が破壊されるため拒否。GCIP 解除は useGcip: false を先に適用してから。
+  if (nextUseGcip && nextGcipTenantId === null) {
+    res.status(400).json({
+      error: "gcip_tenant_id_required",
+      message:
+        "useGcip を true にするには gcipTenantId を非 null で指定してください（ADR-031 Phase 3）。",
+    });
+    return;
+  }
+
+  // ADR-031 一意性制約: gcipTenantId を非 null に設定・変更する場合、他テナントとの重複を拒否。
+  // ADR-031 の「テナント単位の認証サイロ分離」原則により、同じ gcipTenantId を 2 つの Firestore
+  // tenant が保持すると、同じ GCIP tenant 発行の ID token が両方の URL テナントで
+  // `decodedToken.firebase.tenant === gcipTenantId` 照合（Phase 3 Sub-Issue E）を通過し、
+  // 同じメールが両テナントの allowed_emails に登録されている場合に分離が事実上崩れる。
+  if (
+    normalizedGcipTenantId !== undefined &&
+    normalizedGcipTenantId !== null &&
+    normalizedGcipTenantId !== previousGcipTenantId
+  ) {
+    const duplicateSnapshot = await db
+      .collection("tenants")
+      .where("gcipTenantId", "==", normalizedGcipTenantId)
+      .limit(2)
+      .get();
+    const conflictingTenant = duplicateSnapshot.docs.find((doc) => doc.id !== id);
+    if (conflictingTenant) {
+      logger.warn("gcipTenantId uniqueness violation blocked", {
+        errorType: "gcip_tenant_id_conflict",
+        tenantId: id,
+        gcipTenantId: normalizedGcipTenantId,
+        conflictingTenantId: conflictingTenant.id,
+        operatorEmail: req.superAdmin?.email,
+      });
+      res.status(409).json({
+        error: "gcip_tenant_id_conflict",
+        message:
+          "指定された gcipTenantId は既に別のテナントで使用されています（ADR-031 認証サイロ分離の要件）。",
+      });
+      return;
+    }
+  }
+
+  if (
+    normalizedGcipTenantId !== undefined &&
+    normalizedGcipTenantId !== previousGcipTenantId
+  ) {
+    updateData.gcipTenantId = normalizedGcipTenantId;
+    changes.push(
+      `gcipTenantId: ${JSON.stringify(previousGcipTenantId)} -> ${JSON.stringify(normalizedGcipTenantId)}`
+    );
+  }
+
+  if (useGcip !== undefined && useGcip !== previousUseGcip) {
+    updateData.useGcip = useGcip;
+    changes.push(`useGcip: ${previousUseGcip} -> ${useGcip}`);
+  }
+
   if (changes.length === 0) {
     res.status(400).json({
       error: "no_changes",
@@ -509,6 +634,7 @@ router.patch("/tenants/:id", async (req: Request, res: Response) => {
       ownerId: updatedData.ownerId ?? "",
       ownerEmail: updatedData.ownerEmail ?? "",
       status: updatedData.status ?? "active",
+      ...parseTenantGcipFields(updatedData),
       createdAt: updatedData.createdAt?.toDate?.()?.toISOString() ?? null,
       updatedAt: updatedData.updatedAt?.toDate?.()?.toISOString() ?? null,
     },
