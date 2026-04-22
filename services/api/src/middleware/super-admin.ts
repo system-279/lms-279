@@ -49,14 +49,18 @@ declare global {
 /**
  * Firestore アクセスが一時的に失敗した場合に throw される識別可能エラー (Issue #293)。
  * 呼び出し側（super-admin middleware）で catch し 503 として返すためのマーカー。
+ *
+ * `Error.cause` (ES2022) に原因例外を保持しており、Sentry などで stack chain を
+ * 追跡可能。`code` は Firebase Admin SDK の Firestore エラーコード文字列
+ * （"unavailable", "deadline-exceeded", "permission-denied", etc.）が入る。
  */
 export class SuperAdminFirestoreUnavailableError extends Error {
-  readonly code: string | number | undefined;
+  readonly code: string | undefined;
   constructor(cause: unknown) {
-    const c = cause as { code?: string | number; message?: string };
-    super(`SUPER_ADMIN_FIRESTORE_UNAVAILABLE: ${c?.code ?? "unknown"}`);
+    const c = cause as { code?: string } | undefined;
+    super(`SUPER_ADMIN_FIRESTORE_UNAVAILABLE: ${c?.code ?? "unknown"}`, { cause });
     this.name = "SuperAdminFirestoreUnavailableError";
-    this.code = c?.code;
+    this.code = typeof c?.code === "string" ? c.code : undefined;
   }
 }
 
@@ -67,6 +71,8 @@ export class SuperAdminFirestoreUnavailableError extends Error {
  * 403 で締め出されて「権限剥奪？」と誤認される事故につながる。
  * エラーを SuperAdminFirestoreUnavailableError として上位に伝播させ、
  * 呼び出し側で 503 Service Unavailable を返す設計に変更する。
+ *
+ * ログは呼び出し側（superAdminAuthMiddleware）で一本化するため、ここでは出力しない。
  */
 export async function getSuperAdminsFromFirestore(): Promise<string[]> {
   try {
@@ -74,7 +80,6 @@ export async function getSuperAdminsFromFirestore(): Promise<string[]> {
     const snapshot = await db.collection("superAdmins").get();
     return snapshot.docs.map((doc) => doc.id.toLowerCase());
   } catch (error) {
-    console.error("Failed to fetch super admins from Firestore:", error);
     throw new SuperAdminFirestoreUnavailableError(error);
   }
 }
