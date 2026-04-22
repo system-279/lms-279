@@ -19,7 +19,6 @@ export default defineConfig({
         AUTH_MODE: "dev",
         PORT: "8080",
         E2E_TEST_ENABLED: "true",
-        PAUSE_TIMEOUT_MS: "5000",
       },
     },
     {

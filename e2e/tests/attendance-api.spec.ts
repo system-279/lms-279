@@ -3,7 +3,9 @@
  * Issue #157: QA手動検証の自動化
  *
  * e2e-test テナント（InMemoryDataSource, 書き込み可能）を使用。
- * PAUSE_TIMEOUT_MS=5000（5秒）でpause timeoutを高速テスト。
+ * PAUSE_TIMEOUT_MS はデフォルト（15分）を使用する。
+ * 項目4（pause_timeout 強制退室）は CI では test.skip 済みのため、
+ * 正常遷移テストが CI 遅延で 5秒超過して force-exit が発動するフレークを回避。
  */
 
 import { test, expect } from "@playwright/test";
