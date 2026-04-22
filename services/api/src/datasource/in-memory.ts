@@ -13,6 +13,7 @@ import type {
   LessonUpdateData,
   UserUpdateData,
   NotificationPolicyUpdateData,
+  SetFirebaseUidResult,
 } from "./interface.js";
 import { ReadOnlyDataSourceError } from "./interface.js";
 import type {
@@ -467,6 +468,34 @@ export class InMemoryDataSource implements DataSource {
     if (index === -1) return null;
     this.users[index] = { ...this.users[index], ...data, updatedAt: new Date().toISOString() };
     return this.users[index];
+  }
+
+  async setUserFirebaseUidIfUnset(
+    userId: string,
+    firebaseUid: string
+  ): Promise<SetFirebaseUidResult> {
+    this.throwIfReadOnly();
+    const index = this.users.findIndex((u) => u.id === userId);
+    if (index === -1) return { status: "not_found" };
+    const existing = this.users[index];
+    const rawExisting = existing.firebaseUid;
+    const existingUid =
+      typeof rawExisting === "string" && rawExisting.length > 0 ? rawExisting : null;
+
+    if (existingUid === firebaseUid) {
+      return { status: "already_set_same", user: existing };
+    }
+    if (existingUid !== null) {
+      return { status: "conflict", existingUid };
+    }
+
+    const updated: User = {
+      ...existing,
+      firebaseUid,
+      updatedAt: new Date().toISOString(),
+    };
+    this.users[index] = updated;
+    return { status: "updated", user: updated };
   }
 
   async deleteUser(id: string): Promise<boolean> {

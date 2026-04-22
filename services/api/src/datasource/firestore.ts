@@ -15,6 +15,7 @@ import type {
   LessonUpdateData,
   UserUpdateData,
   NotificationPolicyUpdateData,
+  SetFirebaseUidResult,
 } from "./interface.js";
 import type {
   Course,
@@ -395,6 +396,32 @@ export class FirestoreDataSource implements DataSource {
     await applyUpdate(docRef, data as Record<string, unknown>);
     const updated = await docRef.get();
     return this.toUser(updated.id, updated.data()!);
+  }
+
+  async setUserFirebaseUidIfUnset(
+    userId: string,
+    firebaseUid: string
+  ): Promise<SetFirebaseUidResult> {
+    const docRef = this.collection("users").doc(userId);
+    return this.db.runTransaction(async (tx) => {
+      const doc = await tx.get(docRef);
+      if (!doc.exists) return { status: "not_found" as const };
+      const data = doc.data()!;
+      const rawExisting = data.firebaseUid;
+      const existingUid = typeof rawExisting === "string" && rawExisting.length > 0 ? rawExisting : null;
+
+      if (existingUid === firebaseUid) {
+        return { status: "already_set_same" as const, user: this.toUser(doc.id, data) };
+      }
+      if (existingUid !== null) {
+        return { status: "conflict" as const, existingUid };
+      }
+
+      const updatedAt = new Date();
+      tx.update(docRef, { firebaseUid, updatedAt });
+      const updatedData = { ...data, firebaseUid, updatedAt };
+      return { status: "updated" as const, user: this.toUser(doc.id, updatedData) };
+    });
   }
 
   async deleteUser(id: string): Promise<boolean> {

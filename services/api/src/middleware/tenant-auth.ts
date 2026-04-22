@@ -73,7 +73,8 @@ export type TenantAccessDenialReason =
   | "email_not_verified"
   | "non_google_provider"
   | "email_missing"
-  | "not_in_allowlist";
+  | "not_in_allowlist"
+  | "uid_reassignment_blocked";
 
 export class TenantAccessDeniedError extends Error {
   email?: string;
@@ -307,7 +308,42 @@ async function findOrCreateTenantUser(
       if (!superAdminAccess) {
         await ensureAllowlisted(req, email);
       }
-      await ds.updateUser(existingByEmail.id, { firebaseUid: uid });
+      // ADR-031 Issue #313: CAS で UID 紐付け原子性を保証。
+      // 既に別 UID が紐付いているユーザーに新 UID を silent 上書きしない
+      // （並行ログイン / GCIP UID 揺り戻しでの last-write-wins を防止）。
+      const casResult = await ds.setUserFirebaseUidIfUnset(existingByEmail.id, uid);
+      if (casResult.status === "conflict") {
+        logger.warn("uid_reassignment_blocked: user already bound to different UID", {
+          errorType: "uid_reassignment_blocked",
+          tenantId,
+          email,
+          userId: existingByEmail.id,
+          existingUid: casResult.existingUid,
+          attemptedUid: uid,
+        });
+        throw new TenantAccessDeniedError(
+          `UID reassignment blocked for email=${email} (existing=${casResult.existingUid}, attempted=${uid})`,
+          "uid_reassignment_blocked",
+          email,
+          tenantId
+        );
+      }
+      if (casResult.status === "not_found") {
+        // 稀: getUserByEmail 後の並行 DELETE など
+        logger.warn("user disappeared during CAS firebaseUid update", {
+          errorType: "uid_cas_user_not_found",
+          tenantId,
+          email,
+          userId: existingByEmail.id,
+        });
+        throw new TenantAccessDeniedError(
+          `User not found during CAS firebaseUid update (email=${email})`,
+          "not_in_allowlist",
+          email,
+          tenantId
+        );
+      }
+      // status: "updated" または "already_set_same" → 正常継続
       return buildAuthUser(req, existingByEmail, superAdminAccess, { firebaseUid: uid });
     }
   }
