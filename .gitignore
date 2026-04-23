@@ -24,6 +24,9 @@ sa-key.json
 # Serena (AI agent memories)
 .serena/
 
+# Firebase CLI deploy cache (端末ローカル、コミット対象外)
+.firebase/
+
 # IDE
 .idea/
 .vscode/
