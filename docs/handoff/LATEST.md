@@ -1,13 +1,14 @@
-# Session Handoff — 2026-04-23 (Session 10)
+# Session Handoff — 2026-04-23 (Session 11)
 
 ## TL;DR
 
-**Issue #272 ブランディング検証トラック進行中（Google 側審査待ち）**。Session 9 で Firebase Hosting 公開 (`/privacy` `/terms`) を済ませたが、ブランディング再確認で「ホームページ URL 所有権未確認」エラーが発生。本セッションで Search Console にプロパティ追加 + HTML ファイル検証 (PR #325) を実施し、**「所有権を証明しました」** を確認 → GCP Auth Platform で「問題は修正した」経路で再審査リクエスト送信済み。現在は Google 側で「ブランディングは現在審査中です」状態、結果メール待ち。**Issue net 0**（既存 #272 への進捗更新のみ、triage 基準 #5 ユーザー明示指示に基づく PR #325 の 2 ファイル追加）。
+**Issue #272 緊急復旧トラック: Session 9-10 複雑化の診断完了 + 先方への再ログイン依頼テンプレ送信実施。真の待ちは先方返信（ブランディング審査は非ブロッキング）。**
 
-- **マージ完了** (今セッション): PR #325
-- **Firebase Hosting Deploy**: 完了（`firebase deploy --only hosting --project lms-279`）
-- **Issue Net**: **0**（Close 0 / 起票 0、既存 #272 への進捗更新のみ）
-- **Open 推移**: Session 9 末 7 件 → Session 10 末 7 件 (P0:1 / P2:6)
+Session 11 で Session 9-10 の診断ミスを特定: 2026-04-23 08:14 の Issue #272 コメントで既に OAuth External + 本番環境切替完了、テナント `8vexhzpc` (status=active) + allowed_emails 10 名登録済み（2026/4/21）と記録されていた。**つまりこの時点で先方 `sayori-maeda@kanjikai.or.jp` さんはログイン可能な状態**。しかし Session 9-10 は GCP Console UI の「ホームページ URL 所有権未確認」警告に従って、basic scopes only では本来不要なブランディング審査フロー（4-6 週間）に迷入し、PR #324 (/privacy /terms 公開) + PR #325 (Search Console 所有権確認) を実施。直近 7 日のサーバーログに先方の痕跡なし = **先方には再ログイン依頼も届いていなかった**。Session 11 で runbook §5 ベースの連絡テンプレを先方へ送信、運用教訓を memory・runbook に反映。ブランディング審査は非ブロッキング放置。
+
+- **Issue Net**: **0**（本セッション新規起票・close ともに 0、ドキュメント・memory 整理のみ）
+- **Open 推移**: Session 10 末 7 件 → Session 11 末 7 件 (P0:1 / P2:6)
+- **本セッション成果**: 先方連絡送信 + 教訓整備（個人 memory 3 件 + runbook 追記 + 本ハンドオフ更新 + Issue #272 診断コメント）
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -15,19 +16,62 @@
 # 1. 状況復元
 cat docs/handoff/LATEST.md
 
-# 2. 現在の OPEN Issue（P0: 1 / P2: 6）
+# 2. 🔴 最優先: sayori-maeda さんからの返信確認
+# メール / 業務チャットで返信内容を確認
+# - ✅ ログイン成功 → Issue #272 緊急復旧トラック完全クローズ + コメント
+# - ❌ エラー継続（スクショあり） → Cloud Logging 精査
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND severity>=WARNING' \
+  --project=lms-279 --limit=20 --freshness=1d --format=json
+
+# 3. 現在の OPEN Issue（P0: 1 / P2: 6）
 gh issue list --state open --limit 15
 
-# 3. main CI が緑であることを確認
+# 4. main CI が緑であることを確認
 gh run list --branch main --limit 3
 
-# 4. ブランディング審査結果メール確認（system@279279.net）
-# OK → sayori-maeda@kanjikai.or.jp 再ログイン依頼 → #272 緊急トラッククローズ
-# NG → reject 理由確認 → 是正対応
+# 5. ブランディング審査結果（非ブロッキング・オプション、業務上影響なし）
+# Google → system@279279.net に結果メール (4-6 週間)
+# OK → 警告画面が消える / NG → 業務影響なく再申請任意
 
-# 5. 並行で進められる Phase 3 残 Sub-Issue (推奨: D/E 並行 → F)
-gh issue view 272  # Phase 3 親 Issue
+# 6. 並行で進められる Phase 3 残 Sub-Issue (推奨: D/E 並行 → F)
+gh issue view 272
 ```
+
+---
+
+## セッション成果物 (2026-04-23 Session 11)
+
+### 新規診断: Session 9-10 複雑化の根本原因（5 項目）
+
+| # | 発見 |
+|---|------|
+| 1 | 2026-04-23 08:14 の Issue #272 コメントで既に OAuth External + 本番環境切替完了 + テナント/allowed_emails 10 名登録確認済と記録されていた |
+| 2 | つまりその時点で先方はログイン可能な状態 |
+| 3 | Session 9-10 は GCP Console UI の「ホームページ URL 所有権未確認」警告に従い、basic scopes only では本来不要なブランディング審査フローに迷入 |
+| 4 | runbook `oauth-external-publish.md` §審査の有無 に「basic scopes のみ → 審査不要。Publish 即時反映」と明記されていたが Session 9-10 で読み返されなかった |
+| 5 | 直近 7 日のサーバーログに先方の痕跡なし = 先方は連絡を受けていないから再試行もしていなかった |
+
+### 本セッション実施事項
+
+- ✅ Issue #272 真の原因診断（5 項目）
+- ✅ 先方 `sayori-maeda@kanjikai.or.jp` さんへ再ログイン依頼テンプレ送信（runbook §5 ベース）
+- ✅ `docs/runbook/oauth-external-publish.md` 追記:
+  - §審査の有無 に「⚠️ GCP Console UI の警告に騙されない」節追加、2026-04-23 実例記録
+  - §2.5 新設: Publish 直後の §5 テンプレ送信を明示的チェックボックス化
+- ✅ 個人 memory に教訓 3 件追加（`~/.claude/memory/`）:
+  - `feedback_runbook_first_then_ui.md`: 既存 runbook がある作業は UI 誘導より runbook 記述を優先
+  - `feedback_goal_vs_setup_gap.md`: 技術設定完了 ≠ 業務目的達成、連絡・確認・運用ステップを明示化
+  - `feedback_oauth_basic_scopes_no_review.md`: OAuth basic scopes は審査・ブランディング検証不要
+- ✅ `~/.claude/memory/MEMORY.md` インデックス更新（上記 3 件）
+- ✅ Issue #272 に診断コメント追加（複雑化の経緯を関係者に可視化）
+
+### ブランディング審査の扱い（方針確定）
+
+- **業務上の緊急性: なし**（basic scopes only では「確認されていないアプリ」警告画面が消えるだけ）
+- Session 10 で送信済みの再審査リクエスト（現在「ブランディングは現在審査中」）は **放置で OK**
+- 結果 OK → 警告画面が消える / 結果 NG → 業務影響なく再申請も任意
+- PR #324 (/privacy /terms 公開) + PR #325 (Search Console 所有権確認) は revert 不要、将来の正式ブランディング承認に使える資産として残す
 
 ---
 
