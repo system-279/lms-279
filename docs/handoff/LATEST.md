@@ -153,7 +153,7 @@ gh issue view 272  # Phase 3 親 Issue
 - **ADR-031** は Session 8 時点で最新（Sub-Issue H Staging 検証スコープに ABORTED HTTP 応答判断追加済）。本 PR #321 は Sub-Issue B 実装のため As-Is 表に追加の更新なし（Sub-Issue B は ADR-031 移行戦略 Step 5 の一部で、As-Is 表のマトリクスには現れない）
 - **docs/api.md**: 本 PR で公開テナント情報セクション追加
 - **docs/handoff/LATEST.md**: 本ファイル更新 (Session 9)
-- **handoff サイズ**: 本ファイル約 250 行、500 行目標内
+- **handoff サイズ**: 本ファイル約 200 行、500 行目標内
 
 ## Issue Net 変化（CLAUDE.md KPI）
 
