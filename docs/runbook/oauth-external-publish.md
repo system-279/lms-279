@@ -2,6 +2,13 @@
 
 Issue #272 Phase 1.1 の作業手順書。`279279.net` Workspace 組織外のユーザー（例: `sayori-maeda@kanjikai.or.jp`）が Google ログインできない `403 org_internal` を解消する。
 
+## 方針（2026-04-23 PM/PL 確認済、Codex セカンドオピニオン裏取り）
+
+- **原則 Production Publish**（本 runbook §2）。basic scopes のみで Google Trust & Safety 審査不要、Publish 即時反映。
+- **Testing モードは暫定策としてのみ使用**（Publish が詰まった場合、または 1 名限定の緊急時）。Testing は 100 ユーザー上限で、外部ドメイン追加のたびに test user 登録運用が発生するため持続不能。
+- **Authorized Domains（§3）はメールドメイン制御ではない**。`kanjikai.or.jp` 等のユーザーメールドメインを追加する必要はない。登録すべきは Cloud Run / カスタムドメイン等のアプリ配信ドメインのみ。
+- 本作業の前提として [tenant-and-allowlist-preflight-check.md](./tenant-and-allowlist-preflight-check.md) でテナント存在と `allowed_emails` 登録を確認しておくこと。OAuth を開けてもアプリ側で `403 tenant_access_denied` で止まる。
+
 ## 前提
 
 - **GCP Project**: `lms-279`
