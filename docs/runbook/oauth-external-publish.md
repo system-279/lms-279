@@ -23,6 +23,22 @@ Issue #272 Phase 1.1 の作業手順書。`279279.net` Workspace 組織外のユ
 
 将来 DWD 経由ではなくエンドユーザーに直接 sensitive scopes を要求する方向に変更した場合、その時点で審査が必要になる（所要: 数日〜数週間）。
 
+### ⚠️ GCP Console UI の警告に騙されない（2026-04-23 Issue #272 教訓）
+
+GCP Console で External 化・Publish を実行する際、以下のような警告・誘導が表示される場合があるが、**basic scopes のみ利用する本プロジェクトではすべて無視可**:
+
+- 「ホームページ URL の所有権が未確認です」
+- 「プライバシーポリシーの公開が必要です」
+- 「Search Console での所有権確認が必要です」
+- 「アプリロゴの設定が推奨されます」
+- 「ブランディングは現在審査中です」
+
+これらは **Google Trust & Safety によるブランディング本審査フロー**（4-6 週間）のための要件で、basic scopes のみの運用には**影響しない**。警告を「必須」と誤解して対応してしまうと、不要な審査待ちコースに突入する。
+
+**2026-04-23 実例**: Issue #272 Session 9-10 で、basic scopes only のプロジェクトにも関わらず UI 誘導に従って PR #324（/privacy /terms 公開）、PR #325（Search Console 所有権確認ファイル）を実施 → ブランディング審査 4-6 週間待ちコースに突入。真に必要だったのは **「OAuth Publish 完了 → §5 テンプレで先方に再ログイン依頼」の 1 ステップのみ**だった。
+
+**判断基準**: UI 警告と本 §審査の有無 の記述が食い違う場合、**本 runbook の記述を優先**。UI 誘導に従う前に、他のプロジェクト参加者 / Codex セカンドオピニオンで再確認する。
+
 ## 作業ステップ
 
 ### 1. OAuth 同意画面を External に切り替え
@@ -51,6 +67,15 @@ Issue #272 Phase 1.1 の作業手順書。`279279.net` Workspace 組織外のユ
    - 「Verification is not required for your app because it uses only sensitive scopes that are owned by your project」のような文言が出る
    - 「Do you want to push your app to production?」に対して `Confirm`
 4. `Publishing status` が **`In production`** に変わったことを確認
+
+### 2.5. 🚨 **即時必須アクション**: §5 の連絡テンプレを直ちに送信
+
+**Publish 完了直後に、外部ドメインユーザー（例: `sayori-maeda@kanjikai.or.jp`）へ §5 のテンプレで再ログイン依頼を送信する。**
+
+- [ ] §5 テンプレを先方に送信した
+- [ ] 送信日時を Issue #272 コメントに記録した
+
+これをしないと、技術側は完了しても**業務目的（ユーザーログイン）は未達**のまま放置される。本作業は「R5-R6 OAuth 開放」と「R8 ユーザー再ログイン」の間にある **唯一の人的アクション**で、ここで抜けると Issue が宙に浮く（2026-04-23 実例: OAuth Publish 完了から連絡送信まで 12 時間以上の空白が発生）。
 
 ### 3. Firebase Authorized Domains の確認（Phase 1.2）
 
