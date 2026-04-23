@@ -63,7 +63,11 @@ gcloud firestore documents get \
 
 #### 3-A. テナント未作成 → super-admin API で作成
 
-`name` と `ownerEmail` のみで tenant 作成可能。`ownerEmail` は正規化後に allowed_emails に自動登録される（既存実装のオーナー初期化フロー、要実装確認）。
+`name` と `ownerEmail` のみで tenant 作成可能。以下が **同一トランザクション内で一括作成** される（`services/api/src/routes/super-admin.ts` L263-310）:
+
+- `tenants/{tenantId}` ドキュメント（`status: "active"` / `gcipTenantId: null` / `useGcip: false` が固定で入る）
+- `tenants/{tenantId}/allowed_emails/{autoId}` に正規化後の `ownerEmail` を登録（`note: "オーナー（スーパー管理者が登録）"` 固定、後から追記したい場合は Firestore 直編集か §3-B で別途追加登録）
+- `ownerEmail` が **既存 Firebase Auth ユーザー** の場合は `tenants/{tenantId}/users/{autoId}` に `role: "admin"` で初期管理者レコードも同時作成される。未登録の場合は初回ログイン時に自動作成される
 
 ```bash
 curl -X POST \
@@ -76,9 +80,11 @@ curl -X POST \
   "https://<本番 URL>/api/v2/super-admin/tenants"
 ```
 
-レスポンスで返される `tenantId` を記録。ランダム生成のため固定できない。
+レスポンスで返される `tenantId` を記録（ランダム生成のため固定不可）。このフローで allowed_emails にもオーナーが自動登録されるため、§3-B の追加登録は不要。
 
 #### 3-B. テナント既存・allowed_emails のみ未登録 → tenant admin API で追加
+
+`POST /admin/allowed-emails` は `{ email, note }` のみ受け付ける（`services/api/src/routes/shared/allowed-emails.ts` L45-74）。role は **この endpoint では扱わない**。
 
 ```bash
 curl -X POST \
@@ -86,18 +92,21 @@ curl -X POST \
   -H "Content-Type: application/json" \
   -d '{
     "email": "sayori-maeda@kanjikai.or.jp",
-    "role": "student"
+    "note": "Issue #272 緊急対応 (2026-04-23)"
   }' \
   "https://<本番 URL>/api/v2/<tenantId>/admin/allowed-emails"
 ```
 
-role は対象の運用実態に合わせて `admin` / `teacher` / `student` から選択。
+- `note` は optional（省略時は null）
+- 既に登録済みなら **409 `email_exists`** が返る（冪等的に扱える）
+- 正規化（`.trim().toLowerCase()`）は API 内で適用されるため、入力大文字小文字は気にしなくてよい
+- **role は `users` ドキュメント側で管理**。初回ログイン時に `tenants/{tenantId}/users/{autoId}` が自動生成され、以降は tenant admin UI で role（`admin` / `teacher` / `student`）を変更可能
 
 ### 4. 登録後の確認
 
-- Cloud Logging で構造化ログを確認（allowed_emails 追加のログイベントが記録される）
+- Cloud Logging で構造化ログを確認（`Tenant created by super admin` 等のログが記録される）
 - Firestore で再度 §1-§2 の手順で整合性を確認
-- `note` / `memo` 系フィールドがある場合は `Issue #272 緊急対応` を記載
+- §3-A で tenant 作成した場合、オーナー email の `note` は固定値（`"オーナー（スーパー管理者が登録）"`）で保存される。Issue 追跡用の `note` を付けたい場合は §3-B で追加登録時に指定するか、Firestore 直編集で追記
 
 ## OAuth 作業との依存関係
 
