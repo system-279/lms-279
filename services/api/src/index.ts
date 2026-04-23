@@ -16,6 +16,7 @@ import { createSharedRouter } from "./routes/shared/index.js";
 import { tenantsRouter } from "./routes/tenants.js";
 import { superAdminRouter } from "./routes/super-admin.js";
 import { helpRoleRouter } from "./routes/help-role.js";
+import { publicRouter } from "./routes/public.js";
 import { logger } from "./utils/logger.js";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -127,6 +128,10 @@ if (process.env.E2E_TEST_ENABLED === "true") {
   });
 }
 
+// 認証不要の公開API（ADR-031 Phase 3 / Sub-Issue B）
+// FE ログイン前テナント解決（gcipTenantId 取得）用。rate limit 適用必須。
+app.use("/api/v2/public", authLimiter, publicRouter);
+
 // テナント登録API（認証のみ、テナントコンテキスト不要）
 app.use("/api/v2/tenants", authLimiter, tenantsRouter);
 
@@ -157,6 +162,7 @@ const server = app.listen(port, () => {
     port,
     routes: [
       "/health, /healthz, /api/health",
+      "/api/v2/public/*",
       "/api/v2/tenants",
       "/api/v2/super/*",
       "/api/v2/:tenant/*",

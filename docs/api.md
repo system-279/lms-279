@@ -301,6 +301,42 @@
 ```
 
 
+### 公開テナント情報（認証不要）
+
+ベースURL: `/api/v2/public/`
+
+FE が GCIP 経路のログイン前に `auth.tenantId` へ `gcipTenantId` をセットするための認証不要エンドポイント（ADR-031）。
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/tenants/:tenantId` | テナントの公開情報取得（認証不要） |
+
+#### レスポンス
+
+```json
+// GET /public/tenants/:tenantId (200)
+{
+  "tenant": {
+    "id": "test-tenant",
+    "status": "active",
+    "gcipTenantId": "tenant-gcip-xyz",
+    "useGcip": true
+  }
+}
+```
+
+#### セキュリティ設計
+
+- **情報漏洩防止**: `name` / `ownerId` / `ownerEmail` / `userCount` / `createdAt` / `updatedAt` は含めない（顧客名の enumeration 漏洩防止）
+- **Enumeration 防止**: 未登録 / `RESERVED_TENANT_IDS` / 不正フォーマットは全て同一の `404 tenant_not_found` + 同一 `Cache-Control` を返す
+- **suspended テナント**: 200 で返却し `status: "suspended"` を含める（FE はメンテ画面切替に使用）
+- **status の fail-closed 判定**: `"active"` / `"suspended"` 以外の値（データ破損・未設定）は `suspended` にフォールバック（active 漏洩防止）
+- **レート制限**: `authLimiter` 流用（10 req/min/IP）
+- **Firestore 障害時**: `503 firestore_unavailable` + `Cache-Control: no-store` + 構造化 `logger.error` でアラート可能
+- **HTTP キャッシュ**: 200 / 404 とも `Cache-Control: public, max-age=60`（header 差分で存在有無が推測されないよう統一）、503 は `no-store`
+
+関連: ADR-031
+
 ### プラットフォーム認証エラーログ（Super Admin）
 
 ベースURL: `/api/v2/super/`
