@@ -81,7 +81,7 @@ export interface PublicTenantInfoResponse {
  * 「ログインユーザーがアクセス可能なテナント」の最小情報を返す。
  * - owner として作成したテナント
  * - allowed_emails に email が登録されたテナント（招待）
- * の和集合（重複排除済み）。
+ * の和集合（重複排除済み、`createdAt` 降順、`createdAt: null` は末尾）。
  *
  * `ownerEmail` は意図的に含めない。招待ユーザーに対しても等しく返却される
  * エンドポイントのため、招待された全テナントの所有者 email が漏れる。
@@ -106,6 +106,13 @@ export interface MyTenantInfo {
   createdAt: string | null;
 }
 
+/**
+ * `GET /api/v2/tenants/mine` のレスポンス本体。
+ *
+ * `tenants` は `createdAt` 降順、`createdAt: null` は末尾に配置される。
+ * クライアントは追加 sort せずにそのまま表示してよい（API 契約として保証）。
+ * 同一 `createdAt` の相対順序は保証しない（unstable; 現状は Map insertion 順 = owner 優先）。
+ */
 export interface MineTenantsResponse {
   tenants: MyTenantInfo[];
 }

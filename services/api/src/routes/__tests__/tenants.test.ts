@@ -764,4 +764,72 @@ describe("GET /api/v2/tenants/mine — owner + invited 統合", () => {
     expect(res.status).toBe(200);
     expect(res.body.tenants).toHaveLength(N);
   });
+
+  // -------------------------------------------------------------------
+  // AC-15: ?status=invalid → 400 invalid_status
+  //        Firestore に到達する前に hard fail する（"active"/"suspended" 以外）。
+  // -------------------------------------------------------------------
+  it("[AC-15] ?status=invalid → 400 invalid_status (Firestore 呼び出し前に拒否)", async () => {
+    mockVerifyIdToken.mockResolvedValue(decoded("uid-1", "u@example.com"));
+    // Firestore に到達したら throw させ、guard 前拒否を assertion でも明示する。
+    mockGetFirestore.mockImplementation(throwFirestoreImpl);
+    const app = await buildApp();
+
+    const res = await supertest(app)
+      .get("/api/v2/tenants/mine?status=pending")
+      .set("authorization", "Bearer t");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_status");
+    expect(mockGetFirestore).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------
+  // AC-16: createdAt: null を含むテナント群の sort 末尾配置
+  //        ISO 文字列は降順、null は最後尾に寄せる。
+  // -------------------------------------------------------------------
+  it("[AC-16] createdAt:null は sort 末尾に寄る (降順 + null last)", async () => {
+    mockVerifyIdToken.mockResolvedValue(decoded("uid-owner", "o@example.com"));
+    setMine({
+      tenants: [
+        {
+          id: "t-old",
+          name: "Old",
+          ownerEmail: "o@example.com",
+          ownerId: "uid-owner",
+          status: "active",
+          createdAt: "2026-04-18T00:00:00.000Z",
+        },
+        {
+          id: "t-null",
+          name: "Null Created",
+          ownerEmail: "o@example.com",
+          ownerId: "uid-owner",
+          status: "active",
+          createdAt: null,
+        },
+        {
+          id: "t-new",
+          name: "New",
+          ownerEmail: "o@example.com",
+          ownerId: "uid-owner",
+          status: "active",
+          createdAt: "2026-04-20T00:00:00.000Z",
+        },
+      ],
+      allowedEmails: [],
+    });
+    const app = await buildApp();
+
+    const res = await supertest(app)
+      .get("/api/v2/tenants/mine")
+      .set("authorization", "Bearer t");
+
+    expect(res.status).toBe(200);
+    expect(res.body.tenants.map((t: { id: string }) => t.id)).toEqual([
+      "t-new",
+      "t-old",
+      "t-null",
+    ]);
+  });
 });
