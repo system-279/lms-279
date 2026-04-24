@@ -366,7 +366,18 @@ router.get("/mine", async (req: Request, res: Response) => {
           const refs: DocumentReference[] = [];
           for (const allowedDoc of snap.docs) {
             const tenantRef = allowedDoc.ref.parent.parent;
-            if (tenantRef) refs.push(tenantRef);
+            if (tenantRef) {
+              refs.push(tenantRef);
+            } else {
+              // ref.parent.parent が null になるのは allowed_emails が
+              // tenants/{id}/allowed_emails/{id} 以外のパスに置かれた場合のみ。
+              // スキーマ違反のため検知できるよう warn ログを残す。
+              logger.warn("allowed_emails doc has null grandparent ref", {
+                errorType: "allowed_emails_schema_violation",
+                path: allowedDoc.ref.path,
+                endpoint: "/tenants/mine",
+              });
+            }
           }
           return refs;
         })
@@ -393,9 +404,16 @@ router.get("/mine", async (req: Request, res: Response) => {
   if (invitedRefsToFetch.length > 0) {
     const invitedDocs = await db.getAll(...invitedRefsToFetch);
     for (const doc of invitedDocs) {
-      // tenant doc が削除済み等で存在しない場合はスキップ（fail-closed）
+      // tenant doc が削除済み等で存在しない場合はスキップ（fail-closed）。
+      // allowed_emails が先行削除されずに孤児化している兆候なので warn ログ。
       if (doc.exists) {
         tenantDocsById.set(doc.id, doc);
+      } else {
+        logger.warn("invited tenant doc not found (allowed_emails orphan?)", {
+          errorType: "invited_tenant_orphan",
+          tenantId: doc.id,
+          endpoint: "/tenants/mine",
+        });
       }
     }
   }

@@ -81,7 +81,7 @@ export interface PublicTenantInfoResponse {
  * 「ログインユーザーがアクセス可能なテナント」の最小情報を返す。
  * - owner として作成したテナント
  * - allowed_emails に email が登録されたテナント（招待）
- * の和集合（重複排除済み）。
+ * の和集合（重複排除済み、`createdAt` 降順、`createdAt: null` は末尾）。
  *
  * `ownerEmail` は意図的に含めない。招待ユーザーに対しても等しく返却される
  * エンドポイントのため、招待された全テナントの所有者 email が漏れる。
