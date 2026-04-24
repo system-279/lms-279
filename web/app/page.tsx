@@ -4,21 +4,16 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { CircleHelp } from "lucide-react";
+import type { MyTenantInfo, MineTenantsResponse } from "@lms-279/shared-types";
 import { useAuth } from "../lib/auth-context";
 import { apiFetch } from "../lib/api";
 
 const AUTH_MODE = process.env.NEXT_PUBLIC_AUTH_MODE ?? "dev";
 
-type TenantInfo = {
-  id: string;
-  name: string;
-  status: string;
-};
-
 export default function HomePage() {
   const router = useRouter();
   const { user, loading, error, signInWithGoogle, signOut, getIdToken } = useAuth();
-  const [tenants, setTenants] = useState<TenantInfo[]>([]);
+  const [tenants, setTenants] = useState<MyTenantInfo[]>([]);
   const [tenantsLoading, setTenantsLoading] = useState(false);
   const [tenantsError, setTenantsError] = useState<string | null>(null);
 
@@ -123,8 +118,8 @@ function LoggedInView({
   signOut: () => void;
   getIdToken: () => Promise<string | null>;
   router: ReturnType<typeof useRouter>;
-  tenants: TenantInfo[];
-  setTenants: (t: TenantInfo[]) => void;
+  tenants: MyTenantInfo[];
+  setTenants: (t: MyTenantInfo[]) => void;
   tenantsLoading: boolean;
   setTenantsLoading: (l: boolean) => void;
   tenantsError: string | null;
@@ -137,7 +132,7 @@ function LoggedInView({
       setTenantsError(null);
       try {
         const idToken = await getIdToken();
-        const data = await apiFetch<{ tenants: TenantInfo[] }>(
+        const data = await apiFetch<MineTenantsResponse>(
           "/api/v2/tenants/mine?status=active",
           { idToken: idToken ?? undefined }
         );
