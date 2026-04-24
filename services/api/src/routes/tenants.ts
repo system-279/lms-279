@@ -375,6 +375,7 @@ router.get("/mine", async (req: Request, res: Response) => {
               logger.warn("allowed_emails doc has null grandparent ref", {
                 errorType: "allowed_emails_schema_violation",
                 path: allowedDoc.ref.path,
+                uid,
                 endpoint: "/tenants/mine",
               });
             }
@@ -412,6 +413,7 @@ router.get("/mine", async (req: Request, res: Response) => {
         logger.warn("invited tenant doc not found (allowed_emails orphan?)", {
           errorType: "invited_tenant_orphan",
           tenantId: doc.id,
+          uid,
           endpoint: "/tenants/mine",
         });
       }

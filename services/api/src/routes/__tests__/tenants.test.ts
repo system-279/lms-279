@@ -771,7 +771,8 @@ describe("GET /api/v2/tenants/mine — owner + invited 統合", () => {
   // -------------------------------------------------------------------
   it("[AC-15] ?status=invalid → 400 invalid_status (Firestore 呼び出し前に拒否)", async () => {
     mockVerifyIdToken.mockResolvedValue(decoded("uid-1", "u@example.com"));
-    setMine({ tenants: [], allowedEmails: [] });
+    // Firestore に到達したら throw させ、guard 前拒否を assertion でも明示する。
+    mockGetFirestore.mockImplementation(throwFirestoreImpl);
     const app = await buildApp();
 
     const res = await supertest(app)
@@ -780,6 +781,7 @@ describe("GET /api/v2/tenants/mine — owner + invited 統合", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_status");
+    expect(mockGetFirestore).not.toHaveBeenCalled();
   });
 
   // -------------------------------------------------------------------

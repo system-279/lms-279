@@ -106,6 +106,13 @@ export interface MyTenantInfo {
   createdAt: string | null;
 }
 
+/**
+ * `GET /api/v2/tenants/mine` のレスポンス本体。
+ *
+ * `tenants` は `createdAt` 降順、`createdAt: null` は末尾に配置される。
+ * クライアントは追加 sort せずにそのまま表示してよい（API 契約として保証）。
+ * 同一 `createdAt` の相対順序は保証しない（unstable; 現状は Map insertion 順 = owner 優先）。
+ */
 export interface MineTenantsResponse {
   tenants: MyTenantInfo[];
 }
