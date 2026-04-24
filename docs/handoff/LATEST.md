@@ -1,14 +1,14 @@
-# Session Handoff — 2026-04-23 (Session 11)
+# Session Handoff — 2026-04-24 (Session 12)
 
 ## TL;DR
 
-**Issue #272 緊急復旧トラック: Session 9-10 複雑化の診断完了 + 先方への再ログイン依頼テンプレ送信実施。真の待ちは先方返信（ブランディング審査は非ブロッキング）。**
+**招待ユーザーが `/` 経由でログインできない問題の恒久対応 PR #329 をマージ・本番反映完了。受講者から実機ログイン成功の連絡を受領。Issue #272 系のリダイレクト動線も含めて完全解決。**
 
-Session 11 で Session 9-10 の診断ミスを特定: 2026-04-23 08:14 の Issue #272 コメントで既に OAuth External + 本番環境切替完了、テナント `8vexhzpc` (status=active) + allowed_emails 10 名登録済み（2026/4/21）と記録されていた。**つまりこの時点で先方 `sayori-maeda@kanjikai.or.jp` さんはログイン可能な状態**。しかし Session 9-10 は GCP Console UI の「ホームページ URL 所有権未確認」警告に従って、basic scopes only では本来不要なブランディング審査フロー（4-6 週間）に迷入し、PR #324 (/privacy /terms 公開) + PR #325 (Search Console 所有権確認) を実施。直近 7 日のサーバーログに先方の痕跡なし = **先方には再ログイン依頼も届いていなかった**。Session 11 で runbook §5 ベースの連絡テンプレを先方へ送信、運用教訓を memory・runbook に反映。ブランディング審査は非ブロッキング放置。
+Session 11 で sayori-maeda さんへの連絡テンプレ送信完了後、本セッション (Session 12) で別の実害インシデントが浮上: 検証アカウント `y.tsukuda@kanjikai.or.jp` を allowed_emails に登録しトップ URL で試したところ「所属するテナントがありません」表示。調査の結果、`/api/v2/tenants/mine` が `ownerId === uid` のみフィルタしており**招待ユーザーは仕様上 0 件返却**となることが判明。受講者向け案内文の URL がトップ `/` だったため運用上同じ詰まりが発生し得る状態だったと特定。受講者側の URL 変更運用は持続不可能と判断し、システム側で自動リダイレクト可能とする恒久対応 PR #329 を実装（owner + invited 統合 / Codex セカンドオピニオン取得 / `/review-pr` 5 観点全 OK / Critical 0 件）。Firestore index 手動デプロイ → Cloud Run デプロイ → smoke test → 受講者実機ログイン成功確認まで完遂。
 
-- **Issue Net**: **0**（本セッション新規起票・close ともに 0、ドキュメント・memory 整理のみ）
-- **Open 推移**: Session 10 末 7 件 → Session 11 末 7 件 (P0:1 / P2:6)
-- **本セッション成果**: 先方連絡送信 + 教訓整備（個人 memory 3 件 + runbook 追記 + 本ハンドオフ更新 + Issue #272 診断コメント）
+- **Issue Net**: **0**（実害バグ恒久対応 + ユーザー明示指示で直接実装、Issue 起票なし）
+- **Open 推移**: Session 11 末 7 件 → Session 12 末 7 件 (P0:1 / P2:6)
+- **本セッション成果**: PR #329 マージ（5 ファイル / +737 / -29 行 / 14 テスト追加）+ Firestore index デプロイ + 本番反映 + 実機 E2E 成功確認 + 社内向け説明文整理 + ハンドオフ更新
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -16,27 +16,82 @@ Session 11 で Session 9-10 の診断ミスを特定: 2026-04-23 08:14 の Issue
 # 1. 状況復元
 cat docs/handoff/LATEST.md
 
-# 2. 🔴 最優先: sayori-maeda さんからの返信確認
-# メール / 業務チャットで返信内容を確認
-# - ✅ ログイン成功 → Issue #272 緊急復旧トラック完全クローズ + コメント
-# - ❌ エラー継続（スクショあり） → Cloud Logging 精査
-gcloud logging read \
-  'resource.type="cloud_run_revision" AND severity>=WARNING' \
-  --project=lms-279 --limit=20 --freshness=1d --format=json
+# 2. main CI / Cloud Run が緑であることを確認
+gh run list --branch main --limit 3
 
 # 3. 現在の OPEN Issue（P0: 1 / P2: 6）
 gh issue list --state open --limit 15
 
-# 4. main CI が緑であることを確認
-gh run list --branch main --limit 3
-
-# 5. ブランディング審査結果（非ブロッキング・オプション、業務上影響なし）
-# Google → system@279279.net に結果メール (4-6 週間)
-# OK → 警告画面が消える / NG → 業務影響なく再申請任意
-
-# 6. 並行で進められる Phase 3 残 Sub-Issue (推奨: D/E 並行 → F)
+# 4. 🟡 Issue #272 緊急復旧トラック現状: ログイン詰まりは PR #329 で解消済
+#    残るは sayori-maeda さんからのフィードバック（任意）+ ブランディング審査結果待ち（非ブロッキング）
+#    Phase 3 GCIP 移行本体（Sub-Issue D/E/F）は時間取れる時に着手可能
 gh issue view 272
+
+# 5. 本 PR #329 のフォローアップ候補（rating ≤ 7、後追い PR で対応推奨。Issue 化は triage 基準に応じて）
+#    - AC-15: ?status=invalid → 400 テスト追加 (pr-test 指摘 rating 7)
+#    - AC-16: createdAt:null sort 末尾配置のテスト
+#    - silent-failure: tenant doc 不在 / ref.parent.parent null の warn ログ追加
+#    - shared-types `MyTenantInfo` JSDoc に「createdAt 降順」記載
+
+# 6. ブランディング審査結果（非ブロッキング、Session 11 から継続）
+# Google → system@279279.net に結果メール (4-6 週間)
 ```
+
+---
+
+## セッション成果物 (2026-04-24 Session 12)
+
+### 🔴 緊急インシデント対応: 招待ユーザーログイン詰まり
+
+**Phase A: 仕様確認と社内説明（前半）**
+
+| # | 発見 / 対応 |
+|---|------|
+| 1 | 検証アカウント `y.tsukuda@kanjikai.or.jp` を allowed_emails 追加 → トップ `/` で「所属するテナントがありません」 |
+| 2 | `services/api/src/routes/tenants.ts:330` で `/mine` は `ownerId === uid` のみフィルタ → 招待ユーザーは 0 件返却が仕様 |
+| 3 | 受講者側の「以前の履歴」経由ログインで動いていた = 案内 URL 自体は機能していなかった可能性が高い |
+| 4 | 社内向け説明文を作成・送付（システム不具合ではなく仕様の周知） |
+| 5 | 受講者向け案内文の URL ミス（トップ `/` 案内）を発見、修正案提示 |
+
+**Phase B: 恒久対応 PR #329 実装・デプロイ（後半）**
+
+- ✅ Codex セカンドオピニオン取得（`getAll(...refs)` 採用 / `accessVia` 削除 / index 先行デプロイ等を反映）
+- ✅ `/impl-plan` で AC-1〜AC-14 と implementation plan 確定
+- ✅ 実装:
+  - `services/api/src/routes/tenants.ts`: `/mine` を owner + invited 統合に拡張
+  - `packages/shared-types/src/tenant.ts`: `MyTenantInfo` / `MineTenantsResponse` 追加（`ownerEmail` 除外で PII 漏洩防止）
+  - `firestore.indexes.json`: `allowed_emails` を `fieldOverrides` 形式で `COLLECTION_GROUP / email ASC` 追加
+  - `services/api/src/routes/__tests__/tenants.test.ts`: AC-1〜AC-14 のテスト 14 件追加
+  - `web/app/page.tsx`: shared-types import 化
+- ✅ Quality Gate: type-check / lint / 全 643 + 33 テスト PASS / `/simplify` 8 項目修正 / `/safe-refactor` 追加修正なし
+- ✅ `/review-pr` 5 観点並列レビュー（security / silent-failure / type-design / pr-test / comment）→ Critical 0 件
+- ✅ Firestore index 手動デプロイ（CLI）+ READY 確認（4 つの index、特に `COLLECTION_GROUP / email ASC`）
+- ✅ PR #329 squash マージ（commit `7d0568d`）+ Cloud Run 自動デプロイ完了（revision `api-00227-xqv`）
+- ✅ API smoke test PASS（401 のみ、500 / missing-index なし）
+- ✅ **受講者から実機ログイン成功の連絡受領**（リダイレクト動作確認完了）
+
+### 既知制約（コード JSDoc に明文化済）
+
+1. `/mine` の返却は「実際のテナントアクセス可能性」と完全一致しない場合がある。GCIP UID 揺り戻し（`uid_reassignment_blocked`）等により、一覧に出ても `/{tenantId}` 直アクセス時に 403 となる偽陽性が起こり得る
+2. 同一 email が複数テナントの allowed_emails に登録されている場合、その principal は登録された全テナントの id / name / status を取得可能（ADR-006「email を境界にする allowlist」設計の副作用）
+3. `MyTenantInfo` から `ownerEmail` は意図的に除外（招待ユーザーへの owner email PII 漏洩防止）
+
+### 重要な運用知見（次セッション以降も参照）
+
+- **`firestore.indexes.json` の collectionGroup 単一フィールド index は `indexes` 配列ではなく `fieldOverrides` セクションに書く必要がある**（最初 `indexes` 配列に `queryScope: COLLECTION_GROUP` で書いて 400 エラー、`fieldOverrides` に修正してデプロイ成功）
+- `firebase deploy --only firestore:indexes -P lms-279` は CI に含まれないため**本番反映は手動必須**（順序: index デプロイ → READY 待ち → API デプロイ。逆順だと missing-index で 500）
+- 既存 `tenants.ts` の `/mine` ロジック改修は invited 統合だけでなく status push down regression 防止も含む（既存複合 index `[ownerId, status, createdAt]` を活用）
+
+### docs/api.md 更新
+
+- `/tenants/mine` の詳細セクション追加（クエリ / レスポンス / 動作 / セキュリティ設計 / 既知制約 / 必須 index）
+- API 一覧表に `/tenants/mine` を追加
+
+---
+
+## 過去セッション履歴
+
+過去のセッション内容は `docs/handoff/LATEST.md` 履歴 (`git log -p`) または既存セクション（下記）を参照。
 
 ---
 
