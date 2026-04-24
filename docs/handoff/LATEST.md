@@ -1,14 +1,14 @@
-# Session Handoff — 2026-04-24 (Session 12)
+# Session Handoff — 2026-04-24 (Session 13)
 
 ## TL;DR
 
-**招待ユーザーが `/` 経由でログインできない問題の恒久対応 PR #329 をマージ・本番反映完了。受講者から実機ログイン成功の連絡を受領。Issue #272 系のリダイレクト動線も含めて完全解決。**
+**Issue #272 close（緊急対応目的達成）+ PR #331 マージ完了（PR #329 フォローアップ）。`/review-pr` 5 エージェント並列レビューの Critical/Important 指摘を厳選対応、残は次 PR / triage 基準外として PR コメントで記録。Cloud Run デプロイ成功 + smoke test clean で本セッション締め。**
 
-Session 11 で sayori-maeda さんへの連絡テンプレ送信完了後、本セッション (Session 12) で別の実害インシデントが浮上: 検証アカウント `y.tsukuda@kanjikai.or.jp` を allowed_emails に登録しトップ URL で試したところ「所属するテナントがありません」表示。調査の結果、`/api/v2/tenants/mine` が `ownerId === uid` のみフィルタしており**招待ユーザーは仕様上 0 件返却**となることが判明。受講者向け案内文の URL がトップ `/` だったため運用上同じ詰まりが発生し得る状態だったと特定。受講者側の URL 変更運用は持続不可能と判断し、システム側で自動リダイレクト可能とする恒久対応 PR #329 を実装（owner + invited 統合 / Codex セカンドオピニオン取得 / `/review-pr` 5 観点全 OK / Critical 0 件）。Firestore index 手動デプロイ → Cloud Run デプロイ → smoke test → 受講者実機ログイン成功確認まで完遂。
+Session 12 で実害（外部ドメインログイン不可）を PR #329 で完全解消した続きで、本セッション (Session 13) は ① Issue #272 の整理（緊急対応目的達成につき close、残は全て非ブロッキング）、② PR #329 レビュー指摘 rating 5-7 のフォローアップ PR #331 実装・マージ、を完遂。`/review-pr` 5 エージェント並列レビューで新たに Critical 1（pr-test C-1: AC-15 assertion 乖離）+ Important 共通指摘 1（MineTenantsResponse JSDoc）+ silent-failure I-2（uid ログ）を本 PR 内で追加対応し、silent-failure C1-C3（`/mine` 既存 silent-failure、PR #329 時点から存在）は次 PR に送った。
 
-- **Issue Net**: **0**（実害バグ恒久対応 + ユーザー明示指示で直接実装、Issue 起票なし）
-- **Open 推移**: Session 11 末 7 件 → Session 12 末 7 件 (P0:1 / P2:6)
-- **本セッション成果**: PR #329 マージ（5 ファイル / +737 / -29 行 / 14 テスト追加）+ Firestore index デプロイ + 本番反映 + 実機 E2E 成功確認 + 社内向け説明文整理 + ハンドオフ更新
+- **Issue Net**: **-1**（Issue #272 close、起票 0）
+- **Open 推移**: Session 12 末 7 件 (P0:1 / P2:6) → Session 13 末 6 件 (**P0:0** / P2:6)
+- **本セッション成果**: Issue #272 整理（緊急対応完了につき close）+ PR #331 マージ（3 ファイル / +99 / -3 / 2 commits）+ Cloud Run `api-00229-p7w` デプロイ（3m17s）+ Cloud Logging clean
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -19,25 +19,86 @@ cat docs/handoff/LATEST.md
 # 2. main CI / Cloud Run が緑であることを確認
 gh run list --branch main --limit 3
 
-# 3. 現在の OPEN Issue（P0: 1 / P2: 6）
+# 3. 現在の OPEN Issue (P0:0 / P2:6)
 gh issue list --state open --limit 15
 
-# 4. 🟡 Issue #272 緊急復旧トラック現状: ログイン詰まりは PR #329 で解消済
-#    残るは sayori-maeda さんからのフィードバック（任意）+ ブランディング審査結果待ち（非ブロッキング）
-#    Phase 3 GCIP 移行本体（Sub-Issue D/E/F）は時間取れる時に着手可能
-gh issue view 272
+# 4. 次の着手候補（優先度順）:
+#    A. silent-failure C1-C3 フォロー PR（本セッション /review-pr で検出、PR #331 スコープ外）:
+#       - C1: /mine に top-level try-catch なし → Firestore エラーで 500 漏れ (rating 9)
+#       - C2: if (!data) continue が silent skip（PR #331 の warn 4 行下、整合性観点）(rating 8)
+#       - C3: status re-filter で schema violation silent drop → ADR-006 違反テナント表示可能性 (rating 8)
+#       → Issue #310 (platform_auth_error_logs 503/500 分離) と性質が近い、統合検討
+#    B. P2 Issue: #308 (E2E perf), #310 (auth_error_logs 503/500), #274-276 (allowed_emails 運用改善), #281 (allowed_emails CLI refactor)
+#    C. Issue #272 Phase 3 GCIP 移行: ADR-031 記録済、再開条件 (UID 衝突顕在化 / Custom Claims 必要 / 2026-10-24 6 ヶ月再評価) 満たし次第新 Issue
 
-# 5. 本 PR #329 のフォローアップ候補（rating ≤ 7、後追い PR で対応推奨。Issue 化は triage 基準に応じて）
-#    - AC-15: ?status=invalid → 400 テスト追加 (pr-test 指摘 rating 7)
-#    - AC-16: createdAt:null sort 末尾配置のテスト
-#    - silent-failure: tenant doc 不在 / ref.parent.parent null の warn ログ追加
-#    - shared-types `MyTenantInfo` JSDoc に「createdAt 降順」記載
-
-# 6. ブランディング審査結果（非ブロッキング、Session 11 から継続）
-# Google → system@279279.net に結果メール (4-6 週間)
+# 5. Session 13 rating 5-6 指摘（triage 基準外、Issue 化せず PR コメント/TODO 扱い）:
+#    - pr-test I-1/I-2/I-3/I-4: ?status= 空文字 / 大文字 / sort stability / createdAt undefined
+#    - comment S-1/S-2/S-3: warn ログ fail-soft WHY / 孤児化断定緩和 / AC-15/16 WHAT 重複
+#    - type-design I-2/I-3: tiebreaker 未定義 / ISO 8601 branded type
+#    - silent-failure I-1/I-3/S1-S3: errorType naming mine_* prefix / warn ログ単体テスト / 文言構造化
 ```
 
 ---
+
+## セッション成果物 (2026-04-24 Session 13)
+
+### 🟢 Issue #272 close (緊急対応目的達成)
+
+- 2026-04-24 Session 13 で close
+- **実害（外部ドメインログイン不可）は Session 12 PR #329 + 受講者実機ログイン成功で解消済**
+- close 時コメントで残事項の所在・再開条件を明記:
+  - A. sayori-maeda さん個別フィードバック: 受領次第 reopen 可能
+  - B. ブランディング審査結果: basic scopes 運用につき対応不要（仕様変更で審査必須化した場合のみ再開）
+  - C. Phase 3 GCIP 移行: ADR-031 記録済、再開条件（UID 衝突顕在化 / Custom Claims 必要 / 2026-10-24 再評価）満たし次第新 Issue
+- 本 Issue は「緊急対応」スコープのため close、Phase 3 GCIP は性質が異なるアーキテクチャ改善課題として独立扱い
+
+### 🟢 PR #331 マージ完了 (PR #329 フォローアップ)
+
+**初回実装 (commit `d6aea62`)**:
+- `packages/shared-types/src/tenant.ts`: `MyTenantInfo` JSDoc に「createdAt 降順 / null 末尾」追記
+- `services/api/src/routes/tenants.ts`: silent-failure 2 箇所に `logger.warn`（errorType: `allowed_emails_schema_violation` / `invited_tenant_orphan`）
+- `services/api/src/routes/__tests__/tenants.test.ts`: AC-15 (`?status=invalid` → 400) / AC-16 (`createdAt:null` 末尾 sort) の 2 テスト追加
+
+**`/review-pr` 5 エージェント並列レビュー結果**:
+
+| Agent | Critical | Important | Suggestion |
+|-------|:---:|:---:|:---:|
+| code-reviewer | 0 | 0 | 0 |
+| comment-analyzer | 0 | 1 | 3 |
+| pr-test-analyzer | **1** | 4 | 2 |
+| silent-failure-hunter | **3** | 3 | 3 |
+| type-design-analyzer | 0 | 3 | 3 |
+
+**本 PR 内で追加修正 (commit `5e4e95b`)**:
+- **[pr-test C-1, rating 9/conf 95]** AC-15 テストに `expect(mockGetFirestore).not.toHaveBeenCalled()` + `throwFirestoreImpl` を追加（既存 AC-7 パターンに揃える、テスト名と assertion の乖離解消）
+- **[comment I-1 + type-design I-1 共通指摘]** `MineTenantsResponse` JSDoc に sort 契約を追加（DTO 型 / 配列契約の責務分離）
+- **[silent-failure I-2]** `logger.warn` 2 箇所に `uid` field 追加（support ticket 対応時の user 特定）
+
+**次 PR に送った指摘 (silent-failure-hunter C1-C3、`/mine` 既存 silent-failure)**:
+- PR #331 スコープは「PR #329 の rating 5-7 後追い」であり、`/mine` 既存 silent-failure 解消は別スコープ
+- Issue #310（`platform_auth_error_logs` 503/500 分離）と性質が近いため統合検討を推奨
+
+**デプロイ確認**:
+- ✅ CI 全 4 job pass (Build / Lint / Test / Type Check)
+- ✅ squash merge (commit `60f0a60` on main)
+- ✅ Cloud Run 自動デプロイ (revision `api-00229-p7w`, 3m17s)
+- ✅ smoke test: 401/200, 500 なし
+- ✅ Cloud Logging: 500/503/missing-index エラーなし
+- ✅ API 645 tests (PR #329 の 643 + AC-15/16 の 2) + web 33 tests PASS
+
+### 重要な運用知見 (次セッション以降も参照)
+
+- **`logger.warn` の structured payload 規約**: `errorType`, `endpoint`, `uid` を必ず含める（既存 `public.ts` / `super-admin.ts` / `help-role.ts` パターンと整合）
+- **guard 前拒否テストパターン**: `mockGetFirestore.mockImplementation(throwFirestoreImpl)` + `expect(mockGetFirestore).not.toHaveBeenCalled()` の両方で assert（テスト名と assertion の乖離防止）
+- **shared-types の責務分離**: DTO 型（`MyTenantInfo`）と配列契約（`MineTenantsResponse`）の JSDoc を分ける — sort / pagination 等の配列レベル契約は wrapper 型側に書く
+- **`/review-pr` 結果の triage ポリシー**（本セッションで確立）:
+  - 本 PR 内で対応 = rating ≥ 7 Critical / 複数エージェント共通指摘 / low-effort high-value
+  - 別 PR に送る = 既存スコープ外の rating ≥ 7（本 PR で導入していない既存問題）
+  - PR コメント/TODO = rating 5-6（triage 基準外、Issue 化しない）
+
+---
+
+## 過去セッション履歴
 
 ## セッション成果物 (2026-04-24 Session 12)
 
@@ -89,11 +150,6 @@ gh issue view 272
 
 ---
 
-## 過去セッション履歴
-
-過去のセッション内容は `docs/handoff/LATEST.md` 履歴 (`git log -p`) または既存セクション（下記）を参照。
-
----
 
 ## セッション成果物 (2026-04-23 Session 11)
 
