@@ -33,6 +33,7 @@
 | GET | `/admin/auth-errors` | 認証エラーログ |
 | GET/PATCH | `/admin/notification-policies` | 通知ポリシー |
 | POST | `/tenants` | テナント登録 |
+| GET | `/tenants/mine` | 自分がアクセス可能なテナント一覧（owner + 招待） |
 | GET/PATCH | `/super/tenants` | スーパー管理者 |
 
 ### 講座管理（Admin）
@@ -300,6 +301,60 @@
 }
 ```
 
+
+### 自分がアクセス可能なテナント一覧
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/tenants/mine` | 自分が owner または allowed_emails 招待を受けているテナント一覧 |
+
+#### クエリ
+
+| パラメータ | 値 | 説明 |
+|-----------|-----|------|
+| `status` | `"active"` / `"suspended"` | 状態でフィルタ（任意） |
+
+#### レスポンス
+
+```json
+// GET /tenants/mine?status=active (200)
+{
+  "tenants": [
+    {
+      "id": "8vexhzpc",
+      "name": "社会福祉法人 莞爾会 長遊園",
+      "status": "active",
+      "createdAt": "2026-04-21T05:30:00.000Z"
+    }
+  ]
+}
+```
+
+#### 動作
+
+- owner（`tenants.ownerId === uid`）と invited（`allowed_emails.email === decodedToken.email`）の和集合を返却
+- 重複排除キーは tenantId（owner と invited 両方該当時は owner snapshot 採用）
+- `createdAt` 降順、null は末尾
+- `decodedToken.email` 欠落時は invited 検索をスキップして owner のみ返す（fail-closed）
+- tenant doc 削除済みの allowed_emails entry は無視（fail-closed）
+- super-admin に対する特別扱いなし（owner / 招待のみで判定）
+
+#### セキュリティ設計
+
+- **PII 漏洩防止**: `ownerEmail` は意図的に含めない（招待ユーザーが招待された全テナントの owner email を取得するのを防ぐ）
+- **email 横断検索の境界**: `email` は `decodedToken.email` から取得、attacker が任意 email を query 不可
+- **既知の漏洩面（ADR-006 副作用）**: 同一 email が複数テナントの allowed_emails に登録されている場合、その principal は登録された全テナントの id / name / status を取得可能
+
+#### 既知制約
+
+- `/mine` の返却は「実際のテナントアクセス可能性」と完全一致しない場合がある。GCIP UID 揺り戻し（`uid_reassignment_blocked`）等により、一覧に出ても `/{tenantId}` 直アクセス時に 403 となる偽陽性が起こり得る
+
+#### Firestore 必須 index
+
+- `allowed_emails` collectionGroup の `email` フィールド（ASCENDING、`fieldOverrides` 経由）
+- 既存の `tenants` 複合 index `[ownerId, status, createdAt]` も活用
+
+関連: ADR-006
 
 ### 公開テナント情報（認証不要）
 
