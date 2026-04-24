@@ -195,6 +195,13 @@
         { "fieldPath": "courseId", "order": "ASCENDING" },
         { "fieldPath": "entryAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "allowed_emails",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "email", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

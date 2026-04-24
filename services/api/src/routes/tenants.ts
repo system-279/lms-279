@@ -5,10 +5,12 @@
  */
 
 import { Router, Request, Response } from "express";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, type DocumentReference } from "firebase-admin/firestore";
 import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import type { TenantMetadata, CreateTenantRequest } from "../types/tenant.js";
+import type { MyTenantInfo, TenantStatus } from "@lms-279/shared-types";
 import { RESERVED_TENANT_IDS, generateTenantId, validateOrganizationName, normalizeEmail } from "../utils/tenant-id.js";
+import { toISOOptional } from "../datasource/firestore.js";
 import { logger } from "../utils/logger.js";
 
 const router = Router();
@@ -295,14 +297,31 @@ router.post("/", async (req: Request, res: Response) => {
 });
 
 /**
- * 自分が所有するテナント一覧を取得
+ * 自分がアクセス可能なテナント一覧を取得
  * GET /api/v2/tenants/mine
  *
  * 認証必須: Firebase ID Token
  * クエリ: status (optional) - "active" | "suspended"
+ *
+ * 返却内容:
+ *   - owner として作成したテナント
+ *   - allowed_emails に email が登録されたテナント（招待）
+ *   の和集合（重複排除済み、createdAt 降順）。
+ *
+ * 既知制約 (shared-types `MyTenantInfo` JSDoc も参照):
+ *   1. 一覧は「実際のテナントアクセス可能性」と完全一致しない場合がある。
+ *      GCIP UID 揺り戻し（uid_reassignment_blocked）等により、一覧に出ても
+ *      `/{tenantId}` 直アクセス時に 403 となる偽陽性が起こり得る。
+ *   2. 同一 email が複数テナントの allowed_emails に登録されている場合、
+ *      その principal は登録された全テナントの id / name / status を取得可能。
+ *      ADR-006「email を境界にする allowlist」設計の副作用。
+ *
+ * 設計メモ:
+ *   - tenant doc 取得は `getAll(...refs)` を使用（chunk 不要、`in` 上限の影響なし）。
+ *   - status filter は in-memory で適用（owner / invited 両系統に同一適用）。
+ *   - super-admin に対して特別扱いはしない（owner / 招待のみで判定）。
  */
 router.get("/mine", async (req: Request, res: Response) => {
-  // 1. 認証チェック
   const authResult = await verifyAuthToken(req);
   if (!authResult.success) {
     res.status(authResult.status).json({
@@ -312,12 +331,12 @@ router.get("/mine", async (req: Request, res: Response) => {
     return;
   }
 
-  const { uid } = authResult.token;
+  const { uid, email } = authResult.token;
+  const normalizedEmail = email ? normalizeEmail(email) : undefined;
 
-  // 2. クエリパラメータ
+  const validStatuses: TenantStatus[] = ["active", "suspended"];
   const statusFilter = req.query.status as string | undefined;
-  const validStatuses = ["active", "suspended"];
-  if (statusFilter && !validStatuses.includes(statusFilter)) {
+  if (statusFilter && !validStatuses.includes(statusFilter as TenantStatus)) {
     res.status(400).json({
       error: "invalid_status",
       message: "statusは 'active' または 'suspended' を指定してください。",
@@ -325,25 +344,83 @@ router.get("/mine", async (req: Request, res: Response) => {
     return;
   }
 
-  // 3. テナント一覧を取得
   const db = getFirestore();
-  let query = db.collection("tenants").where("ownerId", "==", uid);
 
+  // owner クエリは status を Firestore 側に push down する（既存複合 index
+  // [ownerId, status, createdAt] を活用）。invited は allowed_emails に
+  // status を持たないため getAll 後に in-memory で同じ filter を再適用する。
+  let ownerQuery: FirebaseFirestore.Query = db
+    .collection("tenants")
+    .where("ownerId", "==", uid);
   if (statusFilter) {
-    query = query.where("status", "==", statusFilter);
+    ownerQuery = ownerQuery.where("status", "==", statusFilter);
   }
 
-  const snapshot = await query.orderBy("createdAt", "desc").get();
+  // invited 検索は email 必須（欠落時は owner のみ返す = fail-closed）。
+  const invitedTenantRefsPromise: Promise<DocumentReference[]> = normalizedEmail
+    ? db
+        .collectionGroup("allowed_emails")
+        .where("email", "==", normalizedEmail)
+        .get()
+        .then((snap) => {
+          const refs: DocumentReference[] = [];
+          for (const allowedDoc of snap.docs) {
+            const tenantRef = allowedDoc.ref.parent.parent;
+            if (tenantRef) refs.push(tenantRef);
+          }
+          return refs;
+        })
+    : Promise.resolve([]);
 
-  const tenants = snapshot.docs.map((doc) => {
+  const [ownerSnapshot, invitedTenantRefs] = await Promise.all([
+    ownerQuery.get(),
+    invitedTenantRefsPromise,
+  ]);
+
+  // 重複排除キーは tenantId。owner と invited に同じテナントがある場合は
+  // owner snapshot を採用する（状態は同一だが意味論的に owner を優先）。
+  const tenantDocsById = new Map<
+    string,
+    FirebaseFirestore.DocumentSnapshot
+  >();
+  for (const doc of ownerSnapshot.docs) {
+    tenantDocsById.set(doc.id, doc);
+  }
+
+  const invitedRefsToFetch = invitedTenantRefs.filter(
+    (ref) => !tenantDocsById.has(ref.id)
+  );
+  if (invitedRefsToFetch.length > 0) {
+    const invitedDocs = await db.getAll(...invitedRefsToFetch);
+    for (const doc of invitedDocs) {
+      // tenant doc が削除済み等で存在しない場合はスキップ（fail-closed）
+      if (doc.exists) {
+        tenantDocsById.set(doc.id, doc);
+      }
+    }
+  }
+
+  const tenants: MyTenantInfo[] = [];
+  for (const doc of tenantDocsById.values()) {
     const data = doc.data();
-    return {
+    if (!data) continue;
+    // owner query は status を push down 済だが、invited 経由は filter 未適用のためここで再判定。
+    if (statusFilter && data.status !== statusFilter) continue;
+    tenants.push({
       id: data.id,
       name: data.name,
-      ownerEmail: data.ownerEmail,
       status: data.status,
-      createdAt: data.createdAt?.toDate?.()?.toISOString() ?? null,
-    };
+      createdAt: toISOOptional(data.createdAt),
+    });
+  }
+
+  // createdAt desc。ISO 8601 は lexicographic 比較で時系列と一致するため
+  // localeCompare で desc を表現できる。null は末尾に寄せる。
+  tenants.sort((a, b) => {
+    if (a.createdAt === b.createdAt) return 0;
+    if (a.createdAt === null) return 1;
+    if (b.createdAt === null) return -1;
+    return b.createdAt.localeCompare(a.createdAt);
   });
 
   res.json({ tenants });
