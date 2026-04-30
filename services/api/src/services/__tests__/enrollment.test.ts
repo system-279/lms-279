@@ -3,6 +3,7 @@ import {
   checkQuizAccess,
   checkVideoAccess,
   calculateDefaultDeadlines,
+  validateEnrollmentSettingPayload,
 } from "../enrollment.js";
 import { toDateStrict } from "../../datasource/firestore.js";
 import type { TenantEnrollmentSetting } from "../../types/entities.js";
@@ -132,14 +133,146 @@ describe("calculateDefaultDeadlines (JST日末基準)", () => {
   });
 
   it("無効な日付文字列は例外をスロー", () => {
-    expect(() => calculateDefaultDeadlines("not-a-date")).toThrow("invalid enrolledAt");
-    expect(() => calculateDefaultDeadlines("")).toThrow("invalid enrolledAt");
+    expect(() => calculateDefaultDeadlines("not-a-date")).toThrow("invalid baseDate");
+    expect(() => calculateDefaultDeadlines("")).toThrow("invalid baseDate");
   });
 
   it("年末の日付でも正しく計算", () => {
     const result = calculateDefaultDeadlines("2026-12-15T00:00:00Z");
     expect(result.quizAccessUntil).toBe("2027-02-15T14:59:59.999Z");
     expect(result.videoAccessUntil).toBe("2027-12-15T14:59:59.999Z");
+  });
+
+  it("deadlineBaseDate 起算（要望ケース: 2026-04-05 起算）でテスト=2026-06-05 / 動画=2027-04-05 の JST 日末", () => {
+    const result = calculateDefaultDeadlines("2026-04-05T00:00:00Z");
+    expect(result.quizAccessUntil).toBe("2026-06-05T14:59:59.999Z");
+    expect(result.videoAccessUntil).toBe("2027-04-05T14:59:59.999Z");
+  });
+});
+
+describe("validateEnrollmentSettingPayload", () => {
+  beforeEach(() => {
+    vi.setSystemTime(new Date("2026-04-02T10:00:00Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("enrolledAt のみ指定 → 正規化された ISO を返し deadlineBaseDate は欠落（後方互換）", () => {
+    const result = validateEnrollmentSettingPayload({ enrolledAt: "2026-04-06" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.enrolledAt).toBe("2026-04-06T00:00:00.000Z");
+      expect(result.deadlineBaseDate).toBeUndefined();
+    }
+  });
+
+  it("enrolledAt + deadlineBaseDate 指定 → 両方正規化", () => {
+    const result = validateEnrollmentSettingPayload({
+      enrolledAt: "2026-04-06",
+      deadlineBaseDate: "2026-04-05",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.enrolledAt).toBe("2026-04-06T00:00:00.000Z");
+      expect(result.deadlineBaseDate).toBe("2026-04-05T00:00:00.000Z");
+    }
+  });
+
+  it("deadlineBaseDate = enrolledAt は許可（同日)", () => {
+    const result = validateEnrollmentSettingPayload({
+      enrolledAt: "2026-04-06",
+      deadlineBaseDate: "2026-04-06",
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("deadlineBaseDate が空文字は未指定扱い", () => {
+    const result = validateEnrollmentSettingPayload({
+      enrolledAt: "2026-04-06",
+      deadlineBaseDate: "",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.deadlineBaseDate).toBeUndefined();
+  });
+
+  it("enrolledAt 未指定 → missing_enrolled_at", () => {
+    const result = validateEnrollmentSettingPayload({});
+    expect(result).toMatchObject({ ok: false, code: "missing_enrolled_at", field: "enrolledAt" });
+  });
+
+  it("body 自体が undefined → missing_enrolled_at", () => {
+    const result = validateEnrollmentSettingPayload(undefined);
+    expect(result).toMatchObject({ ok: false, code: "missing_enrolled_at" });
+  });
+
+  it.each([
+    ["数値", { enrolledAt: 1717000000000 }, "invalid_type"],
+    ["配列", { enrolledAt: ["2026-04-06"] }, "invalid_type"],
+    ["boolean", { enrolledAt: true }, "invalid_type"],
+  ])("enrolledAt が %s → invalid_type", (_label, body, expectedCode) => {
+    const result = validateEnrollmentSettingPayload(body);
+    expect(result).toMatchObject({ ok: false, code: expectedCode, field: "enrolledAt" });
+  });
+
+  it("enrolledAt が非 ISO → invalid_date", () => {
+    const result = validateEnrollmentSettingPayload({ enrolledAt: "not-a-date" });
+    expect(result).toMatchObject({ ok: false, code: "invalid_date", field: "enrolledAt" });
+  });
+
+  it("enrolledAt が 5 年以上先 → date_out_of_range", () => {
+    const result = validateEnrollmentSettingPayload({ enrolledAt: "2032-04-02" });
+    expect(result).toMatchObject({ ok: false, code: "date_out_of_range", field: "enrolledAt" });
+  });
+
+  it("deadlineBaseDate が undefined（明示渡し）→ 未指定扱い", () => {
+    const result = validateEnrollmentSettingPayload({
+      enrolledAt: "2026-04-06",
+      deadlineBaseDate: undefined,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.deadlineBaseDate).toBeUndefined();
+  });
+
+  it("deadlineBaseDate が null → 未指定扱い", () => {
+    const result = validateEnrollmentSettingPayload({
+      enrolledAt: "2026-04-06",
+      deadlineBaseDate: null,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.deadlineBaseDate).toBeUndefined();
+  });
+
+  it("deadlineBaseDate が非 ISO → invalid_date", () => {
+    const result = validateEnrollmentSettingPayload({
+      enrolledAt: "2026-04-06",
+      deadlineBaseDate: "garbage",
+    });
+    expect(result).toMatchObject({ ok: false, code: "invalid_date", field: "deadlineBaseDate" });
+  });
+
+  it("deadlineBaseDate が 5 年以上前 → date_out_of_range", () => {
+    const result = validateEnrollmentSettingPayload({
+      enrolledAt: "2026-04-06",
+      deadlineBaseDate: "2020-04-02",
+    });
+    expect(result).toMatchObject({ ok: false, code: "date_out_of_range", field: "deadlineBaseDate" });
+  });
+
+  it("deadlineBaseDate が 5 年以上先 → date_out_of_range（範囲チェックが順序チェックに先行）", () => {
+    const result = validateEnrollmentSettingPayload({
+      enrolledAt: "2026-04-06",
+      deadlineBaseDate: "2032-04-02",
+    });
+    expect(result).toMatchObject({ ok: false, code: "date_out_of_range", field: "deadlineBaseDate" });
+  });
+
+  it("deadlineBaseDate > enrolledAt（順序違反）→ invalid_deadline_base_date", () => {
+    const result = validateEnrollmentSettingPayload({
+      enrolledAt: "2026-04-06",
+      deadlineBaseDate: "2026-04-07",
+    });
+    expect(result).toMatchObject({ ok: false, code: "invalid_deadline_base_date", field: "deadlineBaseDate" });
   });
 });
 

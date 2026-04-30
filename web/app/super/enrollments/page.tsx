@@ -49,6 +49,7 @@ export default function EnrollmentsPage() {
   // 設定ダイアログ
   const [settingOpen, setSettingOpen] = useState(false);
   const [settingEnrolledAt, setSettingEnrolledAt] = useState("");
+  const [settingDeadlineBaseDate, setSettingDeadlineBaseDate] = useState("");
   const [settingLoading, setSettingLoading] = useState(false);
 
   // テナント一覧取得
@@ -86,16 +87,29 @@ export default function EnrollmentsPage() {
   // 設定保存
   const handleSave = async () => {
     if (!selectedTenant || !settingEnrolledAt) return;
+    // 起算日が受講開始日より後の場合はクライアント側で早期ガード
+    if (
+      settingDeadlineBaseDate &&
+      !isNaN(new Date(settingDeadlineBaseDate).getTime()) &&
+      new Date(settingDeadlineBaseDate) > new Date(settingEnrolledAt)
+    ) {
+      setError("期限起算日は受講開始日以前の日付を指定してください");
+      return;
+    }
     setSettingLoading(true);
     try {
+      const body: { enrolledAt: string; deadlineBaseDate?: string } = {
+        enrolledAt: new Date(settingEnrolledAt).toISOString(),
+      };
+      if (settingDeadlineBaseDate) {
+        body.deadlineBaseDate = new Date(settingDeadlineBaseDate).toISOString();
+      }
       await superFetch(
         `/api/v2/super/tenants/${selectedTenant}/enrollment-setting`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            enrolledAt: new Date(settingEnrolledAt).toISOString(),
-          }),
+          body: JSON.stringify(body),
         }
       );
       setSettingOpen(false);
@@ -124,6 +138,7 @@ export default function EnrollmentsPage() {
   // 設定ダイアログを開く
   const openSettingDialog = () => {
     setSettingEnrolledAt(setting?.enrolledAt?.split("T")[0] ?? "");
+    setSettingDeadlineBaseDate(setting?.deadlineBaseDate?.split("T")[0] ?? "");
     setSettingOpen(true);
   };
 
@@ -158,6 +173,12 @@ export default function EnrollmentsPage() {
           <div className="grid grid-cols-2 gap-y-2 text-sm">
             <span className="text-muted-foreground">受講開始日</span>
             <span>{formatDate(setting.enrolledAt)}</span>
+            {setting.deadlineBaseDate && (
+              <>
+                <span className="text-muted-foreground">期限起算日</span>
+                <span>{formatDate(setting.deadlineBaseDate)}</span>
+              </>
+            )}
             <span className="text-muted-foreground">テスト期限</span>
             <span className={isExpired(setting.quizAccessUntil) ? "text-destructive font-medium" : ""}>
               {formatDate(setting.quizAccessUntil)}
@@ -201,12 +222,31 @@ export default function EnrollmentsPage() {
                 onChange={(e) => setSettingEnrolledAt(e.target.value)}
               />
             </div>
-            {settingEnrolledAt && !isNaN(new Date(settingEnrolledAt).getTime()) && (
-              <div className="text-sm text-muted-foreground space-y-1">
-                <p>テスト期限: {formatDate(addMonths(new Date(settingEnrolledAt), 2).toISOString())}（この日のJST 23:59まで有効）</p>
-                <p>動画期限: {formatDate(addYears(new Date(settingEnrolledAt), 1).toISOString())}（この日のJST 23:59まで有効）</p>
-              </div>
-            )}
+            <div>
+              <label className="text-sm">期限起算日（任意）</label>
+              <Input
+                type="date"
+                value={settingDeadlineBaseDate}
+                max={settingEnrolledAt || undefined}
+                onChange={(e) => setSettingDeadlineBaseDate(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                未入力時は受講開始日から起算します。受講開始日は変更されません。受講開始日以前の日付のみ指定可能です。
+              </p>
+            </div>
+            {settingEnrolledAt && !isNaN(new Date(settingEnrolledAt).getTime()) && (() => {
+              const baseDateStr = settingDeadlineBaseDate && !isNaN(new Date(settingDeadlineBaseDate).getTime())
+                ? settingDeadlineBaseDate
+                : settingEnrolledAt;
+              const baseDate = new Date(baseDateStr);
+              const baseLabel = settingDeadlineBaseDate ? "期限起算日" : "受講開始日";
+              return (
+                <div className="text-sm text-muted-foreground space-y-1">
+                  <p>テスト期限: {formatDate(addMonths(baseDate, 2).toISOString())}（{baseLabel} +2ヶ月、JST 23:59まで有効）</p>
+                  <p>動画期限: {formatDate(addYears(baseDate, 1).toISOString())}（{baseLabel} +1年、JST 23:59まで有効）</p>
+                </div>
+              );
+            })()}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setSettingOpen(false)}>キャンセル</Button>
