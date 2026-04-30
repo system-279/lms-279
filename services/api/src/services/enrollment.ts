@@ -6,6 +6,8 @@
 import { addMonths, addYears } from "date-fns";
 import type { Request, Response } from "express";
 import type { TenantEnrollmentSetting } from "../types/entities.js";
+import { logger } from "../utils/logger.js";
+import { classifyFirestoreError, TRANSIENT_RETRY_MESSAGE_JA } from "../utils/grpc-errors.js";
 
 /** JST日末 (23:59:59.999 JST = 14:59:59.999 UTC)。入力はUTC基準のDateであること。 */
 function endOfDayJST(date: Date): Date {
@@ -83,10 +85,17 @@ export async function guardQuizAccess(
     }
     return false;
   } catch (err) {
-    console.error("Failed to check quiz access:", err);
-    res.status(500).json({
+    const { grpcCode, isTransient } = classifyFirestoreError(err);
+    logger.error("Failed to check quiz access", {
+      errorType: "enrollment_quiz_check_failed",
+      error: err instanceof Error ? err : new Error(String(err)),
+      tenantId: req.tenantContext?.tenantId,
+      grpcCode,
+      isTransient,
+    });
+    res.status(isTransient ? 503 : 500).json({
       error: "enrollment_check_failed",
-      message: "受講期限チェックが失敗しました",
+      message: isTransient ? TRANSIENT_RETRY_MESSAGE_JA : "受講期限チェックが失敗しました",
     });
     return true;
   }
@@ -112,10 +121,17 @@ export async function guardVideoAccess(
     }
     return false;
   } catch (err) {
-    console.error("Failed to check video access:", err);
-    res.status(500).json({
+    const { grpcCode, isTransient } = classifyFirestoreError(err);
+    logger.error("Failed to check video access", {
+      errorType: "enrollment_video_check_failed",
+      error: err instanceof Error ? err : new Error(String(err)),
+      tenantId: req.tenantContext?.tenantId,
+      grpcCode,
+      isTransient,
+    });
+    res.status(isTransient ? 503 : 500).json({
       error: "enrollment_check_failed",
-      message: "受講期限チェックが失敗しました",
+      message: isTransient ? TRANSIENT_RETRY_MESSAGE_JA : "受講期限チェックが失敗しました",
     });
     return true;
   }
@@ -137,10 +153,17 @@ export async function checkQuizAccessSoft(
     }
     return { accessExpired: false };
   } catch (err) {
-    console.error("Failed to check quiz access:", err);
-    res.status(500).json({
+    const { grpcCode, isTransient } = classifyFirestoreError(err);
+    logger.error("Failed to check quiz access (soft)", {
+      errorType: "enrollment_quiz_soft_check_failed",
+      error: err instanceof Error ? err : new Error(String(err)),
+      tenantId: req.tenantContext?.tenantId,
+      grpcCode,
+      isTransient,
+    });
+    res.status(isTransient ? 503 : 500).json({
       error: "enrollment_check_failed",
-      message: "受講期限チェックが失敗しました",
+      message: isTransient ? TRANSIENT_RETRY_MESSAGE_JA : "受講期限チェックが失敗しました",
     });
     return null;
   }
