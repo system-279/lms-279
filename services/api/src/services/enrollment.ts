@@ -6,6 +6,7 @@
 import { addMonths, addYears } from "date-fns";
 import type { Request, Response } from "express";
 import type { TenantEnrollmentSetting } from "../types/entities.js";
+import { logger } from "../utils/logger.js";
 
 /** JST日末 (23:59:59.999 JST = 14:59:59.999 UTC)。入力はUTC基準のDateであること。 */
 function endOfDayJST(date: Date): Date {
@@ -83,10 +84,20 @@ export async function guardQuizAccess(
     }
     return false;
   } catch (err) {
-    console.error("Failed to check quiz access:", err);
-    res.status(500).json({
+    const grpcCode = (err as { code?: number })?.code;
+    const isTransient = grpcCode === 14 || grpcCode === 4;
+    logger.error("Failed to check quiz access", {
+      errorType: "enrollment_check_failed",
+      error: err instanceof Error ? err : new Error(String(err)),
+      tenantId: req.tenantContext?.tenantId,
+      grpcCode,
+      isTransient,
+    });
+    res.status(isTransient ? 503 : 500).json({
       error: "enrollment_check_failed",
-      message: "受講期限チェックが失敗しました",
+      message: isTransient
+        ? "サーバーが一時的に利用できません。数秒後に再度お試しください。"
+        : "受講期限チェックが失敗しました",
     });
     return true;
   }
@@ -112,10 +123,20 @@ export async function guardVideoAccess(
     }
     return false;
   } catch (err) {
-    console.error("Failed to check video access:", err);
-    res.status(500).json({
+    const grpcCode = (err as { code?: number })?.code;
+    const isTransient = grpcCode === 14 || grpcCode === 4;
+    logger.error("Failed to check video access", {
+      errorType: "enrollment_check_failed",
+      error: err instanceof Error ? err : new Error(String(err)),
+      tenantId: req.tenantContext?.tenantId,
+      grpcCode,
+      isTransient,
+    });
+    res.status(isTransient ? 503 : 500).json({
       error: "enrollment_check_failed",
-      message: "受講期限チェックが失敗しました",
+      message: isTransient
+        ? "サーバーが一時的に利用できません。数秒後に再度お試しください。"
+        : "受講期限チェックが失敗しました",
     });
     return true;
   }
@@ -137,10 +158,20 @@ export async function checkQuizAccessSoft(
     }
     return { accessExpired: false };
   } catch (err) {
-    console.error("Failed to check quiz access:", err);
-    res.status(500).json({
+    const grpcCode = (err as { code?: number })?.code;
+    const isTransient = grpcCode === 14 || grpcCode === 4;
+    logger.error("Failed to check quiz access (soft)", {
+      errorType: "enrollment_check_failed",
+      error: err instanceof Error ? err : new Error(String(err)),
+      tenantId: req.tenantContext?.tenantId,
+      grpcCode,
+      isTransient,
+    });
+    res.status(isTransient ? 503 : 500).json({
       error: "enrollment_check_failed",
-      message: "受講期限チェックが失敗しました",
+      message: isTransient
+        ? "サーバーが一時的に利用できません。数秒後に再度お試しください。"
+        : "受講期限チェックが失敗しました",
     });
     return null;
   }

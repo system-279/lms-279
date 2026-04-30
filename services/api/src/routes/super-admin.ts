@@ -1535,21 +1535,40 @@ router.get("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Re
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
 
-  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
-  if (!tenantDoc.exists) {
-    res.status(404).json({ error: "not_found", message: "Tenant not found" });
-    return;
+  try {
+    const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+    if (!tenantDoc.exists) {
+      res.status(404).json({ error: "not_found", message: "Tenant not found" });
+      return;
+    }
+
+    const basePath = `tenants/${tenantId}`;
+    const doc = await db.collection(`${basePath}/enrollment_setting`).doc("_config").get();
+
+    if (!doc.exists) {
+      res.json({ setting: null });
+      return;
+    }
+
+    res.json({ setting: toEnrollmentSettingResponse(doc.data()) });
+  } catch (e) {
+    const grpcCode = (e as { code?: number })?.code;
+    const isTransient = grpcCode === 14 || grpcCode === 4;
+    logger.error("Enrollment setting GET failed", {
+      errorType: "enrollment_setting_get_failed",
+      error: e instanceof Error ? e : new Error(String(e)),
+      tenantId,
+      operatorEmail: req.superAdmin?.email,
+      grpcCode,
+      isTransient,
+    });
+    res.status(isTransient ? 503 : 500).json({
+      error: "transaction_failed",
+      message: isTransient
+        ? "サーバーが一時的に利用できません。数秒後に再度お試しください。"
+        : "受講期間設定の取得中にエラーが発生しました。",
+    });
   }
-
-  const basePath = `tenants/${tenantId}`;
-  const doc = await db.collection(`${basePath}/enrollment_setting`).doc("_config").get();
-
-  if (!doc.exists) {
-    res.json({ setting: null });
-    return;
-  }
-
-  res.json({ setting: toEnrollmentSettingResponse(doc.data()) });
 });
 
 /**
@@ -1560,52 +1579,78 @@ router.get("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Re
 router.put("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Response) => {
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
+  const operatorEmail = req.superAdmin!.email;
 
-  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
-  if (!tenantDoc.exists) {
-    res.status(404).json({ error: "not_found", message: "Tenant not found" });
-    return;
-  }
-
+  // バリデーションは例外ではなく値で返るため try の前で実行（純粋関数）。
   const validated = validateEnrollmentSettingPayload(req.body);
   if (!validated.ok) {
     res.status(400).json({ error: validated.code, field: validated.field, message: validated.message });
     return;
   }
 
-  const { enrolledAt: normalizedEnrolledAt, deadlineBaseDate: normalizedDeadlineBaseDate } = validated;
-  const deadlines = calculateDefaultDeadlines(normalizedDeadlineBaseDate ?? normalizedEnrolledAt);
-  const basePath = `tenants/${tenantId}`;
-  const docRef = db.collection(`${basePath}/enrollment_setting`).doc("_config");
-  const updatedAt = new Date().toISOString();
-  const operatorEmail = req.superAdmin!.email;
+  try {
+    const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+    if (!tenantDoc.exists) {
+      res.status(404).json({ error: "not_found", message: "Tenant not found" });
+      return;
+    }
 
-  // PUT は明示的な完全更新セマンティクス。
-  // 省略時は FieldValue.delete() で既存 deadlineBaseDate を除去（merge:true でも残さない）。
-  // 他フィールドは必須なので undefined 除去対象外。
-  const writeData: Record<string, unknown> = {
-    enrolledAt: normalizedEnrolledAt,
-    deadlineBaseDate: normalizedDeadlineBaseDate ?? FieldValue.delete(),
-    quizAccessUntil: deadlines.quizAccessUntil,
-    videoAccessUntil: deadlines.videoAccessUntil,
-    createdBy: operatorEmail,
-    updatedAt,
-  };
+    const { enrolledAt: normalizedEnrolledAt, deadlineBaseDate: normalizedDeadlineBaseDate } = validated;
+    const deadlines = calculateDefaultDeadlines(normalizedDeadlineBaseDate ?? normalizedEnrolledAt);
+    const basePath = `tenants/${tenantId}`;
+    const docRef = db.collection(`${basePath}/enrollment_setting`).doc("_config");
+    const updatedAt = new Date().toISOString();
 
-  await docRef.set(writeData, { merge: true });
+    // PUT は明示的な完全更新セマンティクス。
+    // 省略時は FieldValue.delete() で既存 deadlineBaseDate を除去（merge:true でも残さない）。
+    // 他フィールドは必須なので undefined 除去対象外。
+    const writeData: Record<string, unknown> = {
+      enrolledAt: normalizedEnrolledAt,
+      deadlineBaseDate: normalizedDeadlineBaseDate ?? FieldValue.delete(),
+      quizAccessUntil: deadlines.quizAccessUntil,
+      videoAccessUntil: deadlines.videoAccessUntil,
+      createdBy: operatorEmail,
+      updatedAt,
+    };
 
-  // レスポンスは保存値から純粋に構築（FieldValue.delete sentinel が混入しない設計）。
-  const response: TenantEnrollmentSettingResponse = {
-    enrolledAt: normalizedEnrolledAt,
-    quizAccessUntil: deadlines.quizAccessUntil,
-    videoAccessUntil: deadlines.videoAccessUntil,
-    createdBy: operatorEmail,
-    updatedAt,
-  };
-  if (normalizedDeadlineBaseDate) {
-    response.deadlineBaseDate = normalizedDeadlineBaseDate;
+    await docRef.set(writeData, { merge: true });
+
+    logger.info("Enrollment setting upserted by super admin", {
+      tenantId,
+      operatorEmail,
+      hasDeadlineBaseDate: Boolean(normalizedDeadlineBaseDate),
+    });
+
+    // レスポンスは保存値から純粋に構築（FieldValue.delete sentinel が混入しない設計）。
+    const response: TenantEnrollmentSettingResponse = {
+      enrolledAt: normalizedEnrolledAt,
+      quizAccessUntil: deadlines.quizAccessUntil,
+      videoAccessUntil: deadlines.videoAccessUntil,
+      createdBy: operatorEmail,
+      updatedAt,
+    };
+    if (normalizedDeadlineBaseDate) {
+      response.deadlineBaseDate = normalizedDeadlineBaseDate;
+    }
+    res.json({ setting: response });
+  } catch (e) {
+    const grpcCode = (e as { code?: number })?.code;
+    const isTransient = grpcCode === 14 || grpcCode === 4;
+    logger.error("Enrollment setting PUT failed", {
+      errorType: "enrollment_setting_put_failed",
+      error: e instanceof Error ? e : new Error(String(e)),
+      tenantId,
+      operatorEmail,
+      grpcCode,
+      isTransient,
+    });
+    res.status(isTransient ? 503 : 500).json({
+      error: "transaction_failed",
+      message: isTransient
+        ? "サーバーが一時的に利用できません。数秒後に再度お試しください。"
+        : "受講期間設定の更新中にエラーが発生しました。",
+    });
   }
-  res.json({ setting: response });
 });
 
 /**
@@ -1615,24 +1660,50 @@ router.put("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Re
 router.delete("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Response) => {
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
+  const operatorEmail = req.superAdmin!.email;
 
-  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
-  if (!tenantDoc.exists) {
-    res.status(404).json({ error: "not_found", message: "Tenant not found" });
-    return;
+  try {
+    const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+    if (!tenantDoc.exists) {
+      res.status(404).json({ error: "not_found", message: "Tenant not found" });
+      return;
+    }
+
+    const basePath = `tenants/${tenantId}`;
+    const docRef = db.collection(`${basePath}/enrollment_setting`).doc("_config");
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      res.status(404).json({ error: "not_found", message: "Enrollment setting not found" });
+      return;
+    }
+
+    await docRef.delete();
+
+    logger.info("Enrollment setting deleted by super admin", {
+      tenantId,
+      operatorEmail,
+    });
+
+    res.status(204).send();
+  } catch (e) {
+    const grpcCode = (e as { code?: number })?.code;
+    const isTransient = grpcCode === 14 || grpcCode === 4;
+    logger.error("Enrollment setting DELETE failed", {
+      errorType: "enrollment_setting_delete_failed",
+      error: e instanceof Error ? e : new Error(String(e)),
+      tenantId,
+      operatorEmail,
+      grpcCode,
+      isTransient,
+    });
+    res.status(isTransient ? 503 : 500).json({
+      error: "transaction_failed",
+      message: isTransient
+        ? "サーバーが一時的に利用できません。数秒後に再度お試しください。"
+        : "受講期間設定の削除中にエラーが発生しました。",
+    });
   }
-
-  const basePath = `tenants/${tenantId}`;
-  const docRef = db.collection(`${basePath}/enrollment_setting`).doc("_config");
-  const doc = await docRef.get();
-
-  if (!doc.exists) {
-    res.status(404).json({ error: "not_found", message: "Enrollment setting not found" });
-    return;
-  }
-
-  await docRef.delete();
-  res.status(204).send();
 });
 
 export const superAdminRouter = router;

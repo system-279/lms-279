@@ -1657,8 +1657,12 @@ export class FirestoreDataSource implements DataSource {
       }
       return result;
     } catch (e) {
-      const error = e instanceof Error ? e.message : String(e);
-      console.error(`Failed to parse TenantEnrollmentSetting:`, error);
+      logger.error("Failed to parse TenantEnrollmentSetting", {
+        errorType: "enrollment_setting_parse_failed",
+        error: e instanceof Error ? e : new Error(String(e)),
+        tenantId: this.tenantId,
+        documentId: id,
+      });
       throw e;
     }
   }
