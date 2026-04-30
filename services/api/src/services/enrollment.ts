@@ -184,6 +184,15 @@ function isWithinRange(dateStr: string): boolean {
   return diff <= ENROLLEDAT_RANGE_YEARS * 365.25 * 24 * 60 * 60 * 1000;
 }
 
+export const ENROLLMENT_VALIDATION_ERROR_CODES = [
+  "missing_enrolled_at",
+  "invalid_type",
+  "invalid_date",
+  "date_out_of_range",
+  "invalid_deadline_base_date",
+] as const;
+export type EnrollmentValidationErrorCode = typeof ENROLLMENT_VALIDATION_ERROR_CODES[number];
+
 export type ValidatedEnrollmentPayload = {
   ok: true;
   enrolledAt: string;
@@ -192,8 +201,8 @@ export type ValidatedEnrollmentPayload = {
 
 export type ValidationError = {
   ok: false;
-  status: 400;
-  error: string;
+  code: EnrollmentValidationErrorCode;
+  field: "enrolledAt" | "deadlineBaseDate";
   message: string;
 };
 
@@ -206,39 +215,43 @@ export function validateEnrollmentSettingPayload(body: unknown): ValidatedEnroll
   const payload = (body ?? {}) as { enrolledAt?: unknown; deadlineBaseDate?: unknown };
   const { enrolledAt, deadlineBaseDate } = payload;
 
-  if (!enrolledAt || typeof enrolledAt !== "string") {
-    return { ok: false, status: 400, error: "bad_request", message: "enrolledAt is required" };
+  // 未指定（undefined/null/空文字）と型違反を明確に区別
+  if (enrolledAt === undefined || enrolledAt === null || enrolledAt === "") {
+    return { ok: false, code: "missing_enrolled_at", field: "enrolledAt", message: "enrolledAt is required" };
+  }
+  if (typeof enrolledAt !== "string") {
+    return { ok: false, code: "invalid_type", field: "enrolledAt", message: `enrolledAt must be a string, got ${typeof enrolledAt}` };
   }
   if (!isValidISODate(enrolledAt)) {
-    return { ok: false, status: 400, error: "invalid_date", message: "enrolledAt must be a valid date string" };
+    return { ok: false, code: "invalid_date", field: "enrolledAt", message: "enrolledAt must be a valid date string" };
   }
   if (!isWithinRange(enrolledAt)) {
     return {
-      ok: false, status: 400, error: "date_out_of_range",
-      message: `enrolledAt must be within ${ENROLLEDAT_RANGE_YEARS} years from now`,
+      ok: false, code: "date_out_of_range", field: "enrolledAt",
+      message: `enrolledAt must be within ±${ENROLLEDAT_RANGE_YEARS} years from now`,
     };
   }
 
   const normalizedEnrolledAt = new Date(enrolledAt).toISOString();
 
-  // 空文字・undefined は未指定扱い
+  // JSON null / undefined / "" は全て未指定扱い（FieldValue.delete sentinel と整合）
   const hasDeadlineBaseDate = typeof deadlineBaseDate === "string" && deadlineBaseDate.length > 0;
   if (!hasDeadlineBaseDate) {
     return { ok: true, enrolledAt: normalizedEnrolledAt };
   }
 
   if (!isValidISODate(deadlineBaseDate)) {
-    return { ok: false, status: 400, error: "invalid_date", message: "deadlineBaseDate must be a valid date string" };
+    return { ok: false, code: "invalid_date", field: "deadlineBaseDate", message: "deadlineBaseDate must be a valid date string" };
   }
   if (!isWithinRange(deadlineBaseDate)) {
     return {
-      ok: false, status: 400, error: "date_out_of_range",
-      message: `deadlineBaseDate must be within ${ENROLLEDAT_RANGE_YEARS} years from now`,
+      ok: false, code: "date_out_of_range", field: "deadlineBaseDate",
+      message: `deadlineBaseDate must be within ±${ENROLLEDAT_RANGE_YEARS} years from now`,
     };
   }
   if (new Date(deadlineBaseDate).getTime() > new Date(enrolledAt).getTime()) {
     return {
-      ok: false, status: 400, error: "invalid_deadline_base_date",
+      ok: false, code: "invalid_deadline_base_date", field: "deadlineBaseDate",
       message: "deadlineBaseDate must be on or before enrolledAt",
     };
   }

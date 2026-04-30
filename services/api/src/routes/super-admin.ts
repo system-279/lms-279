@@ -1569,7 +1569,7 @@ router.put("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Re
 
   const validated = validateEnrollmentSettingPayload(req.body);
   if (!validated.ok) {
-    res.status(validated.status).json({ error: validated.error, message: validated.message });
+    res.status(400).json({ error: validated.code, field: validated.field, message: validated.message });
     return;
   }
 
@@ -1577,28 +1577,35 @@ router.put("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Re
   const deadlines = calculateDefaultDeadlines(normalizedDeadlineBaseDate ?? normalizedEnrolledAt);
   const basePath = `tenants/${tenantId}`;
   const docRef = db.collection(`${basePath}/enrollment_setting`).doc("_config");
+  const updatedAt = new Date().toISOString();
+  const operatorEmail = req.superAdmin!.email;
 
   // PUT は明示的な完全更新セマンティクス。
-  // - 指定あり: 値を保存
-  // - 省略: FieldValue.delete() で既存フィールドを除去（merge:true でも残らないようにする）
-  // 他フィールド（enrolledAt 等）は必須なので undefined 除去対象外。
-  const settingData: Record<string, unknown> = {
+  // 省略時は FieldValue.delete() で既存 deadlineBaseDate を除去（merge:true でも残さない）。
+  // 他フィールドは必須なので undefined 除去対象外。
+  const writeData: Record<string, unknown> = {
     enrolledAt: normalizedEnrolledAt,
     deadlineBaseDate: normalizedDeadlineBaseDate ?? FieldValue.delete(),
     quizAccessUntil: deadlines.quizAccessUntil,
     videoAccessUntil: deadlines.videoAccessUntil,
-    createdBy: req.superAdmin!.email,
-    updatedAt: new Date().toISOString(),
+    createdBy: operatorEmail,
+    updatedAt,
   };
 
-  await docRef.set(settingData, { merge: true });
+  await docRef.set(writeData, { merge: true });
 
-  // レスポンスは FieldValue.delete sentinel を含めず、保存時の論理状態を返す
-  const responseData = { ...settingData };
-  if (!normalizedDeadlineBaseDate) {
-    delete responseData.deadlineBaseDate;
+  // レスポンスは保存値から純粋に構築（FieldValue.delete sentinel が混入しない設計）。
+  const response: TenantEnrollmentSettingResponse = {
+    enrolledAt: normalizedEnrolledAt,
+    quizAccessUntil: deadlines.quizAccessUntil,
+    videoAccessUntil: deadlines.videoAccessUntil,
+    createdBy: operatorEmail,
+    updatedAt,
+  };
+  if (normalizedDeadlineBaseDate) {
+    response.deadlineBaseDate = normalizedDeadlineBaseDate;
   }
-  res.json({ setting: toEnrollmentSettingResponse(responseData) });
+  res.json({ setting: response });
 });
 
 /**

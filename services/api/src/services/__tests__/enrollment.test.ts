@@ -196,43 +196,83 @@ describe("validateEnrollmentSettingPayload", () => {
     if (result.ok) expect(result.deadlineBaseDate).toBeUndefined();
   });
 
-  it("enrolledAt 未指定 → 400 bad_request", () => {
+  it("enrolledAt 未指定 → missing_enrolled_at", () => {
     const result = validateEnrollmentSettingPayload({});
-    expect(result).toMatchObject({ ok: false, status: 400, error: "bad_request" });
+    expect(result).toMatchObject({ ok: false, code: "missing_enrolled_at", field: "enrolledAt" });
   });
 
-  it("enrolledAt が非 ISO → 400 invalid_date", () => {
+  it("body 自体が undefined → missing_enrolled_at", () => {
+    const result = validateEnrollmentSettingPayload(undefined);
+    expect(result).toMatchObject({ ok: false, code: "missing_enrolled_at" });
+  });
+
+  it.each([
+    ["数値", { enrolledAt: 1717000000000 }, "invalid_type"],
+    ["配列", { enrolledAt: ["2026-04-06"] }, "invalid_type"],
+    ["boolean", { enrolledAt: true }, "invalid_type"],
+  ])("enrolledAt が %s → invalid_type", (_label, body, expectedCode) => {
+    const result = validateEnrollmentSettingPayload(body);
+    expect(result).toMatchObject({ ok: false, code: expectedCode, field: "enrolledAt" });
+  });
+
+  it("enrolledAt が非 ISO → invalid_date", () => {
     const result = validateEnrollmentSettingPayload({ enrolledAt: "not-a-date" });
-    expect(result).toMatchObject({ ok: false, status: 400, error: "invalid_date" });
+    expect(result).toMatchObject({ ok: false, code: "invalid_date", field: "enrolledAt" });
   });
 
-  it("enrolledAt が 5 年以上先 → 400 date_out_of_range", () => {
+  it("enrolledAt が 5 年以上先 → date_out_of_range", () => {
     const result = validateEnrollmentSettingPayload({ enrolledAt: "2032-04-02" });
-    expect(result).toMatchObject({ ok: false, status: 400, error: "date_out_of_range" });
+    expect(result).toMatchObject({ ok: false, code: "date_out_of_range", field: "enrolledAt" });
   });
 
-  it("deadlineBaseDate が非 ISO → 400 invalid_date", () => {
+  it("deadlineBaseDate が undefined（明示渡し）→ 未指定扱い", () => {
+    const result = validateEnrollmentSettingPayload({
+      enrolledAt: "2026-04-06",
+      deadlineBaseDate: undefined,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.deadlineBaseDate).toBeUndefined();
+  });
+
+  it("deadlineBaseDate が null → 未指定扱い", () => {
+    const result = validateEnrollmentSettingPayload({
+      enrolledAt: "2026-04-06",
+      deadlineBaseDate: null,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.deadlineBaseDate).toBeUndefined();
+  });
+
+  it("deadlineBaseDate が非 ISO → invalid_date", () => {
     const result = validateEnrollmentSettingPayload({
       enrolledAt: "2026-04-06",
       deadlineBaseDate: "garbage",
     });
-    expect(result).toMatchObject({ ok: false, status: 400, error: "invalid_date" });
+    expect(result).toMatchObject({ ok: false, code: "invalid_date", field: "deadlineBaseDate" });
   });
 
-  it("deadlineBaseDate が 5 年以上前 → 400 date_out_of_range", () => {
+  it("deadlineBaseDate が 5 年以上前 → date_out_of_range", () => {
     const result = validateEnrollmentSettingPayload({
       enrolledAt: "2026-04-06",
       deadlineBaseDate: "2020-04-02",
     });
-    expect(result).toMatchObject({ ok: false, status: 400, error: "date_out_of_range" });
+    expect(result).toMatchObject({ ok: false, code: "date_out_of_range", field: "deadlineBaseDate" });
   });
 
-  it("deadlineBaseDate > enrolledAt（順序違反）→ 400 invalid_deadline_base_date", () => {
+  it("deadlineBaseDate が 5 年以上先 → date_out_of_range（範囲チェックが順序チェックに先行）", () => {
+    const result = validateEnrollmentSettingPayload({
+      enrolledAt: "2026-04-06",
+      deadlineBaseDate: "2032-04-02",
+    });
+    expect(result).toMatchObject({ ok: false, code: "date_out_of_range", field: "deadlineBaseDate" });
+  });
+
+  it("deadlineBaseDate > enrolledAt（順序違反）→ invalid_deadline_base_date", () => {
     const result = validateEnrollmentSettingPayload({
       enrolledAt: "2026-04-06",
       deadlineBaseDate: "2026-04-07",
     });
-    expect(result).toMatchObject({ ok: false, status: 400, error: "invalid_deadline_base_date" });
+    expect(result).toMatchObject({ ok: false, code: "invalid_deadline_base_date", field: "deadlineBaseDate" });
   });
 });
 
