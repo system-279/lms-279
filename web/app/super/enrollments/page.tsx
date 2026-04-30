@@ -146,7 +146,7 @@ export default function EnrollmentsPage() {
     <div className="space-y-4">
       <h2 className="text-xl font-bold">受講期間管理</h2>
       <p className="text-sm text-muted-foreground">
-        テナント単位で受講期間を設定します。テスト期限（+2ヶ月）と動画期限（+1年）は受講開始日から自動計算されます。期限は日本時間の日末（23:59）まで有効です。
+        テナント単位で受講期間を設定します。テスト期限（+2ヶ月）と動画期限（+1年）は期限起算日（任意。未指定時は受講開始日）から自動計算されます。期限は日本時間の日末（23:59）まで有効です。
       </p>
 
       {/* テナント選択 */}
@@ -210,7 +210,7 @@ export default function EnrollmentsPage() {
           <DialogHeader>
             <DialogTitle>受講期間を設定</DialogTitle>
             <DialogDescription>
-              テナントの受講開始日を設定します。テスト期限（+2ヶ月）と動画期限（+1年）は自動計算されます。
+              テナントの受講開始日を設定します。テスト期限（+2ヶ月）と動画期限（+1年）は期限起算日（任意指定可。未指定時は受講開始日）から自動計算されます。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
