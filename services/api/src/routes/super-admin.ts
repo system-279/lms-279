@@ -28,6 +28,7 @@ import { masterRouter } from "./super-admin-master.js";
 import { calculateDefaultDeadlines, validateEnrollmentSettingPayload } from "../services/enrollment.js";
 import { generateTenantId, normalizeEmail, parseTenantGcipFields } from "../utils/tenant-id.js";
 import { logger } from "../utils/logger.js";
+import { classifyFirestoreError, TRANSIENT_RETRY_MESSAGE_JA } from "../utils/grpc-errors.js";
 import { getPlatformDataSource } from "../middleware/platform-datasource.js";
 
 const router = Router();
@@ -1534,6 +1535,7 @@ function toEnrollmentSettingResponse(data: any): TenantEnrollmentSettingResponse
 router.get("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Response) => {
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
+  const operatorEmail = req.superAdmin!.email;
 
   try {
     const tenantDoc = await db.collection("tenants").doc(tenantId).get();
@@ -1552,21 +1554,18 @@ router.get("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Re
 
     res.json({ setting: toEnrollmentSettingResponse(doc.data()) });
   } catch (e) {
-    const grpcCode = (e as { code?: number })?.code;
-    const isTransient = grpcCode === 14 || grpcCode === 4;
+    const { grpcCode, isTransient } = classifyFirestoreError(e);
     logger.error("Enrollment setting GET failed", {
       errorType: "enrollment_setting_get_failed",
       error: e instanceof Error ? e : new Error(String(e)),
       tenantId,
-      operatorEmail: req.superAdmin?.email,
+      operatorEmail,
       grpcCode,
       isTransient,
     });
     res.status(isTransient ? 503 : 500).json({
       error: "transaction_failed",
-      message: isTransient
-        ? "サーバーが一時的に利用できません。数秒後に再度お試しください。"
-        : "受講期間設定の取得中にエラーが発生しました。",
+      message: isTransient ? TRANSIENT_RETRY_MESSAGE_JA : "受講期間設定の取得中にエラーが発生しました。",
     });
   }
 });
@@ -1615,10 +1614,14 @@ router.put("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Re
 
     await docRef.set(writeData, { merge: true });
 
+    // 監査ログ: 何の値に更新したか（後日インシデント時の復元用）
     logger.info("Enrollment setting upserted by super admin", {
       tenantId,
       operatorEmail,
-      hasDeadlineBaseDate: Boolean(normalizedDeadlineBaseDate),
+      enrolledAt: normalizedEnrolledAt,
+      deadlineBaseDate: normalizedDeadlineBaseDate ?? null,
+      quizAccessUntil: deadlines.quizAccessUntil,
+      videoAccessUntil: deadlines.videoAccessUntil,
     });
 
     // レスポンスは保存値から純粋に構築（FieldValue.delete sentinel が混入しない設計）。
@@ -1634,8 +1637,7 @@ router.put("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Re
     }
     res.json({ setting: response });
   } catch (e) {
-    const grpcCode = (e as { code?: number })?.code;
-    const isTransient = grpcCode === 14 || grpcCode === 4;
+    const { grpcCode, isTransient } = classifyFirestoreError(e);
     logger.error("Enrollment setting PUT failed", {
       errorType: "enrollment_setting_put_failed",
       error: e instanceof Error ? e : new Error(String(e)),
@@ -1646,9 +1648,7 @@ router.put("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Re
     });
     res.status(isTransient ? 503 : 500).json({
       error: "transaction_failed",
-      message: isTransient
-        ? "サーバーが一時的に利用できません。数秒後に再度お試しください。"
-        : "受講期間設定の更新中にエラーが発生しました。",
+      message: isTransient ? TRANSIENT_RETRY_MESSAGE_JA : "受講期間設定の更新中にエラーが発生しました。",
     });
   }
 });
@@ -1678,17 +1678,20 @@ router.delete("/tenants/:tenantId/enrollment-setting", async (req: Request, res:
       return;
     }
 
+    // 削除前の値を監査ログに残す（後日インシデント時の復元用）
+    const deletedSetting = toEnrollmentSettingResponse(doc.data());
+
     await docRef.delete();
 
     logger.info("Enrollment setting deleted by super admin", {
       tenantId,
       operatorEmail,
+      deletedSetting,
     });
 
     res.status(204).send();
   } catch (e) {
-    const grpcCode = (e as { code?: number })?.code;
-    const isTransient = grpcCode === 14 || grpcCode === 4;
+    const { grpcCode, isTransient } = classifyFirestoreError(e);
     logger.error("Enrollment setting DELETE failed", {
       errorType: "enrollment_setting_delete_failed",
       error: e instanceof Error ? e : new Error(String(e)),
@@ -1699,9 +1702,7 @@ router.delete("/tenants/:tenantId/enrollment-setting", async (req: Request, res:
     });
     res.status(isTransient ? 503 : 500).json({
       error: "transaction_failed",
-      message: isTransient
-        ? "サーバーが一時的に利用できません。数秒後に再度お試しください。"
-        : "受講期間設定の削除中にエラーが発生しました。",
+      message: isTransient ? TRANSIENT_RETRY_MESSAGE_JA : "受講期間設定の削除中にエラーが発生しました。",
     });
   }
 });
