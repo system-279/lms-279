@@ -1644,7 +1644,7 @@ export class FirestoreDataSource implements DataSource {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private toTenantEnrollmentSetting(id: string, data: any): TenantEnrollmentSetting {
     try {
-      return {
+      const result: TenantEnrollmentSetting = {
         id,
         enrolledAt: toDateStrict(data.enrolledAt, "enrolledAt").toISOString(),
         quizAccessUntil: toDateStrict(data.quizAccessUntil, "quizAccessUntil").toISOString(),
@@ -1652,6 +1652,10 @@ export class FirestoreDataSource implements DataSource {
         createdBy: data.createdBy,
         updatedAt: toDateStrict(data.updatedAt, "updatedAt").toISOString(),
       };
+      if (data.deadlineBaseDate != null) {
+        result.deadlineBaseDate = toDateStrict(data.deadlineBaseDate, "deadlineBaseDate").toISOString();
+      }
+      return result;
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
       console.error(`Failed to parse TenantEnrollmentSetting:`, error);

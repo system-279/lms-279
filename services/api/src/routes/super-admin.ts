@@ -11,7 +11,7 @@
  */
 
 import { Router, Request, Response } from "express";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import type { SuperAttendanceResponse, SuperStudentProgressResponse, TenantEnrollmentSettingResponse } from "@lms-279/shared-types";
 import {
@@ -25,7 +25,7 @@ import {
 } from "../middleware/super-admin.js";
 import type { TenantMetadata, TenantStatus } from "../types/tenant.js";
 import { masterRouter } from "./super-admin-master.js";
-import { calculateDefaultDeadlines } from "../services/enrollment.js";
+import { calculateDefaultDeadlines, validateEnrollmentSettingPayload } from "../services/enrollment.js";
 import { generateTenantId, normalizeEmail, parseTenantGcipFields } from "../utils/tenant-id.js";
 import { logger } from "../utils/logger.js";
 import { getPlatformDataSource } from "../middleware/platform-datasource.js";
@@ -1511,28 +1511,20 @@ router.post("/tenants/:tenantId/student-progress/export-sheets", async (req: Req
 // 受講期間管理（テナント×コース単位）
 // ============================================================
 
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z?)?$/;
-
-function isValidISODate(value: string): boolean {
-  return ISO_DATE_RE.test(value) && !isNaN(new Date(value).getTime());
-}
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toEnrollmentSettingResponse(data: any): TenantEnrollmentSettingResponse {
-  return {
+  const deadlineBaseDateRaw = data.deadlineBaseDate?.toDate?.()?.toISOString?.() ?? data.deadlineBaseDate;
+  const response: TenantEnrollmentSettingResponse = {
     enrolledAt: data.enrolledAt?.toDate?.()?.toISOString?.() ?? data.enrolledAt ?? "",
     quizAccessUntil: data.quizAccessUntil?.toDate?.()?.toISOString?.() ?? data.quizAccessUntil ?? "",
     videoAccessUntil: data.videoAccessUntil?.toDate?.()?.toISOString?.() ?? data.videoAccessUntil ?? "",
     createdBy: data.createdBy ?? "",
     updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() ?? data.updatedAt ?? "",
   };
-}
-
-const ENROLLEDAT_RANGE_YEARS = 5;
-
-function isEnrolledAtInRange(dateStr: string): boolean {
-  const diff = Math.abs(new Date(dateStr).getTime() - Date.now());
-  return diff <= ENROLLEDAT_RANGE_YEARS * 365.25 * 24 * 60 * 60 * 1000;
+  if (deadlineBaseDateRaw) {
+    response.deadlineBaseDate = deadlineBaseDateRaw;
+  }
+  return response;
 }
 
 /**
@@ -1568,7 +1560,6 @@ router.get("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Re
 router.put("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Response) => {
   const db = getFirestore();
   const tenantId = req.params.tenantId as string;
-  const { enrolledAt } = req.body;
 
   const tenantDoc = await db.collection("tenants").doc(tenantId).get();
   if (!tenantDoc.exists) {
@@ -1576,28 +1567,24 @@ router.put("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Re
     return;
   }
 
-  if (!enrolledAt) {
-    res.status(400).json({ error: "bad_request", message: "enrolledAt is required" });
+  const validated = validateEnrollmentSettingPayload(req.body);
+  if (!validated.ok) {
+    res.status(validated.status).json({ error: validated.error, message: validated.message });
     return;
   }
 
-  if (!isValidISODate(enrolledAt)) {
-    res.status(400).json({ error: "invalid_date", message: "enrolledAt must be a valid date string" });
-    return;
-  }
-
-  if (!isEnrolledAtInRange(enrolledAt)) {
-    res.status(400).json({ error: "date_out_of_range", message: `enrolledAt must be within ${ENROLLEDAT_RANGE_YEARS} years from now` });
-    return;
-  }
-
-  const normalizedEnrolledAt = new Date(enrolledAt).toISOString();
-  const deadlines = calculateDefaultDeadlines(normalizedEnrolledAt);
+  const { enrolledAt: normalizedEnrolledAt, deadlineBaseDate: normalizedDeadlineBaseDate } = validated;
+  const deadlines = calculateDefaultDeadlines(normalizedDeadlineBaseDate ?? normalizedEnrolledAt);
   const basePath = `tenants/${tenantId}`;
   const docRef = db.collection(`${basePath}/enrollment_setting`).doc("_config");
 
-  const settingData = {
+  // PUT は明示的な完全更新セマンティクス。
+  // - 指定あり: 値を保存
+  // - 省略: FieldValue.delete() で既存フィールドを除去（merge:true でも残らないようにする）
+  // 他フィールド（enrolledAt 等）は必須なので undefined 除去対象外。
+  const settingData: Record<string, unknown> = {
     enrolledAt: normalizedEnrolledAt,
+    deadlineBaseDate: normalizedDeadlineBaseDate ?? FieldValue.delete(),
     quizAccessUntil: deadlines.quizAccessUntil,
     videoAccessUntil: deadlines.videoAccessUntil,
     createdBy: req.superAdmin!.email,
@@ -1605,7 +1592,13 @@ router.put("/tenants/:tenantId/enrollment-setting", async (req: Request, res: Re
   };
 
   await docRef.set(settingData, { merge: true });
-  res.json({ setting: toEnrollmentSettingResponse(settingData) });
+
+  // レスポンスは FieldValue.delete sentinel を含めず、保存時の論理状態を返す
+  const responseData = { ...settingData };
+  if (!normalizedDeadlineBaseDate) {
+    delete responseData.deadlineBaseDate;
+  }
+  res.json({ setting: toEnrollmentSettingResponse(responseData) });
 });
 
 /**

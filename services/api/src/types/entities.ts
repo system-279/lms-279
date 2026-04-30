@@ -329,9 +329,10 @@ export interface LessonSessionFilter {
 
 export interface TenantEnrollmentSetting {
   id: string;              // = "_config"
-  enrolledAt: string;      // ISO — スーパー管理者が設定する受講開始日
-  quizAccessUntil: string; // ISO — enrolledAt + 2ヶ月（JST日末、自動計算）
-  videoAccessUntil: string;// ISO — enrolledAt + 1年（JST日末、自動計算）
+  enrolledAt: string;      // ISO — スーパー管理者が設定する受講開始日（表示用）
+  deadlineBaseDate?: string; // ISO — 期限計算の起算日（任意。未指定時は enrolledAt を起算日とする）
+  quizAccessUntil: string; // ISO — (deadlineBaseDate ?? enrolledAt) + 2ヶ月（JST日末、自動計算）
+  videoAccessUntil: string;// ISO — (deadlineBaseDate ?? enrolledAt) + 1年（JST日末、自動計算）
   createdBy: string;       // スーパー管理者email
   updatedAt: string;
 }

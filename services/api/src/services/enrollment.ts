@@ -147,25 +147,105 @@ export async function checkQuizAccessSoft(
 }
 
 /**
- * enrolledAtからデフォルトの期限を計算（JST日末基準）
+ * 起算日（enrolledAt または deadlineBaseDate）からデフォルトの期限を計算（JST日末基準）
  */
-export function calculateDefaultDeadlines(enrolledAt: string): {
+export function calculateDefaultDeadlines(baseDate: string): {
   quizAccessUntil: string;
   videoAccessUntil: string;
 } {
-  const base = new Date(enrolledAt);
+  const base = new Date(baseDate);
   if (isNaN(base.getTime())) {
-    throw new Error(`calculateDefaultDeadlines: invalid enrolledAt "${enrolledAt}"`);
+    throw new Error(`calculateDefaultDeadlines: invalid baseDate "${baseDate}"`);
   }
 
-  // テスト: enrolledAt + 2ヶ月（JST日末まで有効）
+  // テスト: 起算日 + 2ヶ月（JST日末まで有効）
   const quizDeadline = endOfDayJST(addMonths(base, 2));
 
-  // 動画: enrolledAt + 1年（JST日末まで有効）
+  // 動画: 起算日 + 1年（JST日末まで有効）
   const videoDeadline = endOfDayJST(addYears(base, 1));
 
   return {
     quizAccessUntil: quizDeadline.toISOString(),
     videoAccessUntil: videoDeadline.toISOString(),
+  };
+}
+
+// `<input type="date">` 由来の `YYYY-MM-DD` と ISO datetime（末尾 Z 任意）を許容。
+// super-admin.ts の `ISO_DATE_REGEX` は attendance 用で UTC `Z` 必須の別仕様。統合しない。
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z?)?$/;
+const ENROLLEDAT_RANGE_YEARS = 5;
+
+function isValidISODate(value: unknown): value is string {
+  return typeof value === "string" && ISO_DATE_RE.test(value) && !isNaN(new Date(value).getTime());
+}
+
+function isWithinRange(dateStr: string): boolean {
+  const diff = Math.abs(new Date(dateStr).getTime() - Date.now());
+  return diff <= ENROLLEDAT_RANGE_YEARS * 365.25 * 24 * 60 * 60 * 1000;
+}
+
+export type ValidatedEnrollmentPayload = {
+  ok: true;
+  enrolledAt: string;
+  deadlineBaseDate?: string;
+};
+
+export type ValidationError = {
+  ok: false;
+  status: 400;
+  error: string;
+  message: string;
+};
+
+/**
+ * PUT /super/tenants/:tenantId/enrollment-setting の body を検証して正規化する。
+ * - enrolledAt: 必須、ISO、5年範囲内
+ * - deadlineBaseDate: 任意、空文字は未指定扱い、ISO、5年範囲内、enrolledAt 以前であること
+ */
+export function validateEnrollmentSettingPayload(body: unknown): ValidatedEnrollmentPayload | ValidationError {
+  const payload = (body ?? {}) as { enrolledAt?: unknown; deadlineBaseDate?: unknown };
+  const { enrolledAt, deadlineBaseDate } = payload;
+
+  if (!enrolledAt || typeof enrolledAt !== "string") {
+    return { ok: false, status: 400, error: "bad_request", message: "enrolledAt is required" };
+  }
+  if (!isValidISODate(enrolledAt)) {
+    return { ok: false, status: 400, error: "invalid_date", message: "enrolledAt must be a valid date string" };
+  }
+  if (!isWithinRange(enrolledAt)) {
+    return {
+      ok: false, status: 400, error: "date_out_of_range",
+      message: `enrolledAt must be within ${ENROLLEDAT_RANGE_YEARS} years from now`,
+    };
+  }
+
+  const normalizedEnrolledAt = new Date(enrolledAt).toISOString();
+
+  // 空文字・undefined は未指定扱い
+  const hasDeadlineBaseDate = typeof deadlineBaseDate === "string" && deadlineBaseDate.length > 0;
+  if (!hasDeadlineBaseDate) {
+    return { ok: true, enrolledAt: normalizedEnrolledAt };
+  }
+
+  if (!isValidISODate(deadlineBaseDate)) {
+    return { ok: false, status: 400, error: "invalid_date", message: "deadlineBaseDate must be a valid date string" };
+  }
+  if (!isWithinRange(deadlineBaseDate)) {
+    return {
+      ok: false, status: 400, error: "date_out_of_range",
+      message: `deadlineBaseDate must be within ${ENROLLEDAT_RANGE_YEARS} years from now`,
+    };
+  }
+  if (new Date(deadlineBaseDate).getTime() > new Date(enrolledAt).getTime()) {
+    return {
+      ok: false, status: 400, error: "invalid_deadline_base_date",
+      message: "deadlineBaseDate must be on or before enrolledAt",
+    };
+  }
+
+  return {
+    ok: true,
+    enrolledAt: normalizedEnrolledAt,
+    deadlineBaseDate: new Date(deadlineBaseDate).toISOString(),
   };
 }
