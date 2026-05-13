@@ -24,6 +24,28 @@ describe("classifyFirestoreError", () => {
     });
   });
 
+  it("数値形式 10 (ABORTED) → transient", () => {
+    expect(classifyFirestoreError({ code: 10 })).toEqual({ grpcCode: 10, isTransient: true });
+  });
+
+  it('文字列形式 "aborted" → transient', () => {
+    expect(classifyFirestoreError({ code: "aborted" })).toEqual({
+      grpcCode: "aborted",
+      isTransient: true,
+    });
+  });
+
+  it("数値形式 13 (INTERNAL) → transient", () => {
+    expect(classifyFirestoreError({ code: 13 })).toEqual({ grpcCode: 13, isTransient: true });
+  });
+
+  it('文字列形式 "internal" → transient', () => {
+    expect(classifyFirestoreError({ code: "internal" })).toEqual({
+      grpcCode: "internal",
+      isTransient: true,
+    });
+  });
+
   it("数値形式 7 (PERMISSION_DENIED) → permanent", () => {
     expect(classifyFirestoreError({ code: 7 })).toEqual({ grpcCode: 7, isTransient: false });
   });

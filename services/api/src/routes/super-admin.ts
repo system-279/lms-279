@@ -920,22 +920,29 @@ router.get("/platform/auth-errors", async (req: Request, res: Response) => {
       })),
     });
   } catch (e) {
-    // Firestore 障害時のレスポンス形式を保証する（AC: 500 fetch_failed）。
-    // transient (UNAVAILABLE/DEADLINE_EXCEEDED) と permanent の分離は
-    // ADR-031 Phase 1 制約で別 Issue 対応予定。現状は一律 500 を返す。
-    // ログは errorType + firebaseErrorCode + 入力パラメータで再現性を確保する
-    // （`/admins/:email` DELETE と同等の構造化レベル）。
-    const err = e as { code?: string } | undefined;
+    // Issue #310: transient (UNAVAILABLE/DEADLINE_EXCEEDED/ABORTED/INTERNAL) は 503、
+    // permanent は 500 fetch_failed に分離する（rules/error-handling.md §3）。
+    const { grpcCode, isTransient } = classifyFirestoreError(e);
     logger.error("Failed to fetch platform auth error logs", {
-      errorType: "platform_auth_errors_fetch_failed",
+      errorType: isTransient
+        ? "platform_auth_errors_unavailable"
+        : "platform_auth_errors_fetch_failed",
       error: e instanceof Error ? e : new Error(String(e)),
-      firebaseErrorCode: typeof err?.code === "string" ? err.code : null,
+      grpcCode: grpcCode ?? null,
+      isTransient,
       operatorEmail: req.superAdmin?.email,
       filterEmail: email ?? null,
       filterStartDate: startDateStr ?? null,
       filterEndDate: endDateStr ?? null,
       filterLimit: limit,
     });
+    if (isTransient) {
+      res.status(503).json({
+        error: "service_unavailable",
+        message: TRANSIENT_RETRY_MESSAGE_JA,
+      });
+      return;
+    }
     res.status(500).json({
       error: "fetch_failed",
       message: "認証エラーログの取得に失敗しました。再度お試しください。",

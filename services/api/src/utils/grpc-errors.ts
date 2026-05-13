@@ -9,8 +9,15 @@
  * `code` を保持する。両形式の取りこぼしを防ぐため、両方を判定する。
  */
 
-const TRANSIENT_GRPC_CODES_NUMERIC = new Set<number>([14, 4]);
-const TRANSIENT_GRPC_CODES_STRING = new Set<string>(["unavailable", "deadline-exceeded"]);
+// transient (retry 可能): UNAVAILABLE(14), DEADLINE_EXCEEDED(4), ABORTED(10), INTERNAL(13)
+// ABORTED はトランザクション競合、INTERNAL は gRPC 内部一時障害で retry 可能（Issue #310）
+const TRANSIENT_GRPC_CODES_NUMERIC = new Set<number>([14, 4, 10, 13]);
+const TRANSIENT_GRPC_CODES_STRING = new Set<string>([
+  "unavailable",
+  "deadline-exceeded",
+  "aborted",
+  "internal",
+]);
 
 export function classifyFirestoreError(err: unknown): {
   grpcCode: number | string | undefined;
