@@ -36,99 +36,40 @@
  *   SUPER_ADMIN_EMAILS              スーパー管理者メール（カンマ区切り）
  */
 
-import {
-  initializeApp,
-  cert,
-  getApps,
-  type ServiceAccount,
-} from "firebase-admin/app";
+import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
-import { getFirestore, type WriteBatch } from "firebase-admin/firestore";
+import { getFirestore } from "firebase-admin/firestore";
 import {
   planAudit,
   buildAuditFixNote,
+  planApplyFix,
+  mergeSuperAdmins,
+  parseAuditArgs,
+  detectDuplicateUsers,
+  toNormalizedEmail,
+  HelpRequestedError,
   type AuditUserInput,
   type AuditAllowedEmailInput,
   type AuditReport,
+  type CliOptions,
+  type NormalizedEmail,
 } from "../services/api/src/services/allowed-email-audit.js";
 import { toISOOptional } from "../services/api/src/datasource/firestore.js";
-
-type CliOptions = {
-  fix: boolean;
-  execute: boolean;
-  skipAuthMetadata: boolean;
-  tenantFilter: string | null;
-  extraSuperAdmins: string[];
-};
-
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = {
-    fix: false,
-    execute: false,
-    skipAuthMetadata: false,
-    tenantFilter: null,
-    extraSuperAdmins: [],
-  };
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    switch (arg) {
-      case "--fix":
-        options.fix = true;
-        break;
-      case "--execute":
-        options.execute = true;
-        break;
-      case "--skip-auth-metadata":
-        options.skipAuthMetadata = true;
-        break;
-      case "--tenant": {
-        const val = argv[++i];
-        if (!val) throw new Error("--tenant の値が指定されていません");
-        options.tenantFilter = val;
-        break;
-      }
-      case "--super-admins": {
-        const val = argv[++i];
-        if (!val) throw new Error("--super-admins の値が指定されていません");
-        options.extraSuperAdmins = val
-          .split(",")
-          .map((s) => s.trim())
-          .filter((s) => s.length > 0);
-        break;
-      }
-      case "--help":
-      case "-h":
-        console.log(
-          "使い方は scripts/audit-users-vs-allowed-emails.ts 冒頭のコメントを参照してください。"
-        );
-        process.exit(0);
-      // eslint-disable-next-line no-fallthrough
-      default:
-        // `--tenant` を忘れて位置引数だけ渡すと全テナント走査に巻き込まれる事故を防ぐため、
-        // 未知の引数（オプション形式でないものも含む）は明示的にエラーにする。
-        throw new Error(`未知の引数: ${arg}`);
-    }
-  }
-
-  return options;
-}
 
 function initializeFirebase(): void {
   if (getApps().length > 0) return;
 
   const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if (credPath) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const serviceAccount = require(credPath) as ServiceAccount;
-    initializeApp({ credential: cert(serviceAccount) });
+    // firebase-admin の cert() は string パスも受け取れる (ESM で require を避けるため)
+    initializeApp({ credential: cert(credPath) });
   } else {
     initializeApp();
   }
 }
 
 type SuperAdminsResult = {
-  emails: string[];
+  emails: NormalizedEmail[];
   firestoreFetchFailed: boolean;
 };
 
@@ -142,26 +83,22 @@ type SuperAdminsResult = {
  *
  * strict=false（dry-run 時）の場合は続行するが、firestoreFetchFailed フラグを立てて
  * 呼び出し側がレポート冒頭・Summary 両方に警告を出せるようにする。
+ *
+ * union 計算は純粋関数 `mergeSuperAdmins` に委譲。本関数は Firestore 取得の副作用と
+ * strict mode 判定のみ担う。
  */
 async function collectSuperAdmins(
   extra: string[],
   strict: boolean
 ): Promise<SuperAdminsResult> {
-  const result = new Set<string>();
-  let firestoreFetchFailed = false;
-
   const envCsv = process.env.SUPER_ADMIN_EMAILS ?? "";
-  for (const email of envCsv.split(",")) {
-    const n = email.trim().toLowerCase();
-    if (n) result.add(n);
-  }
+  let firestoreEmails: string[] = [];
+  let firestoreFetchFailed = false;
 
   try {
     const db = getFirestore();
     const snapshot = await db.collection("superAdmins").get();
-    for (const doc of snapshot.docs) {
-      result.add(doc.id.toLowerCase());
-    }
+    firestoreEmails = snapshot.docs.map((doc) => doc.id);
   } catch (error) {
     if (strict) {
       throw new Error(
@@ -174,12 +111,10 @@ async function collectSuperAdmins(
     );
   }
 
-  for (const email of extra) {
-    const n = email.trim().toLowerCase();
-    if (n) result.add(n);
-  }
-
-  return { emails: Array.from(result).sort(), firestoreFetchFailed };
+  return {
+    emails: mergeSuperAdmins(envCsv, firestoreEmails, extra),
+    firestoreFetchFailed,
+  };
 }
 
 type AuthMetadataEnrichment = {
@@ -303,12 +238,6 @@ function printTenantReport(tenantId: string, report: AuditReport): void {
   }
 }
 
-/**
- * Firestore WriteBatch の上限は 500 件/commit。
- * 未定義動作を避けるため安全マージンを取って 450 件で切り替える。
- */
-const WRITE_BATCH_LIMIT = 450;
-
 type ApplyFixResult = {
   applied: number;
   skippedExisting: number;
@@ -324,6 +253,9 @@ type ApplyFixResult = {
  * アトミシティ:
  *   WriteBatch で束ねてコミットすることで、ネットワーク往復の削減と
  *   同一バッチ内の原子性を確保する（Firestore は 500 件/commit 上限）。
+ *
+ * 重複ガード + バッチ分割計画は純粋関数 `planApplyFix` に委譲。本関数は Firestore IO
+ * (既存 allowed_emails 取得 + WriteBatch コミット) と進捗ログ出力のみ担う。
  */
 async function applyFix(
   tenantId: string,
@@ -340,124 +272,79 @@ async function applyFix(
   const currentSnap = await db
     .collection(`tenants/${tenantId}/allowed_emails`)
     .get();
-  const existingEmails = new Set<string>();
+  const existingEmails: NormalizedEmail[] = [];
   for (const doc of currentSnap.docs) {
-    const email = doc.data().email;
-    if (typeof email === "string") {
-      const n = email.trim().toLowerCase();
-      if (n) existingEmails.add(n);
-    }
+    const n = toNormalizedEmail(doc.data().email);
+    if (n !== null) existingEmails.push(n);
   }
 
-  const pendingBatches: WriteBatch[] = [];
-  const pendingBatchEmails: string[][] = [];
-  let currentBatch = db.batch();
-  let currentBatchEmails: string[] = [];
-  let opCount = 0;
-  let applied = 0;
-  let skippedExisting = 0;
+  const plan = planApplyFix(report, existingEmails);
 
-  // entry.email は planAudit が normalizeEmail で正規化した値。
-  // existingEmails 側も同じ規則で正規化済みのため、直接比較してよい。
-  for (const entry of report.usersWithoutAllowedEmail) {
-    if (existingEmails.has(entry.email)) {
-      console.log(
-        `[SKIP EXISTING] tenant=${tenantId} email=${entry.email} (既に allowed_emails に存在)`
-      );
-      skippedExisting++;
-      continue;
-    }
-
+  for (const email of plan.toSkip) {
     console.log(
-      `[FIX] tenant=${tenantId} add allowed_email email=${entry.email} userId=${entry.userId}`
+      `[SKIP EXISTING] tenant=${tenantId} email=${email} (既に allowed_emails に存在)`
     );
+  }
+  for (const email of plan.toAdd) {
+    console.log(`[FIX] tenant=${tenantId} add allowed_email email=${email}`);
+  }
 
-    if (execute) {
+  if (!execute) {
+    return { applied: 0, skippedExisting: plan.toSkip.length };
+  }
+
+  for (let i = 0; i < plan.batches.length; i++) {
+    const batchEmails = plan.batches[i];
+    const writeBatch = db.batch();
+    for (const email of batchEmails) {
       const ref = db.collection(`tenants/${tenantId}/allowed_emails`).doc();
-      currentBatch.set(ref, {
-        email: entry.email,
-        note,
-        createdAt: new Date(),
-      });
-      currentBatchEmails.push(entry.email);
-      opCount++;
-      applied++;
-      existingEmails.add(entry.email); // 同一 run 内での重複防止
-
-      if (opCount >= WRITE_BATCH_LIMIT) {
-        pendingBatches.push(currentBatch);
-        pendingBatchEmails.push(currentBatchEmails);
-        currentBatch = db.batch();
-        currentBatchEmails = [];
-        opCount = 0;
-      }
+      writeBatch.set(ref, { email, note, createdAt: new Date() });
     }
-  }
-
-  if (execute && opCount > 0) {
-    pendingBatches.push(currentBatch);
-    pendingBatchEmails.push(currentBatchEmails);
-  }
-
-  for (let i = 0; i < pendingBatches.length; i++) {
     try {
-      await pendingBatches[i].commit();
+      await writeBatch.commit();
     } catch (error) {
-      const remaining = pendingBatches.length - i - 1;
-      const failedEmails = pendingBatchEmails[i].join(", ");
+      const remaining = plan.batches.length - i - 1;
       console.error(
-        `[BATCH FAILED] tenant=${tenantId} batch=${i + 1}/${pendingBatches.length}\n` +
-        `  committed so far: ${i} batch(es)\n` +
-        `  failed batch emails (${pendingBatchEmails[i].length} 件): ${failedEmails}\n` +
-        `  remaining batches: ${remaining} (not attempted)\n` +
-        `  再実行時は skippedExisting で冪等。失敗原因を解消してから再実行してください。\n` +
-        `  error: ${String(error)}`
+        `[BATCH FAILED] tenant=${tenantId} batch=${i + 1}/${plan.batches.length}\n` +
+          `  committed so far: ${i} batch(es)\n` +
+          `  failed batch emails (${batchEmails.length} 件): ${batchEmails.join(", ")}\n` +
+          `  remaining batches: ${remaining} (not attempted)\n` +
+          `  再実行時は skippedExisting で冪等。失敗原因を解消してから再実行してください。\n` +
+          `  error: ${String(error)}`
       );
       throw error;
     }
   }
 
-  return { applied, skippedExisting };
+  return { applied: plan.toAdd.length, skippedExisting: plan.toSkip.length };
 }
 
 /**
  * 同一 email を持つ users レコードが複数ある場合に警告を出す。
  * planAudit は最初の 1 件のみ採用して後続を無視するため、実態の把握には
  * 事前にこの警告を出すことが重要（Evaluator エッジケース指摘）。
+ *
+ * 検出ロジックは純粋関数 `detectDuplicateUsers` に委譲。本関数は console.warn の
+ * 副作用のみを担う。
  */
 function warnDuplicateUsers(
   tenantId: string,
   rawUsers: AuditUserInput[]
 ): void {
-  const byEmail = new Map<string, string[]>();
-  for (const u of rawUsers) {
-    const n = (u.email ?? "").trim().toLowerCase();
-    if (!n) continue;
-    const ids = byEmail.get(n) ?? [];
-    ids.push(u.id);
-    byEmail.set(n, ids);
-  }
-  for (const [email, ids] of byEmail) {
-    if (ids.length > 1) {
-      console.warn(
-        `⚠️  [DUPLICATE USERS] tenant=${tenantId} email=${email} userIds=${ids.join(",")} (2件目以降は planAudit で無視されます)`
-      );
-    }
+  for (const dup of detectDuplicateUsers(rawUsers)) {
+    console.warn(
+      `⚠️  [DUPLICATE USERS] tenant=${tenantId} email=${dup.email} userIds=${dup.userIds.join(",")} (2件目以降は planAudit で無視されます)`
+    );
   }
 }
 
 async function main(options: CliOptions): Promise<void> {
-  if (options.execute && !options.fix) {
-    throw new Error(
-      "--execute は --fix と併用する必要があります。補正なしの dry-run なら --execute を外してください。"
-    );
-  }
-
   initializeFirebase();
   const db = getFirestore();
 
-  const writeMode = options.fix && options.execute;
-  const header = `=== audit-users-vs-allowed-emails (${writeMode ? "EXECUTE" : "DRY-RUN"}${options.fix ? " + FIX" : ""}) ===`;
+  const writeMode = options.mode.kind === "fix-execute";
+  const fixMode = options.mode.kind !== "dry-run";
+  const header = `=== audit-users-vs-allowed-emails (${writeMode ? "EXECUTE" : "DRY-RUN"}${fixMode ? " + FIX" : ""}) ===`;
   console.log(header);
   console.log(`Issue: #279`);
   console.log(`Date : ${new Date().toISOString()}`);
@@ -520,6 +407,7 @@ async function main(options: CliOptions): Promise<void> {
           firebaseUid: (data.firebaseUid as string | undefined) ?? undefined,
           role: (data.role as string | undefined) ?? "student",
           createdAt: toISOOptional(data.createdAt) ?? "unknown",
+          lastSignInTime: null,
         };
       });
 
@@ -559,12 +447,12 @@ async function main(options: CliOptions): Promise<void> {
         tenantsWithDiff.push(tenantId);
       }
 
-      if (options.fix) {
+      if (fixMode) {
         const { applied, skippedExisting } = await applyFix(
           tenantId,
           report,
           note,
-          options.execute
+          writeMode
         );
         totalApplied += applied;
         totalSkippedExisting += skippedExisting;
@@ -621,8 +509,8 @@ async function main(options: CliOptions): Promise<void> {
     }
   }
 
-  if (options.fix) {
-    if (options.execute) {
+  if (fixMode) {
+    if (writeMode) {
       console.log(`allowed_emails added (executed): ${totalApplied}`);
       console.log(`skipped (already existed)      : ${totalSkippedExisting}`);
     } else {
@@ -647,12 +535,18 @@ const isMain =
 
 if (isMain) {
   try {
-    const options = parseArgs(process.argv.slice(2));
+    const options = parseAuditArgs(process.argv.slice(2));
     main(options).catch((err) => {
       console.error("audit-users-vs-allowed-emails failed:", err);
       process.exit(1);
     });
   } catch (err) {
+    if (err instanceof HelpRequestedError) {
+      console.log(
+        "使い方は scripts/audit-users-vs-allowed-emails.ts 冒頭のコメントを参照してください。"
+      );
+      process.exit(0);
+    }
     console.error((err as Error).message);
     process.exit(2);
   }
