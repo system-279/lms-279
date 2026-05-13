@@ -1,14 +1,14 @@
-# Session Handoff — 2026-05-14 (Session 18)
+# Session Handoff — 2026-05-14 (Session 19)
 
 ## TL;DR
 
-**Session 17 で残った Quick Win Issue #310 (`/platform/auth-errors` transient/permanent 分離) を PR #352 で完遂し、silent-failure-hunter Important #1 (L317 旧 inline パターン乖離) を同セッション内 follow-up PR #353 で吸収。`classifyFirestoreError` util を 2 種 (UNAVAILABLE/DEADLINE_EXCEEDED) → 4 種 (+ ABORTED/INTERNAL) に拡張、全 7 callsite で transient (503) / permanent (500) 分類ロジックが完全統一。Issue Net -1 (#310 close、起票 0)。**
+**Session 18 末ハンドオフの優先順位順に着手し、Issue #308 (E2E perf 根本調査) と Issue #281 (allowed_emails 監査 CLI リファクタ) を完遂。Issue Net -2、Open Issue 6 → 4。特に Issue #308 は CI E2E `attendance-api.spec.ts` を 5.6m → 12.1s (約 28x) に短縮、playwright timeout 180s → 60s 戻しの前提条件を整えた。**
 
-Session 17 末で D 群候補に残っていた Issue #310 は PR #349 と同じ `classifyFirestoreError` パターンを 1 endpoint に適用するだけの Quick Win。Session 18 では ① 該当 endpoint (`/platform/auth-errors`) の handler 改修 + util を 4 種 transient code に拡張 (PR #352)、② `/review-pr` 4 エージェント並列レビューで silent-failure-hunter が「L317 旧 inline パターン (`grpcCode === 14 || 4`) が `classifyFirestoreError` と乖離、UI 側 retry 判定が endpoint ごとに不揃い」と Important #1 を指摘 → ③ 別ブランチで L317 を `classifyFirestoreError` に置換 + テスト 5 件追加 (PR #353)、④ ADR-031 Phase 1 制約「Issue #310 で対応予定」を「部分解消 (2026-05-14)」に更新。
+Session 18 ハンドオフ B 候補 (#308) は CI 環境特有で時間読めずと記録されていたが、E2E ログ精査で 9 秒間隔の正体が `isSuperAdmin` の Firestore タイムアウトと判明し、`AUTH_MODE !== "firebase"` で early return する 2 ファイル変更で根本解消。続く C 候補 (#281) は 4 純粋関数切り出し + brand 型 + discriminated union による型強化リファクタを、`/simplify` 3 並列 → `/safe-refactor` → `/review-pr` 5 並列の品質ゲートを通して完遂。
 
-- **Issue Net**: **-1**（Close 1 件 = #310 / 起票 0 件、CLAUDE.md triage 基準準拠で過剰起票なし）
-- **Open 推移**: Session 17 末 7 件 (P2:6 / enhancement:1 = #346) → Session 18 末 **6 件** (#310 close)
-- **本セッション成果**: PR #351 (Session 17 handoff) / #352 / #353 全 3 件マージ、`classifyFirestoreError` パターンが全 7 callsite で同形に統一、ADR-031 Phase 1 制約の該当項目を部分解消マーク
+- **Issue Net**: **-2**（Close 2 件 = #308 / #281、起票 0 件、CLAUDE.md triage 基準準拠）
+- **Open 推移**: Session 18 末 6 件 → Session 19 末 **4 件** (#346, #276, #275, #274 — Phase 5 / Phase 2 残)
+- **本セッション成果**: PR #355 / #356 全 2 件マージ、E2E 28x 高速化 + 監査 CLI が純粋関数中心の設計に再構築
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -19,119 +19,161 @@ cat docs/handoff/LATEST.md
 # 2. main CI / Cloud Run / E2E が緑であることを確認
 gh run list --branch main --limit 5
 
-# 3. 現在の OPEN Issue (P2:6 / Phase 2 follow-up:1 = #346)
+# 3. 現在の OPEN Issue (4 件)
 gh issue list --state open --limit 15
 
-# 4. 次の着手候補（優先度順、Issue #310 完了済）:
+# 4. 次の着手候補（優先度順）:
 #    A. Issue #346 (Phase 2 メール送信) — ADR-033 ブロッカー解消待ち。
 #       DNS Step 1-6 完了 + Workspace で lms-noreply@279279.net 発行が前提。
 #       ユーザー側作業必要、AI は着手不可。
-#    B. P2 #308 (E2E perf): CI でリクエスト遅延 7-9 秒/req の根本調査。
-#       原因不明の調査タスク、時間読めず。
-#    C. P2 #281 (allowed_emails 監査 CLI refactor): 純粋関数分割 + 型強化。
-#       リファクタ、影響範囲は CLI スクリプト限定。
-#    D. P2 #276 (Phase 5): allowed_emails 削除時の即時セッション失効 + 孤児Auth掃除自動化
+#    B. P2 #276 (Phase 5): allowed_emails 削除時の即時セッション失効 + 孤児Auth掃除自動化
 #       — 機能追加、要件確認必要
-#    E. P2 #275 (Phase 5): allowed_emails 管理画面UX改善 — 機能追加、要件確認必要
-#    F. P2 #274 (Phase 5): allowed_emails 運用の可視化・追跡性強化 — 機能追加、要件確認必要
-#    G. firestore.ts:1606 console.error 残存（resetLessonDataForUser リトライログ）の構造化ログ化
-#    H. /simplify Follow-up: catch ブロック共通ヘルパ抽出（super-admin.ts L1561-1711 と
+#    C. P2 #275 (Phase 5): allowed_emails 管理画面UX改善 — 機能追加、要件確認必要
+#    D. P2 #274 (Phase 5): allowed_emails 運用の可視化・追跡性強化 — 機能追加、要件確認必要
+#    E. playwright timeout 180000 → 60000 戻し PR (PR #307 暫定対処の巻き戻し):
+#       Issue #308 完遂で 1 request 9 秒タイムアウトが解消したので、180s 暫定値を
+#       60s に戻せるか CI で検証。1 ファイル / 1 行変更の軽量 PR。
+#    F. firestore.ts:1606 console.error 残存（resetLessonDataForUser リトライログ）の
+#       構造化ログ化 — 軽量、AI 独立可。
+#    G. /simplify Follow-up: catch ブロック共通ヘルパ抽出（super-admin.ts L1561-1711 と
 #       tenants.ts catch で 4 箇所重複、ただし error code 統一規約が先に必要）
-#       → PR #349 コメント参照。Session 18 で 7 callsite が同形化したので抽出ハードル下がった
-#    I. Issue #272 Phase 3 GCIP 移行: ADR-031 記録済、再開条件満たし次第新 Issue
-#    J. Dependabot PR 週次レビュー
+#       → PR #349 コメント参照。Session 18 末で 7 callsite 同形化済みなので抽出ハードル低い。
+#    H. Issue #272 Phase 3 GCIP 移行: ADR-031 記録済、再開条件満たし次第新 Issue
+#    I. Dependabot PR 週次レビュー
+#    J. /review-pr で本 PR scope 外として見送った follow-up 候補:
+#       1. scripts/audit-users-vs-allowed-emails.ts main() の failedTenants が dry-run 時
+#          exit 0 (CI/cron で部分失敗を検出不能)。既存挙動だが新規 Issue 候補
+#       2. HelpRequestedError → AuditMode 風 sum type 化 (allowed-email-audit.ts、
+#          設計判断、別 PR で検討)
+#       3. extraSuperAdmins / AuditUserInput.email のブランド型化 (boundary 一貫性、
+#          allowed-email-audit.ts、別 PR で検討)
 ```
 
 ---
 
-## セッション成果物 (2026-05-14 Session 18)
+## セッション成果物 (2026-05-14 Session 19)
 
-### 🟢 PR #351: docs(handoff): Session 17 (2026-05-14) 記録
+### 🟢 PR #355: perf(auth): skip Firestore super-admin lookup in dev mode
 
-Session 17 ハンドオフ。Session 17 末で commit 済 / push 済だったが PR 未起票だった分を本セッション冒頭でマージ。1 file, +92/-99、CI 全 PASS。
+**Issue #308 完遂** (Close、auto-close 確認済):
 
-### 🟢 PR #352: fix(api): separate transient/permanent errors in GET /platform/auth-errors (503 vs 500)
-
-**Issue #310 完了** (Close、auto-close 確認済 2026-05-13T22:00:22Z):
+**根本原因**: `isSuperAdmin()` が `AUTH_MODE=dev` でも env 非登録 user に対し Firestore lookup を実行し、CI 環境では credentials 不在のため SDK の deadline 待ちで毎 request ~9 秒タイムアウト → `SuperAdminFirestoreUnavailableError` → `tenant-auth.ts:checkSuperAdmin` catch → tenant role 続行という流れ。機能影響はなかったが、`attendance-api.spec.ts` は ~5.6 分要していた。
 
 | AC 項目 | 状態 |
 |---|---|
-| `classifyFirestoreError` が 4 種 transient code をカバー | ✅ ABORTED(10)/INTERNAL(13) 追加 |
-| `/platform/auth-errors` transient → 503、permanent → 500 | ✅ |
-| 503 response schema が既存 `/admins/:email` DELETE と一致 | ✅ `error: "service_unavailable"` + `TRANSIENT_RETRY_MESSAGE_JA` |
-| 統合テスト追加 (transient/permanent) | ✅ transient 4 件 + permanent 1 件 |
-| ADR-031 Phase 1 制約の close マーク | ✅ 部分解消 (2026-05-14) |
+| 1 request あたりの処理時間が 1 秒以下 | ✅ Firestore タイムアウト分 (~9 秒) を解消 |
+| PR #307 timeout 180000 を 60000 に戻せる | ⏭️ 後続 PR で実測検証 (Session 20 候補 E) |
+| allowlist lookup O(1) 化のベンチマーク test | ⏭️ 9 秒遅延の主因除去後は優先度 low |
 
 **修正**:
-- `services/api/src/utils/grpc-errors.ts`: transient code を 2 種 → 4 種に拡張 (UNAVAILABLE/DEADLINE_EXCEEDED/ABORTED/INTERNAL)
-- `services/api/src/routes/super-admin.ts:866-944`: `/platform/auth-errors` catch 節を `classifyFirestoreError` で分岐 + `errorType` を `*_unavailable` / `*_fetch_failed` で観測性改善
-- `services/api/src/utils/__tests__/grpc-errors.test.ts`: 8 → 12 tests (ABORTED/INTERNAL の数値 + 文字列形式 4 件追加)
-- `services/api/src/routes/__tests__/super-admin-platform-auth-errors.test.ts`: 12 → 17 tests (transient 4 件 + permanent 1 件追加)
-- `docs/adr/ADR-031-gcip-multi-tenancy.md`: Phase 1 制約「Issue #310 で対応予定」を「部分解消 (2026-05-14)」に更新
+- `services/api/src/middleware/super-admin.ts:198-225`: `isSuperAdmin` に `authMode !== "firebase"` 早期 return 追加
+- `services/api/src/middleware/__tests__/super-admin-firestore-failure.test.ts`: dev mode L175-186 更新 (503 → 403、Firestore not called)、Issue #293 unit test ブロックに `AUTH_MODE=firebase` stub 明示、Issue #308 unit test ブロック新規 3 件追加
 
-**`/review-pr` 4 エージェント並列レビュー結果** (medium tier, 5 files, +132/-13):
+**挙動変更** (本番運用は AUTH_MODE=firebase 必須化済 Issue #290 で起動時 assert、本番不変):
+| シナリオ | Before | After |
+|---|---|---|
+| AUTH_MODE=dev + env 未登録 + Firestore 正常 + Firestore 登録あり | 200 | **403** |
+| AUTH_MODE=dev + env 未登録 + Firestore 障害 | 503 | **403** |
 
-| エージェント | Critical | Important | 結論 |
-|---|:---:|:---:|---|
-| code-reviewer | 0 | 0 | Approve、Firestore SDK 内部 retry config (`firestore_client_config.json`) と分類一致確認 |
-| pr-test-analyzer | 0 | 1 (rating 6: 文字列 `"unavailable"` 統合テスト追加 = 次 PR 補強) | マージ可 |
-| comment-analyzer | 0 | 0 | INTERNAL コメント表現は残置妥当 |
-| silent-failure-hunter | 0 | 2 (L317 旧パターン不整合 + INTERNAL 分類根拠補強) | follow-up 推奨 |
+**実測効果** (main マージ後 E2E run 25830683071):
+- `attendance-api.spec.ts`: **5.6m → 12.1s** (約 28x 高速化)
+- `Super admin check failed` ログ: 40+ 件 → **0 件** (完全消滅)
+- E2E job 全体: 8m22s → 大幅短縮
 
-**検証**: lint / type-check / test 1380 PASS、CI 全 PASS。
+**検証**: lint / type-check / API test 704 PASS、CI 全 PASS。
 
-### 🟢 PR #353: fix(api): unify POST /tenants transaction error classification via classifyFirestoreError
+### 🟢 PR #356: refactor(audit): extract pure functions and strengthen types
 
-**PR #352 silent-failure-hunter Important #1 を同セッション内で follow-up**:
+**Issue #281 完遂** (Close、auto-close 確認済):
 
-L317 (`super-admin.ts` POST /tenants tx catch) の旧 inline `grpcCode === 14 || grpcCode === 4` を `classifyFirestoreError` に置換。`TRANSIENT_RETRY_MESSAGE_JA` 定数も適用。これで全 7 callsite (`auth-errors`, `super-admin.ts` L1568/L1651/L1705, `tenants.ts` L450, `progress-pdf.ts` L179, `tenants` POST/tx) で transient/permanent 分類が完全同形。
+PR #280 のレビュー指摘 (Firestore IO と純粋ロジックの分離不十分) を完遂する構造リファクタ。本番影響なし、CLI スクリプト + 純粋関数追加に閉じる。
 
-**修正**:
-- `services/api/src/routes/super-admin.ts:314-336`: inline → `classifyFirestoreError`、message を `TRANSIENT_RETRY_MESSAGE_JA` 定数に統一
-- `services/api/src/routes/__tests__/super-admin-tenants-gcip.test.ts`: 新規 describe で transient (code: 14, "aborted", "internal") / permanent (code: "permission-denied", code 属性なし) の統合テスト 5 件追加
+| AC 項目 | 状態 |
+|---|---|
+| 4 純粋関数が services/api/src/services/ 配下に存在 | ✅ planApplyFix / mergeSuperAdmins / parseAuditArgs / detectDuplicateUsers |
+| planApplyFix WriteBatch 境界 4 ケース PASS | ✅ 449/450/900/901 |
+| CliOptions discriminated union 化で --execute 単体 reject | ✅ 型レベル + runtime 両方 |
+| 既存 17 tests 継続 PASS | ✅ 55/55 PASS (+38 新規) |
+| Gmail dot trick negative test 追加 | ✅ `a.l.i.c.e@gmail.com` ≠ `alice@gmail.com` |
+| require(credPath) 撤廃 | ✅ cert(string path) 直接 (ESM 化) |
 
-**影響**: ABORTED (transaction 競合) / INTERNAL (gRPC 内部一時障害) で 500 → 503 に挙動変化。`rules/error-handling.md §3` 準拠、retry 可能状況での適切な UX 改善。
+**新規型**:
+- `NormalizedEmail` brand 型 + `toNormalizedEmail()` ファクトリ — `MatchedEntry.email` 等が正規化済みであることを型レベル保証
+- `AuditMode` discriminated union (`{ kind: "dry-run" | "fix-dry-run" | "fix-execute" }`) — 旧 fix/execute boolean ペアの不正状態 `--execute && !--fix` を型レベル排除
+- `DuplicateUserEntry` + `AuditReport.duplicateUsers` — 重複 users (primary + 漏れた N 件) を可視化
+- `AuditUserInput.lastSignInTime` を optional → `string | null` 必須化 (silent failure 防止)
 
-**軽量手動 review** (small tier, 2 files / +88/-4):
-- Security: secret なし、injection リスクなし ✅
-- 後方互換: UNAVAILABLE/DEADLINE_EXCEEDED 既存挙動変化なし ✅
-- Test sufficiency: transient 3 種 + permanent 2 種で交差網羅 ✅
+**新規純粋関数**:
+- `planApplyFix`: 重複ガード + WriteBatch 分割計画 (Set ベース O(n) dedup、901 件テスト含む)
+- `mergeSuperAdmins`: env CSV + Firestore + extra の union 計算
+- `parseAuditArgs`: 引数パース + Mode 構築 (`HelpRequestedError` で help フロー制御)
+- `detectDuplicateUsers`: 重複検出ロジック (null/empty は invalid 経路に委譲)
 
-**検証**: lint / type-check / test 1385 PASS (1380 → 1385、+5)、CI 全 PASS。
+**scripts 修正**:
+- `parseArgs` → `parseAuditArgs` (Mode discriminated union)
+- `collectSuperAdmins` の union 計算ロジックを `mergeSuperAdmins` に委譲
+- `applyFix` の重複ガード + バッチ分割を `planApplyFix` に委譲
+- `warnDuplicateUsers` の検出ロジックを `detectDuplicateUsers` に委譲
+- `require(credPath)` 撤廃 → `cert(credPath)` 直接 (string path、ESM 互換)
+- `main()` の `options.fix`/`execute` を `options.mode.kind` ベースに変更
+- ローカル `WRITE_BATCH_LIMIT`/`ApplyFixResult` 重複定義削除
+
+**品質ゲート**:
+| Gate | Result |
+|---|---|
+| `npm run lint` | ✅ PASS |
+| `npm run type-check` | ✅ PASS (4 workspaces) |
+| `npm run test -w @lms-279/api` | ✅ 742 PASS (704 → 742、+38) |
+| `/simplify` 3 並列 (reuse/quality/efficiency) | ✅ CRITICAL 0 / IMPORTANT 5 全吸収 |
+| `/safe-refactor` | ✅ 未使用 import 1 件削除 |
+| `/review-pr` 5 並列 (code/test/comment/silent-failure/type-design) | ✅ CRITICAL 0 / IMPORTANT 2 吸収 + 3 件 follow-up |
 
 ## 主要技術判断
 
-### `classifyFirestoreError` transient code を 2 種 → 4 種に拡張した根拠
+### Issue #308 の根本原因特定アプローチ
 
-- **UNAVAILABLE(14)**: Firestore サービス一時停止
-- **DEADLINE_EXCEEDED(4)**: gRPC timeout
-- **ABORTED(10)**: transaction 競合（既存実装でも実は retry 推奨だった、漏れていた）
-- **INTERNAL(13)**: gRPC 内部一時障害、Firestore SDK 内部 `firestore_client_config.json` でも retryable と定義
+Session 18 ハンドオフでは「B (#308) は不確実性高く時間読めず」と記録されていたが、CI E2E ログ (run 25829580319) を 1 行ずつ精査することで、9 秒間隔の正体が `[WebServer] Super admin check failed, proceeding with tenant role` のループであることを直接確認。コード追跡で `tenant-auth.ts:311 checkSuperAdmin` → `super-admin.ts:198 isSuperAdmin` → `getSuperAdminsFromFirestore` → CI で credentials 不在のため SDK deadline (~9 秒) → `SuperAdminFirestoreUnavailableError` throw → catch で fallback、という具体的なフローを特定。仮説リスト 5 つのうち仮説 4 (Firestore SDK init / 認証試行タイムアウト) が当たり。Issue #308 本文の Phase 1 (プロファイリング) を経由せず、ログ精査だけで根本原因に到達できた。
 
-code-reviewer 検証: Google が SDK 内部で同分類を採用、widening は upstream semantics と一致。blast-radius は他 6 callsite で「500 → 503 に変化するが、retry 可能な状況で 503 を返すのは適切」。
+### AUTH_MODE=dev で Firestore lookup スキップする設計選択
 
-### silent-failure-hunter Important #1 を同セッション内 follow-up した理由
+Issue #293 で導入された「dev mode で env 未登録 + Firestore 障害 → 503」は、本番運用想定外 (Issue #290 で AUTH_MODE=firebase 必須化済) の経路。dev mode は env-only フォールバック構成という ADR-031 の延長として明文化し、Firestore lookup 自体をスキップする実装に変更した。これにより:
+- E2E perf: 9 秒タイムアウト分の解消
+- dev mode の挙動が予測可能 (env-only)
+- 本番挙動 (AUTH_MODE=firebase) は完全不変
 
-CLAUDE.md Issue 起票基準 ① 実害 = UX 不一致 (endpoint により retry 判定が異なる) に該当するが、修正規模が極小 (1 ファイル / 4 行 + テスト追加)。次セッション着手より同セッション内吸収のほうが、関連知識が memory cache に残っている状態で完遂できコスト効率が良い。別 Issue 起票せず PR #353 で直接対応。
+設計判断のスコープが新規 ADR を要するほど大きくないため、commit/PR description で記録し、ADR は新規作成しない判断とした。
 
-### INTERNAL を transient に分類する出典 (comment-analyzer Important #2 への応答)
+### Issue #281 の品質ゲート 3 段構え
 
-gRPC 公式 retry policy では INTERNAL は idempotent operation 限定だが、Firestore SDK 内部の `firestore_client_config.json` (`node_modules/@google-cloud/firestore/build/src/v1/firestore_client_config.json`) では UNAVAILABLE / DEADLINE_EXCEEDED と同列で retryable と分類されている。Firestore 文脈では retry 推奨が SDK 公式実装と一致。コメント文言は code-reviewer 確認済のため修正なし。
+「3 ファイル以上」「中規模リファクタ」のため `/simplify` + `/safe-refactor` + `/review-pr` の三段品質ゲートを通した。各段で発見された指摘:
+
+| 段階 | 発見 | 対応 |
+|---|---|---|
+| `/simplify` Efficiency | `planApplyFix` の `toAdd.includes` が O(n²) | Set ベース O(n) dedup |
+| `/simplify` Quality | `planAudit` の `primary ? ... : droppedIds` fallback が dead code | `primary!` non-null assertion + 不変条件コメント |
+| `/simplify` Quality | `parseAuditArgs` のネステッド ternary | if/else if/else 構造化 |
+| `/simplify` Quality / Reuse | テストヘルパ重複 (`mkUser` / 内側 `u()`) | file-scope `u()` 1 つに統一 |
+| `/safe-refactor` | 未使用 import (`WRITE_BATCH_LIMIT` in scripts) | 削除 |
+| `/review-pr` comment-analyzer | `Issue #281:` プレフィックス 14 箇所 | 削除 (task history は git/PR description へ) |
+| `/review-pr` silent-failure-hunter | `detectDuplicateUsers` JSDoc に null skip 記述不足 | 追記 |
+
+`/review-pr` で見送った指摘 3 件は本 PR scope 外として Session 20 候補 J に記録。
 
 ## Issue Net 変化
 
 ```
-- Close 数: 1 件 (#310)
+- Close 数: 2 件 (#308, #281)
 - 起票数: 0 件
-- Net: -1 件
+- Net: -2 件
 ```
 
-**Net -1 で進捗あり** — Session 17 末の P2 候補 Issue #310 を 1 セッション内で `/review-pr` + follow-up PR まで含めて完遂。CLAUDE.md triage 基準（rating ≥ 7 / 実害 / ユーザー明示指示）準拠で過剰起票なし。silent-failure-hunter Important #1 を別 Issue 化せず同セッション内 follow-up で吸収したため、Open 数増加なし。
+**Net -2 で大きな進捗** — Session 18 末の P2 候補 2 件を 1 セッション内で完遂。CLAUDE.md triage 基準（rating ≥ 7 / 実害 / ユーザー明示指示）準拠で過剰起票なし。`/review-pr` で見送った指摘 3 件 (Session 20 候補 J) も Issue 化せず handoff に記録するに留めた (rating 5-6 相当のため triage 基準未満)。
 
 ## 関連リンク
 
-- ADR-031 (GCIP マルチテナンシー、Phase 1 制約 #310 部分解消マーク): `docs/adr/ADR-031-gcip-multi-tenancy.md`
-- Issue #310 (transient/permanent 分離、Close 2026-05-13): https://github.com/system-279/lms-279/issues/310
-- PR #351 (Session 17 handoff): https://github.com/system-279/lms-279/pull/351
-- PR #352 (Issue #310 完了): https://github.com/system-279/lms-279/pull/352
-- PR #353 (L317 follow-up 統一): https://github.com/system-279/lms-279/pull/353
+- Issue #308 (E2E perf 根本調査、Close 2026-05-14): https://github.com/system-279/lms-279/issues/308
+- Issue #281 (allowed_emails 監査 CLI リファクタ、Close 2026-05-14): https://github.com/system-279/lms-279/issues/281
+- PR #354 (Session 18 handoff): https://github.com/system-279/lms-279/pull/354
+- PR #355 (Issue #308 完遂): https://github.com/system-279/lms-279/pull/355
+- PR #356 (Issue #281 完遂): https://github.com/system-279/lms-279/pull/356
+- 関連 ADR: ADR-031 (GCIP マルチテナンシー、Issue #293/#308 の挙動変更根拠)、Issue #290 (AUTH_MODE=firebase 本番必須化)
