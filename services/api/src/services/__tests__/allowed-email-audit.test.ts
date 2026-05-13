@@ -286,7 +286,7 @@ describe("buildAuditFixNote", () => {
   });
 });
 
-describe("planApplyFix (Issue #281)", () => {
+describe("planApplyFix", () => {
   function buildReport(
     emails: string[]
   ): Pick<AuditReport, "usersWithoutAllowedEmail"> {
@@ -378,7 +378,7 @@ describe("planApplyFix (Issue #281)", () => {
   });
 });
 
-describe("mergeSuperAdmins (Issue #281)", () => {
+describe("mergeSuperAdmins", () => {
   it("env CSV + Firestore + extra の union を返す", () => {
     const result = mergeSuperAdmins(
       "a@x.com,b@x.com",
@@ -414,7 +414,7 @@ describe("mergeSuperAdmins (Issue #281)", () => {
   });
 });
 
-describe("parseAuditArgs (Issue #281)", () => {
+describe("parseAuditArgs", () => {
   it("引数なしは dry-run mode", () => {
     expect(parseAuditArgs([])).toEqual({
       mode: { kind: "dry-run" },
@@ -500,7 +500,7 @@ describe("parseAuditArgs (Issue #281)", () => {
   });
 });
 
-describe("detectDuplicateUsers (Issue #281)", () => {
+describe("detectDuplicateUsers", () => {
   it("重複なしなら空配列", () => {
     const result = detectDuplicateUsers([
       u("u1", "a@x.com"),
@@ -549,7 +549,7 @@ describe("detectDuplicateUsers (Issue #281)", () => {
   });
 });
 
-describe("planAudit duplicateUsers 出力 (Issue #281)", () => {
+describe("planAudit duplicateUsers 出力", () => {
   it("重複 users があれば duplicateUsers に primary + 漏れた id をまとめて出力", () => {
     const report = planAudit(
       [

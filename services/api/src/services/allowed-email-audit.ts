@@ -24,7 +24,7 @@
 import { normalizeEmail as normalizeEmailUtil } from "../utils/tenant-id.js";
 
 /**
- * 正規化済みメールアドレスを表す brand 型 (Issue #281)。
+ * 正規化済みメールアドレスを表す brand 型。
  *
  * `toNormalizedEmail()` を通った文字列のみが NormalizedEmail として扱える。
  * MatchedEntry.email 等が `email.toLowerCase().trim()` 済みであることを型レベルで保証し、
@@ -50,7 +50,7 @@ export function toNormalizedEmail(
 }
 
 /**
- * CLI 実行モード (Issue #281)。
+ * CLI 実行モード。
  *
  * 旧 `{ fix: boolean; execute: boolean }` の組み合わせ 4 通りのうち、
  * `{ fix: false, execute: true }`（補正なしで書き込みのみ）は意味的に不正な状態だったが、
@@ -78,7 +78,7 @@ export type AuditUserInput = {
   createdAt: string;
   /**
    * Firebase Auth から取得した最終サインイン時刻。取得不可なら null。
-   * Issue #281: optional を撤廃し必須化 (silent failure 防止)。
+   * 必須化することで silent failure (退職者判定の誤誘導) を防ぐ。
    */
   lastSignInTime: string | null;
 };
@@ -121,7 +121,7 @@ export type ExcludedSuperAdminEntry = {
 };
 
 /**
- * Issue #281: 同一 email を持つ users レコードが複数ある場合の可視化エントリ。
+ * 同一 email を持つ users レコードが複数ある場合の可視化エントリ。
  * planAudit は最初の 1 件のみ採用するため、ここで漏れを可視化する。
  */
 export type DuplicateUserEntry = {
@@ -135,7 +135,7 @@ export type AuditReport = {
   allowedEmailsWithoutUser: AllowedEmailWithoutUserEntry[];
   invalid: InvalidEntry[];
   excludedSuperAdmins: ExcludedSuperAdminEntry[];
-  /** Issue #281: 同一 email が複数 users にある場合、最初の 1 件以外はここに可視化 */
+  /** 同一 email が複数 users にある場合、最初の 1 件以外はここに可視化 */
   duplicateUsers: DuplicateUserEntry[];
 };
 
@@ -175,7 +175,7 @@ export function planAudit(
     }
   }
 
-  // Issue #281: 重複 users を可視化するため、最初の 1 件を採用 + 後続を duplicateUserIds に記録
+  // 重複 users を可視化するため、最初の 1 件を採用 + 後続を duplicateUserIds に記録
   const usersByNormalized = new Map<NormalizedEmail, AuditUserInput>();
   const duplicateUserIds = new Map<NormalizedEmail, string[]>();
   for (const u of users) {
@@ -273,7 +273,7 @@ export function buildAuditFixNote(date: Date = new Date()): string {
 export const WRITE_BATCH_LIMIT = 450;
 
 /**
- * Issue #281: `--fix` 実行計画の純粋ロジック。
+ * `--fix` 実行計画の純粋ロジック。
  *
  * `report.usersWithoutAllowedEmail` から `existingEmails` を引いた差分を「追加対象」とし、
  * 既存に同じ email がある entry は `toSkip` として分離。さらに WriteBatch の op 上限
@@ -325,7 +325,7 @@ export function planApplyFix(
 }
 
 /**
- * Issue #281: env CSV + Firestore emails + 手動追加分の union 計算 (純粋関数)。
+ * env CSV + Firestore emails + 手動追加分の union 計算 (純粋関数)。
  *
  * Firestore 取得は scripts 側で行う。本関数は文字列入力のみで純粋。
  * 各入力は trim().toLowerCase() で正規化され、空文字は除去される。結果はソート済み。
@@ -352,7 +352,7 @@ export function mergeSuperAdmins(
 }
 
 /**
- * Issue #281: CLI 引数パース (純粋関数)。
+ * CLI 引数パース (純粋関数)。
  *
  * - 位置引数 (`--` 接頭辞なし) は明示的に reject。
  * - `--execute` 単体（`--fix` 未指定）は reject。
@@ -433,10 +433,13 @@ export function parseAuditArgs(argv: readonly string[]): CliOptions {
 }
 
 /**
- * Issue #281: 同一 email を持つ users レコードを検出する純粋関数。
+ * 同一 email を持つ users レコードを検出する純粋関数。
  *
  * planAudit も内部で重複検出するが、`AuditUserInput` の段階で early-warn したい
  * （scripts は planAudit 呼び出し前に console.warn を出すフロー）ために独立した関数を提供。
+ *
+ * null/empty な email は invalid として skip する (重複検出の対象外、`planAudit` 側で
+ * `AuditReport.invalid[]` に記録される)。
  */
 export function detectDuplicateUsers(
   rawUsers: readonly AuditUserInput[]

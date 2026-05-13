@@ -61,7 +61,7 @@ function initializeFirebase(): void {
 
   const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if (credPath) {
-    // Issue #281: require(credPath) 撤廃。firebase-admin の cert は string パスも受け取れる。
+    // firebase-admin の cert() は string パスも受け取れる (ESM で require を避けるため)
     initializeApp({ credential: cert(credPath) });
   } else {
     initializeApp();
@@ -84,8 +84,8 @@ type SuperAdminsResult = {
  * strict=false（dry-run 時）の場合は続行するが、firestoreFetchFailed フラグを立てて
  * 呼び出し側がレポート冒頭・Summary 両方に警告を出せるようにする。
  *
- * Issue #281: union 計算は純粋関数 mergeSuperAdmins に分離済。本関数は Firestore 取得の
- * 副作用と strict mode の判定のみを担う。
+ * union 計算は純粋関数 `mergeSuperAdmins` に委譲。本関数は Firestore 取得の副作用と
+ * strict mode 判定のみ担う。
  */
 async function collectSuperAdmins(
   extra: string[],
@@ -254,9 +254,8 @@ type ApplyFixResult = {
  *   WriteBatch で束ねてコミットすることで、ネットワーク往復の削減と
  *   同一バッチ内の原子性を確保する（Firestore は 500 件/commit 上限）。
  *
- * Issue #281: 重複ガード + バッチ分割計画は純粋関数 planApplyFix に分離済。
- * 本関数は Firestore IO (既存 allowed_emails 取得 + WriteBatch コミット) と
- * 進捗ログ出力のみを担う。
+ * 重複ガード + バッチ分割計画は純粋関数 `planApplyFix` に委譲。本関数は Firestore IO
+ * (既存 allowed_emails 取得 + WriteBatch コミット) と進捗ログ出力のみ担う。
  */
 async function applyFix(
   tenantId: string,
@@ -325,8 +324,8 @@ async function applyFix(
  * planAudit は最初の 1 件のみ採用して後続を無視するため、実態の把握には
  * 事前にこの警告を出すことが重要（Evaluator エッジケース指摘）。
  *
- * Issue #281: 検出ロジックは純粋関数 detectDuplicateUsers に分離済。
- * 本関数は console.warn の副作用のみを担う。
+ * 検出ロジックは純粋関数 `detectDuplicateUsers` に委譲。本関数は console.warn の
+ * 副作用のみを担う。
  */
 function warnDuplicateUsers(
   tenantId: string,
