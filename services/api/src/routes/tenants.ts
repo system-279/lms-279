@@ -12,6 +12,7 @@ import type { MyTenantInfo, TenantStatus } from "@lms-279/shared-types";
 import { RESERVED_TENANT_IDS, generateTenantId, validateOrganizationName, normalizeEmail } from "../utils/tenant-id.js";
 import { toISOOptional } from "../datasource/firestore.js";
 import { logger } from "../utils/logger.js";
+import { classifyFirestoreError, TRANSIENT_RETRY_MESSAGE_JA } from "../utils/grpc-errors.js";
 
 const router = Router();
 
@@ -346,104 +347,123 @@ router.get("/mine", async (req: Request, res: Response) => {
 
   const db = getFirestore();
 
-  // owner クエリは status を Firestore 側に push down する（既存複合 index
-  // [ownerId, status, createdAt] を活用）。invited は allowed_emails に
-  // status を持たないため getAll 後に in-memory で同じ filter を再適用する。
-  let ownerQuery: FirebaseFirestore.Query = db
-    .collection("tenants")
-    .where("ownerId", "==", uid);
-  if (statusFilter) {
-    ownerQuery = ownerQuery.where("status", "==", statusFilter);
-  }
+  try {
+    // owner クエリは status を Firestore 側に push down する（既存複合 index
+    // [ownerId, status, createdAt] を活用）。invited は allowed_emails に
+    // status を持たないため getAll 後に in-memory で同じ filter を再適用する。
+    let ownerQuery: FirebaseFirestore.Query = db
+      .collection("tenants")
+      .where("ownerId", "==", uid);
+    if (statusFilter) {
+      ownerQuery = ownerQuery.where("status", "==", statusFilter);
+    }
 
-  // invited 検索は email 必須（欠落時は owner のみ返す = fail-closed）。
-  const invitedTenantRefsPromise: Promise<DocumentReference[]> = normalizedEmail
-    ? db
-        .collectionGroup("allowed_emails")
-        .where("email", "==", normalizedEmail)
-        .get()
-        .then((snap) => {
-          const refs: DocumentReference[] = [];
-          for (const allowedDoc of snap.docs) {
-            const tenantRef = allowedDoc.ref.parent.parent;
-            if (tenantRef) {
-              refs.push(tenantRef);
-            } else {
-              // ref.parent.parent が null になるのは allowed_emails が
-              // tenants/{id}/allowed_emails/{id} 以外のパスに置かれた場合のみ。
-              // スキーマ違反のため検知できるよう warn ログを残す。
-              logger.warn("allowed_emails doc has null grandparent ref", {
-                errorType: "allowed_emails_schema_violation",
-                path: allowedDoc.ref.path,
-                uid,
-                endpoint: "/tenants/mine",
-              });
+    // invited 検索は email 必須（欠落時は owner のみ返す = fail-closed）。
+    const invitedTenantRefsPromise: Promise<DocumentReference[]> = normalizedEmail
+      ? db
+          .collectionGroup("allowed_emails")
+          .where("email", "==", normalizedEmail)
+          .get()
+          .then((snap) => {
+            const refs: DocumentReference[] = [];
+            for (const allowedDoc of snap.docs) {
+              const tenantRef = allowedDoc.ref.parent.parent;
+              if (tenantRef) {
+                refs.push(tenantRef);
+              } else {
+                // ref.parent.parent が null になるのは allowed_emails が
+                // tenants/{id}/allowed_emails/{id} 以外のパスに置かれた場合のみ。
+                // スキーマ違反のため検知できるよう warn ログを残す。
+                logger.warn("allowed_emails doc has null grandparent ref", {
+                  errorType: "allowed_emails_schema_violation",
+                  path: allowedDoc.ref.path,
+                  uid,
+                  endpoint: "/tenants/mine",
+                });
+              }
             }
-          }
-          return refs;
-        })
-    : Promise.resolve([]);
+            return refs;
+          })
+      : Promise.resolve([]);
 
-  const [ownerSnapshot, invitedTenantRefs] = await Promise.all([
-    ownerQuery.get(),
-    invitedTenantRefsPromise,
-  ]);
+    const [ownerSnapshot, invitedTenantRefs] = await Promise.all([
+      ownerQuery.get(),
+      invitedTenantRefsPromise,
+    ]);
 
-  // 重複排除キーは tenantId。owner と invited に同じテナントがある場合は
-  // owner snapshot を採用する（状態は同一だが意味論的に owner を優先）。
-  const tenantDocsById = new Map<
-    string,
-    FirebaseFirestore.DocumentSnapshot
-  >();
-  for (const doc of ownerSnapshot.docs) {
-    tenantDocsById.set(doc.id, doc);
-  }
+    // 重複排除キーは tenantId。owner と invited に同じテナントがある場合は
+    // owner snapshot を採用する（状態は同一だが意味論的に owner を優先）。
+    const tenantDocsById = new Map<
+      string,
+      FirebaseFirestore.DocumentSnapshot
+    >();
+    for (const doc of ownerSnapshot.docs) {
+      tenantDocsById.set(doc.id, doc);
+    }
 
-  const invitedRefsToFetch = invitedTenantRefs.filter(
-    (ref) => !tenantDocsById.has(ref.id)
-  );
-  if (invitedRefsToFetch.length > 0) {
-    const invitedDocs = await db.getAll(...invitedRefsToFetch);
-    for (const doc of invitedDocs) {
-      // tenant doc が削除済み等で存在しない場合はスキップ（fail-closed）。
-      // allowed_emails が先行削除されずに孤児化している兆候なので warn ログ。
-      if (doc.exists) {
-        tenantDocsById.set(doc.id, doc);
-      } else {
-        logger.warn("invited tenant doc not found (allowed_emails orphan?)", {
-          errorType: "invited_tenant_orphan",
-          tenantId: doc.id,
-          uid,
-          endpoint: "/tenants/mine",
-        });
+    const invitedRefsToFetch = invitedTenantRefs.filter(
+      (ref) => !tenantDocsById.has(ref.id)
+    );
+    if (invitedRefsToFetch.length > 0) {
+      const invitedDocs = await db.getAll(...invitedRefsToFetch);
+      for (const doc of invitedDocs) {
+        // tenant doc が削除済み等で存在しない場合はスキップ（fail-closed）。
+        // allowed_emails が先行削除されずに孤児化している兆候なので warn ログ。
+        if (doc.exists) {
+          tenantDocsById.set(doc.id, doc);
+        } else {
+          logger.warn("invited tenant doc not found (allowed_emails orphan?)", {
+            errorType: "invited_tenant_orphan",
+            tenantId: doc.id,
+            uid,
+            endpoint: "/tenants/mine",
+          });
+        }
       }
     }
-  }
 
-  const tenants: MyTenantInfo[] = [];
-  for (const doc of tenantDocsById.values()) {
-    const data = doc.data();
-    if (!data) continue;
-    // owner query は status を push down 済だが、invited 経由は filter 未適用のためここで再判定。
-    if (statusFilter && data.status !== statusFilter) continue;
-    tenants.push({
-      id: data.id,
-      name: data.name,
-      status: data.status,
-      createdAt: toISOOptional(data.createdAt),
+    const tenants: MyTenantInfo[] = [];
+    for (const doc of tenantDocsById.values()) {
+      const data = doc.data();
+      if (!data) continue;
+      // owner query は status を push down 済だが、invited 経由は filter 未適用のためここで再判定。
+      if (statusFilter && data.status !== statusFilter) continue;
+      tenants.push({
+        id: data.id,
+        name: data.name,
+        status: data.status,
+        createdAt: toISOOptional(data.createdAt),
+      });
+    }
+
+    // createdAt desc。ISO 8601 は lexicographic 比較で時系列と一致するため
+    // localeCompare で desc を表現できる。null は末尾に寄せる。
+    tenants.sort((a, b) => {
+      if (a.createdAt === b.createdAt) return 0;
+      if (a.createdAt === null) return 1;
+      if (b.createdAt === null) return -1;
+      return b.createdAt.localeCompare(a.createdAt);
+    });
+
+    res.json({ tenants });
+  } catch (err) {
+    const { grpcCode, isTransient } = classifyFirestoreError(err);
+    logger.error("GET /tenants/mine failed", {
+      errorType: "tenants_mine_failed",
+      error: err instanceof Error ? err : new Error(String(err)),
+      uid,
+      hasEmail: Boolean(normalizedEmail),
+      statusFilter: statusFilter ?? null,
+      grpcCode,
+      isTransient,
+    });
+    res.status(isTransient ? 503 : 500).json({
+      error: "internal_error",
+      message: isTransient
+        ? TRANSIENT_RETRY_MESSAGE_JA
+        : "アクセス可能なテナント一覧の取得中にエラーが発生しました。",
     });
   }
-
-  // createdAt desc。ISO 8601 は lexicographic 比較で時系列と一致するため
-  // localeCompare で desc を表現できる。null は末尾に寄せる。
-  tenants.sort((a, b) => {
-    if (a.createdAt === b.createdAt) return 0;
-    if (a.createdAt === null) return 1;
-    if (b.createdAt === null) return -1;
-    return b.createdAt.localeCompare(a.createdAt);
-  });
-
-  res.json({ tenants });
 });
 
 /**
