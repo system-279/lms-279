@@ -834,6 +834,33 @@ describe("GET /api/v2/tenants/mine — owner + invited 統合", () => {
   });
 
   // -------------------------------------------------------------------
+  // AC-17 〜 AC-19 用 Firestore モック。owner / invited どちらかの get() が
+  // throw する状況を構築する。throw 指定なしのレッグは空 docs を返す。
+  // makeMineFirestoreMock とは独立（エラー経路では正常系のクエリ動作が
+  // 不要なため、必要最小限のスタブで読みやすさを優先）。
+  // -------------------------------------------------------------------
+  function makeThrowingFirestoreMock(opts: {
+    throwOnOwner?: unknown;
+    throwOnInvited?: unknown;
+  }) {
+    const ownerGet = async () => {
+      if (opts.throwOnOwner !== undefined) throw opts.throwOnOwner;
+      return { docs: [] };
+    };
+    const invitedGet = async () => {
+      if (opts.throwOnInvited !== undefined) throw opts.throwOnInvited;
+      return { docs: [] };
+    };
+    return {
+      collection: () => ({ where: () => ({ where: () => ({ get: ownerGet }), get: ownerGet }) }),
+      collectionGroup: () => ({ where: () => ({ get: invitedGet }) }),
+      async getAll() {
+        return [];
+      },
+    };
+  }
+
+  // -------------------------------------------------------------------
   // AC-17: ownerQuery.get() が transient エラー (gRPC code 14 UNAVAILABLE)
   //        を投げた時、503 + internal_error + TRANSIENT_RETRY_MESSAGE_JA。
   //        Firestore の一時的不調を fail-closed にせず適切に分類する。
@@ -841,19 +868,9 @@ describe("GET /api/v2/tenants/mine — owner + invited 統合", () => {
   it("[AC-17] Firestore が transient エラー (code 14) → 503 internal_error", async () => {
     mockVerifyIdToken.mockResolvedValue(decoded("uid-1", "u@example.com"));
     const transientErr = Object.assign(new Error("UNAVAILABLE"), { code: 14 });
-    mockGetFirestore.mockReturnValue({
-      collection: () => ({
-        where: () => ({
-          async get() {
-            throw transientErr;
-          },
-        }),
-      }),
-      collectionGroup: () => ({
-        where: () => ({ async get() { return { docs: [] }; } }),
-      }),
-      async getAll() { return []; },
-    } as never);
+    mockGetFirestore.mockReturnValue(
+      makeThrowingFirestoreMock({ throwOnOwner: transientErr }) as never
+    );
     const app = await buildApp();
 
     const res = await supertest(app)
@@ -873,19 +890,9 @@ describe("GET /api/v2/tenants/mine — owner + invited 統合", () => {
   it("[AC-18] Firestore が permanent エラー (code 7) → 500 internal_error", async () => {
     mockVerifyIdToken.mockResolvedValue(decoded("uid-1", "u@example.com"));
     const permanentErr = Object.assign(new Error("PERMISSION_DENIED"), { code: 7 });
-    mockGetFirestore.mockReturnValue({
-      collection: () => ({
-        where: () => ({
-          async get() {
-            throw permanentErr;
-          },
-        }),
-      }),
-      collectionGroup: () => ({
-        where: () => ({ async get() { return { docs: [] }; } }),
-      }),
-      async getAll() { return []; },
-    } as never);
+    mockGetFirestore.mockReturnValue(
+      makeThrowingFirestoreMock({ throwOnOwner: permanentErr }) as never
+    );
     const app = await buildApp();
 
     const res = await supertest(app)
@@ -900,25 +907,17 @@ describe("GET /api/v2/tenants/mine — owner + invited 統合", () => {
   // -------------------------------------------------------------------
   // AC-19: collectionGroup get() (invited 側) が transient エラーを投げた時
   //        も catch される (Promise.all のどちらが reject しても 503)。
+  //        owner 側は空 docs で正常終了する経路のため、reject が invited
+  //        単独でも TRANSIENT_RETRY_MESSAGE_JA に到達することを検証する。
   // -------------------------------------------------------------------
   it("[AC-19] invited 側 (collectionGroup) が transient エラー → 503", async () => {
     mockVerifyIdToken.mockResolvedValue(decoded("uid-1", "u@example.com"));
     const transientErr = Object.assign(new Error("DEADLINE_EXCEEDED"), {
       code: "deadline-exceeded",
     });
-    mockGetFirestore.mockReturnValue({
-      collection: () => ({
-        where: () => ({ async get() { return { docs: [] }; } }),
-      }),
-      collectionGroup: () => ({
-        where: () => ({
-          async get() {
-            throw transientErr;
-          },
-        }),
-      }),
-      async getAll() { return []; },
-    } as never);
+    mockGetFirestore.mockReturnValue(
+      makeThrowingFirestoreMock({ throwOnInvited: transientErr }) as never
+    );
     const app = await buildApp();
 
     const res = await supertest(app)
@@ -927,5 +926,6 @@ describe("GET /api/v2/tenants/mine — owner + invited 統合", () => {
 
     expect(res.status).toBe(503);
     expect(res.body.error).toBe("internal_error");
+    expect(res.body.message).toContain("一時的");
   });
 });
