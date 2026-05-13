@@ -2,7 +2,7 @@
 const PRODUCTION_API_URL = "https://api-3zcica5euq-an.a.run.app";
 
 // 環境変数またはデフォルト値を使用
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ||
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL ||
   (typeof window !== "undefined" && window.location.hostname !== "localhost"
     ? PRODUCTION_API_URL
     : "http://localhost:8080");
