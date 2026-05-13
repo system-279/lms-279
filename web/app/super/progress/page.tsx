@@ -339,7 +339,16 @@ export default function StudentProgressPage() {
                             {isExpanded ? "▼" : "▶"}
                           </TableCell>
                           <TableCell>
-                            <div className="text-sm">{student.userName ?? "—"}</div>
+                            <div className="text-sm flex items-center gap-2">
+                              <span>{student.userName ?? "—"}</span>
+                              <a
+                                href={`/super/progress/${selectedTenant}/${student.userId}/print`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-xs text-blue-600 underline hover:text-blue-800"
+                              >
+                                PDF
+                              </a>
+                            </div>
                             <div className="text-xs text-muted-foreground">{student.userEmail}</div>
                           </TableCell>
                           <TableCell>{course.courseName}</TableCell>

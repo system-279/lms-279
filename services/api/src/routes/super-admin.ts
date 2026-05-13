@@ -25,6 +25,7 @@ import {
 } from "../middleware/super-admin.js";
 import type { TenantMetadata, TenantStatus } from "../types/tenant.js";
 import { masterRouter } from "./super-admin-master.js";
+import { progressPdfRouter } from "./super/progress-pdf.js";
 import { calculateDefaultDeadlines, validateEnrollmentSettingPayload } from "../services/enrollment.js";
 import { generateTenantId, normalizeEmail, parseTenantGcipFields } from "../utils/tenant-id.js";
 import { logger } from "../utils/logger.js";
@@ -41,6 +42,9 @@ router.use(superAdminAuthMiddleware);
 
 // マスターコンテンツ管理ルート
 router.use(masterRouter);
+
+// 受講者進捗 PDF 出力ルート (ADR-031)
+router.use(progressPdfRouter);
 
 /**
  * テナント一覧のレスポンス型

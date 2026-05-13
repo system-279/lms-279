@@ -15,9 +15,10 @@ RUN npm run build -w @lms-279/shared-types
 
 # APIソースをコピーしてビルド
 COPY services/api/src ./services/api/src
+COPY services/api/assets ./services/api/assets
 RUN npm run build -w @lms-279/api
 
-# 不要ファイル削除
+# 不要ファイル削除（assets は PDF 生成で必要なため残す）
 RUN rm -rf services/api/src packages/shared-types/src node_modules/.cache
 
 # 本番用依存関係のみ再インストール

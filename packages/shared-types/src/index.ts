@@ -7,3 +7,4 @@ export type * from "./student-progress.js";
 export type * from "./enrollment.js";
 export type * from "./quiz.js";
 export type * from "./tenant.js";
+export type * from "./progress-pdf.js";
