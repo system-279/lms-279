@@ -264,12 +264,94 @@ describe("GET /api/v2/super/platform/auth-errors (Issue #299)", () => {
     expect(logs[0].firebaseErrorCode).toBe("auth/id-token-revoked");
   });
 
-  it("DataSource 障害時は 500 fetch_failed を返す（evaluator 指摘）", async () => {
+  it("DataSource 障害 (code 属性なし) は 500 fetch_failed を返す", async () => {
     // super@example.com は env fast path で super-admin 判定される
-    // getPlatformAuthErrorLogs を reject させる
+    // code 属性なしの Error は permanent 扱い (classifyFirestoreError)
     const brokenDs = {
       ...ds,
       getPlatformAuthErrorLogs: vi.fn().mockRejectedValue(new Error("Firestore unavailable")),
+      createPlatformAuthErrorLog: ds.createPlatformAuthErrorLog.bind(ds),
+    } as unknown as InMemoryDataSource;
+
+    const app = await buildApp(brokenDs);
+    const res = await supertest(app)
+      .get("/api/v2/super/platform/auth-errors")
+      .set("X-User-Email", "super@example.com");
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe("fetch_failed");
+  });
+
+  // Issue #310: transient/permanent 分離
+  it("Issue #310: transient エラー (code: 14 UNAVAILABLE) は 503 service_unavailable を返す", async () => {
+    const brokenDs = {
+      ...ds,
+      getPlatformAuthErrorLogs: vi.fn().mockRejectedValue(Object.assign(new Error("Firestore unavailable"), { code: 14 })),
+      createPlatformAuthErrorLog: ds.createPlatformAuthErrorLog.bind(ds),
+    } as unknown as InMemoryDataSource;
+
+    const app = await buildApp(brokenDs);
+    const res = await supertest(app)
+      .get("/api/v2/super/platform/auth-errors")
+      .set("X-User-Email", "super@example.com");
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe("service_unavailable");
+    expect(res.body.message).toContain("一時的");
+  });
+
+  it('Issue #310: transient エラー (code: "deadline-exceeded") は 503 service_unavailable を返す', async () => {
+    const brokenDs = {
+      ...ds,
+      getPlatformAuthErrorLogs: vi.fn().mockRejectedValue(Object.assign(new Error("Deadline exceeded"), { code: "deadline-exceeded" })),
+      createPlatformAuthErrorLog: ds.createPlatformAuthErrorLog.bind(ds),
+    } as unknown as InMemoryDataSource;
+
+    const app = await buildApp(brokenDs);
+    const res = await supertest(app)
+      .get("/api/v2/super/platform/auth-errors")
+      .set("X-User-Email", "super@example.com");
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe("service_unavailable");
+  });
+
+  it('Issue #310: transient エラー (code: "aborted") は 503 service_unavailable を返す', async () => {
+    const brokenDs = {
+      ...ds,
+      getPlatformAuthErrorLogs: vi.fn().mockRejectedValue(Object.assign(new Error("Aborted"), { code: "aborted" })),
+      createPlatformAuthErrorLog: ds.createPlatformAuthErrorLog.bind(ds),
+    } as unknown as InMemoryDataSource;
+
+    const app = await buildApp(brokenDs);
+    const res = await supertest(app)
+      .get("/api/v2/super/platform/auth-errors")
+      .set("X-User-Email", "super@example.com");
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe("service_unavailable");
+  });
+
+  it('Issue #310: transient エラー (code: "internal") は 503 service_unavailable を返す', async () => {
+    const brokenDs = {
+      ...ds,
+      getPlatformAuthErrorLogs: vi.fn().mockRejectedValue(Object.assign(new Error("Internal"), { code: "internal" })),
+      createPlatformAuthErrorLog: ds.createPlatformAuthErrorLog.bind(ds),
+    } as unknown as InMemoryDataSource;
+
+    const app = await buildApp(brokenDs);
+    const res = await supertest(app)
+      .get("/api/v2/super/platform/auth-errors")
+      .set("X-User-Email", "super@example.com");
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe("service_unavailable");
+  });
+
+  it('Issue #310: permanent エラー (code: "permission-denied") は 500 fetch_failed を返す', async () => {
+    const brokenDs = {
+      ...ds,
+      getPlatformAuthErrorLogs: vi.fn().mockRejectedValue(Object.assign(new Error("Permission denied"), { code: "permission-denied" })),
       createPlatformAuthErrorLog: ds.createPlatformAuthErrorLog.bind(ds),
     } as unknown as InMemoryDataSource;
 
