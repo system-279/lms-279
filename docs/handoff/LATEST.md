@@ -1,14 +1,14 @@
-# Session Handoff — 2026-05-14 (Session 17)
+# Session Handoff — 2026-05-14 (Session 18)
 
 ## TL;DR
 
-**Session 16 PR #345 (Phase 1 PDF 出力) マージ後の Cloud Run deploy が連続失敗していた production blocker を発見・修正 (PR #348)、Session 13 `/review-pr` 検出の silent-failure C1 (`/tenants/mine` top-level try-catch 欠落、rating 9) を解消 (PR #349)、Phase 2 (Issue #346) 着手前の事前検証として ADR-033 (SMTP プロバイダ選定とドメイン認証整備) を草案 Status: Proposed で起票・マージ (PR #350)。Issue Net 0 (起票 0 / Close 0) だが、production blocker 解消 + 既存 high-rating silent-failure 修正 + Phase 2 着手前提整備の 3 軸で進捗。**
+**Session 17 で残った Quick Win Issue #310 (`/platform/auth-errors` transient/permanent 分離) を PR #352 で完遂し、silent-failure-hunter Important #1 (L317 旧 inline パターン乖離) を同セッション内 follow-up PR #353 で吸収。`classifyFirestoreError` util を 2 種 (UNAVAILABLE/DEADLINE_EXCEEDED) → 4 種 (+ ABORTED/INTERNAL) に拡張、全 7 callsite で transient (503) / permanent (500) 分類ロジックが完全統一。Issue Net -1 (#310 close、起票 0)。**
 
-Session 16 で完遂した Phase 1 PR #345 の Docker ビルドが `react/jsx-runtime` 型解決不能で連続失敗していたが、ローカル/CI は npm workspaces hoisting で web の react を root に hoist して通過していたため見落とされていた。Session 17 は ① catchup 直後にこの connect-the-dots を実施し PR #348 で `react` + `@types/react` を API workspace の deps に追加 (本番デプロイ復旧確認済)、② 並行で silent-failure C1 を `classifyFirestoreError` パターン (super-admin.ts 既存実装と一貫) で修正、`/simplify` の 3 agent 並列レビューで指摘された Nit 2 件 (テストモック共通化 + AC-19 assertion 強化) を同 PR 内で吸収、③ Phase 2 の SMTP プロバイダ選定を ADR-033 で **Workspace SMTP relay + `lms-noreply@279279.net`** を推奨案で記録、`279279.net` の SPF/DKIM/DMARC が全て未整備であることを dig で確認し DNS 整備手順 6 ステップを明文化。
+Session 17 末で D 群候補に残っていた Issue #310 は PR #349 と同じ `classifyFirestoreError` パターンを 1 endpoint に適用するだけの Quick Win。Session 18 では ① 該当 endpoint (`/platform/auth-errors`) の handler 改修 + util を 4 種 transient code に拡張 (PR #352)、② `/review-pr` 4 エージェント並列レビューで silent-failure-hunter が「L317 旧 inline パターン (`grpcCode === 14 || 4`) が `classifyFirestoreError` と乖離、UI 側 retry 判定が endpoint ごとに不揃い」と Important #1 を指摘 → ③ 別ブランチで L317 を `classifyFirestoreError` に置換 + テスト 5 件追加 (PR #353)、④ ADR-031 Phase 1 制約「Issue #310 で対応予定」を「部分解消 (2026-05-14)」に更新。
 
-- **Issue Net**: **0**（Close 0 件 / 起票 0 件、CLAUDE.md triage 基準準拠で過剰起票なし）
-- **Open 推移**: Session 16 末 7 件 (P0:0 / P2:6 / enhancement:1 = #346) → Session 17 末 **7 件** (変化なし)
-- **本セッション成果**: PR #348/#349/#350 全 3 件マージ完了、Phase 1 本番化前提整備完了、Phase 2 ブロッカー条件明文化
+- **Issue Net**: **-1**（Close 1 件 = #310 / 起票 0 件、CLAUDE.md triage 基準準拠で過剰起票なし）
+- **Open 推移**: Session 17 末 7 件 (P2:6 / enhancement:1 = #346) → Session 18 末 **6 件** (#310 close)
+- **本セッション成果**: PR #351 (Session 17 handoff) / #352 / #353 全 3 件マージ、`classifyFirestoreError` パターンが全 7 callsite で同形に統一、ADR-031 Phase 1 制約の該当項目を部分解消マーク
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -19,125 +19,119 @@ cat docs/handoff/LATEST.md
 # 2. main CI / Cloud Run / E2E が緑であることを確認
 gh run list --branch main --limit 5
 
-# 3. 現在の OPEN Issue (P0:0 / P2:6 / Phase 2 follow-up:1)
+# 3. 現在の OPEN Issue (P2:6 / Phase 2 follow-up:1 = #346)
 gh issue list --state open --limit 15
 
-# 4. 次の着手候補（優先度順、Phase 2 ブロッカー解消前に着手可能なもの）:
-#    A. Issue #346 (Phase 2) — ADR-033 ブロッカー解消待ち、DNS Step 1-6 完了 +
-#       Workspace で lms-noreply@279279.net 発行が前提。ユーザー側作業が必要。
-#    B. P2 #310 (platform_auth_error_logs 503/500 分離) — PR #349 と同じ
-#       classifyFirestoreError パターンを適用するだけ、すぐ着手可
-#    C. POST /tenants 既存 catch (super-admin.ts:312-330) と DELETE /tenants/:id
-#       (L666-) も classifyFirestoreError 適用余地（PR #349 で導入したパターン拡大）
-#    D. P2 #308 (E2E perf), #281 (allowed_emails CLI refactor),
-#       #274-276 (allowed_emails 運用改善)
-#    E. firestore.ts:1606 console.error 残存（resetLessonDataForUser リトライログ）
-#    F. /simplify Follow-up: catch ブロック共通ヘルパ抽出（super-admin.ts L1561-1711 と
+# 4. 次の着手候補（優先度順、Issue #310 完了済）:
+#    A. Issue #346 (Phase 2 メール送信) — ADR-033 ブロッカー解消待ち。
+#       DNS Step 1-6 完了 + Workspace で lms-noreply@279279.net 発行が前提。
+#       ユーザー側作業必要、AI は着手不可。
+#    B. P2 #308 (E2E perf): CI でリクエスト遅延 7-9 秒/req の根本調査。
+#       原因不明の調査タスク、時間読めず。
+#    C. P2 #281 (allowed_emails 監査 CLI refactor): 純粋関数分割 + 型強化。
+#       リファクタ、影響範囲は CLI スクリプト限定。
+#    D. P2 #276 (Phase 5): allowed_emails 削除時の即時セッション失効 + 孤児Auth掃除自動化
+#       — 機能追加、要件確認必要
+#    E. P2 #275 (Phase 5): allowed_emails 管理画面UX改善 — 機能追加、要件確認必要
+#    F. P2 #274 (Phase 5): allowed_emails 運用の可視化・追跡性強化 — 機能追加、要件確認必要
+#    G. firestore.ts:1606 console.error 残存（resetLessonDataForUser リトライログ）の構造化ログ化
+#    H. /simplify Follow-up: catch ブロック共通ヘルパ抽出（super-admin.ts L1561-1711 と
 #       tenants.ts catch で 4 箇所重複、ただし error code 統一規約が先に必要）
-#       → PR #349 コメント参照
-#    G. Issue #272 Phase 3 GCIP 移行: ADR-031 記録済、再開条件満たし次第新 Issue
-#    H. Dependabot PR 週次レビュー
+#       → PR #349 コメント参照。Session 18 で 7 callsite が同形化したので抽出ハードル下がった
+#    I. Issue #272 Phase 3 GCIP 移行: ADR-031 記録済、再開条件満たし次第新 Issue
+#    J. Dependabot PR 週次レビュー
 ```
 
 ---
 
-## セッション成果物 (2026-05-14 Session 17)
+## セッション成果物 (2026-05-14 Session 18)
 
-### 🟢 PR #348: fix(api): add react and @types/react to api workspace deps
+### 🟢 PR #351: docs(handoff): Session 17 (2026-05-14) 記録
 
-**production blocker 発見**: PR #345 / PR #347 マージ以降の `Deploy to Cloud Run` が連続 failure。
+Session 17 ハンドオフ。Session 17 末で commit 済 / push 済だったが PR 未起票だった分を本セッション冒頭でマージ。1 file, +92/-99、CI 全 PASS。
 
-エラー:
-```
-src/services/progress-pdf-document.tsx(125,5): error TS7016:
-Could not find a declaration file for module 'react/jsx-runtime'.
-```
+### 🟢 PR #352: fix(api): separate transient/permanent errors in GET /platform/auth-errors (503 vs 500)
 
-**根本原因**: PR #345 で `@react-pdf/renderer` を導入したが、API workspace に `react` / `@types/react` が無く、Dockerfile の workspace 限定 `npm ci -w @lms-279/shared-types -w @lms-279/api` では型解決できなかった。ローカル / CI は npm workspaces hoisting で `web/` の `react` を root に hoist して通過していたため見落とされていた。
+**Issue #310 完了** (Close、auto-close 確認済 2026-05-13T22:00:22Z):
 
-**修正**:
-- `services/api/package.json` の `dependencies` に `react: "19.2.3"` 追加 (`@react-pdf/renderer` の peerDep + 実行時 `_jsx`/`_jsxs` 呼び出し必須)
-- `services/api/package.json` の `devDependencies` に `@types/react: "19.2.8"` 追加 (`tsc --build` 時の `jsx: "react-jsx"` 型解決必須)
-- `npm ci --omit=dev` で実行時イメージから除外
-
-**検証**: type-check / lint / test 684 PASS → **マージ後 Cloud Run deploy success 復旧を確認**。
-
-### 🟢 PR #349: fix(api): wrap GET /tenants/mine handler in try-catch with error classification
-
-**Session 13 `/review-pr` で検出された silent-failure C1 (rating 9) を解消**:
-
-| ID | rating | 内容 | 対応 |
-|----|--------|------|------|
-| **C1** | **9** | `/mine` に top-level try-catch なし → Firestore 例外で 500 漏れ | 本 PR で修正 |
-| C2 | 8 | `if (!data) continue` の silent skip | Session 14-15 で `logger.warn` 整備済 (スコープ外、実質クローズ) |
-| C3 | 8 | status re-filter の schema violation silent drop | 同上 |
+| AC 項目 | 状態 |
+|---|---|
+| `classifyFirestoreError` が 4 種 transient code をカバー | ✅ ABORTED(10)/INTERNAL(13) 追加 |
+| `/platform/auth-errors` transient → 503、permanent → 500 | ✅ |
+| 503 response schema が既存 `/admins/:email` DELETE と一致 | ✅ `error: "service_unavailable"` + `TRANSIENT_RETRY_MESSAGE_JA` |
+| 統合テスト追加 (transient/permanent) | ✅ transient 4 件 + permanent 1 件 |
+| ADR-031 Phase 1 制約の close マーク | ✅ 部分解消 (2026-05-14) |
 
 **修正**:
-- `/api/v2/tenants/mine` ハンドラ全体を try-catch で包む
-- `classifyFirestoreError` で transient (gRPC 14/4, "unavailable"/"deadline-exceeded") を 503 + `TRANSIENT_RETRY_MESSAGE_JA`、permanent を 500 + 通常メッセージに分離（既存 super-admin.ts パターン踏襲、`rules/error-handling.md §3` 準拠）
-- `logger.error` で errorType / grpcCode / isTransient / uid / hasEmail / statusFilter を構造化記録
-- テスト 3 件追加 (AC-17/18/19): transient(code 14) → 503 / permanent(code 7) → 500 / collectionGroup transient("deadline-exceeded") → 503
+- `services/api/src/utils/grpc-errors.ts`: transient code を 2 種 → 4 種に拡張 (UNAVAILABLE/DEADLINE_EXCEEDED/ABORTED/INTERNAL)
+- `services/api/src/routes/super-admin.ts:866-944`: `/platform/auth-errors` catch 節を `classifyFirestoreError` で分岐 + `errorType` を `*_unavailable` / `*_fetch_failed` で観測性改善
+- `services/api/src/utils/__tests__/grpc-errors.test.ts`: 8 → 12 tests (ABORTED/INTERNAL の数値 + 文字列形式 4 件追加)
+- `services/api/src/routes/__tests__/super-admin-platform-auth-errors.test.ts`: 12 → 17 tests (transient 4 件 + permanent 1 件追加)
+- `docs/adr/ADR-031-gcip-multi-tenancy.md`: Phase 1 制約「Issue #310 で対応予定」を「部分解消 (2026-05-14)」に更新
 
-**`/simplify` 3 agent 並列レビュー所感 (PR コメント記録)**:
-- 本 PR で吸収: `makeThrowingFirestoreMock` ヘルパ抽出 (3 箇所重複 → 1 行化) / AC-19 メッセージ assertion 強化 (`"一時的"` 検証追加)
-- Follow-up (Issue 起票せず PR コメント記録、rating 5-6 帯): catch ブロック共通ヘルパ抽出 (4 箇所目で抽出閾値、error code `transaction_failed` vs `internal_error` 統一規約が先に必要) / `toLogError` ヘルパ抽出 / `TRANSIENT_GRPC_CODES_*` export
+**`/review-pr` 4 エージェント並列レビュー結果** (medium tier, 5 files, +132/-13):
 
-**検証**: type-check / lint / test 687 PASS (684 → 687)、CI 全 PASS。
+| エージェント | Critical | Important | 結論 |
+|---|:---:|:---:|---|
+| code-reviewer | 0 | 0 | Approve、Firestore SDK 内部 retry config (`firestore_client_config.json`) と分類一致確認 |
+| pr-test-analyzer | 0 | 1 (rating 6: 文字列 `"unavailable"` 統合テスト追加 = 次 PR 補強) | マージ可 |
+| comment-analyzer | 0 | 0 | INTERNAL コメント表現は残置妥当 |
+| silent-failure-hunter | 0 | 2 (L317 旧パターン不整合 + INTERNAL 分類根拠補強) | follow-up 推奨 |
 
-### 🟢 PR #350: docs(adr): add ADR-033 draft - Phase 2 SMTP selection and DNS auth setup
+**検証**: lint / type-check / test 1380 PASS、CI 全 PASS。
 
-**Issue #346 (Phase 2 メール送信) 着手前の事前検証**:
+### 🟢 PR #353: fix(api): unify POST /tenants transaction error classification via classifyFirestoreError
 
-**DNS 現状確認 (dig 2026-05-14)**:
-| レコード | 設定状況 |
-|---------|---------|
-| MX | ✅ `smtp.google.com` (Workspace 受信稼働中) |
-| SPF (`TXT 279279.net`) | ❌ `v=spf1 ...` なし |
-| DKIM | ❌ `google._domainkey` / `selector1._domainkey` なし |
-| DMARC | ❌ `_dmarc.279279.net` なし |
+**PR #352 silent-failure-hunter Important #1 を同セッション内で follow-up**:
 
-**ADR-033 推奨案 (Status: Proposed)**:
-1. **SMTP プロバイダ: Google Workspace SMTP relay** — 既存 Workspace 内、追加コスト 0、Phase 2 volume (月 10-30 通) に十分、Nodemailer 抽象化で将来 SendGrid 切替可能
-2. **送信元: `lms-noreply@279279.net`** — 返信 blackhole で誤運用防止
-3. **DNS 整備順序 6 ステップ** — SPF → DKIM 鍵生成 → DKIM 認証 ON → DMARC (初期 `p=quarantine`) → dig + Gmail 送信テスト
-4. **Phase 2 アーキテクチャ確定事項** (ADR-032 から引き継ぎ): GCS `gs://lms-279-pdf-tmp/{tenantId}/{userId}/{requestId}.pdf` (TTL 7 日) → object path 渡し → notification が Nodemailer で送信、`pdf_send_logs` PII 最小化、レート制限 (admin 60/h, tenant 30/d)、idempotency
+L317 (`super-admin.ts` POST /tenants tx catch) の旧 inline `grpcCode === 14 || grpcCode === 4` を `classifyFirestoreError` に置換。`TRANSIENT_RETRY_MESSAGE_JA` 定数も適用。これで全 7 callsite (`auth-errors`, `super-admin.ts` L1568/L1651/L1705, `tenants.ts` L450, `progress-pdf.ts` L179, `tenants` POST/tx) で transient/permanent 分類が完全同形。
 
-**Alternatives Considered**: SendGrid (運用負荷増のため不採用) / Amazon SES (GCP 内完結方針反、ismap 観点) / Cloud Run 自前 Postfix (port 25 closed のため不採用)
+**修正**:
+- `services/api/src/routes/super-admin.ts:314-336`: inline → `classifyFirestoreError`、message を `TRANSIENT_RETRY_MESSAGE_JA` 定数に統一
+- `services/api/src/routes/__tests__/super-admin-tenants-gcip.test.ts`: 新規 describe で transient (code: 14, "aborted", "internal") / permanent (code: "permission-denied", code 属性なし) の統合テスト 5 件追加
 
-**Phase 2 実装着手のブロッカー** (Issue #346 にコメント記録済):
-- [ ] ADR-033 を Accepted に変更（ユーザー判断）
-- [ ] DNS Step 1-5 完了（ドメインオーナー手作業、見積 30-60 分）
-- [ ] DNS Step 6 検証 PASS (Gmail への送信テストで SPF=pass / DKIM=pass / DMARC=pass)
-- [ ] Workspace で `lms-noreply@279279.net` 発行
+**影響**: ABORTED (transaction 競合) / INTERNAL (gRPC 内部一時障害) で 500 → 503 に挙動変化。`rules/error-handling.md §3` 準拠、retry 可能状況での適切な UX 改善。
+
+**軽量手動 review** (small tier, 2 files / +88/-4):
+- Security: secret なし、injection リスクなし ✅
+- 後方互換: UNAVAILABLE/DEADLINE_EXCEEDED 既存挙動変化なし ✅
+- Test sufficiency: transient 3 種 + permanent 2 種で交差網羅 ✅
+
+**検証**: lint / type-check / test 1385 PASS (1380 → 1385、+5)、CI 全 PASS。
 
 ## 主要技術判断
 
-### `react` を services/api の dependencies に追加した理由 (ADR 起票なし)
-@react-pdf/renderer は実行時に `react/jsx-runtime` の `_jsx`/`_jsxs` 関数を呼び出すため、peerDep を満たさないと Cloud Run 実行時にも失敗する。`@types/react` は build 時のみ必要なので devDep に分離。npm workspaces hoisting に依存しない明示的な依存宣言が Docker workspace 限定インストールでの再現性を保証する。
+### `classifyFirestoreError` transient code を 2 種 → 4 種に拡張した根拠
 
-### silent-failure C1 修正で `error: "internal_error"` を採用した理由
-既存 `error: "transaction_failed"` は `runTransaction` 失敗専用、`"internal_error"` は `middleware/tenant-auth.ts:563` / `middleware/super-admin.ts:516` / `super-admin.ts:805` で「想定外 catch-all」用途として確立済。本ケースは Firestore クエリ失敗 (`runTransaction` 外) のため `"internal_error"` が適切。
+- **UNAVAILABLE(14)**: Firestore サービス一時停止
+- **DEADLINE_EXCEEDED(4)**: gRPC timeout
+- **ABORTED(10)**: transaction 競合（既存実装でも実は retry 推奨だった、漏れていた）
+- **INTERNAL(13)**: gRPC 内部一時障害、Firestore SDK 内部 `firestore_client_config.json` でも retryable と定義
 
-### Phase 2 で Workspace SMTP relay を推奨した理由
-- 既存契約内で追加コスト 0
-- Phase 2 想定 volume (月 10-30 通) では SendGrid の bounce 監視優位性が活きない
-- ismap 観点で GCP 内完結方針 (memory `feedback_ismap_gcp_only.md`) と整合
-- Nodemailer 抽象化で将来切替可能
+code-reviewer 検証: Google が SDK 内部で同分類を採用、widening は upstream semantics と一致。blast-radius は他 6 callsite で「500 → 503 に変化するが、retry 可能な状況で 503 を返すのは適切」。
+
+### silent-failure-hunter Important #1 を同セッション内 follow-up した理由
+
+CLAUDE.md Issue 起票基準 ① 実害 = UX 不一致 (endpoint により retry 判定が異なる) に該当するが、修正規模が極小 (1 ファイル / 4 行 + テスト追加)。次セッション着手より同セッション内吸収のほうが、関連知識が memory cache に残っている状態で完遂できコスト効率が良い。別 Issue 起票せず PR #353 で直接対応。
+
+### INTERNAL を transient に分類する出典 (comment-analyzer Important #2 への応答)
+
+gRPC 公式 retry policy では INTERNAL は idempotent operation 限定だが、Firestore SDK 内部の `firestore_client_config.json` (`node_modules/@google-cloud/firestore/build/src/v1/firestore_client_config.json`) では UNAVAILABLE / DEADLINE_EXCEEDED と同列で retryable と分類されている。Firestore 文脈では retry 推奨が SDK 公式実装と一致。コメント文言は code-reviewer 確認済のため修正なし。
 
 ## Issue Net 変化
 
 ```
-- Close 数: 0 件
+- Close 数: 1 件 (#310)
 - 起票数: 0 件
-- Net: 0 件
+- Net: -1 件
 ```
 
-**Net 0 だが進捗あり** — 本セッションの修正は全て既存課題 (Session 16 PR #345 リリース後発覚の Docker build 問題 / Session 13 検出済 silent-failure C1 / Issue #346 Phase 2 事前検証) への対応。新規 Issue 起票は CLAUDE.md triage 基準上適切な抑制（rating 5-6 の `/simplify` Follow-up 3 件は PR #349 コメントで TODO 化）。Phase 1 production blocker 解消 + high-rating silent-failure 解消で機能品質は実質前進。
+**Net -1 で進捗あり** — Session 17 末の P2 候補 Issue #310 を 1 セッション内で `/review-pr` + follow-up PR まで含めて完遂。CLAUDE.md triage 基準（rating ≥ 7 / 実害 / ユーザー明示指示）準拠で過剰起票なし。silent-failure-hunter Important #1 を別 Issue 化せず同セッション内 follow-up で吸収したため、Open 数増加なし。
 
 ## 関連リンク
-- ADR-033 (Phase 2 SMTP 選定、Status: Proposed): `docs/adr/ADR-033-phase2-smtp-selection.md`
-- ADR-032 (Phase 1 PDF 出力、Status: Accepted): `docs/adr/ADR-032-super-admin-progress-pdf.md`
-- Issue #346 (Phase 2 起票): https://github.com/system-279/lms-279/issues/346
-- PR #348 (Cloud Run deploy 復旧): https://github.com/system-279/lms-279/pull/348
-- PR #349 (silent-failure C1 修正): https://github.com/system-279/lms-279/pull/349
-- PR #350 (ADR-033 草案): https://github.com/system-279/lms-279/pull/350
+
+- ADR-031 (GCIP マルチテナンシー、Phase 1 制約 #310 部分解消マーク): `docs/adr/ADR-031-gcip-multi-tenancy.md`
+- Issue #310 (transient/permanent 分離、Close 2026-05-13): https://github.com/system-279/lms-279/issues/310
+- PR #351 (Session 17 handoff): https://github.com/system-279/lms-279/pull/351
+- PR #352 (Issue #310 完了): https://github.com/system-279/lms-279/pull/352
+- PR #353 (L317 follow-up 統一): https://github.com/system-279/lms-279/pull/353
