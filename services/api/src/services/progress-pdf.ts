@@ -23,6 +23,26 @@ import type { DataSource } from "../datasource/interface.js";
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
+/** lesson ごとの video/analytics 並列取得上限 (Firestore 詰まり回避) */
+const LESSON_FETCH_CONCURRENCY = 8;
+
+/** Promise を chunk 単位で並列実行する小さなランナー (外部依存を増やさない) */
+async function runInBatches<T, R>(
+  items: T[],
+  batchSize: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  for (let i = 0; i < items.length; i += batchSize) {
+    const slice = items.slice(i, i + batchSize);
+    const sliceResults = await Promise.all(slice.map(fn));
+    for (let j = 0; j < sliceResults.length; j++) {
+      results[i + j] = sliceResults[j];
+    }
+  }
+  return results;
+}
+
 export interface TenantInfo {
   id: string;
   name: string;
@@ -121,9 +141,10 @@ export async function buildProgressPdfData(
     throw new Error("user_not_in_tenant");
   }
 
+  // PDF には公開済みコースのみを載せる (draft / archived は受講者に表示すべきでない)
   const [enrollmentSetting, courses, lessons, courseProgresses] = await Promise.all([
     dataSource.getTenantEnrollmentSetting(),
-    dataSource.getCourses(),
+    dataSource.getCourses({ status: "published" }),
     dataSource.getLessons(),
     dataSource.getCourseProgressByUser(userId),
   ]);
@@ -153,17 +174,23 @@ export async function buildProgressPdfData(
 
     const [userProgresses, videos] = await Promise.all([
       dataSource.getUserProgressByCourse(userId, course.id),
-      Promise.all(validLessonIds.map((lid) => dataSource.getVideoByLessonId(lid))),
+      runInBatches(validLessonIds, LESSON_FETCH_CONCURRENCY, (lid) =>
+        dataSource.getVideoByLessonId(lid),
+      ),
     ]);
     const userProgressByLesson = new Map(userProgresses.map((up) => [up.lessonId, up]));
     const videoByLessonId = new Map<string, typeof videos[number]>();
     validLessonIds.forEach((lid, idx) => videoByLessonId.set(lid, videos[idx]));
 
-    const analyticsResults = await Promise.all(
-      validLessonIds.map((lid) => {
+    const analyticsResults = await runInBatches(
+      validLessonIds,
+      LESSON_FETCH_CONCURRENCY,
+      (lid) => {
         const video = videoByLessonId.get(lid);
-        return video ? dataSource.getVideoAnalytics(userId, video.id) : Promise.resolve(null);
-      }),
+        return video
+          ? dataSource.getVideoAnalytics(userId, video.id)
+          : Promise.resolve(null);
+      },
     );
     const analyticsByLessonId = new Map<string, typeof analyticsResults[number]>();
     validLessonIds.forEach((lid, idx) => analyticsByLessonId.set(lid, analyticsResults[idx]));

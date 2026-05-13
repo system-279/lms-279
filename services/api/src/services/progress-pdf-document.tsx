@@ -229,8 +229,12 @@ function LessonChecklistSection({ courses }: { courses: ProgressPdfCourseRecord[
     <View style={styles.section}>
       <Text style={styles.h2}>レッスン別チェックリスト</Text>
       {courses.map((c) => (
-        <View key={c.courseId} wrap={false}>
-          <Text style={styles.courseHeader}>{c.courseName}</Text>
+        // コース全体での wrap={false} は大量レッスン時に行が消えるので使わず、
+        // コースヘッダだけは次のレッスンと一緒に保つ。レッスン行は break-inside-avoid のみ。
+        <View key={c.courseId}>
+          <View wrap={false}>
+            <Text style={styles.courseHeader}>{c.courseName}</Text>
+          </View>
           {c.lessons.map((l) => {
             const mark = l.lessonCompleted
               ? "✓"
@@ -241,7 +245,7 @@ function LessonChecklistSection({ courses }: { courses: ProgressPdfCourseRecord[
             if (l.hasVideo) detail.push(l.videoCompleted ? "動画✓" : "動画□");
             if (l.hasQuiz) detail.push(l.quizPassed ? "テスト✓" : "テスト□");
             return (
-              <View key={l.lessonId} style={styles.lessonRow}>
+              <View key={l.lessonId} style={styles.lessonRow} wrap={false}>
                 <Text style={styles.lessonCheck}>{mark}</Text>
                 <Text style={styles.lessonTitle}>{l.lessonTitle}</Text>
                 <Text style={styles.lessonMeta}>{detail.join(" / ")}</Text>

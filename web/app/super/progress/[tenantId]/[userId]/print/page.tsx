@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/lib/auth-context";
 import { useSuperAdminFetch } from "@/lib/super-api";
+import { API_BASE } from "@/lib/api";
 import type {
   ProgressPdfSectionKey,
   ProgressPdfSections,
@@ -25,12 +26,6 @@ import type {
   SuperTenantDetailResponse,
 } from "@lms-279/shared-types";
 
-const PRODUCTION_API_URL = "https://api-3zcica5euq-an.a.run.app";
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== "undefined" && window.location.hostname !== "localhost"
-    ? PRODUCTION_API_URL
-    : "http://localhost:8080");
 const AUTH_MODE = process.env.NEXT_PUBLIC_AUTH_MODE ?? "dev";
 const DEV_SUPER_ADMIN_EMAIL =
   process.env.NEXT_PUBLIC_SUPER_ADMIN_EMAIL ?? "admin@example.com";
