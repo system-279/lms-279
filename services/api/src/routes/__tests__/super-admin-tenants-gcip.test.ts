@@ -423,3 +423,88 @@ describe("POST /api/v2/super/tenants — GCIP 初期値 (Issue #312)", () => {
     expect(tenantMetadata.useGcip).toBe(false);
   });
 });
+
+describe("POST /api/v2/super/tenants — transaction transient/permanent 分離 (Issue #310 follow-up)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubEnv("AUTH_MODE", "dev");
+    vi.stubEnv("SUPER_ADMIN_EMAILS", "super@example.com");
+    mockTransactionCreate.mockReset();
+    mockTransactionSet.mockReset();
+    mockRunTransaction.mockReset();
+    mockSuperAdminsCollectionGet.mockResolvedValue({ docs: [] });
+    mockTenantDocGet.mockResolvedValue({ exists: false });
+    mockGetUserByEmail.mockRejectedValue(new Error("not found"));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("transient エラー (code: 14 UNAVAILABLE) は 503 transaction_failed を返す", async () => {
+    mockRunTransaction.mockRejectedValueOnce(Object.assign(new Error("Firestore unavailable"), { code: 14 }));
+
+    const app = await buildApp();
+    const res = await supertest(app)
+      .post("/api/v2/super/tenants")
+      .set("X-User-Email", "super@example.com")
+      .send({ name: "New Tenant", ownerEmail: "owner@example.com" });
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe("transaction_failed");
+    expect(res.body.message).toContain("一時的");
+  });
+
+  it('transient エラー (code: "aborted") は 503 transaction_failed を返す (Issue #310 拡張)', async () => {
+    mockRunTransaction.mockRejectedValueOnce(Object.assign(new Error("Aborted"), { code: "aborted" }));
+
+    const app = await buildApp();
+    const res = await supertest(app)
+      .post("/api/v2/super/tenants")
+      .set("X-User-Email", "super@example.com")
+      .send({ name: "New Tenant", ownerEmail: "owner@example.com" });
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe("transaction_failed");
+  });
+
+  it('transient エラー (code: "internal") は 503 transaction_failed を返す (Issue #310 拡張)', async () => {
+    mockRunTransaction.mockRejectedValueOnce(Object.assign(new Error("Internal"), { code: "internal" }));
+
+    const app = await buildApp();
+    const res = await supertest(app)
+      .post("/api/v2/super/tenants")
+      .set("X-User-Email", "super@example.com")
+      .send({ name: "New Tenant", ownerEmail: "owner@example.com" });
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe("transaction_failed");
+  });
+
+  it('permanent エラー (code: "permission-denied") は 500 transaction_failed を返す', async () => {
+    mockRunTransaction.mockRejectedValueOnce(Object.assign(new Error("Permission denied"), { code: "permission-denied" }));
+
+    const app = await buildApp();
+    const res = await supertest(app)
+      .post("/api/v2/super/tenants")
+      .set("X-User-Email", "super@example.com")
+      .send({ name: "New Tenant", ownerEmail: "owner@example.com" });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe("transaction_failed");
+    expect(res.body.message).toContain("エラーが発生");
+  });
+
+  it("code 属性なしのエラーは 500 transaction_failed を返す (permanent fallback)", async () => {
+    mockRunTransaction.mockRejectedValueOnce(new Error("Unknown failure"));
+
+    const app = await buildApp();
+    const res = await supertest(app)
+      .post("/api/v2/super/tenants")
+      .set("X-User-Email", "super@example.com")
+      .send({ name: "New Tenant", ownerEmail: "owner@example.com" });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe("transaction_failed");
+  });
+});

@@ -314,22 +314,21 @@ router.post("/tenants", async (req: Request, res: Response) => {
       }
     });
   } catch (txError) {
-    const grpcCode = (txError as { code?: number })?.code;
-    const isTransient = grpcCode === 14 || grpcCode === 4;
+    const { grpcCode, isTransient } = classifyFirestoreError(txError);
 
     logger.error("Tenant creation transaction failed", {
       error: txError instanceof Error ? txError : new Error(String(txError)),
       tenantId,
       ownerEmail: normalizedOwnerEmail,
       operatorEmail: req.superAdmin?.email,
-      grpcCode,
+      grpcCode: grpcCode ?? null,
       isTransient,
     });
 
     res.status(isTransient ? 503 : 500).json({
       error: "transaction_failed",
       message: isTransient
-        ? "サーバーが一時的に利用できません。数秒後に再度お試しください。"
+        ? TRANSIENT_RETRY_MESSAGE_JA
         : "テナントの作成中にエラーが発生しました。",
     });
     return;
