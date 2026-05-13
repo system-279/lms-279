@@ -1,14 +1,14 @@
-# Session Handoff — 2026-05-13 (Session 16)
+# Session Handoff — 2026-05-14 (Session 17)
 
 ## TL;DR
 
-**スーパー管理者向け受講者進捗 PDF 出力 Phase 1 を完遂 (PR #345)。@react-pdf/renderer + Noto Sans JP Variable Font (SIL OFL 1.1) でサーバーサイド生成、7 セクション (profile/deadline/summary/lessons/quiz/pace/video) をチェック UI で ON/OFF。Cloud Run 256MB 内で完結、推奨ペース 5 状態 (completed/expired_both/expired_video/expired_quiz/ongoing) の境界仕様を ADR-032 で明文化。Codex セカンドオピニオン + evaluator 分離プロトコル + Codex PR レビューの 3 段レビューで Critical/High を吸収（demo テナント拒否、パストラバーサル防止、PDF テキスト抽出テスト、公開コース限定、N+1 を 8 並列に絞る、wrap 行単位）。Phase 2 (テナント管理者へ自動メール送信) は Issue #346 として起票・スコープ確定済。**
+**Session 16 PR #345 (Phase 1 PDF 出力) マージ後の Cloud Run deploy が連続失敗していた production blocker を発見・修正 (PR #348)、Session 13 `/review-pr` 検出の silent-failure C1 (`/tenants/mine` top-level try-catch 欠落、rating 9) を解消 (PR #349)、Phase 2 (Issue #346) 着手前の事前検証として ADR-033 (SMTP プロバイダ選定とドメイン認証整備) を草案 Status: Proposed で起票・マージ (PR #350)。Issue Net 0 (起票 0 / Close 0) だが、production blocker 解消 + 既存 high-rating silent-failure 修正 + Phase 2 着手前提整備の 3 軸で進捗。**
 
-Session 15 で deadlineBaseDate (期限起算日) + enrollment 構造化ログ整備の 3 PR を完遂した状態を引き継ぎ、本セッション (Session 16) は ① ユーザー要望「他受講者の情報なしで受講者個別の進捗 PDF を出力したい、可能ならテナント管理者へ自動送信も」に対し、Plan モードで Explore 3 並列 + Codex plan review + AskUserQuestion 4 セットで要件を分解、② Phase 1 (PDF 生成・ダウンロード) を新規 9 ファイル + 修正 10 ファイル (+2546 行 / -12 行) で実装、③ Evaluator 分離プロトコル (rules/quality-gate.md) で AC 12 項目検証 + 設計妥当性レビューを実施、④ PR レビュー段階で Codex review を再度実行し公開コース絞り込み・N+1 並列上限・wrap 制御・API_BASE 集約のフォロー修正を同 PR で反映、⑤ Phase 2 のスコープを ADR-032 に論点記録 + Issue #346 で起票し再開可能化。
+Session 16 で完遂した Phase 1 PR #345 の Docker ビルドが `react/jsx-runtime` 型解決不能で連続失敗していたが、ローカル/CI は npm workspaces hoisting で web の react を root に hoist して通過していたため見落とされていた。Session 17 は ① catchup 直後にこの connect-the-dots を実施し PR #348 で `react` + `@types/react` を API workspace の deps に追加 (本番デプロイ復旧確認済)、② 並行で silent-failure C1 を `classifyFirestoreError` パターン (super-admin.ts 既存実装と一貫) で修正、`/simplify` の 3 agent 並列レビューで指摘された Nit 2 件 (テストモック共通化 + AC-19 assertion 強化) を同 PR 内で吸収、③ Phase 2 の SMTP プロバイダ選定を ADR-033 で **Workspace SMTP relay + `lms-noreply@279279.net`** を推奨案で記録、`279279.net` の SPF/DKIM/DMARC が全て未整備であることを dig で確認し DNS 整備手順 6 ステップを明文化。
 
-- **Issue Net**: **-1**（Close 0 件 / 起票 1 件 #346 — Phase 2 follow-up）
-- **Open 推移**: Session 15 末 6 件 (P0:0 / P2:6) → Session 16 末 7 件 (P0:0 / P2:6 / enhancement:1 = #346)
-- **本セッション成果**: PR #345 マージ完了 + ADR-032 採択 + Phase 2 スコープ確定 + Issue #346 起票
+- **Issue Net**: **0**（Close 0 件 / 起票 0 件、CLAUDE.md triage 基準準拠で過剰起票なし）
+- **Open 推移**: Session 16 末 7 件 (P0:0 / P2:6 / enhancement:1 = #346) → Session 17 末 **7 件** (変化なし)
+- **本セッション成果**: PR #348/#349/#350 全 3 件マージ完了、Phase 1 本番化前提整備完了、Phase 2 ブロッカー条件明文化
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -22,129 +22,122 @@ gh run list --branch main --limit 5
 # 3. 現在の OPEN Issue (P0:0 / P2:6 / Phase 2 follow-up:1)
 gh issue list --state open --limit 15
 
-# 4. 次の着手候補（優先度順）:
-#    A. Issue #346 (Phase 2: テナント管理者へ自動メール送信) — ADR-032 にスコープ確定済
-#       事前検証: SMTP プロバイダ選定 ADR (Workspace relay vs SendGrid) + 送信ドメイン SPF/DKIM/DMARC 整備
-#    B. silent-failure C1-C3 フォロー PR (Session 13 /review-pr 検出、PR #331 スコープ外):
-#       - C1: /mine に top-level try-catch なし → Firestore エラーで 500 漏れ (rating 9)
-#       - C2: if (!data) continue が silent skip（整合性観点）(rating 8)
-#       - C3: status re-filter で schema violation silent drop → ADR-006 違反テナント表示可能性 (rating 8)
-#       → Issue #310 (platform_auth_error_logs 503/500 分離) と統合検討推奨
-#    C. P2 Issue: #308 (E2E perf), #310 (auth_error_logs 503/500), #274-276 (allowed_emails 運用改善), #281 (allowed_emails CLI refactor)
-#    D. POST /tenants 既存 catch (super-admin.ts:312-330) と DELETE /tenants/:id (L666-) も classifyFirestoreError 適用余地
-#    E. firestore.ts:1606 の console.error 残存（resetLessonDataForUser リトライログ、PR #343 スコープ外）
-#    F. Issue #272 Phase 3 GCIP 移行: ADR-031 記録済、再開条件満たし次第新 Issue
-#    G. Dependabot PR 週次レビュー
+# 4. 次の着手候補（優先度順、Phase 2 ブロッカー解消前に着手可能なもの）:
+#    A. Issue #346 (Phase 2) — ADR-033 ブロッカー解消待ち、DNS Step 1-6 完了 +
+#       Workspace で lms-noreply@279279.net 発行が前提。ユーザー側作業が必要。
+#    B. P2 #310 (platform_auth_error_logs 503/500 分離) — PR #349 と同じ
+#       classifyFirestoreError パターンを適用するだけ、すぐ着手可
+#    C. POST /tenants 既存 catch (super-admin.ts:312-330) と DELETE /tenants/:id
+#       (L666-) も classifyFirestoreError 適用余地（PR #349 で導入したパターン拡大）
+#    D. P2 #308 (E2E perf), #281 (allowed_emails CLI refactor),
+#       #274-276 (allowed_emails 運用改善)
+#    E. firestore.ts:1606 console.error 残存（resetLessonDataForUser リトライログ）
+#    F. /simplify Follow-up: catch ブロック共通ヘルパ抽出（super-admin.ts L1561-1711 と
+#       tenants.ts catch で 4 箇所重複、ただし error code 統一規約が先に必要）
+#       → PR #349 コメント参照
+#    G. Issue #272 Phase 3 GCIP 移行: ADR-031 記録済、再開条件満たし次第新 Issue
+#    H. Dependabot PR 週次レビュー
 ```
 
 ---
 
-## セッション成果物 (2026-05-13 Session 16)
+## セッション成果物 (2026-05-14 Session 17)
 
-### 🟢 PR #345: スーパー管理者向け受講者進捗 PDF 出力 (Phase 1)
+### 🟢 PR #348: fix(api): add react and @types/react to api workspace deps
 
-**ユーザー要望**: 「他受講者の状況はなしで、今どのくらい進んでいますよ。あと残りの期間だと、このペースで進めて欲しいです、といった内容を受講状況のようにチェックを入れて PDF 出力できるような機能。可能ならテナント管理者へ自動送信も。」
+**production blocker 発見**: PR #345 / PR #347 マージ以降の `Deploy to Cloud Run` が連続 failure。
 
-**設計判断 (Plan モードで確定)**:
-- 利用者: スーパー管理者のみ（ユーザー回答で確定。受講者本人・テナント管理者ページからの出力は不採用）
-- チェック対象: 出力する 7 セクション、初期値全 ON
-- 推奨ペース: 週レッスン数 + 1 日あたり視聴分を併記
-- PDF 生成方式: **サーバーサイド @react-pdf/renderer** (Phase 2 のメール添付を見据え、ブラウザ印刷不採用)
-- Phase 分割: Phase 1 (DL のみ) と Phase 2 (メール送信) に分離。Phase 2 は Issue #346 で起票
-
-**実装ファイル**:
-- 新規 (9): `services/api/src/routes/super/progress-pdf.ts` (route + validation), `services/api/src/services/progress-pdf.ts` (データ集約 + pace 計算), `services/api/src/services/progress-pdf-document.tsx` (@react-pdf/renderer Document), `services/api/src/__tests__/integration/progress-pdf.test.ts` (13 テスト), `packages/shared-types/src/progress-pdf.ts`, `web/app/super/progress/[tenantId]/[userId]/print/page.tsx`, `services/api/assets/fonts/{NotoSansJP-VariableFont.ttf, LICENSE.txt, README.md}`, `docs/adr/ADR-032-super-admin-progress-pdf.md`
-- 修正 (10): `services/api/Dockerfile` (assets COPY 追加), `services/api/tsconfig.json` (jsx: react-jsx + tsx include), `services/api/src/routes/super-admin.ts` (新ルータマウント), `web/lib/api.ts` (API_BASE を named export), `web/app/super/progress/page.tsx` (PDF リンク追加), `services/api/package.json` (@react-pdf/renderer, pdf-parse 追加), `packages/shared-types/src/index.ts`, `docs/api.md`
-
-**Codex セカンドオピニオン (Plan 段階)**:
-- Critical 4: PDF Base64 直渡し → GCS 一時保存 + path、`getUserById` 自動越境チェックの危険、PII 誤送信対策、Cloud Run 256MB の OOM リスク
-- Important 5: SMTP relay 運用、pdf_send_logs PII 最小化、Secret Manager 最小権限、idempotency、推奨ペース境界
-- Nit 2: PDF golden test 脆い、Phase 1 から確認 UI 土台を作るべき
-- 反映先: ADR-032 / Phase 2 AC / Phase 1 メモリ実測 + サイズ上限 + 越境明示 + 宛先プレビュー UI
-
-**Evaluator 分離プロトコル (実装段階)**:
-- AC 12 項目を独立コンテキストで検証 (PASS/FAIL/UNTESTABLE)
-- Critical 1: demo テナントが共有 InMemoryDataSource を返すため越境チェックすり抜け → **demo を 400 で明示拒否**
-- Important 3: `requestId` 用途の誤解 (Phase 1 ではログ用と明示)、`tenantId` パストラバーサル (validateTenantId 適用 + USER_ID_REGEX)、AC#12 テキスト抽出テスト未実装 (pdf-parse 2.x の `PDFParse` クラスで 2 テスト追加)
-
-**Codex review (PR 段階)**:
-- High 2: 全コース取得が draft 漏洩 → `getCourses({ status: "published" })`、lesson 個別 read が N+1 → `runInBatches` で 8 並列に
-- Medium 4: web の API_BASE 重複 → `lib/api.ts` の named export に集約、`wrap={false}` がコース単位でページ溢れ → 行単位に変更
-- Low 2: hyphenation callback プロセスグローバル、heap delta 計測弱い → 別 PR で改善余地
-
-**テスト**: 統合テスト 13 件追加。すべて `InMemoryDataSource` 中心 (ADR-028 準拠)。
-- 越境チェック (`user_not_in_tenant` スロー)
-- pace 計算 5 状態境界
-- PDF Buffer 検証 (%PDF ヘッダ / サイズ 100KB-5MB / heap delta < 200MB)
-- `PDFParse` でテキスト抽出して「受講進捗レポート / テナント名 / 受講者名 / セクション見出し」存在確認
-- sections フラグ ON/OFF による出力差分
-
-**品質ゲート**: lint / type-check / test (API 684 / Web 33) 全 PASS、CI Build / Lint / Test / Type Check 全 PASS、mergeStateStatus: CLEAN → squash-merge 完了 (commit 5df7f4a)。
-
-### 🆕 ADR-032: スーパー管理者向け 受講者進捗 PDF 出力
-
-`docs/adr/ADR-032-super-admin-progress-pdf.md` で Status: Accepted。
-- Phase 1 採用事項 + Phase 2 論点 + 推奨ペース計算境界仕様 + Alternatives + Consequences
-- 関連: ADR-028 (DataSource Test Strategy), ADR-029 (Enrollment Timezone Policy), PR #340 (deadlineBaseDate)
-
-### 🆕 Issue #346: Phase 2 follow-up
-
-Phase 2 (テナント管理者へ自動メール送信) のスコープ・AC・事前検証項目を ADR-032 から抜粋して起票。triage 基準: ユーザー明示指示 (CLAUDE.md GitHub Issues #5)。
-
----
-
-## Phase 1 設計判断の要点
-
-### 越境チェック (Codex C-2 対応)
-DataSource は tenant 単位でインスタンス化される (`firestore.ts:193` `tenants/${tenantId}/` prefix)。`getUserById(userId)` は tenant scope の `users` コレクションを叩くため、別テナントの userId は doc.exists=false で null が返り 404 `user_not_in_tenant`。新規 `getUserByPath` は不要、既存 API の null チェックで満たせる。ただし `tenantId === "demo"` は `factory.ts` の getDataSource が共有 `demoDataSource` (read-only InMemory) を返すため越境チェックすり抜け → demo は明示的に 400 で拒否。
-
-### 推奨ペース 5 状態の境界
+エラー:
 ```
-status         | 条件                          | lessonsPerWeek | minutesPerDay
----------------|------------------------------|----------------|---------------
-completed      | remainingLessons === 0       | null           | null
-expired_both   | 動画期限<now AND テスト期限<now | null           | null
-expired_video  | 動画期限<now (テストのみ可)    | null           | null
-expired_quiz   | テスト期限<now (動画のみ可)    | 計算           | 計算
-ongoing        | 両期限内                      | 計算           | 計算
+src/services/progress-pdf-document.tsx(125,5): error TS7016:
+Could not find a declaration file for module 'react/jsx-runtime'.
 ```
 
-残動画秒の欠損対応: `video_analytics` 未記録 → `durationSec × requiredWatchRatio (0.95) - 0` を必要量として加算。JST 統一は API 側で実施。
+**根本原因**: PR #345 で `@react-pdf/renderer` を導入したが、API workspace に `react` / `@types/react` が無く、Dockerfile の workspace 限定 `npm ci -w @lms-279/shared-types -w @lms-279/api` では型解決できなかった。ローカル / CI は npm workspaces hoisting で `web/` の `react` を root に hoist して通過していたため見落とされていた。
 
-### PDF サイズ上限
-`PDF_MAX_BYTES = 5MB`。`renderToBuffer` 後 `buffer.length > PDF_MAX_BYTES` で 413 `pdf_too_large` + 構造化ログ。テストで heap delta < 200MB を確認 (Cloud Run 256MB の安全マージン)。
+**修正**:
+- `services/api/package.json` の `dependencies` に `react: "19.2.3"` 追加 (`@react-pdf/renderer` の peerDep + 実行時 `_jsx`/`_jsxs` 呼び出し必須)
+- `services/api/package.json` の `devDependencies` に `@types/react: "19.2.8"` 追加 (`tsc --build` 時の `jsx: "react-jsx"` 型解決必須)
+- `npm ci --omit=dev` で実行時イメージから除外
 
-### N+1 緩和 (Codex review High 対応)
-`runInBatches(items, 8, fn)` で lesson ごとの video/analytics 取得を 8 並列に制限。外部依存追加せず純粋関数で実装。
+**検証**: type-check / lint / test 684 PASS → **マージ後 Cloud Run deploy success 復旧を確認**。
 
----
+### 🟢 PR #349: fix(api): wrap GET /tenants/mine handler in try-catch with error classification
+
+**Session 13 `/review-pr` で検出された silent-failure C1 (rating 9) を解消**:
+
+| ID | rating | 内容 | 対応 |
+|----|--------|------|------|
+| **C1** | **9** | `/mine` に top-level try-catch なし → Firestore 例外で 500 漏れ | 本 PR で修正 |
+| C2 | 8 | `if (!data) continue` の silent skip | Session 14-15 で `logger.warn` 整備済 (スコープ外、実質クローズ) |
+| C3 | 8 | status re-filter の schema violation silent drop | 同上 |
+
+**修正**:
+- `/api/v2/tenants/mine` ハンドラ全体を try-catch で包む
+- `classifyFirestoreError` で transient (gRPC 14/4, "unavailable"/"deadline-exceeded") を 503 + `TRANSIENT_RETRY_MESSAGE_JA`、permanent を 500 + 通常メッセージに分離（既存 super-admin.ts パターン踏襲、`rules/error-handling.md §3` 準拠）
+- `logger.error` で errorType / grpcCode / isTransient / uid / hasEmail / statusFilter を構造化記録
+- テスト 3 件追加 (AC-17/18/19): transient(code 14) → 503 / permanent(code 7) → 500 / collectionGroup transient("deadline-exceeded") → 503
+
+**`/simplify` 3 agent 並列レビュー所感 (PR コメント記録)**:
+- 本 PR で吸収: `makeThrowingFirestoreMock` ヘルパ抽出 (3 箇所重複 → 1 行化) / AC-19 メッセージ assertion 強化 (`"一時的"` 検証追加)
+- Follow-up (Issue 起票せず PR コメント記録、rating 5-6 帯): catch ブロック共通ヘルパ抽出 (4 箇所目で抽出閾値、error code `transaction_failed` vs `internal_error` 統一規約が先に必要) / `toLogError` ヘルパ抽出 / `TRANSIENT_GRPC_CODES_*` export
+
+**検証**: type-check / lint / test 687 PASS (684 → 687)、CI 全 PASS。
+
+### 🟢 PR #350: docs(adr): add ADR-033 draft - Phase 2 SMTP selection and DNS auth setup
+
+**Issue #346 (Phase 2 メール送信) 着手前の事前検証**:
+
+**DNS 現状確認 (dig 2026-05-14)**:
+| レコード | 設定状況 |
+|---------|---------|
+| MX | ✅ `smtp.google.com` (Workspace 受信稼働中) |
+| SPF (`TXT 279279.net`) | ❌ `v=spf1 ...` なし |
+| DKIM | ❌ `google._domainkey` / `selector1._domainkey` なし |
+| DMARC | ❌ `_dmarc.279279.net` なし |
+
+**ADR-033 推奨案 (Status: Proposed)**:
+1. **SMTP プロバイダ: Google Workspace SMTP relay** — 既存 Workspace 内、追加コスト 0、Phase 2 volume (月 10-30 通) に十分、Nodemailer 抽象化で将来 SendGrid 切替可能
+2. **送信元: `lms-noreply@279279.net`** — 返信 blackhole で誤運用防止
+3. **DNS 整備順序 6 ステップ** — SPF → DKIM 鍵生成 → DKIM 認証 ON → DMARC (初期 `p=quarantine`) → dig + Gmail 送信テスト
+4. **Phase 2 アーキテクチャ確定事項** (ADR-032 から引き継ぎ): GCS `gs://lms-279-pdf-tmp/{tenantId}/{userId}/{requestId}.pdf` (TTL 7 日) → object path 渡し → notification が Nodemailer で送信、`pdf_send_logs` PII 最小化、レート制限 (admin 60/h, tenant 30/d)、idempotency
+
+**Alternatives Considered**: SendGrid (運用負荷増のため不採用) / Amazon SES (GCP 内完結方針反、ismap 観点) / Cloud Run 自前 Postfix (port 25 closed のため不採用)
+
+**Phase 2 実装着手のブロッカー** (Issue #346 にコメント記録済):
+- [ ] ADR-033 を Accepted に変更（ユーザー判断）
+- [ ] DNS Step 1-5 完了（ドメインオーナー手作業、見積 30-60 分）
+- [ ] DNS Step 6 検証 PASS (Gmail への送信テストで SPF=pass / DKIM=pass / DMARC=pass)
+- [ ] Workspace で `lms-noreply@279279.net` 発行
+
+## 主要技術判断
+
+### `react` を services/api の dependencies に追加した理由 (ADR 起票なし)
+@react-pdf/renderer は実行時に `react/jsx-runtime` の `_jsx`/`_jsxs` 関数を呼び出すため、peerDep を満たさないと Cloud Run 実行時にも失敗する。`@types/react` は build 時のみ必要なので devDep に分離。npm workspaces hoisting に依存しない明示的な依存宣言が Docker workspace 限定インストールでの再現性を保証する。
+
+### silent-failure C1 修正で `error: "internal_error"` を採用した理由
+既存 `error: "transaction_failed"` は `runTransaction` 失敗専用、`"internal_error"` は `middleware/tenant-auth.ts:563` / `middleware/super-admin.ts:516` / `super-admin.ts:805` で「想定外 catch-all」用途として確立済。本ケースは Firestore クエリ失敗 (`runTransaction` 外) のため `"internal_error"` が適切。
+
+### Phase 2 で Workspace SMTP relay を推奨した理由
+- 既存契約内で追加コスト 0
+- Phase 2 想定 volume (月 10-30 通) では SendGrid の bounce 監視優位性が活きない
+- ismap 観点で GCP 内完結方針 (memory `feedback_ismap_gcp_only.md`) と整合
+- Nodemailer 抽象化で将来切替可能
 
 ## Issue Net 変化
 
 ```
 - Close 数: 0 件
-- 起票数: 1 件 (#346 Phase 2 follow-up)
-- Net: -1 件
+- 起票数: 0 件
+- Net: 0 件
 ```
 
-**Net -1 だが Phase 2 follow-up は ADR-032 に論点記録済の機能要望で、triage 基準 #5 (ユーザー明示指示) に厳密合致。Phase 1 マージで本機能の半分が稼働開始済。** 機械的な net KPI では進捗ゼロ扱いになるが、莞爾会 長遊園 様運用への実機能投入 + Phase 2 のスコープ確定という事業上の進捗は確保している。
+**Net 0 だが進捗あり** — 本セッションの修正は全て既存課題 (Session 16 PR #345 リリース後発覚の Docker build 問題 / Session 13 検出済 silent-failure C1 / Issue #346 Phase 2 事前検証) への対応。新規 Issue 起票は CLAUDE.md triage 基準上適切な抑制（rating 5-6 の `/simplify` Follow-up 3 件は PR #349 コメントで TODO 化）。Phase 1 production blocker 解消 + high-rating silent-failure 解消で機能品質は実質前進。
 
----
-
-## ドキュメント整合性確認
-
-- ✅ CLAUDE.md: 主要設計判断・Phase 一覧は不変
-- ✅ docs/api.md: 新エンドポイント「受講者進捗 PDF 出力 (Super Admin)」セクション追記済
-- ✅ docs/adr/: ADR-032 新規作成、Status: Accepted
-- ✅ docs/data-model.md: 変更なし (Firestore スキーマ不変、Phase 2 で `pdf_send_logs` 追加予定)
-- ✅ docs/tech-stack.md: 依存追加 (@react-pdf/renderer 4.5.1, pdf-parse 2.4.5) の反映確認推奨 (次回 catchup で要 review、本 Session ではスコープ外)
-
-## 構造的整合性チェック
-
-- /impact-analysis: ⏭️スキップ (型追加は shared-types で外部公開済、FE/BE 両側で import 整合)
-- /check-api-impact: ⏭️スキップ (新規 API のみ、既存 API 変更なし)
-- /trace-dataflow: ⏭️スキップ (進捗データの新規読み取り経路、DataSource → service → document の各層を統合テストで網羅)
-
-## 残留プロセス
-
-✅ なし
+## 関連リンク
+- ADR-033 (Phase 2 SMTP 選定、Status: Proposed): `docs/adr/ADR-033-phase2-smtp-selection.md`
+- ADR-032 (Phase 1 PDF 出力、Status: Accepted): `docs/adr/ADR-032-super-admin-progress-pdf.md`
+- Issue #346 (Phase 2 起票): https://github.com/system-279/lms-279/issues/346
+- PR #348 (Cloud Run deploy 復旧): https://github.com/system-279/lms-279/pull/348
+- PR #349 (silent-failure C1 修正): https://github.com/system-279/lms-279/pull/349
+- PR #350 (ADR-033 草案): https://github.com/system-279/lms-279/pull/350
