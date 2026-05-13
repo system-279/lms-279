@@ -194,6 +194,13 @@ export async function getSuperAdminsFromFirestore(): Promise<string[]> {
  * env フォールバックに載っている場合は Firestore アクセスなしで true を返す（高速パス）。
  * Firestore 障害時は SuperAdminFirestoreUnavailableError を throw するため、
  * 呼び出し側で catch して 503 として返却する必要がある。
+ *
+ * AUTH_MODE=dev では Firestore lookup をスキップ (Issue #308 / ADR-031 延長):
+ *   本番運用は AUTH_MODE=firebase が必須 (Issue #290 で起動時 assert 済) で、
+ *   dev mode は env-only のフォールバック構成。dev mode で Firestore credentials が
+ *   存在しないと SDK の deadline 待ち (~7-9 秒) でリクエスト遅延が積み上がる。
+ *   CI E2E では毎 request この遅延が出ていたため、dev mode では env チェック後
+ *   即 false return して Firestore lookup を回避する。
  */
 export async function isSuperAdmin(email: string | undefined): Promise<boolean> {
   if (!email) return false;
@@ -202,6 +209,11 @@ export async function isSuperAdmin(email: string | undefined): Promise<boolean> 
   // 環境変数でチェック（高速パス。Firestore 障害でも通過する）
   if (envSuperAdminEmails.includes(normalizedEmail)) {
     return true;
+  }
+
+  // AUTH_MODE=dev では Firestore lookup をスキップ (env-only フォールバック構成)
+  if (authMode !== "firebase") {
+    return false;
   }
 
   // Firestore でチェック（障害時は throw → 呼び出し側で 503）
