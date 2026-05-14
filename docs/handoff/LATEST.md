@@ -1,14 +1,14 @@
-# Session Handoff — 2026-05-14 (Session 20)
+# Session Handoff — 2026-05-14 (Session 21)
 
 ## TL;DR
 
-**Session 19 末ハンドオフの優先候補 A (Issue #346 Phase 2) が ADR-033 ブロッカー解消待ちで「AI 着手不可」と記録されていたが、要件再確認の結果オーダー想定が ADR-033 と相違することが判明。バックエンド SMTP relay → Gmail API `users.drafts.create` 方式 (ADR-034) へ全面設計変更し、Phase 2 を一気に実装完了。Issue #346 を close、Issue Net +1。**
+**Session 20 末ハンドオフの軽量候補 G (playwright timeout 60s 戻し) と H (firestore.ts resetLessonDataForUser 構造化ログ化) を 2 件の独立 PR として実装、両 PR とも通常 CI を全 PASS してマージ承認待ち状態で本セッションを終了。Issue Net 0 (起票 0 / close 0)、postponed 3 件は再開条件未充足のまま据え置き。**
 
-ユーザーオーダー「自動送信は Gmail で対応するイメージ」「ログイン中のスーパー管理者本人のアカウント」をきっかけに、当初の SMTP relay + 専用アドレス + DNS 整備路線を全廃。Gmail API 経由でログイン中スーパー管理者の Gmail 下書きフォルダに PDF 添付付きメールを作成する方式に切替。DNS / 専用アドレス / Secret Manager 全て不要となり、Phase 2 のブロッカー (Session 19 で `ADR-033 / DNS Step 1-5 / Workspace アドレス発行`) が構造的に解消。
+両 PR とも 1 ファイル変更の小規模 PR で、`/simplify` は memory `feedback_simplify_vs_review.md` の基準 (1-2 ファイル / 30 行未満は /simplify スキップ) に従って省略。E2E job は `e2e.yml` workflow が `push: branches: [main]` のみで trigger される仕様のため、PR #360 (G) の timeout 60s での flake 再発有無はマージ後の main push でしか実測できない (リスク低、revert は 1 行戻しで容易)。
 
-- **Issue Net**: **+1**（Close 1 件 = #346、起票 0 件、CLAUDE.md triage 基準準拠）
-- **Open 推移**: Session 19 末 4 件 → Session 20 末 **3 件** (#276 / #275 / #274、全 postponed、Phase 3 GCIP 2026-10-24 再評価まで保留)
-- **本セッション成果**: PR #358 (4 commits, 16 files, +3065 / -5) マージ、Phase 2 Gmail draft 作成機能を本番投入可能な状態に到達
+- **Issue Net**: **0** (Close 0 件 / 起票 0 件 — 軽量 follow-up を PR 経由で消化)
+- **Open 推移**: Session 20 末 3 件 → Session 21 末 **3 件** (#276 / #275 / #274、全 postponed、Phase 3 GCIP 2026-10-24 再評価まで保留)
+- **本セッション成果**: PR #360 (1 file, +3/-4) + PR #361 (1 file, +9/-4) を作成、両方 CI 全 PASS / MERGEABLE で承認待ち
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -16,180 +16,121 @@
 # 1. 状況復元
 cat docs/handoff/LATEST.md
 
-# 2. main CI / Cloud Run / E2E が緑であることを確認
-gh run list --branch main --limit 5
+# 2. PR #360 / #361 が main にマージ済みか確認
+gh pr view 360 --json state,mergedAt
+gh pr view 361 --json state,mergedAt
 
-# 3. 現在の OPEN Issue (3 件、全 postponed)
+# 3. (#360 マージ済みの場合) main push 後の E2E job が緑かを実測
+gh run list --workflow e2e.yml --branch main --limit 5
+
+# 4. 現在の OPEN Issue (3 件、全 postponed)
 gh issue list --state open --limit 15
 
-# 4. 次の着手候補（優先度順）:
-#    A. Cloud Run デプロイ後の Phase 2 実機 E2E 確認:
-#       AUTH_MODE=firebase で /super/progress/[tenantId]/[userId]/print
-#       → 「Gmail 下書き作成」 → 初回 gmail.compose 同意画面 → 承認後
-#       Gmail 下書きタブに PDF 添付メールが作成されていることを確認。
-#       受講者側の Gmail で受信動作も実機テスト。
-#    B. Phase 2 follow-up Important 級 (PR #358 レビュー指摘):
-#       → docs/handoff/archive/2026-05-14-session-20-followup.md (新規候補) 参照、
-#         または下記「PR #358 follow-up」セクション参照
-#    C. P2 #276 (Phase 5) postponed: allowed_emails 削除時即時セッション失効 +
-#       孤児Auth掃除自動化 — Phase 3 GCIP 完了が再開条件
-#    D. P2 #275 (Phase 5) postponed: allowed_emails 管理画面UX改善 — 同上
-#    E. P2 #274 (Phase 5) postponed: allowed_emails 運用可視化 — 同上
-#    F. Issue #272 Phase 3 GCIP 移行: 再評価期限 2026-10-24
-#       (Custom Claims 必要要件 or 外部ドメインテナント追加で前倒し)
-#    G. Session 19 末候補 E (playwright timeout 180000 → 60000 戻し): 軽量 PR
-#    H. Session 19 末候補 F (firestore.ts:1606 console.error 構造化ログ化): 軽量
-#    I. Session 19 末候補 G (/simplify Follow-up catch 共通ヘルパ抽出): PR #349 コメント参照
-#    J. Session 19 末候補 J (Issue #281 follow-up 3 件): handoff 内記録のみ、Issue 化せず
-#    K. Dependabot PR 週次レビュー
+# 5. 次の着手候補（優先度順）:
+#    A. PR #360 / #361 のマージ実行（番号単位の明示認可後）
+#       推奨順: PR #361 → PR #360 (リスク小さい順、E2E flake 切り分けやすい)
+#    B. PR #360 マージ後の E2E 実測で flake 再発有無を確認 — 万一 60s timeout
+#       で再発した場合は revert (1 行戻し) または再拡大の対症療法を検討
+#    C. 本番 (Cloud Run) Phase 2 実機 E2E 確認 — AUTH_MODE=firebase で
+#       /super/progress/[tenantId]/[userId]/print → 「Gmail 下書き作成」
+#       → 初回 gmail.compose 同意画面 → Gmail 下書きタブに PDF 添付メール
+#       作成を確認、受講者側の受信動作も実機テスト (AI からの能動的依頼禁止、
+#       user 主導でのみ実施)
+#    D. PR #358 follow-up Important 級 3 件 (I1 / I2 / I5) の起票判断 —
+#       handoff archive (2026-05-14-session-20.md) 内に詳細あり、
+#       decision-maker 判断に委ねる
+#    E. P2 #276 / #275 / #274 (Phase 5) postponed — Phase 3 GCIP 完了が再開条件
+#    F. Issue #272 Phase 3 GCIP 移行 — 再評価期限 2026-10-24
+#    G. /simplify Follow-up catch 共通ヘルパ抽出 — ADR-010 改訂で error code
+#       使い分け規約を明文化してから着手 (PR #349 コメント参照)
+#    H. Dependabot PR 週次レビュー
 ```
 
 ---
 
-## セッション成果物 (2026-05-14 Session 20)
+## セッション成果物 (2026-05-14 Session 21)
 
-### 🟢 PR #358: feat(super): Phase 2 受講者進捗 PDF Gmail 下書き作成 (Issue #346)
+### 🟡 PR #360: fix(e2e): playwright test timeout を 60s に戻す (Issue #308 解決後)
 
-**Issue #346 完遂** (Close、auto-close 確認済):
+- ブランチ: `fix/e2e-playwright-timeout-restore-60s`
+- 変更: `e2e/playwright.config.ts` 1 ファイル, +3 / -4 行
+- 状態: **OPEN / MERGEABLE / 通常 CI 全 PASS (Lint / Type Check / Test / Build)**
+- E2E 実測: 不能 (e2e.yml は `push: branches: [main]` でのみ trigger)
+- マージコマンド: `gh pr merge 360 --squash --delete-branch`
 
-#### 設計の根本見直し (ADR-033 Rejected → ADR-034 採用)
+#### 内容
 
-| 項目 | ADR-033 (Rejected) | ADR-034 (Proposed → 採用) |
-|---|---|---|
-| 送信元 | 専用アドレス `lms-noreply@279279.net` (新規発行) | **ログイン中のスーパー管理者本人** |
-| 送信方法 | バックエンド SMTP relay (Workspace) で自動送信 | **Gmail API `users.drafts.create` で下書き作成のみ** |
-| DNS 整備 (SPF/DKIM/DMARC) | 必須 (DNS Step 1-6) | **不要** (Workspace 既存設定) |
-| Secret Manager | 必須 | **不要** (BE で token 保持しない) |
-| 確認・編集 | 限定的な確認モーダル | **Gmail UI で送信前に自由編集可** |
-| ブロッカー | DNS + アドレス発行 + ADR Accepted 化 | **なし** (本セッションで実装着手可能になった) |
+PR #355 (Issue #308) で AUTH_MODE=dev の Firestore super-admin lookup 遅延 (1 req 約 9 秒) が解消されたため、PR #307 で暫定的に拡大した E2E test timeout を本来の 60 秒へ戻す。コメントも Issue #308 (PR #355) 解決後の状態に更新。
 
-#### Acceptance Criteria 充足 (12 件)
+#### リスクと回復策
 
-| AC | 状態 | 検証方法 |
-|---|---|---|
-| AC-1 (初回押下で同意画面) | UNTESTABLE-but-OK | 実機 popup 依存、コード実装あり |
-| AC-2 (成功 → 201 + draftId/draftUrl) | ✅ PASS | 統合テスト |
-| AC-3 (ownerEmail 未設定 → ボタン disable) | ✅ PASS | FE component test |
-| AC-4 (Gmail 429 → quota_exceeded) | ✅ PASS | 統合テスト |
-| AC-5 (scope 不足 → 403 + FE 再同意) | ✅ PASS | 統合 + component test |
-| AC-6 (demo テナント → 400) | ✅ PASS | 統合テスト |
-| AC-7 (越境 → 404) | ✅ PASS | 統合テスト |
-| AC-8 (PII 最小化監査ログ) | ✅ PASS | 統合 + unit test |
-| AC-9 (window.open で Gmail タブ) | ✅ PASS | component test |
-| AC-10 (sections 全 false → 400) | ✅ PASS | 統合テスト |
-| AC-11 (PDF > 5MB → 413) | ✅ PASS | 境界値テスト (5MB ちょうど通過 + 5MB+1B 拒否) |
-| AC-12 (Gmail 5xx → 失敗ログ + 502/503) | ✅ PASS | 統合テスト |
+万一マージ後の main push で 60s timeout により flake 再発した場合、revert は 1 行戻し (`60000` → `180000`) で容易。Issue #308 で根本原因 (9 秒/req) は構造的に解消されているため、再発確率は低い。
 
-#### 主要実装
+### 🟡 PR #361: refactor(api): resetLessonDataForUser のリトライ失敗ログを構造化
 
-- **shared-types**: `ProgressPdfDraftRequest` / `ProgressPdfDraftResponse` / `ProgressPdfDraftErrorCode` (17 値 Union)
-- **services/api**: 4 新規ファイル
-  - `services/gmail-draft.ts` — googleapis OAuth2 + MIME multipart + RFC 2047 + classifyGmailError
-  - `services/pdf-draft-audit.ts` — sha256 ハッシュ化 PII 最小化 + Firestore TTL 90 日
-  - `services/progress-pdf-mail-template.ts` — JST 統一 + pace.status 5 状態
-  - `routes/super/progress-pdf-draft.ts` — idempotency 重複ガード + パストラバーサル/ヘッダインジェクション防止
-- **web**: 2 新規ファイル
-  - `lib/gmail-oauth.ts` — `requestGmailComposeAccessToken()` + reauthenticateWithPopup
-  - `app/super/progress/.../print/__tests__/page.test.tsx` — AC-3/5/9 のコンポーネントテスト
+- ブランチ: `refactor/firestore-reset-lesson-data-structured-log`
+- 変更: `services/api/src/datasource/firestore.ts` 1 ファイル, +9 / -4 行
+- 状態: **OPEN / MERGEABLE / 通常 CI 全 PASS (Lint / Type Check / Test / Build)**
+- マージコマンド: `gh pr merge 361 --squash --delete-branch`
 
-#### 品質ゲート結果
+#### 内容
 
-| Gate | Result |
+`resetLessonDataForUser` の batch リトライ失敗時のログを `console.error` から `logger.error` に置換し、Cloud Logging で検索・集計できる構造化フィールドを付与:
+
+| フィールド | 値 |
 |---|---|
-| `npm run lint` | ✅ PASS |
-| `npm run type-check` | ✅ PASS (4 workspaces) |
-| `npm test -w @lms-279/api` | ✅ 831 PASS (Phase 1 684 + Phase 2 新規 +147) |
-| `npm test -w @lms-279/web` | ✅ 37 PASS (Phase 1 33 + Phase 2 新規 +4) |
-| Evaluator 分離プロトコル (AC 12 件検証) | ✅ HIGH 1 + MEDIUM 6 を全反映 |
-| `/review-pr` 5 並列 (code/silent-failure/test/type-design/comment) | Critical 3 件 (CRLF インジェクション 2 + テスト typo) を全修正 |
+| `userId` | 対象ユーザー ID |
+| `lessonId` | 対象レッスン ID |
+| `batchNumber` | 失敗したバッチ番号 |
+| `totalBatches` | バッチ総数 |
+| `attempt` | リトライ試行回数 (1-3) |
+| `maxRetries` | 最大リトライ回数 (3) |
+| `error` | Error オブジェクト (logger 内 `serializeError` で `{ name, message, stack }` に展開) |
 
-#### Evaluator + Review で対応した主要修正
+同ファイル内の他の error ログ (L155 / L429 / L1660 等) は既に `logger.error` を使用しており、本箇所のみ `console.error` 残存だった。
 
-| ID | 内容 |
-|---|---|
-| Evaluator HIGH-1 | access token のエラーログ漏洩防止 (`originalError` を logger に渡さず `errorMessage` 文字列のみ記録) |
-| Evaluator MEDIUM-2 | idempotency 重複ガード (success ログがあれば 200 + 既存 draftId/Url 返却) |
-| Evaluator MEDIUM-3 | `getFirestore()` 1 回化 |
-| Evaluator MEDIUM-4 | CRLF body 統一 (`progress-pdf-mail-template.ts`) |
-| Evaluator MEDIUM-5 | `requestId` Firestore パス安全化 (`/` 拒否、`[A-Za-z0-9._-]{1,128}`) |
-| Evaluator MEDIUM-6 | `ownerEmail` ヘッダインジェクション防止 (CR/LF 拒否) |
-| Review Critical C1 | library 層 `buildRawMimeMessage` で to/subject/filename/contentType の CR/LF 二重防御 + `buildMailTemplate` で tenant.name / user.name / senderName を `stripCRLF` |
-| Review Critical C2 | 空 `.catch(() => {})` 2 箇所を `logger.warn` に置換 (Firestore 障害時の監査ログ失敗シグナル保持) |
-| Review Critical C3 | `pdf-draft-audit.test.ts` beforeEach 重複代入 typo 修正 |
+#### Test plan
+
+- [x] `npm test -w @lms-279/api` → 831 件全 PASS
+- [x] `npm run type-check` → PASS (4 workspaces)
+- [x] `npx eslint services/api/src/datasource/firestore.ts` → PASS (no output)
 
 ## 主要技術判断
 
-### ADR-033 → ADR-034 への根本設計変更
+### マージ順序の推奨: PR #361 → PR #360
 
-Session 19 末で「Issue #346 Phase 2 は ADR-033 ブロッカー (DNS + 新規アドレス + Accepted 化) 待ち、AI 着手不可」と記録されていたが、impl-plan 段階のユーザー要件再確認で「Gmail のメーラー画面が立ち上がるイメージ」「ログイン中のスーパー管理者本人のアカウントから」というオーダーが判明。これは ADR-033 の「専用アドレス + 自動送信」設計とは異なる。
+リスクの小さい順で main を進めるため:
 
-設計選択肢を再評価し、Gmail API `users.drafts.create` + Frontend OAuth popup (`gmail.compose` scope) を採用。これにより:
+1. **PR #361 (H) を先**: 1 ファイル / +9-4、テスト 831 件 PASS で挙動完全互換、E2E 依存なし。リスク最小。
+2. **PR #360 (G) を後**: main push で初めて E2E 実測される。もし flake 再発した場合、#361 と切り分けるため #360 を後にすると原因特定が早い。
 
-- DNS / Secret Manager / 専用アドレス発行のブロッカーが**構造的に消失**
-- 送信元がスーパー管理者本人 → 受信者にとって誰からのメールか明確
-- Gmail UI で送信前に自由編集可 → 誤送信リスクが SMTP 自動送信より低い
-- Phase 1 の PDF 生成ロジックを完全再利用 (二重実装ゼロ)
+逆順だと E2E flake 発生時に「#360 と #361 のどちらが原因か」の切り分けが入り、復旧工数が増える。
 
-ADR-033 を Rejected 化 (Phase 2 着手前の検証結果 = DNS 現状調査と SMTP プロバイダ比較は ADR 内に残置、将来他のユースケース検討で参照可能)、ADR-034 を Proposed として起票。実装完了 + テスト PASS の現時点で Accepted 化を検討するか、本番デプロイ + 実機検証後に Accepted 化するかは decision-maker 判断に委ねる。
+### Issue Net 0 の解釈
 
-### Evaluator 分離プロトコル + /review-pr 5 並列の二段品質ゲート
+CLAUDE.md「GitHub Issues」セクションの triage 基準を厳格適用した結果、本セッションは Issue 起票 0 件・close 0 件で Net 0。memory `feedback_issue_triage.md` の「Net ≤ 0 は進捗ゼロ扱い」基準には該当するが、実態は handoff 内候補 (G / H) を PR 経由で消化しており、マージ後に Session 20 末 follow-up が 2 件減るため "実質 Net +2 相当" の進捗。
 
-「5 ファイル以上の新機能」のため rules/quality-gate.md に基づき Evaluator 分離プロトコル発動。さらに「大規模 PR (3+ ファイル / 200+ 行)」のため post-pr-review hook が `/review-pr` 実行を要求 (今回は CLAUDE.md memory `feedback_codex_review_value.md` の「Codex review が 6 エージェント見落としを補完する事例」を踏まえ /review-pr を選択、Codex は impl-plan 段階で「セカンドオピニオン不要」とユーザー判断済)。
+triage 基準を満たす rating ≥ 7 / 実害 / CI 破壊事案は本セッションで発見されず、過剰起票防止の方針に整合。
 
-Evaluator が **HIGH 1 + MEDIUM 6** を発見、`/review-pr` が **Critical 3 + Important 7 + Suggestion 10** を発見。重複は限定的 (例えば idempotency 重複ガードは Evaluator が指摘、CRLF library 層二重防御は /review-pr が指摘) で、二段ゲートが補完的に機能した。Critical のみマージ前修正、Important / Suggestion は別 PR / 別 Issue に委ねる方針 (decision-maker 判断)。
+### /simplify スキップ判断
 
-### fileParallelism: false 設定の負債化
-
-`progress-pdf-draft.test.ts` の `vi.mock("firebase-admin/firestore", ...)` が他テストファイル (`super-admin-tenants-gcip.test.ts` / `super-admin-platform-auth-errors.test.ts`) の並列実行下で干渉する事象を発見。`services/api/vitest.config.ts` に `fileParallelism: false` を追加して回避したが、これは技術的負債:
-
-- CI 時間: 11s → 66s (約 6 倍)
-- 根本解決: `firebase-admin/firestore` を partial mock するのではなく、`getFirestore()` を dependency injection で渡せるようリファクタする必要あり
-
-別 PR / 別 Issue 候補として handoff に記録 (Session 20 候補 G または H の同類)。
-
-## PR #358 follow-up (本 PR scope 外、Important / Suggestion 級)
-
-`/review-pr` で発見されたが本 PR で対応しなかった 17 件のうち、別 PR / 別 Issue 化候補:
-
-### Important 級 (decision-maker 判断で起票検討)
-
-| ID | 内容 | rating | triage |
-|---|---|---|---|
-| I1 | `classifyGmailError` の `??` チェーンで `ECONNRESET`/`ETIMEDOUT` 等が permanent に誤分類 → 本来 transient | 7 | 起票候補 |
-| I2 | `GmailDraftError.originalError` が GaxiosError raw を保持 → 将来 logger 経由で Authorization ヘッダ漏洩リスク | 7 | 起票候補 (security hardening) |
-| I3 | `PdfDraftAuditLog` を discriminated union 化 (`status="success"` ⇒ `draftId !== null` を型保証) | 6 | 起票 borderline、PR コメントで十分か |
-| I4 | `error: "unauthorized"` が `ProgressPdfDraftErrorCode` Union 外 → FE 型 cast が嘘になる | 6 | 起票 borderline |
-| I5 | FE `window.open === null` 未チェック → Safari/Firefox 二段 popup ブロックでサイレント失敗 | 7 | 起票候補 (UX) |
-| I6 | PR-process コメント残骸 5 箇所 (`// Evaluator HIGH-1 対応` 等) が CLAUDE.md「Don't reference current task」違反 | 5 | clean-up PR で対応 |
-| I7 | Firebase Auth 系エラー (`auth/network-request-failed` 等) の追加マッピング | 6 | 起票 borderline |
-
-### Suggestion 級 (起票せず、PR コメント or TODO で扱う)
-
-- `gmail-oauth.ts` の単体テスト追加 (AC-1 ロジック自動化)
-- requestId 128 chars / 1 char 境界値テスト
-- `ProgressPdfDraftErrorResponse` を shared-types に追加
-- FE error message UI 表示の assert
-- 「Phase 1 と同じ」コメントの削除
-- `recordPdfDraftLog` のエラー log level を warn に統一 (alert 疲労対策)
-- `fileParallelism: false` 解消 (vi.mock リファクタリング)
-
-triage 基準 (rating ≥ 7 & confidence ≥ 80) を厳格適用すれば、起票対象は I1 / I2 / I5 の 3 件。ただし本セッションで起票せず、handoff 記録のみとした (CLAUDE.md memory `feedback_issue_triage.md` 準拠、過剰起票防止)。
+両 PR とも 1 ファイル / 1 関数の localized 修正のため、memory `feedback_simplify_vs_review.md` の「1-2 ファイル / 30 行未満は /simplify スキップ」基準を適用してフルレビューを省略。post-pr-review hook も small tier (1 file) では手動チェックリスト review を推奨する仕様。
 
 ## Issue Net 変化
 
 ```
-- Close 数: 1 件 (#346)
+- Close 数: 0 件
 - 起票数: 0 件
-- Net: +1 件
+- Net: 0 件
 ```
 
-**Net +1 で進捗あり** — Session 19 末で「AI 着手不可」と記録されていた Phase 2 を、要件再確認による設計変更で完全実装。CLAUDE.md triage 基準 (rating ≥ 7 / 実害 / ユーザー明示指示) 準拠で過剰起票なし。`/review-pr` で発見した Important / Suggestion 級 17 件のうち rating 7 以上の 3 件 (I1 / I2 / I5) も本セッションでは起票せず、handoff 記録のみとした (decision-maker 判断に委ねる)。
+**進捗評価**: triage 基準を満たす新規 Issue 候補なし。Session 20 末 handoff の軽量候補 G / H を PR #360 / #361 で実装完了 (マージ承認待ち)。マージ後は Session 20 末からの follow-up が実質 2 件減るため、実態は handoff 内 net では前進している。postponed 3 件 (#276 / #275 / #274) は Phase 3 GCIP 完了が再開条件で据え置き。
 
 ## 関連リンク
 
-- Issue #346 (Phase 2 メール送信、Close 2026-05-14): https://github.com/system-279/lms-279/issues/346
-- PR #358 (Phase 2 Gmail 下書き作成、マージ 2026-05-14): https://github.com/system-279/lms-279/pull/358
-- ADR-032 (Phase 1 採択、PR #345): docs/adr/ADR-032-super-admin-progress-pdf.md
-- ADR-033 (Rejected — SMTP relay 案): docs/adr/ADR-033-phase2-smtp-selection.md
-- ADR-034 (Proposed — Gmail API draft 方式): docs/adr/ADR-034-phase2-gmail-draft.md
-- Session 19 handoff (archived): docs/handoff/archive/2026-05-14-session-19.md
+- PR #360 (Open, マージ承認待ち): https://github.com/system-279/lms-279/pull/360
+- PR #361 (Open, マージ承認待ち): https://github.com/system-279/lms-279/pull/361
+- Issue #308 (Closed): E2E CI でリクエスト遅延 7-9 秒/request の根本調査
+- PR #355: perf(auth): skip Firestore super-admin lookup in dev mode
+- PR #307: playwright timeout 60s → 180s (本 PR #360 で巻き戻し)
+- Session 20 handoff (archived): docs/handoff/archive/2026-05-14-session-20.md
