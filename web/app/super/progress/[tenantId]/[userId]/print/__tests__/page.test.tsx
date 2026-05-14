@@ -101,7 +101,9 @@ describe("AC-9: 成功時 window.open で Gmail タブを開く", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const windowOpenSpy = vi.fn();
+    // window.open は成功時に Window-like オブジェクト ({ closed: false }) を返す前提。
+    // popup ブロック検出 (null / closed=true) と区別するため明示的に non-null を返す。
+    const windowOpenSpy = vi.fn().mockReturnValue({ closed: false } as Window);
     vi.stubGlobal("open", windowOpenSpy);
 
     render(<PrintPage />);
@@ -130,6 +132,9 @@ describe("AC-9: 成功時 window.open で Gmail タブを開く", () => {
         "noopener,noreferrer",
       );
     });
+
+    // 成功時は fallback UI (Gmail を開くリンク) が出ないこと
+    expect(screen.queryByRole("link", { name: /Gmail を開いてください/ })).toBeNull();
   });
 });
 
@@ -151,7 +156,7 @@ describe("AC-5: scope 不足エラーで再同意リトライ", () => {
       });
     vi.stubGlobal("fetch", fetchMock);
 
-    const windowOpenSpy = vi.fn();
+    const windowOpenSpy = vi.fn().mockReturnValue({ closed: false } as Window);
     vi.stubGlobal("open", windowOpenSpy);
 
     render(<PrintPage />);
@@ -173,6 +178,103 @@ describe("AC-5: scope 不足エラーで再同意リトライ", () => {
         "_blank",
         "noopener,noreferrer",
       );
+    });
+  });
+});
+
+describe("I5: popup ブロック時の fallback UI", () => {
+  it("window.open が null を返す → 「下書きは作成済み」+ Gmail を開くリンクが描画される", async () => {
+    const draftUrl = "https://mail.google.com/mail/u/0/?ogbl#drafts/r-popup-null";
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ draftId: "r-popup-null", draftUrl }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // popup ブロック相当: window.open が null を返す
+    const windowOpenSpy = vi.fn().mockReturnValue(null);
+    vi.stubGlobal("open", windowOpenSpy);
+
+    render(<PrintPage />);
+
+    const draftButton = await screen.findByRole("button", { name: /Gmail 下書き作成/ });
+    fireEvent.click(draftButton);
+
+    // 「下書きは作成済み」を含む文言と Gmail を開くリンクが出る
+    const fallbackLink = await screen.findByRole("link", { name: /Gmail を開いてください/ });
+    expect(fallbackLink.getAttribute("href")).toBe(draftUrl);
+    expect(fallbackLink.getAttribute("target")).toBe("_blank");
+    // rel: target=_blank なら noopener / noreferrer 必須
+    const rel = fallbackLink.getAttribute("rel") ?? "";
+    expect(rel).toMatch(/noopener/);
+    expect(rel).toMatch(/noreferrer/);
+
+    // 「ブロック」と断定する文言は使わない: noopener/noreferrer + COOP で参照切れになり、
+    // 成功時でも null/closed=true が返るケースがあり「blocked」誤検知し得るため。
+    expect(screen.queryByText(/ブロックされました/)).toBeNull();
+    expect(screen.queryByText(/下書きは作成済み/)).not.toBeNull();
+  });
+
+  it("window.open が closed=true の Window を返す → fallback UI が描画される", async () => {
+    const draftUrl = "https://mail.google.com/mail/u/0/?ogbl#drafts/r-closed-true";
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ draftId: "r-closed-true", draftUrl }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const windowOpenSpy = vi.fn().mockReturnValue({ closed: true } as Window);
+    vi.stubGlobal("open", windowOpenSpy);
+
+    render(<PrintPage />);
+
+    const draftButton = await screen.findByRole("button", { name: /Gmail 下書き作成/ });
+    fireEvent.click(draftButton);
+
+    const fallbackLink = await screen.findByRole("link", { name: /Gmail を開いてください/ });
+    expect(fallbackLink.getAttribute("href")).toBe(draftUrl);
+  });
+
+  it("2 回目の handleCreateDraft 開始時、前回の fallback URL がクリアされる", async () => {
+    const firstUrl = "https://mail.google.com/mail/u/0/?ogbl#drafts/r-first";
+    const secondUrl = "https://mail.google.com/mail/u/0/?ogbl#drafts/r-second";
+
+    // 1 回目: null 返却 → fallback 表示。2 回目: 成功 ({ closed: false }) → fallback 消える
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ draftId: "r-first", draftUrl: firstUrl }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ draftId: "r-second", draftUrl: secondUrl }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const windowOpenSpy = vi
+      .fn()
+      .mockReturnValueOnce(null) // 1 回目: ブロック相当
+      .mockReturnValue({ closed: false } as Window); // 2 回目以降: 成功
+    vi.stubGlobal("open", windowOpenSpy);
+
+    render(<PrintPage />);
+
+    const draftButton = await screen.findByRole("button", { name: /Gmail 下書き作成/ });
+
+    // 1 回目: fallback 表示
+    fireEvent.click(draftButton);
+    const firstLink = await screen.findByRole("link", { name: /Gmail を開いてください/ });
+    expect(firstLink.getAttribute("href")).toBe(firstUrl);
+
+    // 2 回目: ボタンが enabled に戻るのを待ってから再押下
+    await waitFor(() => expect(draftButton).not.toBeDisabled());
+    fireEvent.click(draftButton);
+
+    // 古い fallback link が消えて新規 API が呼ばれる
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(screen.queryByRole("link", { name: /Gmail を開いてください/ })).toBeNull();
     });
   });
 });
