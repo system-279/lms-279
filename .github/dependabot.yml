@@ -7,3 +7,18 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "ci"
+
+  # npm workspaces の root スキャンで packages/shared-types / services/api /
+  # services/notification / web 全 workspace の依存を同時に管理する。
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    # major upgrades はレビュー負荷が高く breaking changes を伴うため、
+    # 自動更新対象外とし手動 PR で個別判断する (例: next 16, firebase-admin 等)。
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
