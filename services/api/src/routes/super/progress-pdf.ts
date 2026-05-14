@@ -15,10 +15,11 @@
 import { Router, type Request, type Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
 import { renderToBuffer } from "@react-pdf/renderer";
-import type {
-  ProgressPdfRequest,
-  ProgressPdfSectionKey,
-  ProgressPdfSections,
+import {
+  buildProgressPdfFilename,
+  type ProgressPdfRequest,
+  type ProgressPdfSectionKey,
+  type ProgressPdfSections,
 } from "@lms-279/shared-types";
 import { getDataSource } from "../../datasource/factory.js";
 import { validateTenantId } from "../../middleware/tenant.js";
@@ -156,15 +157,26 @@ router.post(
         return;
       }
 
-      const filenameSafeName = (pdfData.user.name ?? pdfData.user.email).replace(/[^A-Za-z0-9._-]/g, "_");
       const dateStr = pdfData.generatedAt.slice(0, 10);
-      const filename = `progress-${filenameSafeName}-${dateStr}.pdf`;
+      const filename = buildProgressPdfFilename({
+        name: pdfData.user.name,
+        email: pdfData.user.email,
+        date: dateStr,
+      });
+      // RFC 6266: filename="..." は ASCII safe な fallback、filename*=UTF-8'' は Unicode。
+      // Node.js の setHeader は ISO-8859-1 を期待するため、非 ASCII を含む filename は
+      // email ベースの ASCII fallback に置き換える (モダンブラウザは filename* を優先)。
+      const asciiFallback = buildProgressPdfFilename({
+        name: null,
+        email: pdfData.user.email,
+        date: dateStr,
+      }).replace(/[^\x20-\x7e]/g, "_");
 
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Length", String(buffer.length));
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
       );
       res.setHeader("Cache-Control", "no-store");
       res.status(200).send(buffer);

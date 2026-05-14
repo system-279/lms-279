@@ -23,13 +23,14 @@ import {
   requestGmailComposeAccessToken,
   GmailOAuthError,
 } from "@/lib/gmail-oauth";
-import type {
-  ProgressPdfDraftErrorCode,
-  ProgressPdfDraftResponse,
-  ProgressPdfSectionKey,
-  ProgressPdfSections,
-  SuperStudentProgressResponse,
-  SuperTenantDetailResponse,
+import {
+  buildProgressPdfFilename,
+  type ProgressPdfDraftErrorCode,
+  type ProgressPdfDraftResponse,
+  type ProgressPdfSectionKey,
+  type ProgressPdfSections,
+  type SuperStudentProgressResponse,
+  type SuperTenantDetailResponse,
 } from "@lms-279/shared-types";
 
 const AUTH_MODE = process.env.NEXT_PUBLIC_AUTH_MODE ?? "dev";
@@ -169,9 +170,12 @@ export default function ProgressPdfPrintPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      const filenameSafeName = (meta.userName ?? meta.userEmail).replace(/[^A-Za-z0-9._-]/g, "_");
       const dateStr = new Date().toISOString().slice(0, 10);
-      a.download = `progress-${filenameSafeName}-${dateStr}.pdf`;
+      a.download = buildProgressPdfFilename({
+        name: meta.userName,
+        email: meta.userEmail,
+        date: dateStr,
+      });
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
