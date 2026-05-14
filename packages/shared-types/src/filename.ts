@@ -37,18 +37,22 @@ export interface BuildProgressPdfFilenameInput {
 // なるため、エスケープ表記で記述する。
 const UNSAFE_CHARS_RE = /[\x00-\x1f\x7f<>:"/\\|?*]/g;
 
-// 受講者名相当の長さ上限 (UTF-16 code unit 数)。
+// 受講者名相当の長さ上限 (Unicode code point 数)。
 // 日本語 50 文字 ≒ UTF-8 で約 150 bytes。全体 (`progress-` + name + `-YYYY-MM-DD.pdf`) で
 // ext4 / NTFS / HFS+ の 255 byte ファイル名制限内に収まる。
+//
+// 注: `String.prototype.slice` は UTF-16 code unit 単位なのでサロゲートペア (絵文字等) を
+// 分断し lone surrogate を生成する。後段 progress-pdf.ts の encodeURIComponent が
+// URIError を投げて 500 になるため、Array.from() で code point 単位に分解してから slice する。
 const MAX_SANITIZED_LENGTH = 50;
 
 function sanitizeForFilename(value: string): string {
-  return value
+  const cleaned = value
     .replace(UNSAFE_CHARS_RE, "_")
     .replace(/_+/g, "_")
     .replace(/^[._]+|[._]+$/g, "")
-    .trim()
-    .slice(0, MAX_SANITIZED_LENGTH);
+    .trim();
+  return Array.from(cleaned).slice(0, MAX_SANITIZED_LENGTH).join("");
 }
 
 export function buildProgressPdfFilename(input: BuildProgressPdfFilenameInput): string {
