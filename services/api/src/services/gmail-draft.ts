@@ -155,12 +155,13 @@ export function buildRawMimeMessage(input: BuildRawMimeMessageInput): string {
 
 /**
  * Node.js / undici / gaxios の transport-level error code。
- * これらは一時的なネットワーク不安定で発生し、リトライで回復しうる。
+ * これらは一時的なネットワーク不安定で発生し、リトライで回復しうる
+ * (ECONNRESET / ETIMEDOUT 等は transient エラーとして扱う)。
  *
- * 参考: ~/.claude/rules/error-handling.md §3
- * (ECONNRESET / ETIMEDOUT / 429 / 503 等は transient → retry_pending 相当)
+ * 未収載の code は gmail_api_error (502) にフォールバックする。本番ログで
+ * transient 候補の漏れを発見したら本セットに追加する。
  *
- * Exported for test reuse — テスト側は本 Set を参照することで定義の二重化を避ける。
+ * export 理由: テスト側で本 Set を再利用し定義の二重化を避けるため。
  */
 export const TRANSIENT_NETWORK_CODES: ReadonlySet<string> = new Set([
   "ECONNRESET",
@@ -178,10 +179,12 @@ export const TRANSIENT_NETWORK_CODES: ReadonlySet<string> = new Set([
 /**
  * googleapis のエラーを ProgressPdfDraftErrorCode に分類する。
  *
- * 優先順位:
- *   1. HTTP status (response.status) — 401/403/429/503 等の API レイヤエラー
- *   2. transport-level network code (e.code / e.cause?.code) — ECONNRESET 等
- *   3. フォールバック (gmail_api_error)
+ * 評価順 (上位ほど優先):
+ *   1. response.status — Gmail API から返された HTTP status (401/403/429/503 等)
+ *   2. e.code が数値 / 数値文字列 — HTTP status として扱う (gaxios の歴史的挙動互換)
+ *   3. e.code / e.cause?.code が transport code 文字列 (ECONNRESET 等) — transient
+ *   4. e.status の存在 — HTTP status として扱う
+ *   5. フォールバック (gmail_api_error, httpStatus 502)
  *
  * GaxiosError の構造:
  * - .code: HTTP status (number) または transport code (string)
@@ -205,11 +208,13 @@ export function classifyGmailError(err: unknown): GmailDraftError {
     message?: string;
   };
 
-  const numericCodeFromString =
+  // e.code が "503" のような数値文字列のとき、それを HTTP status の候補として扱う。
+  // "ECONNRESET" 等の非数値文字列は undefined となり、後段の transport code 経路で評価される。
+  const httpStatusFromCode =
     typeof e.code === "string" && /^\d+$/.test(e.code) ? Number(e.code) : undefined;
   const status =
     e.response?.status ??
-    (typeof e.code === "number" ? e.code : numericCodeFromString) ??
+    (typeof e.code === "number" ? e.code : httpStatusFromCode) ??
     e.status ??
     0;
 
@@ -218,11 +223,13 @@ export function classifyGmailError(err: unknown): GmailDraftError {
   const message = e.response?.data?.error?.message ?? e.message ?? "Gmail API error";
 
   // transport-level network error は HTTP status 未確定のときのみ transient 扱い
-  // (HTTP status があれば API レイヤの分類を優先する)
+  // (HTTP status があれば API レイヤの分類を優先する)。
   if (!e.response?.status) {
-    const networkCode =
-      (typeof e.code === "string" && !numericCodeFromString ? e.code : undefined) ??
-      (typeof e.cause?.code === "string" ? e.cause.code : undefined);
+    const transportCodeFromError =
+      typeof e.code === "string" && httpStatusFromCode === undefined ? e.code : undefined;
+    const transportCodeFromCause =
+      typeof e.cause?.code === "string" ? e.cause.code : undefined;
+    const networkCode = transportCodeFromError ?? transportCodeFromCause;
     if (networkCode && TRANSIENT_NETWORK_CODES.has(networkCode)) {
       return new GmailDraftError(message, "gmail_api_transient", 503, err);
     }

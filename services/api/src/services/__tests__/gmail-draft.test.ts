@@ -282,6 +282,19 @@ describe("classifyGmailError: network error (string code) → transient", () => 
     expect(result.httpStatus).toBe(503);
   });
 
+  it("response.status=429 + e.code=ECONNRESET → HTTP status 優先で gmail_quota_exceeded (429)", () => {
+    // undici の retry レイヤーで rate-limit 検出後にコネクションが切れたケース。
+    // HTTP status (429) が確定しているので API レイヤ分類を優先し、
+    // transport code (ECONNRESET) で transient 503 に降格させない。
+    const err = {
+      response: { status: 429, data: { error: { message: "Quota exceeded" } } },
+      code: "ECONNRESET",
+    };
+    const result = classifyGmailError(err);
+    expect(result.errorCode).toBe("gmail_quota_exceeded");
+    expect(result.httpStatus).toBe(429);
+  });
+
   it("未知の string code (EUNKNOWN) → gmail_api_error (httpStatus 502)、過剰分類しない", () => {
     const err = { code: "EUNKNOWN", message: "unknown error" };
     const result = classifyGmailError(err);
