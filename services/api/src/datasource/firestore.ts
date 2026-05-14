@@ -1603,10 +1603,15 @@ export class FirestoreDataSource implements DataSource {
           break;
         } catch (err) {
           lastError = err;
-          console.error(
-            `resetLessonDataForUser batch ${Math.floor(i / BATCH_LIMIT) + 1} ` +
-            `attempt ${attempt + 1}/${MAX_RETRIES} failed:`, err
-          );
+          logger.error("resetLessonDataForUser batch deletion failed", {
+            userId,
+            lessonId,
+            batchNumber: Math.floor(i / BATCH_LIMIT) + 1,
+            totalBatches: Math.ceil(docsToDelete.length / BATCH_LIMIT),
+            attempt: attempt + 1,
+            maxRetries: MAX_RETRIES,
+            error: err,
+          });
           if (attempt < MAX_RETRIES - 1) {
             await new Promise(r => setTimeout(r, 100 * Math.pow(2, attempt)));
           }
