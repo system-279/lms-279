@@ -84,6 +84,9 @@ export default function ProgressPdfPrintPage() {
   const [draftCreating, setDraftCreating] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draftRequestId, setDraftRequestId] = useState<string>(() => crypto.randomUUID());
+  // window.open が popup ブロック (null) または COOP で参照切れ (closed=true) となった場合の
+  // フォールバック URL。ユーザーが手動で Gmail 下書きを開くためのリンクを描画する。
+  const [draftFallbackUrl, setDraftFallbackUrl] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -197,6 +200,7 @@ export default function ProgressPdfPrintPage() {
     if (!meta || !ownerEmail) return;
     setDraftCreating(true);
     setDraftError(null);
+    setDraftFallbackUrl(null);
 
     const callDraftApi = async (accessToken: string): Promise<ProgressPdfDraftResponse> => {
       const idToken = AUTH_MODE === "firebase" ? await getIdToken() : null;
@@ -245,8 +249,14 @@ export default function ProgressPdfPrintPage() {
         }
       }
 
-      // 3. 下書き URL を新規タブで開く
-      window.open(result.draftUrl, "_blank", "noopener,noreferrer");
+      // 3. 下書き URL を新規タブで開く。
+      //    win === null は popup ブロック、closed=true は COOP/ブラウザ実装で参照切れ。
+      //    どちらも「開けたか」を断定できないため、フォールバックリンクを描画して
+      //    ユーザーが確実に Gmail 下書きにたどり着けるようにする。
+      const win = window.open(result.draftUrl, "_blank", "noopener,noreferrer");
+      if (!win || win.closed) {
+        setDraftFallbackUrl(result.draftUrl);
+      }
 
       // 次回用に requestId 再発行
       setDraftRequestId(crypto.randomUUID());
@@ -266,6 +276,7 @@ export default function ProgressPdfPrintPage() {
         const messages: Partial<Record<ProgressPdfDraftErrorCode, string>> = {
           gmail_quota_exceeded: "Gmail API の送信制限に達しました。しばらくしてから再試行してください。",
           gmail_scope_required: "Gmail 送信権限の同意が必要です。再度お試しください。",
+          gmail_api_transient: "Gmail サーバーへの接続が一時的に不安定です。しばらく後に再試行してください。",
           pdf_too_large_for_gmail: "PDF サイズが上限 (5MB) を超えました。出力項目を絞ってください。",
           owner_email_not_set: "テナント管理者メールが未設定です。テナント詳細画面で設定してください。",
           no_sections_selected: "出力項目を少なくとも 1 つ選択してください。",
@@ -359,6 +370,20 @@ export default function ProgressPdfPrintPage() {
             {generateError && <span className="text-sm text-red-600">{generateError}</span>}
             {draftError && <span className="text-sm text-red-600">{draftError}</span>}
           </div>
+          {draftFallbackUrl && (
+            <p className="text-sm text-amber-700">
+              下書きは作成済みです。新しいタブが開かない場合は
+              <a
+                href={draftFallbackUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline ml-1 mr-1"
+              >
+                こちらから Gmail を開いてください
+              </a>
+              。
+            </p>
+          )}
           <p className="text-xs text-muted-foreground">
             「Gmail 下書き作成」はスーパー管理者本人の Gmail 下書きフォルダに、宛先 ({ownerEmail ?? "未設定"}) と PDF 添付付きで下書きを作成します。Gmail が新しいタブで開きますので内容を確認・編集してから送信してください。
           </p>

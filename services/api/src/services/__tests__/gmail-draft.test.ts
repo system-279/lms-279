@@ -38,6 +38,7 @@ const {
   buildGmailDraftUrl,
   createGmailDraft,
   GmailDraftError,
+  TRANSIENT_NETWORK_CODES,
   __internal,
 } = await import("../gmail-draft.js");
 
@@ -248,6 +249,51 @@ describe("classifyGmailError", () => {
   it("status 不明の error も gmail_api_error にフォールバック", () => {
     const err = new Error("network failure");
     expect(classifyGmailError(err).errorCode).toBe("gmail_api_error");
+  });
+});
+
+describe("classifyGmailError: network error (string code) → transient", () => {
+  // Node.js / undici の transport error code を gmail_api_transient に分類する。
+  // 参考: rules/error-handling.md §3 — ECONNRESET / ETIMEDOUT 等は transient
+  // 実装側 (gmail-draft.ts) の TRANSIENT_NETWORK_CODES を参照し、定義二重化を避ける。
+  const TRANSIENT_CASES = Array.from(TRANSIENT_NETWORK_CODES);
+
+  it.each(TRANSIENT_CASES)("e.code === %s → gmail_api_transient (httpStatus 503)", (code) => {
+    const err = { code, message: `${code}: connection issue` };
+    const result = classifyGmailError(err);
+    expect(result.errorCode).toBe("gmail_api_transient");
+    expect(result.httpStatus).toBe(503);
+  });
+
+  it("e.cause.code === ECONNRESET のみ (e.code なし) → gmail_api_transient", () => {
+    const err = { cause: { code: "ECONNRESET" }, message: "fetch failed" };
+    const result = classifyGmailError(err);
+    expect(result.errorCode).toBe("gmail_api_transient");
+    expect(result.httpStatus).toBe(503);
+  });
+
+  it("response.status=503 + e.code=ECONNRESET 両存在 → HTTP status 優先で gmail_api_transient", () => {
+    const err = {
+      response: { status: 503, data: { error: { message: "Service unavailable" } } },
+      code: "ECONNRESET",
+    };
+    const result = classifyGmailError(err);
+    expect(result.errorCode).toBe("gmail_api_transient");
+    expect(result.httpStatus).toBe(503);
+  });
+
+  it("未知の string code (EUNKNOWN) → gmail_api_error (httpStatus 502)、過剰分類しない", () => {
+    const err = { code: "EUNKNOWN", message: "unknown error" };
+    const result = classifyGmailError(err);
+    expect(result.errorCode).toBe("gmail_api_error");
+    expect(result.httpStatus).toBe(502);
+  });
+
+  it("e.code === '503' (string number) → 既存経路で gmail_api_transient (回帰なし)", () => {
+    const err = { code: "503", message: "Service unavailable" };
+    const result = classifyGmailError(err);
+    expect(result.errorCode).toBe("gmail_api_transient");
+    expect(result.httpStatus).toBe(503);
   });
 });
 
