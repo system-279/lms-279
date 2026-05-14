@@ -25,12 +25,13 @@
 import { Router, type Request, type Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
 import { renderToBuffer } from "@react-pdf/renderer";
-import type {
-  ProgressPdfDraftErrorCode,
-  ProgressPdfDraftRequest,
-  ProgressPdfDraftResponse,
-  ProgressPdfSectionKey,
-  ProgressPdfSections,
+import {
+  buildProgressPdfFilename,
+  type ProgressPdfDraftErrorCode,
+  type ProgressPdfDraftRequest,
+  type ProgressPdfDraftResponse,
+  type ProgressPdfSectionKey,
+  type ProgressPdfSections,
 } from "@lms-279/shared-types";
 import { getDataSource } from "../../datasource/factory.js";
 import { validateTenantId } from "../../middleware/tenant.js";
@@ -102,10 +103,6 @@ function parseBody(body: unknown): ParsedBody | ParseError {
     return { error: "invalid_access_token", message: "accessToken must be a non-empty string" };
   }
   return { requestId, sections: parsedSections, accessToken };
-}
-
-function sanitizeFilename(name: string): string {
-  return name.replace(/[^A-Za-z0-9._-]/g, "_");
 }
 
 router.post(
@@ -299,10 +296,13 @@ router.post(
       subject = template.subject;
       body = template.body;
 
-      const filenameSafeName = sanitizeFilename(pdfData.user.name ?? pdfData.user.email);
       const dateStr = pdfData.generatedAt.slice(0, 10);
       attachment = {
-        filename: `progress-${filenameSafeName}-${dateStr}.pdf`,
+        filename: buildProgressPdfFilename({
+          name: pdfData.user.name,
+          email: pdfData.user.email,
+          date: dateStr,
+        }),
         contentType: "application/pdf",
         content: pdfBuffer,
       };

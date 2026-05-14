@@ -280,12 +280,30 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
           subject: expect.stringContaining("莞爾会 長遊園"),
           body: expect.stringContaining("山田 太郎"),
           attachment: expect.objectContaining({
-            filename: expect.stringMatching(/^progress-.*\.pdf$/),
+            // Issue #366: 日本語名 (山田 太郎) がそのままファイル名に含まれる
+            // (連続 _ で受講者を識別不能にしない)
+            filename: expect.stringMatching(/^progress-山田 太郎-\d{4}-\d{2}-\d{2}\.pdf$/),
             contentType: "application/pdf",
             content: FAKE_PDF,
           }),
         }),
       );
+    });
+
+    // Issue #366 の再発防止リグレッションマーカー。AC-2 (上記) の正規表現でも完全に
+     // 検証済みだが、本テストは「日本語が ___ に潰れない」という Issue 本質を
+     // 直接的に表現するため、意図を明示するシグナルとして残す。
+    it("Issue #366: 日本語名は filename に保持され ___ に潰されない", async () => {
+      const { user } = await seedTenant(ds);
+
+      await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-jp-name", sections: ALL_ON, accessToken: "t" });
+
+      const call = mocks.createGmailDraftMock.mock.calls[0]?.[0];
+      const filename: string = call?.attachment?.filename ?? "";
+      expect(filename).toContain("山田 太郎");
+      expect(filename).not.toMatch(/_{3,}/);
     });
 
     it("AC-8: 成功時 監査ログに status=success + PII 最小化", async () => {
