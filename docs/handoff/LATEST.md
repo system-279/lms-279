@@ -2,13 +2,13 @@
 
 ## TL;DR
 
-**Session 20 末ハンドオフの軽量候補 G (playwright timeout 60s 戻し) と H (firestore.ts resetLessonDataForUser 構造化ログ化) を 2 件の独立 PR として実装、両 PR とも通常 CI を全 PASS してマージ承認待ち状態で本セッションを終了。Issue Net 0 (起票 0 / close 0)、postponed 3 件は再開条件未充足のまま据え置き。**
+**Session 20 末ハンドオフの軽量候補 G (playwright timeout 60s 戻し) と H (firestore.ts resetLessonDataForUser 構造化ログ化) を 2 件の独立 PR として実装、両方マージ実行 + E2E 緑確認まで完遂。PR #360 の核心 AC「60s timeout で E2E flake なし」を main push 後の e2e.yml 実測 (1m41s) で実証し、Issue #308 根本解決を確証。Issue Net 0 (起票 0 / close 0)、postponed 3 件は据え置き。**
 
-両 PR とも 1 ファイル変更の小規模 PR で、`/simplify` は memory `feedback_simplify_vs_review.md` の基準 (1-2 ファイル / 30 行未満は /simplify スキップ) に従って省略。E2E job は `e2e.yml` workflow が `push: branches: [main]` のみで trigger される仕様のため、PR #360 (G) の timeout 60s での flake 再発有無はマージ後の main push でしか実測できない (リスク低、revert は 1 行戻しで容易)。
+両 PR とも 1 ファイル変更の小規模 PR で、`/simplify` は memory `feedback_simplify_vs_review.md` の基準 (1-2 ファイル / 30 行未満は /simplify スキップ) に従って省略。マージ順序は推奨通り PR #361 (リスク小) → PR #360 (E2E 実測あり) → PR #362 (handoff docs) で実施。
 
 - **Issue Net**: **0** (Close 0 件 / 起票 0 件 — 軽量 follow-up を PR 経由で消化)
 - **Open 推移**: Session 20 末 3 件 → Session 21 末 **3 件** (#276 / #275 / #274、全 postponed、Phase 3 GCIP 2026-10-24 再評価まで保留)
-- **本セッション成果**: PR #360 (1 file, +3/-4) + PR #361 (1 file, +9/-4) を作成、両方 CI 全 PASS / MERGEABLE で承認待ち
+- **本セッション成果**: PR #361 / #360 / #362 を作成・マージ完了、E2E 全 success (各 1m14s / 1m41s / 1m23s)
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -16,47 +16,38 @@
 # 1. 状況復元
 cat docs/handoff/LATEST.md
 
-# 2. PR #360 / #361 が main にマージ済みか確認
-gh pr view 360 --json state,mergedAt
-gh pr view 361 --json state,mergedAt
+# 2. main CI / Cloud Run / E2E が緑であることを確認
+gh run list --branch main --limit 5
 
-# 3. (#360 マージ済みの場合) main push 後の E2E job が緑かを実測
-gh run list --workflow e2e.yml --branch main --limit 5
-
-# 4. 現在の OPEN Issue (3 件、全 postponed)
+# 3. 現在の OPEN Issue (3 件、全 postponed)
 gh issue list --state open --limit 15
 
-# 5. 次の着手候補（優先度順）:
-#    A. PR #360 / #361 のマージ実行（番号単位の明示認可後）
-#       推奨順: PR #361 → PR #360 (リスク小さい順、E2E flake 切り分けやすい)
-#    B. PR #360 マージ後の E2E 実測で flake 再発有無を確認 — 万一 60s timeout
-#       で再発した場合は revert (1 行戻し) または再拡大の対症療法を検討
-#    C. 本番 (Cloud Run) Phase 2 実機 E2E 確認 — AUTH_MODE=firebase で
+# 4. 次の着手候補（優先度順、本セッションのマージ完遂を反映）:
+#    A. 本番 (Cloud Run) Phase 2 実機 E2E 確認 — AUTH_MODE=firebase で
 #       /super/progress/[tenantId]/[userId]/print → 「Gmail 下書き作成」
 #       → 初回 gmail.compose 同意画面 → Gmail 下書きタブに PDF 添付メール
 #       作成を確認、受講者側の受信動作も実機テスト (AI からの能動的依頼禁止、
 #       user 主導でのみ実施)
-#    D. PR #358 follow-up Important 級 3 件 (I1 / I2 / I5) の起票判断 —
+#    B. PR #358 follow-up Important 級 3 件 (I1 / I2 / I5) の起票判断 —
 #       handoff archive (2026-05-14-session-20.md) 内に詳細あり、
 #       decision-maker 判断に委ねる
-#    E. P2 #276 / #275 / #274 (Phase 5) postponed — Phase 3 GCIP 完了が再開条件
-#    F. Issue #272 Phase 3 GCIP 移行 — 再評価期限 2026-10-24
-#    G. /simplify Follow-up catch 共通ヘルパ抽出 — ADR-010 改訂で error code
+#    C. P2 #276 / #275 / #274 (Phase 5) postponed — Phase 3 GCIP 完了が再開条件
+#    D. Issue #272 Phase 3 GCIP 移行 — 再評価期限 2026-10-24
+#    E. /simplify Follow-up catch 共通ヘルパ抽出 — ADR-010 改訂で error code
 #       使い分け規約を明文化してから着手 (PR #349 コメント参照)
-#    H. Dependabot PR 週次レビュー
+#    F. Dependabot PR 週次レビュー
 ```
 
 ---
 
 ## セッション成果物 (2026-05-14 Session 21)
 
-### 🟡 PR #360: fix(e2e): playwright test timeout を 60s に戻す (Issue #308 解決後)
+### 🟢 PR #360: fix(e2e): playwright test timeout を 60s に戻す (Issue #308 解決後)
 
-- ブランチ: `fix/e2e-playwright-timeout-restore-60s`
+- ブランチ: `fix/e2e-playwright-timeout-restore-60s` (削除済)
 - 変更: `e2e/playwright.config.ts` 1 ファイル, +3 / -4 行
-- 状態: **OPEN / MERGEABLE / 通常 CI 全 PASS (Lint / Type Check / Test / Build)**
-- E2E 実測: 不能 (e2e.yml は `push: branches: [main]` でのみ trigger)
-- マージコマンド: `gh pr merge 360 --squash --delete-branch`
+- 状態: **MERGED (2026-05-14T12:30:08Z, squash) / 通常 CI 全 PASS**
+- **E2E 実測**: main push 後の e2e.yml run 25860067678 → **success (1m41s)**、60s timeout で flake 再発なし
 
 #### 内容
 
@@ -66,12 +57,12 @@ PR #355 (Issue #308) で AUTH_MODE=dev の Firestore super-admin lookup 遅延 (
 
 万一マージ後の main push で 60s timeout により flake 再発した場合、revert は 1 行戻し (`60000` → `180000`) で容易。Issue #308 で根本原因 (9 秒/req) は構造的に解消されているため、再発確率は低い。
 
-### 🟡 PR #361: refactor(api): resetLessonDataForUser のリトライ失敗ログを構造化
+### 🟢 PR #361: refactor(api): resetLessonDataForUser のリトライ失敗ログを構造化
 
-- ブランチ: `refactor/firestore-reset-lesson-data-structured-log`
+- ブランチ: `refactor/firestore-reset-lesson-data-structured-log` (削除済)
 - 変更: `services/api/src/datasource/firestore.ts` 1 ファイル, +9 / -4 行
-- 状態: **OPEN / MERGEABLE / 通常 CI 全 PASS (Lint / Type Check / Test / Build)**
-- マージコマンド: `gh pr merge 361 --squash --delete-branch`
+- 状態: **MERGED (2026-05-14T12:29:59Z, squash) / 通常 CI 全 PASS**
+- **E2E 実測**: main push 後の e2e.yml run 25860059996 → **success (1m14s)**
 
 #### 内容
 
@@ -126,10 +117,19 @@ triage 基準を満たす rating ≥ 7 / 実害 / CI 破壊事案は本セッシ
 
 **進捗評価**: triage 基準を満たす新規 Issue 候補なし。Session 20 末 handoff の軽量候補 G / H を PR #360 / #361 で実装完了 (マージ承認待ち)。マージ後は Session 20 末からの follow-up が実質 2 件減るため、実態は handoff 内 net では前進している。postponed 3 件 (#276 / #275 / #274) は Phase 3 GCIP 完了が再開条件で据え置き。
 
+## マージ後実測サマリー
+
+| PR | E2E run | 所要時間 | 結果 |
+|---|---|---|---|
+| #361 | 25860059996 | 1m14s | ✅ success |
+| #360 | 25860067678 | 1m41s | ✅ success — **60s timeout で flake 再発なし、Issue #308 根本解決を実証** |
+| #362 | 25860077696 | 1m23s | ✅ success |
+
 ## 関連リンク
 
-- PR #360 (Open, マージ承認待ち): https://github.com/system-279/lms-279/pull/360
-- PR #361 (Open, マージ承認待ち): https://github.com/system-279/lms-279/pull/361
+- PR #360 (Merged): https://github.com/system-279/lms-279/pull/360
+- PR #361 (Merged): https://github.com/system-279/lms-279/pull/361
+- PR #362 (Merged): https://github.com/system-279/lms-279/pull/362
 - Issue #308 (Closed): E2E CI でリクエスト遅延 7-9 秒/request の根本調査
 - PR #355: perf(auth): skip Firestore super-admin lookup in dev mode
 - PR #307: playwright timeout 60s → 180s (本 PR #360 で巻き戻し)
