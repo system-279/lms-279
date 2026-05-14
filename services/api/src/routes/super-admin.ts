@@ -26,6 +26,7 @@ import {
 import type { TenantMetadata, TenantStatus } from "../types/tenant.js";
 import { masterRouter } from "./super-admin-master.js";
 import { progressPdfRouter } from "./super/progress-pdf.js";
+import { progressPdfDraftRouter } from "./super/progress-pdf-draft.js";
 import { calculateDefaultDeadlines, validateEnrollmentSettingPayload } from "../services/enrollment.js";
 import { generateTenantId, normalizeEmail, parseTenantGcipFields } from "../utils/tenant-id.js";
 import { logger } from "../utils/logger.js";
@@ -43,8 +44,11 @@ router.use(superAdminAuthMiddleware);
 // マスターコンテンツ管理ルート
 router.use(masterRouter);
 
-// 受講者進捗 PDF 出力ルート (ADR-031)
+// 受講者進捗 PDF 出力ルート (ADR-032 Phase 1)
 router.use(progressPdfRouter);
+
+// 受講者進捗 PDF Gmail 下書き作成ルート (ADR-034 Phase 2)
+router.use(progressPdfDraftRouter);
 
 /**
  * テナント一覧のレスポンス型

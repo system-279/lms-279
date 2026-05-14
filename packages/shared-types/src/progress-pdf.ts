@@ -109,3 +109,58 @@ export interface ProgressPdfData {
     totalDurationSec: number;
   };
 }
+
+/**
+ * Phase 2: Gmail 下書き作成リクエスト。
+ * ソース: services/api/src/routes/super/progress-pdf-draft.ts
+ *
+ * accessToken は FE 側で `GoogleAuthProvider.addScope("https://www.googleapis.com/auth/gmail.compose")`
+ * のもとに取得した OAuth access token。BE は受信後 Gmail API 呼び出しに使い、ログには記録しない。
+ */
+export interface ProgressPdfDraftRequest {
+  /** Idempotency 用。FE で crypto.randomUUID() を生成して送信 */
+  requestId: string;
+  /** 各セクションを PDF に含めるかどうか。AC-10: 全 false は 400 で拒否 */
+  sections: ProgressPdfSections;
+  /** Google OAuth access token (gmail.compose scope 必須)。BE で保持しない */
+  accessToken: string;
+}
+
+/**
+ * Phase 2: Gmail 下書き作成成功レスポンス。
+ *
+ * draftUrl は Gmail Web UI の下書き個別ページ URL。FE は新規タブで開く。
+ */
+export interface ProgressPdfDraftResponse {
+  /** Gmail draft ID (Google 側で発行) */
+  draftId: string;
+  /** Gmail Web UI 下書き個別ページ URL */
+  draftUrl: string;
+}
+
+/**
+ * Phase 2: エラーコード。ADR-034 §8 で定義した分類と一致させる。
+ *
+ * FE はこのコードで動線を分岐する:
+ * - gmail_scope_required: reauthenticateWithPopup で再同意フロー
+ * - gmail_quota_exceeded: 「しばらく待ってから再試行」メッセージ
+ * - owner_email_not_set: ボタン disabled (本来到達しない、二重防御)
+ */
+export type ProgressPdfDraftErrorCode =
+  | "bad_request"
+  | "invalid_sections"
+  | "invalid_request_id"
+  | "invalid_access_token"
+  | "no_sections_selected"
+  | "owner_email_not_set"
+  | "demo_tenant_not_supported"
+  | "invalid_tenant_id"
+  | "invalid_user_id"
+  | "tenant_not_found"
+  | "user_not_in_tenant"
+  | "pdf_too_large_for_gmail"
+  | "pdf_generation_failed"
+  | "gmail_scope_required"
+  | "gmail_quota_exceeded"
+  | "gmail_api_error"
+  | "gmail_api_transient";

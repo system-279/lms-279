@@ -19,7 +19,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/lib/auth-context";
 import { useSuperAdminFetch } from "@/lib/super-api";
 import { API_BASE } from "@/lib/api";
+import {
+  requestGmailComposeAccessToken,
+  GmailOAuthError,
+} from "@/lib/gmail-oauth";
 import type {
+  ProgressPdfDraftErrorCode,
+  ProgressPdfDraftResponse,
   ProgressPdfSectionKey,
   ProgressPdfSections,
   SuperStudentProgressResponse,
@@ -73,6 +79,11 @@ export default function ProgressPdfPrintPage() {
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [requestId, setRequestId] = useState<string>(() => crypto.randomUUID());
+
+  // Phase 2: Gmail 下書き作成状態
+  const [draftCreating, setDraftCreating] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftRequestId, setDraftRequestId] = useState<string>(() => crypto.randomUUID());
 
   useEffect(() => {
     let cancelled = false;
@@ -173,6 +184,104 @@ export default function ProgressPdfPrintPage() {
     }
   }, [meta, getIdToken, tenantId, userId, requestId, sections]);
 
+  /**
+   * Phase 2: Gmail 下書き作成 (ADR-034)
+   *
+   * 1. requestGmailComposeAccessToken() で gmail.compose scope の access token 取得
+   *    (初回は同意 popup、2 回目以降はサイレント)
+   * 2. POST /progress-pdf-draft で BE が PDF 生成 + Gmail API draft 作成
+   * 3. 成功時は draftUrl を新規タブで開く
+   * 4. scope 不足 (gmail_scope_required) は同意 popup を再起動して 1 回だけリトライ
+   */
+  const handleCreateDraft = useCallback(async () => {
+    if (!meta || !ownerEmail) return;
+    setDraftCreating(true);
+    setDraftError(null);
+
+    const callDraftApi = async (accessToken: string): Promise<ProgressPdfDraftResponse> => {
+      const idToken = AUTH_MODE === "firebase" ? await getIdToken() : null;
+      const headers: HeadersInit = { "Content-Type": "application/json" };
+      if (AUTH_MODE === "dev") headers["X-User-Email"] = DEV_SUPER_ADMIN_EMAIL;
+      if (idToken) headers["Authorization"] = `Bearer ${idToken}`;
+
+      const res = await fetch(
+        `${API_BASE}/api/v2/super/tenants/${tenantId}/users/${userId}/progress-pdf-draft`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ requestId: draftRequestId, sections, accessToken }),
+        },
+      );
+
+      const body = (await res.json().catch(() => ({}))) as
+        | ProgressPdfDraftResponse
+        | { error: ProgressPdfDraftErrorCode; message: string };
+      if (!res.ok) {
+        const errBody = body as { error: ProgressPdfDraftErrorCode; message: string };
+        const apiError = new Error(errBody.message ?? `Gmail 下書き作成に失敗しました (HTTP ${res.status})`);
+        (apiError as Error & { code?: ProgressPdfDraftErrorCode; status?: number }).code = errBody.error;
+        (apiError as Error & { code?: ProgressPdfDraftErrorCode; status?: number }).status = res.status;
+        throw apiError;
+      }
+      return body as ProgressPdfDraftResponse;
+    };
+
+    try {
+      // 1. access token 取得 (初回 popup or サイレント)
+      let accessToken = await requestGmailComposeAccessToken();
+
+      // 2. BE で下書き作成 (scope 不足時のみ 1 回リトライ)
+      let result: ProgressPdfDraftResponse;
+      try {
+        result = await callDraftApi(accessToken);
+      } catch (err) {
+        const code = (err as { code?: ProgressPdfDraftErrorCode }).code;
+        if (code === "gmail_scope_required") {
+          // 再度 popup を起動して同意を取り直す
+          accessToken = await requestGmailComposeAccessToken();
+          result = await callDraftApi(accessToken);
+        } else {
+          throw err;
+        }
+      }
+
+      // 3. 下書き URL を新規タブで開く
+      window.open(result.draftUrl, "_blank", "noopener,noreferrer");
+
+      // 次回用に requestId 再発行
+      setDraftRequestId(crypto.randomUUID());
+    } catch (err: unknown) {
+      if (err instanceof GmailOAuthError) {
+        // popup_closed は静かに無視せず明示
+        const messages: Record<string, string> = {
+          popup_closed: "Google 認証がキャンセルされました。再度お試しください。",
+          popup_blocked: "ブラウザがポップアップをブロックしました。ポップアップを許可してください。",
+          auth_disabled: "Gmail 連携は本番認証モードでのみ利用できます。",
+          no_access_token: "Google から access token を取得できませんでした。再度お試しください。",
+          unknown: err.message,
+        };
+        setDraftError(messages[err.code] ?? err.message);
+      } else {
+        const apiCode = (err as { code?: ProgressPdfDraftErrorCode }).code;
+        const messages: Partial<Record<ProgressPdfDraftErrorCode, string>> = {
+          gmail_quota_exceeded: "Gmail API の送信制限に達しました。しばらくしてから再試行してください。",
+          gmail_scope_required: "Gmail 送信権限の同意が必要です。再度お試しください。",
+          pdf_too_large_for_gmail: "PDF サイズが上限 (5MB) を超えました。出力項目を絞ってください。",
+          owner_email_not_set: "テナント管理者メールが未設定です。テナント詳細画面で設定してください。",
+          no_sections_selected: "出力項目を少なくとも 1 つ選択してください。",
+        };
+        const msg = apiCode && messages[apiCode]
+          ? (messages[apiCode] as string)
+          : err instanceof Error
+          ? err.message
+          : "Gmail 下書き作成に失敗しました";
+        setDraftError(msg);
+      }
+    } finally {
+      setDraftCreating(false);
+    }
+  }, [meta, ownerEmail, getIdToken, tenantId, userId, draftRequestId, sections]);
+
   return (
     <div className="space-y-6">
       <div>
@@ -229,12 +338,30 @@ export default function ProgressPdfPrintPage() {
             )}
           </div>
 
-          <div className="flex items-center gap-4">
-            <Button onClick={handleGenerate} disabled={generating}>
+          <div className="flex flex-wrap items-center gap-4">
+            <Button onClick={handleGenerate} disabled={generating || draftCreating}>
               {generating ? "生成中..." : "PDF生成"}
             </Button>
+            <Button
+              variant="secondary"
+              onClick={handleCreateDraft}
+              disabled={draftCreating || generating || !ownerEmail || !anySelected}
+              title={
+                !ownerEmail
+                  ? "テナント管理者メールが未設定のため利用できません"
+                  : !anySelected
+                  ? "出力項目を少なくとも 1 つ選択してください"
+                  : "Gmail 下書きフォルダにメールを作成し、新しいタブで開きます"
+              }
+            >
+              {draftCreating ? "下書き作成中..." : "Gmail 下書き作成"}
+            </Button>
             {generateError && <span className="text-sm text-red-600">{generateError}</span>}
+            {draftError && <span className="text-sm text-red-600">{draftError}</span>}
           </div>
+          <p className="text-xs text-muted-foreground">
+            「Gmail 下書き作成」はスーパー管理者本人の Gmail 下書きフォルダに、宛先 ({ownerEmail ?? "未設定"}) と PDF 添付付きで下書きを作成します。Gmail が新しいタブで開きますので内容を確認・編集してから送信してください。
+          </p>
         </>
       )}
     </div>
