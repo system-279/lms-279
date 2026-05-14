@@ -273,8 +273,16 @@ router.post(
           errorCode: "pdf_too_large_for_gmail",
           sections: parsed.sections,
           pdfSizeBytes: pdfBuffer.length,
-        }).catch(() => {
-          // 監査ログ失敗はレスポンスをブロックしない
+        }).catch((auditErr: unknown) => {
+          // 監査ログ失敗はレスポンスをブロックしないが、サイレント化せず警告ログを残す
+          // (Firestore 障害時に「PDF サイズ超過」のシグナルが完全に消えるのを防ぐ)
+          logger.warn("Failed to record pdf_too_large_for_gmail audit log", {
+            errorType: "pdf_draft_audit_write_failed_413",
+            tenantId,
+            requestId: parsed.requestId,
+            pdfSizeBytes: pdfBuffer.length,
+            errorMessage: auditErr instanceof Error ? auditErr.message : String(auditErr),
+          });
         });
         res.status(413).json({
           error: "pdf_too_large_for_gmail",
@@ -378,8 +386,17 @@ router.post(
         errorCode,
         sections: parsed.sections,
         pdfSizeBytes: attachmentBytes,
-      }).catch(() => {
-        // 監査ログ失敗はレスポンスをブロックしない
+      }).catch((auditErr: unknown) => {
+        // 監査ログ失敗はレスポンスをブロックしないが、サイレント化せず警告ログを残す
+        // (Gmail API 失敗 + 監査ログ失敗の二重失敗を可視化)
+        logger.warn("Failed to record failed pdf_draft_logs entry (Gmail also failed)", {
+          errorType: "pdf_draft_audit_write_failed_after_gmail_fail",
+          tenantId,
+          requestId: parsed.requestId,
+          primaryErrorCode: errorCode,
+          primaryHttpStatus: httpStatus,
+          errorMessage: auditErr instanceof Error ? auditErr.message : String(auditErr),
+        });
       });
 
       // Evaluator HIGH-1 対応: GaxiosError の originalError には Authorization ヘッダを

@@ -22,6 +22,15 @@ export interface MailTemplateOutput {
   body: string;
 }
 
+/**
+ * 件名・本文に埋め込まれる前にユーザー由来文字列の CR/LF を空白へ。
+ * SECURITY: tenant.name / user.name が件名行に入るため、CR/LF が残ると
+ * MIME ヘッダインジェクション (Bcc 改ざん等) のリスク。route 層の二重防御。
+ */
+function stripCRLF(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
 /** ISO 文字列を JST の YYYY-MM-DD 表記に変換 */
 function toJstDate(isoString: string): string {
   const utc = new Date(isoString);
@@ -107,8 +116,10 @@ export function formatPaceSummary(pace: Pace): string {
  */
 export function buildMailTemplate(input: MailTemplateInput): MailTemplateOutput {
   const { data, senderName } = input;
-  const userDisplay = data.user.name ?? data.user.email;
-  const tenantName = data.tenant.name;
+  // SECURITY: 件名行に注入される可能性のあるフィールドは CR/LF を除去 (空白置換)。
+  const userDisplay = stripCRLF(data.user.name ?? data.user.email);
+  const tenantName = stripCRLF(data.tenant.name);
+  const safeSenderName = stripCRLF(senderName);
   const generatedDate = toJstDate(data.generatedAt);
 
   const progress = calculateOverallProgressPercent(data);
@@ -132,10 +143,10 @@ export function buildMailTemplate(input: MailTemplateInput): MailTemplateOutput 
     "",
     "ご質問やご相談がありましたら、本メールにご返信ください。",
     "",
-    senderName,
+    safeSenderName,
   ].join("\r\n");
 
   return { subject, body };
 }
 
-export const __internal = { toJstDate };
+export const __internal = { toJstDate, stripCRLF };

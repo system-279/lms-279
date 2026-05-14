@@ -19,7 +19,7 @@ import {
   __internal,
 } from "../progress-pdf-mail-template.js";
 
-const { toJstDate } = __internal;
+const { toJstDate, stripCRLF } = __internal;
 
 function makeData(overrides?: Partial<ProgressPdfData>): ProgressPdfData {
   const base: ProgressPdfData = {
@@ -164,6 +164,54 @@ describe("formatPaceSummary", () => {
 
   it.each(cases)("status=%s で正しい文言を返す", (pace, expected) => {
     expect(formatPaceSummary(pace)).toBe(expected);
+  });
+});
+
+describe("stripCRLF (ヘッダインジェクション防御)", () => {
+  it("CR/LF を空白に置換して trim", () => {
+    expect(stripCRLF("Hello\r\nBcc: x@evil.com")).toBe("Hello Bcc: x@evil.com");
+    expect(stripCRLF("a\rb\nc\r\nd")).toBe("a b c d");
+  });
+
+  it("CR/LF を含まない文字列はそのまま返す", () => {
+    expect(stripCRLF("Hello World")).toBe("Hello World");
+  });
+
+  it("前後の空白も削除", () => {
+    expect(stripCRLF("  Hello  ")).toBe("Hello");
+  });
+});
+
+describe("buildMailTemplate ヘッダインジェクション防御 (件名・本文)", () => {
+  it("tenant.name に CR/LF を含んでも件名行に CR/LF が混入しない", () => {
+    const data = makeData();
+    data.tenant.name = "莞爾会\r\nBcc: attacker@evil.com";
+    const result = buildMailTemplate({ data, senderName: "管理者" });
+    // 核心: 件名行を物理的に分断する CR/LF が消されていれば MIME インジェクションは成立しない
+    // (Bcc: 文字列自体が件名に残っても、ただの件名文字列として表示されるだけで害はない)
+    expect(result.subject).not.toContain("\r");
+    expect(result.subject).not.toContain("\n");
+  });
+
+  it("user.name に CR/LF を含んでも件名行に注入されない", () => {
+    const data = makeData();
+    data.user.name = "山田\r\n太郎";
+    const result = buildMailTemplate({ data, senderName: "管理者" });
+    expect(result.subject).not.toContain("\r");
+    expect(result.subject).not.toContain("\n");
+  });
+
+  it("senderName に CR/LF を含んでも本文末尾に注入されない", () => {
+    const result = buildMailTemplate({
+      data: makeData(),
+      senderName: "管理者\r\n--\r\nBcc: x@evil",
+    });
+    const lines = result.body.split("\r\n");
+    // 最後の行に CR が混入していないこと
+    expect(lines[lines.length - 1]).not.toContain("\r");
+    expect(lines[lines.length - 1]).not.toContain("\n");
+    // 本文中に Bcc 注入が残らないこと (raw な \r\n がないこと)
+    expect(result.body.match(/\nBcc:/i)).toBeNull();
   });
 });
 

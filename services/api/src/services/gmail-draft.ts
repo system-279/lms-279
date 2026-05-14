@@ -66,6 +66,22 @@ function generateBoundary(): string {
   return `lms279_boundary_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
 }
 
+/**
+ * MIME ヘッダ系フィールドに CR/LF が含まれていれば throw する。
+ * SECURITY: ヘッダインジェクション (例: To/Subject に \r\nBcc: attacker@... を
+ * 注入されて転送先を改ざんされる) を library 層で防ぐ。route 層も検証するが、
+ * 将来別 caller (一括送信機能など) が増えたときも安全に保つ二重防御。
+ */
+function assertNoCRLF(value: string, fieldName: string): void {
+  if (/[\r\n]/.test(value)) {
+    throw new GmailDraftError(
+      `MIME header injection blocked: ${fieldName} contains CR/LF`,
+      "gmail_api_error",
+      400,
+    );
+  }
+}
+
 /** Buffer / string を base64url にエンコード (Gmail API raw 用) */
 function toBase64Url(input: string | Buffer): string {
   const buf = typeof input === "string" ? Buffer.from(input, "utf-8") : input;
@@ -80,6 +96,16 @@ function toBase64Url(input: string | Buffer): string {
  */
 export function buildRawMimeMessage(input: BuildRawMimeMessageInput): string {
   const { to, subject, body, attachment } = input;
+
+  // SECURITY: library 層でのヘッダインジェクション二重防御。
+  // body 内の CR/LF は base64 エンコードされるため許容。
+  assertNoCRLF(to, "to");
+  assertNoCRLF(subject, "subject");
+  if (attachment) {
+    assertNoCRLF(attachment.filename, "attachment.filename");
+    assertNoCRLF(attachment.contentType, "attachment.contentType");
+  }
+
   const encodedSubject = encodeMimeHeader(subject);
 
   if (!attachment) {

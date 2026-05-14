@@ -121,6 +121,68 @@ describe("buildRawMimeMessage", () => {
   });
 });
 
+describe("buildRawMimeMessage CR/LF ヘッダインジェクション防御", () => {
+  it("to に \\r\\n を含むと GmailDraftError (gmail_api_error, 400) を throw", () => {
+    expect(() =>
+      buildRawMimeMessage({
+        to: "owner@example.com\r\nBcc: attacker@evil.com",
+        subject: "件名",
+        body: "本文",
+      }),
+    ).toThrow(GmailDraftError);
+  });
+
+  it("subject に \\n を含むと throw", () => {
+    expect(() =>
+      buildRawMimeMessage({
+        to: "owner@example.com",
+        subject: "件名\nX-Injected: yes",
+        body: "本文",
+      }),
+    ).toThrow(/MIME header injection blocked: subject/);
+  });
+
+  it("attachment.filename に \\r\\n を含むと throw", () => {
+    expect(() =>
+      buildRawMimeMessage({
+        to: "owner@example.com",
+        subject: "件名",
+        body: "本文",
+        attachment: {
+          filename: "evil.pdf\r\nContent-Type: text/html",
+          contentType: "application/pdf",
+          content: Buffer.from("x"),
+        },
+      }),
+    ).toThrow(/MIME header injection blocked: attachment\.filename/);
+  });
+
+  it("attachment.contentType に \\n を含むと throw", () => {
+    expect(() =>
+      buildRawMimeMessage({
+        to: "owner@example.com",
+        subject: "件名",
+        body: "本文",
+        attachment: {
+          filename: "ok.pdf",
+          contentType: "application/pdf\nX-Injected: yes",
+          content: Buffer.from("x"),
+        },
+      }),
+    ).toThrow(/MIME header injection blocked: attachment\.contentType/);
+  });
+
+  it("body 内の \\n は許容される (base64 化されるため)", () => {
+    const raw = buildRawMimeMessage({
+      to: "owner@example.com",
+      subject: "件名",
+      body: "1 行目\n2 行目\r\n3 行目",
+    });
+    expect(typeof raw).toBe("string");
+    expect(raw.length).toBeGreaterThan(0);
+  });
+});
+
 describe("classifyGmailError", () => {
   it("401 → invalid_access_token", () => {
     const err = { response: { status: 401, data: { error: { message: "Invalid Credentials" } } } };

@@ -36,8 +36,6 @@ describe("recordPdfDraftLog", () => {
     setMock = vi.fn().mockResolvedValue(undefined);
     docMock = vi.fn(() => ({ set: setMock, collection: collectionMock }));
     collectionMock = vi.fn(() => ({ doc: docMock }));
-    docMock = vi.fn(() => ({ set: setMock, collection: collectionMock }));
-    collectionMock = vi.fn(() => ({ doc: docMock }));
     dbMock = { collection: collectionMock };
   });
 
