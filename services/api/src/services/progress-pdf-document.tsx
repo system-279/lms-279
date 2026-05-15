@@ -22,19 +22,23 @@ const __dirname = path.dirname(__filename);
 // src 実行時（vitest 等）は services/api/src/services/... → ../../assets/fonts/... で同じく解決。
 const FONT_PATH = path.resolve(__dirname, "../../assets/fonts/NotoSansJP-VariableFont.ttf");
 
+/**
+ * Font.register で実際に登録する weight 一覧。テストで「想定外の weight 変更」
+ * を検知できるよう export する。
+ *
+ * 注: @react-pdf/font は Variable Font の weight axis 補間 (getVariation) を
+ * 実装していないため、同じ Variable TTF を Medium (500) として別登録しても
+ * Regular と同じ glyphs で描画される (no-op)。本文値の濃度は 700 (Bold) で
+ * 稼ぎ、見出しと本文の階層は fontSize で確保する。
+ */
+export const REGISTERED_FONT_WEIGHTS = [400, 700] as const;
+
 let fontRegistered = false;
 function ensureFontRegistered() {
   if (fontRegistered) return;
   Font.register({
     family: "NotoSansJP",
-    fonts: [
-      { src: FONT_PATH, fontWeight: 400 },
-      // NotoSansJP-VariableFont.ttf は weight axis を持つ Variable Font。
-      // @react-pdf/renderer は登録された fontWeight の中で最も近いものを選ぶため、
-      // Medium (500) を別途登録して「本文値」と「ラベル/見出し」の階層を確保する。
-      { src: FONT_PATH, fontWeight: 500 },
-      { src: FONT_PATH, fontWeight: 700 },
-    ],
+    fonts: REGISTERED_FONT_WEIGHTS.map((fontWeight) => ({ src: FONT_PATH, fontWeight })),
   });
   // 改行制御: @react-pdf/renderer はデフォルトで latin の境界しか改行しない。
   Font.registerHyphenationCallback((word) => Array.from(word));
@@ -48,20 +52,22 @@ const COLOR_BORDER = "#9ca3af"; // 構造線 (gray-400)
 
 const styles = StyleSheet.create({
   page: { fontFamily: "NotoSansJP", fontSize: 11, padding: 32, color: COLOR_BODY },
-  h1: { fontSize: 19, fontWeight: 700, marginBottom: 4 },
-  h2: { fontSize: 14, fontWeight: 700, marginTop: 14, marginBottom: 6, borderBottom: 1, borderColor: COLOR_BORDER, paddingBottom: 2 },
+  // 階層は fontSize で表現: h1 (20) > h2 (15) > courseHeader (13) > body (11) > meta/lessonMeta (10)
+  // 太字 (Bold 700) は h1/h2/courseHeader/lessonCheck/value/lessonTitle に適用し、
+  // ラベル/meta (Regular 400) との濃度コントラストを確保する。
+  h1: { fontSize: 20, fontWeight: 700, marginBottom: 4 },
+  h2: { fontSize: 15, fontWeight: 700, marginTop: 14, marginBottom: 6, borderBottom: 1, borderColor: COLOR_BORDER, paddingBottom: 2 },
   meta: { fontSize: 10, color: COLOR_SUB, marginBottom: 8 },
   row: { flexDirection: "row", marginBottom: 2 },
   label: { width: 110, color: COLOR_SUB },
-  // 本文値は Medium (500) で「ラベル/見出し」と階層を保ちつつ十分な濃度を確保
-  value: { flex: 1, fontWeight: 500 },
+  value: { flex: 1, fontWeight: 700 },
   section: { marginBottom: 6 },
-  courseHeader: { fontSize: 12, fontWeight: 700, marginTop: 8, marginBottom: 4 },
+  courseHeader: { fontSize: 13, fontWeight: 700, marginTop: 8, marginBottom: 4 },
   progressBarOuter: { height: 6, backgroundColor: "#e5e7eb", borderRadius: 3, marginTop: 2, marginBottom: 4 },
   progressBarInner: { height: 6, backgroundColor: "#22c55e", borderRadius: 3 },
   lessonRow: { flexDirection: "row", marginBottom: 1.5, paddingVertical: 1 },
   lessonCheck: { width: 16, fontWeight: 700 },
-  lessonTitle: { flex: 1, fontWeight: 500 },
+  lessonTitle: { flex: 1, fontWeight: 700 },
   lessonMeta: { width: 90, color: COLOR_SUB, fontSize: 10, textAlign: "right" },
   expired: { color: "#dc2626", fontWeight: 700 },
   caution: { color: "#f59e0b" },
