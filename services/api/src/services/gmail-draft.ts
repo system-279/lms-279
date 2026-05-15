@@ -110,11 +110,10 @@ function buildFilenameParam(
     const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     return `${paramName}="${escaped}"`;
   }
-  // 非 ASCII を `_` 化したデフォルト ASCII fallback (RFC 6266 §5 古いクライアント向け)
-  const defaultFallback = value.replace(/[^\x20-\x7e]/g, "_");
-  // asciiOverride が ASCII safe ならそれを使い、そうでなければデフォルトに退避
+  // asciiOverride は呼び出し側で assertValidAsciiFallback 済みの前提で無条件採用。
+  // 未指定時は非 ASCII を `_` 化したデフォルト fallback を使う (RFC 6266 §5)。
   const rawFallback =
-    asciiOverride && !/[^\x20-\x7e]/.test(asciiOverride) ? asciiOverride : defaultFallback;
+    asciiOverride !== undefined ? asciiOverride : value.replace(/[^\x20-\x7e]/g, "_");
   const asciiFallback = rawFallback.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   return `${paramName}="${asciiFallback}"; ${paramName}*=UTF-8''${rfc5987Encode(value)}`;
 }
@@ -167,6 +166,32 @@ function assertSafeFilename(value: string): void {
   }
 }
 
+/**
+ * asciiFallbackFilename の妥当性を保証する。
+ * Gmail に意味のある ASCII fallback を渡す前提のため、以下を reject:
+ * - 非 ASCII (silent default fallback への退避を防止 → silent_failure_hunter C1)
+ * - 空文字 / whitespace-only (Gmail が UUID 化する燃料 → silent_failure_hunter C2)
+ * - assertSafeFilename / assertNoCRLF と同じ防御 (二重防御の維持 → silent_failure_hunter C3)
+ */
+function assertValidAsciiFallback(value: string): void {
+  assertNoCRLF(value, "attachment.asciiFallbackFilename");
+  assertSafeFilename(value);
+  if (/[^\x20-\x7e]/.test(value)) {
+    throw new GmailDraftError(
+      "Invalid asciiFallbackFilename: must contain only ASCII printable characters",
+      "gmail_api_error",
+      400,
+    );
+  }
+  if (!/[A-Za-z0-9]/.test(value)) {
+    throw new GmailDraftError(
+      "Invalid asciiFallbackFilename: must contain at least one alphanumeric character",
+      "gmail_api_error",
+      400,
+    );
+  }
+}
+
 /** Buffer / string を base64url にエンコード (Gmail API raw 用) */
 function toBase64Url(input: string | Buffer): string {
   const buf = typeof input === "string" ? Buffer.from(input, "utf-8") : input;
@@ -190,6 +215,9 @@ export function buildRawMimeMessage(input: BuildRawMimeMessageInput): string {
     assertNoCRLF(attachment.filename, "attachment.filename");
     assertNoCRLF(attachment.contentType, "attachment.contentType");
     assertSafeFilename(attachment.filename);
+    if (attachment.asciiFallbackFilename !== undefined) {
+      assertValidAsciiFallback(attachment.asciiFallbackFilename);
+    }
   }
 
   const encodedSubject = encodeMimeHeader(subject);
@@ -429,4 +457,5 @@ export const __internal = {
   buildFilenameParam,
   rfc5987Encode,
   assertSafeFilename,
+  assertValidAsciiFallback,
 };
