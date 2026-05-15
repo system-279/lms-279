@@ -4,9 +4,9 @@
 
 **Session 26 末で記録上ゼロ化していた handoff 内 follow-up に対し、ユーザー依頼「進捗状況 PDF → Gmail 下書き → PDF 自動貼付フローを Playwright で実機テスト」を実施。検証の過程で 2 系統の連鎖品質課題を発見し 4 PR (#391 / #393 / #392 / #403) で完全解決、Playwright MCP 実機検証で Gmail 受信メール経由の PDF DL までフル PASS。**Issue #389 を起票し PR #391 で auto-close、その後 PR #393 マージで完全解消、PR #403 で文字濃度の真因 (Variable Font default = Thin) を解消。session を通して 1 Issue 起票 / 1 close で Issue Net ±0、しかし Phase 2 Gmail Draft 機能の本番運用品質を実機エビデンス付きで大きく押し上げた。
 
-- **Issue Net**: **±0** (Close 1 件 / 起票 1 件 — いずれも #389)
-- **Open 推移**: Session 26 末 3 件 → Session 27 末 **3 件** (全 postponed: #276 / #275 / #274 — 変化なし)
-- **本セッション成果**: PR 4 件マージ (#391 / #392 / #393 / #403) / Variable Font 真因解明 / 2026 業界 best practice (filename 生 Unicode dual-form) 採用 / Playwright MCP 実機検証完遂
+- **Issue Net**: **+1** (Close 1 件 #389 / 起票 2 件 #389 + #405)
+- **Open 推移**: Session 26 末 3 件 → Session 27 末 **4 件** (#276 / #275 / #274 / **#405** 全 postponed)
+- **本セッション成果**: PR 4 件マージ (#391 / #392 / #393 / #403) / Variable Font 真因解明 / 2026 業界 best practice (filename 生 Unicode dual-form) 採用 / Playwright MCP 実機検証完遂 / Issue #405 (Phase 2 follow-up postponed) 起票
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -17,8 +17,9 @@ cat docs/handoff/LATEST.md
 # 2. main CI 状況確認 (本セッション末で Deploy success: 25942250679 / 3m58s)
 gh run list --branch main --limit 5
 
-# 3. 現在の OPEN Issue (3 件、全 postponed、変化なし)
+# 3. 現在の OPEN Issue (4 件、全 postponed)
 gh issue list --state open --limit 15
+#  → #274 / #275 / #276 (Phase 3 GCIP 完了が再開条件) / #405 (Phase 2 filename strict MTA risk、本セッション起票)
 
 # 4. 次の着手候補 (優先度順):
 #    A. 【完了済】Issue #389 系列 — 本セッションで PR #391/#392/#393/#403 マージ
@@ -27,7 +28,10 @@ gh issue list --state open --limit 15
 #       — 期限到達まで着手不可、postponed #276 / #275 / #274 の再開条件
 #    C. 【優先度2】postponed #276 / #275 / #274 — Phase 3 GCIP 完了が再開条件
 #       — 明示指示なき限り着手不可
-#    D. 【優先度3】Dependabot semver-major 全 ignore 設定の月次/四半期棚卸し運用
+#    D. 【優先度3】postponed #405 — Phase 2 Gmail draft filename strict MTA risk
+#       再開条件: M365/Outlook/Proofpoint/Mimecast テナント追加 or 添付名問い合わせ
+#       — 明示指示なき限り着手不可 (実害未観測のため待機)
+#    E. 【優先度4】Dependabot semver-major 全 ignore 設定の月次/四半期棚卸し運用
 ```
 
 ---
@@ -140,14 +144,17 @@ https://web-3zcica5euq-an.a.run.app
 ## Issue Net 変化
 
 - **Close 数**: **1 件** (#389 Phase 2 Gmail draft の MIME 添付ファイル名 RFC 違反)
-- **起票数**: **1 件** (#389、同 Issue を本セッション内で起票)
-- **Net**: **±0**
+- **起票数**: **2 件** (#389 + #405)
+- **Net**: **+1**
 
-| Issue | 起票 | 起票理由 | Close PR |
+| Issue | 起票 | 起票理由 | Close PR / 状態 |
 |---|---|---|---|
 | #389 | Session 27 (実機検証中) | triage #1 #2 #4 #5 該当 (実害 / 再現可能 / rating ≥7 / ユーザー明示指示) | PR #391 で auto-close、PR #393 で完全解消、PR #403 で文字濃度真因解消 |
+| #405 | Session 27 末 (ユーザー明示指示) | triage #5 該当 (silent-failure-hunter PR #393 review I3 / Phase 2 follow-up postponed) | **postponed** (open 維持、再開条件: M365/Outlook/Proofpoint/Mimecast テナント追加 or 添付名問い合わせ) |
 
 triage 基準は CLAUDE.md「GitHub Issues」セクション準拠。rating 5-6 の review agent 提案は本セッション内で発見されたものも含めて Issue 化せず、PR 内修正で対応した (`silent-failure-hunter` C1/C2/C3 / `code-reviewer` I1/I2 等は PR コメント / 追加 commit で消化済)。
+
+**Net +1 の理由言語化**: 起票 #405 は **ユーザー明示指示 (本セッション内 "I3 を Issue 化して残置")** による起票。silent-failure-hunter PR #393 review I3 (Important rating 5-7) を機械的に Issue 化したわけではなく、実害未観測ながら本番運用テナント追加時のフットプリント拡大に備えた **postponed 待機** 配置。CLAUDE.md「Net ≤ 0 は進捗ゼロ扱い」基準は機械的 5-6 自動起票を抑止する目的であり、本件は明示認可 + postponed 残置で趣旨を満たす (`feedback_issue_postpone_pattern.md` 準拠)。
 
 ---
 
@@ -171,6 +178,8 @@ triage 基準は CLAUDE.md「GitHub Issues」セクション準拠。rating 5-6 
 - PR #392: https://github.com/system-279/lms-279/pull/392
 - PR #393: https://github.com/system-279/lms-279/pull/393
 - PR #403: https://github.com/system-279/lms-279/pull/403
+- PR #404 (本ハンドオフ): https://github.com/system-279/lms-279/pull/404
 - Issue #389 (Closed): https://github.com/system-279/lms-279/issues/389
+- Issue #405 (Open, postponed): https://github.com/system-279/lms-279/issues/405
 - ADR-034 (Phase 2 Gmail API Draft 方式採用): docs/adr/ADR-034-phase2-gmail-draft.md
 - Session 26 handoff (archived): docs/handoff/archive/2026-05-15-session-26.md
