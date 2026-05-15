@@ -12,12 +12,14 @@
 import { google } from "googleapis";
 import type { ProgressPdfDraftErrorCode } from "@lms-279/shared-types";
 
+// SECURITY (I2 / ADR-034): GaxiosError は config.headers.Authorization に
+// access token を保持するため、本クラスは raw error への参照を持たない。
+// 分類済みの errorCode / httpStatus / message のみを公開する。
 export class GmailDraftError extends Error {
   constructor(
     message: string,
     public errorCode: ProgressPdfDraftErrorCode,
     public httpStatus: number,
-    public originalError?: unknown,
   ) {
     super(message);
     this.name = "GmailDraftError";
@@ -231,13 +233,13 @@ export function classifyGmailError(err: unknown): GmailDraftError {
       typeof e.cause?.code === "string" ? e.cause.code : undefined;
     const networkCode = transportCodeFromError ?? transportCodeFromCause;
     if (networkCode && TRANSIENT_NETWORK_CODES.has(networkCode)) {
-      return new GmailDraftError(message, "gmail_api_transient", 503, err);
+      return new GmailDraftError(message, "gmail_api_transient", 503);
     }
   }
 
   // 401: invalid_access_token
   if (status === 401) {
-    return new GmailDraftError(message, "invalid_access_token", 401, err);
+    return new GmailDraftError(message, "invalid_access_token", 401);
   }
 
   // 403: scope 不足の判定
@@ -248,28 +250,28 @@ export function classifyGmailError(err: unknown): GmailDraftError {
       /insufficient/i.test(message) ||
       /scope/i.test(message)
     ) {
-      return new GmailDraftError(message, "gmail_scope_required", 403, err);
+      return new GmailDraftError(message, "gmail_scope_required", 403);
     }
-    return new GmailDraftError(message, "gmail_api_error", 403, err);
+    return new GmailDraftError(message, "gmail_api_error", 403);
   }
 
   // 429: quota / rate limit
   if (status === 429) {
-    return new GmailDraftError(message, "gmail_quota_exceeded", 429, err);
+    return new GmailDraftError(message, "gmail_quota_exceeded", 429);
   }
 
   // 503: transient
   if (status === 503) {
-    return new GmailDraftError(message, "gmail_api_transient", 503, err);
+    return new GmailDraftError(message, "gmail_api_transient", 503);
   }
 
   // 5xx 全般
   if (status >= 500 && status < 600) {
-    return new GmailDraftError(message, "gmail_api_error", 502, err);
+    return new GmailDraftError(message, "gmail_api_error", 502);
   }
 
   // それ以外 (4xx 含む) は gmail_api_error
-  return new GmailDraftError(message, "gmail_api_error", status || 502, err);
+  return new GmailDraftError(message, "gmail_api_error", status || 502);
 }
 
 /**
@@ -316,7 +318,6 @@ export async function createGmailDraft(
         "Gmail API returned no draft id",
         "gmail_api_error",
         502,
-        response,
       );
     }
 

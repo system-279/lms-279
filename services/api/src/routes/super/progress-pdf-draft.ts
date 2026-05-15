@@ -399,9 +399,9 @@ router.post(
         });
       });
 
-      // Evaluator HIGH-1 対応: GaxiosError の originalError には Authorization ヘッダを
-      // 含む config が残存する可能性があるため、access token を含む raw error は
-      // ログに渡さない。errorCode / httpStatus / message のみを記録する。
+      // SECURITY (I2 / ADR-034): GmailDraftError は raw GaxiosError 参照を持たない
+      // 設計 (gmail-draft.ts §GmailDraftError) のため、ここでは分類済みの
+      // errorCode / httpStatus / message のみを記録する。
       logger.error("Gmail draft creation failed", {
         errorType: "gmail_draft_failed",
         tenantId,
