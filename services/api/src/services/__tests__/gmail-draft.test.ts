@@ -97,7 +97,7 @@ describe("buildRawMimeMessage", () => {
     expect(decoded).toMatch(/--lms279_boundary_\d+_[a-z0-9]+--/);
   });
 
-  it("添付の日本語ファイル名は RFC 2231/5987 dual-form (filename + filename*=UTF-8'') で出力", () => {
+  it("添付の日本語ファイル名は Content-Disposition で RFC 2231/5987 dual-form を出力 (Content-Type 側は name= を出さない)", () => {
     const original = "進捗レポート.pdf";
     const raw = buildRawMimeMessage({
       to: "owner@example.com",
@@ -111,8 +111,7 @@ describe("buildRawMimeMessage", () => {
     });
     const decoded = base64UrlDecode(raw);
 
-    // RFC 2047 §5 違反 (parameter value に encoded-word 不可) のため
-    // そのパターンが含まれないことをアサート (退行防止)
+    // RFC 2047 §5 違反 (parameter value に encoded-word 不可) パターンが含まれないこと
     expect(decoded).not.toMatch(/filename="=\?UTF-8\?B\?/);
     expect(decoded).not.toMatch(/name="=\?UTF-8\?B\?/);
 
@@ -122,9 +121,30 @@ describe("buildRawMimeMessage", () => {
     expect(decoded).toContain(
       `Content-Disposition: attachment; filename="${expectedFallback}"; filename*=UTF-8''${expectedEncoded}`,
     );
+    // RFC 2046 deprecated な Content-Type `name=` は発行しない
+    expect(decoded).toContain("Content-Type: application/pdf\r\n");
+    expect(decoded).not.toMatch(/Content-Type: application\/pdf;/);
+  });
+
+  it("asciiFallbackFilename が指定されればそれを ASCII fallback として使う (Gmail UI 表示用に意味のある ASCII)", () => {
+    const raw = buildRawMimeMessage({
+      to: "owner@example.com",
+      subject: "件名",
+      body: "本文",
+      attachment: {
+        filename: "progress-テスト-2026-05-15.pdf",
+        asciiFallbackFilename: "progress-y.honda-2026-05-15.pdf",
+        contentType: "application/pdf",
+        content: Buffer.from("x"),
+      },
+    });
+    const decoded = base64UrlDecode(raw);
+    const expectedEncoded = rfc5987Encode("progress-テスト-2026-05-15.pdf");
     expect(decoded).toContain(
-      `Content-Type: application/pdf; name="${expectedFallback}"; name*=UTF-8''${expectedEncoded}`,
+      `Content-Disposition: attachment; filename="progress-y.honda-2026-05-15.pdf"; filename*=UTF-8''${expectedEncoded}`,
     );
+    // 自動 _ 化 fallback (progress-___-2026-05-15.pdf) は使われないこと
+    expect(decoded).not.toMatch(/filename="progress-___-/);
   });
 
   it("ASCII のみのファイル名は dual-form にせずシンプル形式 (filename=\"...\") のみ", () => {
@@ -142,12 +162,12 @@ describe("buildRawMimeMessage", () => {
     expect(decoded).toContain(
       'Content-Disposition: attachment; filename="progress-2026-05-15.pdf"',
     );
-    expect(decoded).toContain(
-      'Content-Type: application/pdf; name="progress-2026-05-15.pdf"',
-    );
-    // filename*= / name*= は出力されないこと (ASCII のみで dual-form 不要)
+    expect(decoded).toContain("Content-Type: application/pdf\r\n");
+    // filename*= / name= (RFC 2046 deprecated) / name*= は出力されないこと
+    // 単語境界で filename= 中の name= を hit しないよう ; or 行頭の直後を要求
     expect(decoded).not.toMatch(/filename\*=/);
-    expect(decoded).not.toMatch(/name\*=/);
+    expect(decoded).not.toMatch(/(?:^|;\s)name=/);
+    expect(decoded).not.toMatch(/(?:^|;\s)name\*=/);
   });
 
   it("base64url エンコードされ、+ / = が含まれない", () => {
