@@ -20,16 +20,19 @@ const __dirname = path.dirname(__filename);
 
 // dist/services/progress-pdf-document.js から ../../assets/fonts/... へ辿る。
 // src 実行時（vitest 等）は services/api/src/services/... → ../../assets/fonts/... で同じく解決。
-const FONT_PATH = path.resolve(__dirname, "../../assets/fonts/NotoSansJP-VariableFont.ttf");
+//
+// 注: 旧実装は NotoSansJP-VariableFont.ttf 単体を全 weight に再利用していたが、
+// @react-pdf/font は Variable Font の weight axis 補間 (getVariation) を未実装で
+// あり、TTF のデフォルト weight (本フォントでは Thin) で全て描画されてしまう。
+// このため Regular / Bold の static OTF を別々に登録して本物の濃度差を出す。
+// (notofonts/noto-cjk Sans 2.004 公式リリース由来、SIL Open Font License 1.1)
+const FONT_REGULAR_PATH = path.resolve(__dirname, "../../assets/fonts/NotoSansJP-Regular.otf");
+const FONT_BOLD_PATH = path.resolve(__dirname, "../../assets/fonts/NotoSansJP-Bold.otf");
 
 /**
  * Font.register で実際に登録する weight 一覧。テストで「想定外の weight 変更」
- * を検知できるよう export する。
- *
- * 注: @react-pdf/font は Variable Font の weight axis 補間 (getVariation) を
- * 実装していないため、同じ Variable TTF を Medium (500) として別登録しても
- * Regular と同じ glyphs で描画される (no-op)。本文値の濃度は 700 (Bold) で
- * 稼ぎ、見出しと本文の階層は fontSize で確保する。
+ * を検知できるよう export する。Regular と Bold をそれぞれ別の static OTF
+ * ファイルに紐付け、@react-pdf/font の Variable Font axis 未対応問題を回避する。
  */
 export const REGISTERED_FONT_WEIGHTS = [400, 700] as const;
 
@@ -38,7 +41,10 @@ function ensureFontRegistered() {
   if (fontRegistered) return;
   Font.register({
     family: "NotoSansJP",
-    fonts: REGISTERED_FONT_WEIGHTS.map((fontWeight) => ({ src: FONT_PATH, fontWeight })),
+    fonts: [
+      { src: FONT_REGULAR_PATH, fontWeight: 400 },
+      { src: FONT_BOLD_PATH, fontWeight: 700 },
+    ],
   });
   // 改行制御: @react-pdf/renderer はデフォルトで latin の境界しか改行しない。
   Font.registerHyphenationCallback((word) => Array.from(word));
