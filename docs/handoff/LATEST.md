@@ -1,14 +1,14 @@
-# Session Handoff — 2026-05-15 (Session 22)
+# Session Handoff — 2026-05-15 (Session 23)
 
 ## TL;DR
 
-**Session 21 末ハンドオフの優先候補 B (PR #358 follow-up Important 級 I1 / I5) を 1 PR (#364) で完遂、Quality Gate 全段 (Codex 計画レビュー / `/simplify` 3 並列 / `/safe-refactor` / `/review-pr` 6 並列) を通過し、追加発見の Important 4 件も同 PR 内追加コミットで反映。main マージ後の E2E は success (1m25s) で実証。Session 22 後半追補で Playwright による本番 Phase 2 実機 E2E を完遂し、Gmail API 有効化済 + Gmail draft 作成成功を実証、副次的に PDF 添付ファイル名 sanitize 問題 (Issue #366) を発見。**
+**Session 22 末ハンドオフ「優先候補 A' (Issue #366)」と「F (Dependabot 週次レビュー)」を完遂、計 9 PR をマージ。Issue #366 (Phase 2 PDF 日本語名 `___` 問題) を PR #368 で解消、Codex review でサロゲートペア lone surrogate → `encodeURIComponent` URIError リスクを指摘・修正。Dependabot 週次レビュー時に構造的セキュリティギャップ (npm エコシステム未対象 + GitHub Dependabot alerts 無効化) を発見、PR #369 で `dependabot.yml` 拡張 + `npm audit fix` で 12 件 (critical 1 件含む) 解消 + `gh api PUT /vulnerability-alerts` で alerts 自動有効化。PR #369 マージ直後に Dependabot が 11 PR を自動生成、dev deps + security 関連 7 件を順次マージ。**
 
-I1 (classifyGmailError の network error transient 分類) はグローバルルール `~/.claude/rules/error-handling.md §3` (transient/permanent 分類) への準拠で、ECONNRESET 等 10 種の transport-level code を `gmail_api_transient` (503) に分類。I5 (popup ブロック fallback UI) は Codex 指摘の COOP false positive 対策として「ブロックされました」を断定せず「下書きは作成済みです。新しいタブが開かない場合は…」の安全文言で吸収。
+特に重要: **PR #372 (next 16.1.1 → 16.2.6)** で middleware bypass / DoS 等 5 件の security advisories (high 4 + moderate 1) を本番 web から解消。Phase 2 本番運用への security baseline 強化が完了。
 
-- **Issue Net**: **+1** (Close 0 件 / 起票 1 件 #366、ただし handoff 内 follow-up 2 件消化で実質進捗あり)
-- **Open 推移**: Session 21 末 3 件 → Session 22 末 **4 件** (#276 / #275 / #274 全 postponed + 新規 **#366** Phase 2 PDF ファイル名 sanitize bug)
-- **本セッション成果**: PR #364 (2 commits, 4 files, +241 / -6) マージ、E2E success (1m25s)、**本番 Phase 2 実機 E2E 完遂 (Playwright)**、Issue #366 起票
+- **Issue Net**: **-1** (Close 2 件 #366 / #374、起票 1 件 #382 → Net -1、KPI 進捗あり)
+- **Open 推移**: Session 22 末 4 件 → Session 23 末 **4 件** (#276 / #275 / #274 全 postponed + 新規 **#382** vitest 4.1.6 jest-dom matcher 型エラー、#366 close、#374 起票即 close)
+- **本セッション成果**: PR 9 件マージ / Issue 2 件 close + 1 件起票 / `gh api PUT` で Dependabot alerts 自動有効化 / セキュリティ脆弱性 12 + 5 = 17 件解消
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -19,206 +19,217 @@ cat docs/handoff/LATEST.md
 # 2. main CI / Cloud Run / E2E が緑であることを確認
 gh run list --branch main --limit 5
 
-# 3. 現在の OPEN Issue (3 件、全 postponed)
+# 3. 現在の OPEN Issue (4 件: 3 件 postponed + #382 active)
 gh issue list --state open --limit 15
 
-# 4. 次の着手候補（優先度順）:
-#    A. 【完了済】本番 (Cloud Run) Phase 2 実機 E2E 確認 — Session 22 後半追補で
-#       Playwright により完遂。Gmail API 有効化 (user 主導) + Gmail draft 作成成功
-#       (件名・宛先・PDF 中身すべて正常)。詳細は下記「Session 22 追補」セクション参照。
-#       受講者側の受信動作テストは未実施 (送信に user 主導判断が必要)。
-#    A'. **新規 Issue #366** Phase 2 PDF 添付ファイル名 sanitize 問題 (P2/bug) —
-#       Phase 2 本番運用前に必ず対応。日本語名受講者で `progress-___-2026-05-14.pdf`
-#       のように `___` に置換され、管理者運用支障。PR #364 `/review-pr` の
-#       Important 残 7 件と合わせて bulk 修正候補。
-#    B. PR #358 follow-up I2 (originalError 設計改善) — handoff 内記録のみ、
-#       現状実害なし (route 層は HIGH-1 で logger に渡さない方針継続)。
-#       将来 logger 経由のフットガン対策として PR 化検討。decision-maker 判断。
-#    C. P2 #276 / #275 / #274 (Phase 5) postponed — Phase 3 GCIP 完了が再開条件
-#    D. Issue #272 Phase 3 GCIP 移行 — 再評価期限 2026-10-24
-#    E. /simplify Follow-up catch 共通ヘルパ抽出 — ADR-010 改訂で error code
-#       使い分け規約を明文化してから着手 (PR #349 コメント参照)
-#    F. Dependabot PR 週次レビュー
+# 4. 現在の OPEN Dependabot PR (3 件、要レビュー)
+gh pr list --author "app/dependabot" --state open
+
+# 5. 次の着手候補（優先度順）:
+#    A. 【優先度1】PR #376 react-dom 19.2.3 → 19.2.6 production レビュー
+#       — CI 全 PASS だが react 自体 (19.2.3) と pair upgrade 慎重判断
+#       — Dependabot は react 単独 PR 未生成 (peer 依存解決のため？)
+#       — マージ後 web の SSR / hydration の smoke 確認
+#    B. 【優先度2】PR #377 @google-cloud/vertexai 1.10.2 → 1.12.0 production レビュー
+#       — CI 全 PASS、AI 連携の minor upgrade
+#       — Vertex AI 連携箇所 (services/api 内) の API 変更影響確認
+#    C. 【優先度3】Issue #382 vitest 4.1.6 で @testing-library/jest-dom matcher 型解決失敗
+#       — PR #370 ブロック解除のため必要、調査方針は Issue body 参照
+#       — 想定原因: vitest 4.1.6 で Assertion<> 型構造変更 / jest-dom 型拡張
+#         declare module 'vitest' の不整合
+#    D. 【優先度4】PR #358 follow-up I2 (originalError 設計改善) — Session 22 から
+#       継続、decision-maker 判断待ち
+#    E. 【優先度5】Issue #272 Phase 3 GCIP 移行 — 再評価期限 2026-10-24
+#    F. 【優先度6】postponed #276 / #275 / #274 — Phase 3 GCIP 完了が再開条件
+#    G. 【優先度7】Dependabot semver-major 全 ignore 設定の月次/四半期棚卸し運用
+#       — Codex review (PR #369) で指摘、`/handoff` で記録のみ (Issue 化見送り)
+#    H. 【優先度8】PR #381 playwright 1.58.2 → 1.60.0 が CONFLICTING で自動 close
+#       — lockfile は ^1.60.0 caret range 経由で 1.60.0 解決済、実害なし
+#       — 次回 Dependabot weekly で再 PR 来るか観察 (なければ手動 PR 不要)
 ```
 
 ---
 
-## セッション成果物 (2026-05-15 Session 22)
+## セッション成果物 (2026-05-15 Session 23)
 
-### 🟢 PR #364: fix(super): Gmail draft の transient 分類修正 + popup fallback UI
+### 🟢 PR #368: fix(super): Progress PDF ファイル名で日本語名を保持 (Issue #366)
 
-- ブランチ: `fix/gmail-draft-transient-and-popup-fallback` (削除済)
-- 変更: 4 ファイル, +241 / -6 行 (2 commits)
-- 状態: **MERGED (2026-05-15 squash) / 通常 CI 全 PASS (1m45s + 1m34s)**
-- **E2E 実測**: main push 後の e2e.yml run 25884657503 → **success (1m25s)**
+- ブランチ: `fix/issue-366-pdf-filename-japanese` (削除済)
+- 変更: 7 ファイル, +290 / -29 行 (2 commits)
+- 状態: **MERGED (2026-05-14T23:25:55Z, squash) / Issue #366 自動 close**
+- Quality Gate: impl-plan / `/simplify` 3 並列 / `/safe-refactor` / `/codex review` 全段通過
 
 #### 内容
 
-**I1: classifyGmailError の network error transient 分類** (`services/api/src/services/gmail-draft.ts`)
+3 箇所に重複していた sanitize 正規表現 `(name ?? email).replace(/[^A-Za-z0-9._-]/g, "_")` を共通ヘルパ `@lms-279/shared-types.buildProgressPdfFilename` に集約し、Unicode 保持 + email fallback + 50 code point truncate を実装。
+
+| 変更ファイル | 内容 |
+|---|---|
+| `packages/shared-types/src/filename.ts` (新規) | 共通ヘルパ。`UNSAFE_CHARS_RE = /[\x00-\x1f\x7f<>:"/\\|?*]/g` で OS/HTTP unsafe 文字のみ除去、`Array.from(cleaned).slice(0, 50).join("")` で **code point 単位 truncate** (Codex 指摘のサロゲートペア lone surrogate 問題対策) |
+| `packages/shared-types/src/index.ts` | 初の runtime export 追加 (これまで `export type *` のみ) |
+| `services/api/src/routes/super/progress-pdf-draft.ts` | sanitizeFilename 撤去、共通ヘルパ参照 |
+| `services/api/src/routes/super/progress-pdf.ts` | インライン正規表現撤去、RFC 6266 dual-filename の ASCII fallback を email-based で生成 |
+| `web/app/super/progress/[tenantId]/[userId]/print/page.tsx` | インライン正規表現撤去、共通ヘルパ参照 |
+| `services/api/src/__tests__/unit/filename.test.ts` (新規 16 件) | 日本語保持 / null/undefined/空 → email fallback / 危険文字置換 / 連続_圧縮 / トリム / 50 code point truncate / **サロゲートペア (絵文字) 2 件** |
+| `services/api/src/__tests__/integration/progress-pdf-draft.test.ts` | AC-2 assertion 強化 + Issue #366 リグレッションマーカー 1 件追加 |
+
+#### 設計判断
+
+3 経路の Unicode safe な配信機構を活用:
+- **Gmail draft**: `services/api/src/services/gmail-draft.ts` の `encodeMimeHeader` が RFC 2047 (`=?UTF-8?B?...?=`) で attachment filename を base64 encode
+- **HTTP attachment**: `Content-Disposition: filename="ASCII fallback"; filename*=UTF-8''<encoded>` (RFC 6266) — モダンブラウザは `filename*` を優先
+- **ブラウザダウンロード**: `<a download>` 属性は Unicode をそのまま許容
+
+shared-types は従来 `export type *` のみの型専用パッケージだったが、FE/BE で同一の filename 生成ロジックを担保するため初の runtime export を追加。Codex 評価では「ファイル名は API response / Gmail draft / Web download の共有契約、純粋関数 1 個なら許容範囲、新規 utils package は過剰」と肯定。
+
+#### Codex セカンドオピニオン指摘 → 反映済
+
+| 指摘 | 対応 |
+|---|---|
+| `String.prototype.slice(0, 50)` は UTF-16 code unit 単位でサロゲートペアを境界分断 → 後段 `encodeURIComponent` が `URIError: URI malformed` を投げて HTTP 500 になる | `Array.from(cleaned).slice(0, 50).join("")` で code point 単位 truncate に変更、テスト 2 件追加 (絵文字 100 個 / 49 BMP + 絵文字境界) |
+| ASCII fallback ロジックの専用ヘルパ化 | 現状 1 箇所のみ使用で YAGNI、Optional として handoff 記録 |
+| Unicode bidi 制御文字 (U+202A-U+202E) の除去 | Optional、Issue #366 直接 scope 外 |
+
+#### テスト結果
+
+- API test: 863 件 PASS (+17: ユニット 16 + integration 1)
+- web test: 40 件 PASS
+- lint / type-check: PASS
+
+---
+
+### 🟢 PR #369: chore(deps): npm エコシステムを Dependabot 対象化 + 既知脆弱性 12 件解消
+
+- ブランチ: `chore/dependabot-npm-and-audit-fix` (削除済)
+- 変更: 2 ファイル, +255 / -253 行 (1 commit)
+- 状態: **MERGED (2026-05-14T23:38:49Z, squash)**
+- 全 CI PASS / Codex review「マージ可」
+
+#### 発見ギャップ
+
+Dependabot 週次レビュー指示 → open PR 0 件で一見健全 → 構造的セキュリティギャップ 3 件発見:
+
+| # | 項目 | 状態 |
+|---|---|---|
+| 1 | `.github/dependabot.yml` の対象 | **github-actions のみ、npm 未対象** ⚠️ |
+| 2 | GitHub Dependabot alerts | **無効化** (`gh api /dependabot/alerts` → HTTP 403 "disabled") ⚠️ |
+| 3 | `npm audit` (workspaces) | **23 件の脆弱性 (1 critical / 4 high / 7 moderate / 8 low)** 🔴 |
+
+#### 修正内容
 
 | 変更 | 内容 |
 |---|---|
-| `TRANSIENT_NETWORK_CODES` set (export) | `ECONNRESET` / `ETIMEDOUT` / `ENOTFOUND` / `EAI_AGAIN` / `ECONNREFUSED` / `ESOCKETTIMEDOUT` / `ECONNABORTED` / `UND_ERR_CONNECT_TIMEOUT` / `UND_ERR_HEADERS_TIMEOUT` / `UND_ERR_SOCKET` (10 種) を `gmail_api_transient` (HTTP 503) に分類 |
-| 評価順明文化 (JSDoc) | 1. `response.status` → 2. 数値 `e.code` → 3. transport code 文字列 → 4. `e.status` → 5. フォールバック |
-| `e.cause?.code` 検出 | undici 経由でラップされた transport error にも対応 |
-| `httpStatusFromCode` 命名 + 明示比較 | `numericCodeFromString` から rename、二重否定 (`!numericCodeFromString`) を `=== undefined` に変更 (`/review-pr` simplifier M1 反映) |
-| Set export | テスト側で参照、定義の二重化を解消 (`/simplify` reuse/quality 指摘反映) |
+| `.github/dependabot.yml` | npm エコシステム追加 (`directory: "/"`、`open-pull-requests-limit: 10`、`commit-message.prefix: "chore(deps)"`、`ignore: dependency-name: "*" / version-update:semver-major` で major は手動 PR で個別判断) |
+| `package-lock.json` | `npm audit fix` (--force 不使用) で 23 → 11 件に削減、critical 1 件 (protobufjs + 7 advisories) + moderate 6 件 + low 5 件解消 |
+| **GitHub Dependabot alerts 有効化** | `gh api -X PUT /repos/system-279/lms-279/vulnerability-alerts` で **自動有効化済** (HTTP 204、Codex 指摘によりこの PR 内で完結) |
 
-**I5: popup ブロック時 fallback UI** (`web/.../print/page.tsx`)
+#### 残存脆弱性 (PR #369 内未解消、別 PR で対応)
 
-| 変更 | 内容 |
-|---|---|
-| `draftFallbackUrl` state 追加 | popup 開けない場合の手動リンク用 URL |
-| `handleCreateDraft` 冒頭 clear | 前回 URL の残留防止 |
-| `window.open` 戻り値チェック | `!win || win.closed` のとき `setDraftFallbackUrl` |
-| FE エラーメッセージマップに `gmail_api_transient` 追加 | 「Gmail サーバーへの接続が一時的に不安定です。しばらく後に再試行してください。」 |
-| JSX `<a>` fallback リンク | `target="_blank"` + `rel="noopener noreferrer"` で安全 |
-
-「ブロックされました」と断定せず「下書きは作成済みです。新しいタブが開かない場合は…」の文言で COOP 誤検知に耐える (Codex 計画レビュー指摘を計画段階で吸収)。
-
-#### Acceptance Criteria 充足 (16 件)
-
-| AC 群 | 件数 | 検証 |
+| 件数 | 内訳 | 解消方法 |
 |---|---|---|
-| AC-I1-1〜10 (10 種 transient code) | 10 | `it.each` PASS |
-| AC-I1-11 (e.cause.code 単独) / 12 (response.status=503 + e.code 両存在) / 13 (未知 string code) / 14 (e.code="503" string number) | 4 | vitest PASS |
-| AC-I1-15 (response.status=429 + e.code=ECONNRESET → HTTP status 優先) | 1 | `/review-pr` IM-1 反映で追加 |
-| AC-I5-1 (window.open null + fallback link) / -2 (closed=true) / -3 (再クリックで URL clear) | 3 | vitest PASS |
-| 既存 AC-3 / 5 / 9 mock 更新 (回帰防止) | – | `{ closed: false }` 返却に更新 |
+| 2 | vite high 系 (path traversal / WebSocket file read) | next 16.1.1 → 16.2.6 で解消 |
+| 1 | postcss moderate (XSS via unescaped `</style>`) | next 16.1.1 → 16.2.6 で解消 |
+| 8 | low | 許容範囲 (個別 Dependabot PR が来るのを待つ) |
 
-#### 品質ゲート結果
+→ Dependabot が PR #372 で next minor upgrade を自動生成、後段で解消。
 
-| Gate | Result |
-|---|---|
-| Codex 計画レビュー (plan モード、5 観点) | High 1 件 (I5「ブロック」断定回避) を計画段階で吸収 |
-| `/simplify` 3 並列 (reuse / quality / efficiency) | MEDIUM 2 件 (TRANSIENT_NETWORK_CODES export + task-reference コメント技術背景化) 反映、LOW 4 件は scope 外 |
-| `/safe-refactor` | HIGH/MEDIUM 0 件、LOW 4 件は別 PR 候補で修正不要 |
-| `/review-pr` 6 並列 (code/silent-failure/test/comment/type-design/simplifier) | Critical 0 件、Important 11 件のうち 4 件 (comment I-1/I-2, test IM-1, simplifier M1) を追加コミットで反映、残 7 件は scope 外 |
-| `npm test -w @lms-279/api` | 845 → **846 件 PASS** (+15、新規 transient 系 11 + cause.code + 優先順 + 429+ECONNRESET + EUNKNOWN + "503" string) |
-| `npm test -w @lms-279/web` | 37 → **40 件 PASS** (+3、I5 popup null / closed=true / fallback URL clear) |
-| `npm run lint` / `type-check` | PASS (4 workspaces) |
+---
 
-## 主要技術判断
+### 🟢 PR #372: chore(deps): bump next from 16.1.1 to 16.2.6 (security 5 件解消)
 
-### Codex セカンドオピニオンで I5 設計を計画段階で根本見直し
+- Dependabot 自動 PR (squash merge、2026-05-14T23:44:20Z)
+- next リリースノート上の **security advisories 5 件 (high 4 + moderate 1) を解消**:
+  - GHSA-8h8q-6873-q5fj (DoS w/ Server Components)
+  - GHSA-267c-6grr-h53f / GHSA-26hh-7cqf-hhc6 (Middleware/Proxy bypass via segment-prefetch)
+  - GHSA-mg66-mrh9-m8jx (DoS via connection exhaustion in Cache Components)
+  - GHSA-492v-c6pp-mqqv (Middleware/Proxy bypass via dynamic route)
+- 当初 Issue #374 で起票したが、Dependabot が先行対応 → Issue #374 を **PR #372 で対応済として close**
 
-実装着手前の Codex `mcp__codex__codex` plan モードレビューで、I5 当初方針 (`window.open === null` を「popup ブロック」と断定する文言) に High リスク (`noopener,noreferrer` + COOP で成功時も `null`/`closed=true` が返るブラウザがあり誤検知し得る) を指摘。これを受けて方針を変更:
+---
 
-| 項目 | 当初方針 | 修正方針 |
+### 🟢 dev deps minor upgrade マージ (6 PR)
+
+PR #369 マージ直後に Dependabot が大量 PR を生成、CI 全 PASS の dev deps を順次マージ:
+
+| PR | タイトル | merged |
 |---|---|---|
-| 検出時の文言 | 「ポップアップがブロックされました」 | 「下書きは作成済みです。新しいタブが開かない場合はこちら…」 |
-| 検出時の動作 | エラー扱い (`setDraftError`) | 中立な fallback link 表示 (`setDraftFallbackUrl`、別 state) |
-| `<a>` 属性 | (未定義) | `target="_blank"` + `rel="noopener noreferrer"` 明示 |
+| #371 | @vitejs/plugin-react 6.0.1 → 6.0.2 | 2026-05-14T23:43:43Z |
+| #373 | @vitest/coverage-v8 4.1.0 → 4.1.6 | 2026-05-14T23:53:39Z (Dependabot rebase 経由) |
+| #375 | eslint-config-next 15.5.13 → 15.5.18 | 2026-05-14T23:55:28Z |
+| #378 | @tailwindcss/postcss 4.2.1 → 4.3.0 | 2026-05-15T00:12:08Z |
+| #379 | @typescript-eslint/parser 8.57.1 → 8.59.3 | 2026-05-15T00:13:48Z |
+| #380 | @playwright/test 1.58.2 → 1.60.0 | 2026-05-15T00:15:26Z |
 
-実装後の `/review-pr` でも本判断は positive observation として 4 agent から評価。
+全マージ後 main で `npm install` + lint / type-check / API 863 / web 40 件 全 PASS で回帰ゼロ確認。
 
-### Important 級指摘の処理戦略: PR 内追加コミット vs 後続 Issue 化
+---
 
-`/review-pr` で発見した Important 11 件のうち、本 PR で追加コミット反映する基準を明確化:
+## ⚠️ 残 open / closed PR と Issue (次セッション要対応)
 
-- **本 PR 内対応 (4 件)**: コードと文書の真偽乖離 (comment I-1)、リポジトリ外パス参照 (comment I-2)、軽量テスト追加 (test IM-1)、可読性 (simplifier M1)
-- **scope 外 (7 件)**: 別 PR / 別 Issue 候補 (numericCodeFromString "0" edge case、UX 文言具体化、observability、Firebase 内部エラー露出、cause.code 型異常、case sensitivity、fallback と error 共存テスト)
+### 残 open PR (3 件)
 
-CLAUDE.md triage 基準 (rating ≥ 7 / 実害 / CI 破壊 / ユーザー明示指示) を厳格適用し、起票 0 件で過剰起票を防止。同時に「PR 内 follow-up」として軽量化できる指摘は本 PR 内で消化することで、handoff 内に未消化指摘を残さない方針。
-
-### I2 (originalError 設計改善) を本 PR 含めない判断
-
-Codex 計画レビュー (質問 3) + `/review-pr` (silent-failure-hunter) のいずれも「分離継続が妥当」と判定。理由:
-
-- 現状 route 層が `originalError` を logger に渡さない方針が HIGH-1 (Session 20) で対応済 → **現状の実害なし**
-- I2 はログ安全性・error object 保持ポリシー・将来の route 層変更まで含む設計判断、同梱するとレビュー焦点が散る
-- 将来 logger 経由のフットガン対策として PR 化検討は decision-maker 判断に委ねる
-
-本 PR コミットメッセージ + PR 本文に「規約として継続」を 1 行記載し、handoff 内 follow-up 候補 B として明示。
-
-## Issue Net 変化 (Session 22 本編、PR #364 マージ時点)
-
-```
-- Close 数: 0 件
-- 起票数: 0 件
-- Net: 0 件
-```
-
-**Net 0 だが進捗あり** — 理由:
-
-1. **Session 20 末 handoff 記録の PR #358 follow-up Important 級 3 件 (I1 / I2 / I5) のうち I1 と I5 を本 PR #364 で消化**、I2 は規約として継続記録 → handoff 内 follow-up が **2 件減**
-2. **`/review-pr` で発見した Important 4 件は本 PR 内追加コミットで消化** (Issue 起票せず) → 過剰起票防止の方針に整合、CLAUDE.md triage 基準 (rating ≥ 7 / 実害 / CI 破壊) を満たす新規 Issue 候補なし
-3. **postponed 3 件 (#276 / #275 / #274) は据え置き** — Phase 3 GCIP 完了が再開条件、2026-10-24 再評価まで保留
-
-triage 基準を厳格適用した結果、起票 0 件で Net 0 だが、実態は handoff 内 follow-up 消化で前進。
-
-> ⚠ **Session 22 末 (本追補マージ後) の最終 Net は `+1`**。下記「Session 22 追補」で本番実機 E2E 中に発見した Issue #366 (Phase 2 PDF ファイル名 sanitize 問題) を起票。triage 基準 #1 #2 #4 #5 該当のため起票。
-
-## Session 22 追補 (2026-05-15 後半) — 本番 Phase 2 実機 E2E 検証
-
-### 検証範囲
-
-- **環境**: 本番 Cloud Run (`https://web-3zcica5euq-an.a.run.app`)、`AUTH_MODE=firebase`
-- **テナント**: TEST (`qos4c4ka`、本番顧客への副作用を出さない選定)
-- **受講者**: テスト (`y.honda@279279.net`、userId: `uXMEFBo5Jdd3uok3C3kb`)
-- **検証経路**: `/super/progress/qos4c4ka/uXMEFBo5Jdd3uok3C3kb/print` → 「Gmail 下書き作成」
-- **手段**: Playwright MCP (rules/browser-operations.md §1 準拠)
-
-### 検証結果
-
-| 検証ポイント | 結果 |
-|---|---|
-| OAuth (gmail.compose scope) reauth | ✅ user 主導の popup で完了 |
-| POST `/api/v2/super/tenants/qos4c4ka/users/uXMEFBo5Jdd3uok3C3kb/progress-pdf-draft` | ✅ HTTP 200 (Gmail API 有効化後) |
-| Gmail draft 作成 | ✅ 下書きフォルダに新規 1 件 |
-| 件名 | ✅ 「【TEST】テスト さんの受講進捗レポート (2026-05-15)」 |
-| 宛先 | ✅ システムカンリ `system@279279.net` (TEST テナント管理者) |
-| 本文 | ✅ 進捗率 0% (0/20)、受講期限、推奨ペース、署名 |
-| PDF 添付実体 | ✅ 35,680 bytes / PDF 1.3 / 2 ページ / 内容完全正常 |
-| popup 新タブで Gmail 自動 open | ✅ I5 happy path (通常 flow) |
-
-### 新規発覚事項
-
-#### 解消済: Gmail API が GCP project 1034821634012 で未有効化
-
-初回 click 時 403 で発覚。user 主導で GCP Console (`https://console.developers.google.com/apis/api/gmail.googleapis.com/overview?project=1034821634012`) から有効化、伝播後に再試行で成功。**Phase 2 機能は本日 (2026-05-15) まで本番では一度も動作していなかった**ことが判明 (PR #358 マージ後の deploy 完了状態でも API 側未設定だった)。
-
-#### 未対応: Issue #366 - Phase 2 PDF 添付ファイル名 sanitize 問題 (P2/bug)
-
-ファイル名生成 sanitizer `[^A-Za-z0-9._-]` が日本語を `_` に置換するため、受講者「テスト」(3 文字非 ASCII) が `___` に変換され `progress-___-2026-05-14.pdf` となる。**PDF 本文は完全に正常**、ファイル名のみの問題。
-
-| 該当箇所 | 行 |
-|---|---|
-| `services/api/src/routes/super/progress-pdf-draft.ts` | L107-109 (`sanitizeFilename`), L302 |
-| `services/api/src/routes/super/progress-pdf.ts` | L159 (インライン正規表現) |
-| `web/app/super/progress/[tenantId]/[userId]/print/page.tsx` | L172 (インライン正規表現) |
-
-3 箇所重複 (DRY 違反) + 日本語非対応の二重問題。修正案 i/ii/iii は Issue #366 本文参照。**Phase 2 本番顧客向け運用開始前の必須対応**。
-
-### Issue Net 変化 (再掲)
-
-```
-- Close 数: 0 件
-- 起票数: 1 件 (#366)
-- Net: +1 件
-```
-
-triage 基準 (CLAUDE.md GitHub Issues #1 実害 / #2 再現可能 / #4 rating≥7 / #5 user 明示指示) の **#1 / #2 / #4 / #5 すべて該当** で起票。本セッションでは I1 / I5 と Important 4 件は PR #364 内消化により Issue 化を避けたが、本件は Phase 2 本番運用前 blocker のため明示的に Issue 化。
-
-### 検証中に観測した COOP 警告 (期待通り)
-
-console に `Cross-Origin-Opener-Policy policy would block the window.closed call.` 多発。これは PR #364 I5 で対策した COOP false positive の典型パターンで、現状は popup が正常に開けたため `setDraftFallbackUrl` には到達せず (fallback link 描画は発火条件 = `!win || win.closed` を満たさない)。意図的な popup ブロック再現テストは unit test (AC-I5-1/-2/-3) でカバー済のため実機未検証。
-
-## マージ後実測サマリー
-
-| Workflow | Run ID | 所要時間 | 結果 |
+| PR | 内容 | 状態 | 評価 |
 |---|---|---|---|
-| 通常 CI (PR フェーズ、初回) | 25884020303 | 1m40s | ✅ success |
-| 通常 CI (PR フェーズ、`/review-pr` 反映後) | 25884479722 | 1m45s | ✅ success |
-| 通常 CI (main push 後) | 25884657527 | 1m34s | ✅ success |
-| E2E Tests (main push 後) | 25884657503 | 1m25s | ✅ success |
-| Deploy to Cloud Run | 25884657534 | in_progress (能動的確認は控える) | – |
+| #370 | vitest 4.1.0 → 4.1.6 | Type Check FAIL | Issue #382 で blocked、jest-dom matcher 型解決失敗 (17 件 TS2339) |
+| **#376** | **react-dom 19.2.3 → 19.2.6** | CI 全 PASS | production deps、react 自体との pair upgrade 慎重判断 |
+| **#377** | **@google-cloud/vertexai 1.10.2 → 1.12.0** | CI 全 PASS | production deps、AI 連携 API 変更影響確認 |
 
-## 関連リンク
+### CLOSED (人為的でない)
+- #381: playwright 1.58.2 → 1.60.0 — Dependabot 自動 close (CONFLICTING)
+  - **実害なし**: package.json は `^1.57.0` のまま、lockfile は `1.60.0` で実 install 済 (caret range が 1.60.0 を許容)
+  - 次回 Dependabot weekly で再 PR 来るか観察
 
-- PR #364 (Merged): https://github.com/system-279/lms-279/pull/364
-- PR #358 (Phase 2 Gmail draft 採用、Session 20 末マージ): https://github.com/system-279/lms-279/pull/358
-- **Issue #366 (Phase 2 PDF ファイル名 sanitize bug、Session 22 追補で起票)**: https://github.com/system-279/lms-279/issues/366
-- ADR-034 (Phase 2 Gmail API draft 方式採用): docs/adr/ADR-034-phase2-gmail-draft.md
-- グローバルルール: `~/.claude/rules/error-handling.md §3` (transient/permanent 分類) / `~/.claude/rules/testing.md §5` (外部API エラー分類テスト必須) / `~/.claude/rules/browser-operations.md §1` (Playwright MCP 一択)
-- Session 21 handoff (archived): docs/handoff/archive/2026-05-14-session-21.md
+### 起票 Issue (1 件、本セッション)
+
+- **#382** [deps] vitest 4.1.0 → 4.1.6 minor upgrade で @testing-library/jest-dom matcher の型解決が失敗 (PR #370 ブロック)
+  - 17 件の TS2339 エラー: `toBeDisabled`, `toBeInTheDocument` 等の matcher が `Assertion<HTMLElement>` 型で認識されない
+  - 想定原因: vitest 4.1.6 で `Assertion` 型の export 構造変更 / jest-dom 側型拡張 `declare module 'vitest'` の不整合 / tsconfig types 配列の不足
+  - labels: `bug,P2`
+
+### Close Issue (2 件、本セッション)
+
+- **#366** [bug] Phase 2 Gmail draft の PDF 添付ファイル名が日本語名受講者で `___` に置換される — PR #368 で解消
+- **#374** [security] next 16.1.1 → 16.2.6 minor upgrade で vite/postcss 脆弱性 3 件解消 — PR #372 で同等以上対応 (next 本体 security 5 件も解消)、起票直後に close
+
+---
+
+## Issue Net 変化
+
+- Close 数: **2 件** (#366, #374)
+- 起票数: **1 件** (#382)
+- **Net: -1 件 (KPI 進捗あり)**
+
+triage 評価: 起票 #382 は本セッションのユーザー B 案明示指示で起票、rating 5-6 だが Dependabot 運用継続性のため #5 該当として起票。#374 は起票後 5 分で PR #372 (Dependabot 自動) が先行対応で発見、即 close。機械的な Issue 化はなく、適切な triage を実施。
+
+---
+
+## 教訓・気づき
+
+### 1. Dependabot 設定の構造ギャップは「open PR 0 件」の沈黙の下に隠れる
+週次レビュー指示時に open PR 0 件を「健全」と短絡せず、`.github/dependabot.yml` の対象範囲 + `gh api /dependabot/alerts` の有効化状態を併せて確認する。本セッション発見の二重ギャップ (npm 未対象 + alerts 無効) は数ヶ月放置されていた可能性が高い。
+
+### 2. Codex review は本物の URIError を捕まえる
+PR #368 で sub-tools (`/simplify` 3 並列 + `/safe-refactor`) が見逃した「`String.prototype.slice` のサロゲートペア分断 → `encodeURIComponent` URIError → HTTP 500」を Codex が指摘・修正。Codex セカンドオピニオンは「形式的レビュー」ではなく実害を捕まえる手段として機能した。
+
+### 3. Dependabot 自動 PR 大量生成への対応パターン
+PR #369 マージ直後に 11 PR が一気に生成 (`open-pull-requests-limit: 10` 超過は race condition 由来)。production deps と dev deps を分けて優先度判定、CI 全 PASS の dev deps を順次マージ、競合は `@dependabot rebase` コメントで Bot に依頼、conflict 解消失敗時の自動 close (PR #381) は実害なら手動 PR、無害なら次回 weekly 待ち、というワークフローを確立。
+
+### 4. shared-types の責務拡張は ADR なしで進めた (Follow-up 候補)
+従来 `export type *` のみだった `@lms-279/shared-types` に PR #368 で初の runtime helper (`buildProgressPdfFilename`) を export 追加。Codex は「純粋関数 1 個なら許容」と評価したが、責務境界の方針転換として ADR-035 で記録するか、`packages/shared-types/README.md` 更新で明文化するかは次セッション以降の判断項目。
+
+---
+
+## 環境状態 (本セッション終了時)
+
+- main ブランチ: PR #369 (`5bc0a98`) 経由で順次マージ、HEAD は `f7527fd` (PR #380)
+- ローカル: main 同期済、`package-lock.json` の fsevents に `"dev": true` フラグ追加 (npm install による正規化、handoff PR に同梱)
+- 全テスト: API 863 / web 40 件 PASS
+- lint / type-check: PASS
+- Cloud Run / E2E: PR #380 マージ後 Deploy success (3m51s)
+- 残留プロセス: なし
+
+---
+
+## Session 22 のアーカイブ
+
+旧 LATEST.md (Session 22) は `docs/handoff/archive/2026-05-15-session-22.md` に保存済み。
