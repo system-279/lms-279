@@ -64,32 +64,41 @@ function encodeMimeHeader(value: string): string {
 }
 
 /**
- * MIME ヘッダパラメータ (filename / name) を RFC 2231 / 5987 形式で組み立てる。
+ * RFC 5987 §3.2.1 attr-char 準拠の percent-encoding。
+ * `encodeURIComponent` は `*'()!` を encode せず残すため、RFC 5987 ext-value
+ * 文法 (`'` が charset/language 区切りに使われる) を破る可能性がある。
+ * 厳密パーサ (Outlook の一部) が param ごと無視して ASCII fallback に落とすのを防ぐ。
+ */
+function rfc5987Encode(value: string): string {
+  return encodeURIComponent(value).replace(
+    /[!'()*]/g,
+    (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
+  );
+}
+
+/**
+ * MIME ヘッダパラメータ (filename / name) を RFC 2231 / 5987 dual-form で組み立てる。
  *
- * 経緯 (Issue #389): 従来は RFC 2047 (`=?UTF-8?B?...?=`) を `filename="..."` パラメータ値
- * に直接埋めていたが、RFC 2047 §5 で encoded-word は MIME ヘッダパラメータ値で使用不可と
- * 規定されており、Gmail は仕様準拠のため添付プレビュー → ダウンロード時にファイル名解決に
- * 失敗し attachment ID (UUID) にフォールバックする。
+ * RFC 2047 §5 により encoded-word (`=?UTF-8?B?...?=`) は MIME ヘッダ parameter value
+ * で使用不可。非 ASCII は RFC 5987 `param*=UTF-8''<pct-encoded>` で表現し、古い
+ * パーサ向けに ASCII fallback `param="..."` を併記する (RFC 6266 §5 dual-form)。
  *
- * 解決策: RFC 5987 の `param*=UTF-8''<percent-encoded>` 形式を使い、ASCII fallback として
- * `param="..."` も併記する (RFC 6266 dual-form と同等)。ASCII fallback は filename の
- * 非 ASCII 文字を `_` に置き換えた版を使う。
- *
- * @param paramName "filename" または "name"
- * @param value     生のファイル名 (Unicode 含む)
- * @returns         "param=\"ascii-fallback\"; param*=UTF-8''percent-encoded" 形式の文字列
+ * 制御文字 (`\x00-\x1f`, `\x7f`) と lone surrogate は事前に呼び出し側 (assertSafeFilename)
+ * で拒否する前提。本関数はそれら無効値が渡らないことを invariant として扱う。
  */
 function buildFilenameParam(paramName: "filename" | "name", value: string): string {
   const isAscii = !/[^\x20-\x7e]/.test(value);
   if (isAscii) {
-    // パラメータ値中の " を escape し、ASCII のままシンプル形式で返す
-    const escaped = value.replace(/"/g, '\\"');
+    // RFC 5322 quoted-pair: `\` も `"` も escape する
+    const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     return `${paramName}="${escaped}"`;
   }
-  // 非 ASCII を `_` に置き換えた ASCII fallback (古いクライアント / 厳密パーサ向け)
-  const asciiFallback = value.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, '\\"');
-  const percentEncoded = encodeURIComponent(value);
-  return `${paramName}="${asciiFallback}"; ${paramName}*=UTF-8''${percentEncoded}`;
+  // 非 ASCII を `_` 化した ASCII fallback (RFC 6266 §5 古いクライアント向け)
+  const asciiFallback = value
+    .replace(/[^\x20-\x7e]/g, "_")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"');
+  return `${paramName}="${asciiFallback}"; ${paramName}*=UTF-8''${rfc5987Encode(value)}`;
 }
 
 /** boundary 文字列を生成 (predictable で衝突しないもの) */
@@ -107,6 +116,33 @@ function assertNoCRLF(value: string, fieldName: string): void {
   if (/[\r\n]/.test(value)) {
     throw new GmailDraftError(
       `MIME header injection blocked: ${fieldName} contains CR/LF`,
+      "gmail_api_error",
+      400,
+    );
+  }
+}
+
+/**
+ * 添付ファイル名として安全な文字列であることを保証する。
+ * - 制御文字 (`\x00-\x1f`, `\x7f`): 一部 MTA で truncate / 拒否 / NUL 終端誤認の原因
+ * - lone surrogate (`\uD800-\uDFFF` 単独): rfc5987Encode (encodeURIComponent) が URIError を throw
+ *
+ * 空文字は本関数では許容する (現状 route 層で必須化されているため二重バリデーションを避ける)。
+ */
+function assertSafeFilename(value: string): void {
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f]/.test(value)) {
+    throw new GmailDraftError(
+      "Invalid filename: contains control character",
+      "gmail_api_error",
+      400,
+    );
+  }
+  // lone surrogate 検出: high の後に low が来ないペア、または low 単独
+  // (encodeURIComponent はこれらで URIError を throw する)
+  if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value)) {
+    throw new GmailDraftError(
+      "Invalid filename: contains lone surrogate",
       "gmail_api_error",
       400,
     );
@@ -135,6 +171,7 @@ export function buildRawMimeMessage(input: BuildRawMimeMessageInput): string {
   if (attachment) {
     assertNoCRLF(attachment.filename, "attachment.filename");
     assertNoCRLF(attachment.contentType, "attachment.contentType");
+    assertSafeFilename(attachment.filename);
   }
 
   const encodedSubject = encodeMimeHeader(subject);
@@ -154,8 +191,6 @@ export function buildRawMimeMessage(input: BuildRawMimeMessageInput): string {
   }
 
   const boundary = generateBoundary();
-  // Issue #389: 添付ファイル名は RFC 2231 / 5987 形式で組み立てる
-  // (RFC 2047 を filename= 値に詰めるのは仕様違反で Gmail が UUID にフォールバックする)
   const nameParam = buildFilenameParam("name", attachment.filename);
   const filenameParam = buildFilenameParam("filename", attachment.filename);
 
@@ -362,4 +397,11 @@ export async function createGmailDraft(
   }
 }
 
-export const __internal = { encodeMimeHeader, generateBoundary, toBase64Url, buildFilenameParam };
+export const __internal = {
+  encodeMimeHeader,
+  generateBoundary,
+  toBase64Url,
+  buildFilenameParam,
+  rfc5987Encode,
+  assertSafeFilename,
+};
