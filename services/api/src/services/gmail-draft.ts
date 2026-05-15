@@ -32,6 +32,14 @@ export interface MimeAttachment {
   contentType: string;
   /** 添付ファイルのバイト列 */
   content: Buffer;
+  /**
+   * RFC 6266 dual-form の ASCII fallback。filename が非 ASCII を含むときに
+   * `filename="..."` の値として使われる。Gmail は filename*= を解釈せず
+   * ASCII fallback を採用する経路があり、機械生成の `_` 連続では UUID に
+   * フォールバックされるため、呼び出し側で意味のある ASCII 名 (email base 等)
+   * を渡すこと。省略時は filename の非ASCII 文字を `_` に置換した自動 fallback。
+   */
+  asciiFallbackFilename?: string;
 }
 
 export interface BuildRawMimeMessageInput {
@@ -83,21 +91,30 @@ function rfc5987Encode(value: string): string {
  * で使用不可。非 ASCII は RFC 5987 `param*=UTF-8''<pct-encoded>` で表現し、古い
  * パーサ向けに ASCII fallback `param="..."` を併記する (RFC 6266 §5 dual-form)。
  *
+ * Gmail は受信側で `filename*=` を解釈せず ASCII fallback を採用する経路があり、
+ * 機械的な `_` 連続 fallback だと UUID にフォールバックされる。意味のある ASCII
+ * fallback を呼び出し側から渡す `asciiOverride` 経路を用意し、未指定時のみ
+ * `_` 置換のデフォルトを使う。
+ *
  * 制御文字 (`\x00-\x1f`, `\x7f`) と lone surrogate は事前に呼び出し側 (assertSafeFilename)
  * で拒否する前提。本関数はそれら無効値が渡らないことを invariant として扱う。
  */
-function buildFilenameParam(paramName: "filename" | "name", value: string): string {
+function buildFilenameParam(
+  paramName: "filename" | "name",
+  value: string,
+  asciiOverride?: string,
+): string {
   const isAscii = !/[^\x20-\x7e]/.test(value);
   if (isAscii) {
     // RFC 5322 quoted-pair: `\` も `"` も escape する
     const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     return `${paramName}="${escaped}"`;
   }
-  // 非 ASCII を `_` 化した ASCII fallback (RFC 6266 §5 古いクライアント向け)
-  const asciiFallback = value
-    .replace(/[^\x20-\x7e]/g, "_")
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"');
+  // asciiOverride は呼び出し側で assertValidAsciiFallback 済みの前提で無条件採用。
+  // 未指定時は非 ASCII を `_` 化したデフォルト fallback を使う (RFC 6266 §5)。
+  const rawFallback =
+    asciiOverride !== undefined ? asciiOverride : value.replace(/[^\x20-\x7e]/g, "_");
+  const asciiFallback = rawFallback.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   return `${paramName}="${asciiFallback}"; ${paramName}*=UTF-8''${rfc5987Encode(value)}`;
 }
 
@@ -149,6 +166,32 @@ function assertSafeFilename(value: string): void {
   }
 }
 
+/**
+ * asciiFallbackFilename の妥当性を保証する。
+ * Gmail に意味のある ASCII fallback を渡す前提のため、以下を reject:
+ * - 非 ASCII (silent default fallback への退避を防止 → silent_failure_hunter C1)
+ * - 空文字 / whitespace-only (Gmail が UUID 化する燃料 → silent_failure_hunter C2)
+ * - assertSafeFilename / assertNoCRLF と同じ防御 (二重防御の維持 → silent_failure_hunter C3)
+ */
+function assertValidAsciiFallback(value: string): void {
+  assertNoCRLF(value, "attachment.asciiFallbackFilename");
+  assertSafeFilename(value);
+  if (/[^\x20-\x7e]/.test(value)) {
+    throw new GmailDraftError(
+      "Invalid asciiFallbackFilename: must contain only ASCII printable characters",
+      "gmail_api_error",
+      400,
+    );
+  }
+  if (!/[A-Za-z0-9]/.test(value)) {
+    throw new GmailDraftError(
+      "Invalid asciiFallbackFilename: must contain at least one alphanumeric character",
+      "gmail_api_error",
+      400,
+    );
+  }
+}
+
 /** Buffer / string を base64url にエンコード (Gmail API raw 用) */
 function toBase64Url(input: string | Buffer): string {
   const buf = typeof input === "string" ? Buffer.from(input, "utf-8") : input;
@@ -172,6 +215,9 @@ export function buildRawMimeMessage(input: BuildRawMimeMessageInput): string {
     assertNoCRLF(attachment.filename, "attachment.filename");
     assertNoCRLF(attachment.contentType, "attachment.contentType");
     assertSafeFilename(attachment.filename);
+    if (attachment.asciiFallbackFilename !== undefined) {
+      assertValidAsciiFallback(attachment.asciiFallbackFilename);
+    }
   }
 
   const encodedSubject = encodeMimeHeader(subject);
@@ -191,8 +237,15 @@ export function buildRawMimeMessage(input: BuildRawMimeMessageInput): string {
   }
 
   const boundary = generateBoundary();
-  const nameParam = buildFilenameParam("name", attachment.filename);
-  const filenameParam = buildFilenameParam("filename", attachment.filename);
+  // RFC 2046 §5.1 の Content-Type `name=` は RFC 6266 で deprecated。一部 MUA は
+  // Content-Disposition: filename を無視して Content-Type: name を優先するため、
+  // ASCII fallback と filename* が両方マッチしないと UUID にフォールバックされる
+  // 観測あり。name= を発行せず Content-Disposition: filename*= のみに統一する。
+  const filenameParam = buildFilenameParam(
+    "filename",
+    attachment.filename,
+    attachment.asciiFallbackFilename,
+  );
 
   // base64 を 76 文字ごとに改行 (RFC 2045 推奨)
   const attachmentBase64 = attachment.content.toString("base64").match(/.{1,76}/g)?.join("\r\n") ?? "";
@@ -210,7 +263,7 @@ export function buildRawMimeMessage(input: BuildRawMimeMessageInput): string {
     Buffer.from(body, "utf-8").toString("base64"),
     "",
     `--${boundary}`,
-    `Content-Type: ${attachment.contentType}; ${nameParam}`,
+    `Content-Type: ${attachment.contentType}`,
     `Content-Disposition: attachment; ${filenameParam}`,
     "Content-Transfer-Encoding: base64",
     "",
@@ -404,4 +457,5 @@ export const __internal = {
   buildFilenameParam,
   rfc5987Encode,
   assertSafeFilename,
+  assertValidAsciiFallback,
 };

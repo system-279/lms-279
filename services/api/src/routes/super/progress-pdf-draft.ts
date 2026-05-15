@@ -297,6 +297,21 @@ router.post(
       body = template.body;
 
       const dateStr = pdfData.generatedAt.slice(0, 10);
+      // email base な ASCII fallback (name: null で email 由来名を生成)。
+      // Gmail UI が filename*= を解釈せず ASCII fallback を採用した経路でも、
+      // UUID にフォールバックされずに意味のあるファイル名 + 拡張子で保存される。
+      const candidateFallback = buildProgressPdfFilename({
+        name: null,
+        email: pdfData.user.email,
+        date: dateStr,
+      });
+      // email に非 ASCII (RFC 6531 SMTPUTF8) が含まれる場合や、何らかの理由で
+      // sanitize 結果が ASCII でない場合は asciiFallbackFilename を渡さず、
+      // library 側のデフォルト (_ 置換 fallback) に委ねる。
+      const asciiFallbackFilename =
+        /^[\x20-\x7e]+$/.test(candidateFallback) && /[A-Za-z0-9]/.test(candidateFallback)
+          ? candidateFallback
+          : undefined;
       attachment = {
         filename: buildProgressPdfFilename({
           name: pdfData.user.name,
@@ -305,6 +320,7 @@ router.post(
         }),
         contentType: "application/pdf",
         content: pdfBuffer,
+        asciiFallbackFilename,
       };
     } catch (err) {
       if (err instanceof Error && err.message === "user_not_in_tenant") {
