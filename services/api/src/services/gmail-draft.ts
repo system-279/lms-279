@@ -63,6 +63,35 @@ function encodeMimeHeader(value: string): string {
   return `=?UTF-8?B?${base64}?=`;
 }
 
+/**
+ * MIME ヘッダパラメータ (filename / name) を RFC 2231 / 5987 形式で組み立てる。
+ *
+ * 経緯 (Issue #389): 従来は RFC 2047 (`=?UTF-8?B?...?=`) を `filename="..."` パラメータ値
+ * に直接埋めていたが、RFC 2047 §5 で encoded-word は MIME ヘッダパラメータ値で使用不可と
+ * 規定されており、Gmail は仕様準拠のため添付プレビュー → ダウンロード時にファイル名解決に
+ * 失敗し attachment ID (UUID) にフォールバックする。
+ *
+ * 解決策: RFC 5987 の `param*=UTF-8''<percent-encoded>` 形式を使い、ASCII fallback として
+ * `param="..."` も併記する (RFC 6266 dual-form と同等)。ASCII fallback は filename の
+ * 非 ASCII 文字を `_` に置き換えた版を使う。
+ *
+ * @param paramName "filename" または "name"
+ * @param value     生のファイル名 (Unicode 含む)
+ * @returns         "param=\"ascii-fallback\"; param*=UTF-8''percent-encoded" 形式の文字列
+ */
+function buildFilenameParam(paramName: "filename" | "name", value: string): string {
+  const isAscii = !/[^\x20-\x7e]/.test(value);
+  if (isAscii) {
+    // パラメータ値中の " を escape し、ASCII のままシンプル形式で返す
+    const escaped = value.replace(/"/g, '\\"');
+    return `${paramName}="${escaped}"`;
+  }
+  // 非 ASCII を `_` に置き換えた ASCII fallback (古いクライアント / 厳密パーサ向け)
+  const asciiFallback = value.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, '\\"');
+  const percentEncoded = encodeURIComponent(value);
+  return `${paramName}="${asciiFallback}"; ${paramName}*=UTF-8''${percentEncoded}`;
+}
+
 /** boundary 文字列を生成 (predictable で衝突しないもの) */
 function generateBoundary(): string {
   return `lms279_boundary_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
@@ -125,7 +154,10 @@ export function buildRawMimeMessage(input: BuildRawMimeMessageInput): string {
   }
 
   const boundary = generateBoundary();
-  const encodedFilename = encodeMimeHeader(attachment.filename);
+  // Issue #389: 添付ファイル名は RFC 2231 / 5987 形式で組み立てる
+  // (RFC 2047 を filename= 値に詰めるのは仕様違反で Gmail が UUID にフォールバックする)
+  const nameParam = buildFilenameParam("name", attachment.filename);
+  const filenameParam = buildFilenameParam("filename", attachment.filename);
 
   // base64 を 76 文字ごとに改行 (RFC 2045 推奨)
   const attachmentBase64 = attachment.content.toString("base64").match(/.{1,76}/g)?.join("\r\n") ?? "";
@@ -143,8 +175,8 @@ export function buildRawMimeMessage(input: BuildRawMimeMessageInput): string {
     Buffer.from(body, "utf-8").toString("base64"),
     "",
     `--${boundary}`,
-    `Content-Type: ${attachment.contentType}; name="${encodedFilename}"`,
-    `Content-Disposition: attachment; filename="${encodedFilename}"`,
+    `Content-Type: ${attachment.contentType}; ${nameParam}`,
+    `Content-Disposition: attachment; ${filenameParam}`,
     "Content-Transfer-Encoding: base64",
     "",
     attachmentBase64,
@@ -330,4 +362,4 @@ export async function createGmailDraft(
   }
 }
 
-export const __internal = { encodeMimeHeader, generateBoundary, toBase64Url };
+export const __internal = { encodeMimeHeader, generateBoundary, toBase64Url, buildFilenameParam };

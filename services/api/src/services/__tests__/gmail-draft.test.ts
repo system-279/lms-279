@@ -42,7 +42,7 @@ const {
   __internal,
 } = await import("../gmail-draft.js");
 
-const { encodeMimeHeader } = __internal;
+const { encodeMimeHeader, buildFilenameParam } = __internal;
 
 /** base64url decode (Node の Buffer は base64url を toString サポート) */
 function base64UrlDecode(s: string): string {
@@ -97,7 +97,7 @@ describe("buildRawMimeMessage", () => {
     expect(decoded).toMatch(/--lms279_boundary_\d+_[a-z0-9]+--/);
   });
 
-  it("添付の日本語ファイル名は RFC 2047 で encode", () => {
+  it("添付の日本語ファイル名は RFC 2231/5987 dual-form (filename + filename*=UTF-8'') で出力 (Issue #389)", () => {
     const raw = buildRawMimeMessage({
       to: "owner@example.com",
       subject: "件名",
@@ -109,7 +109,39 @@ describe("buildRawMimeMessage", () => {
       },
     });
     const decoded = base64UrlDecode(raw);
-    expect(decoded).toMatch(/filename="=\?UTF-8\?B\?[A-Za-z0-9+/=]+\?="/);
+
+    // RFC 2047 (=?UTF-8?B?...?=) を filename= 値に詰めるのは仕様違反のため、
+    // 退行を防ぐためにそのパターンが含まれないことをアサート
+    expect(decoded).not.toMatch(/filename="=\?UTF-8\?B\?/);
+    expect(decoded).not.toMatch(/name="=\?UTF-8\?B\?/);
+
+    // ASCII fallback (filename="___.pdf") と RFC 5987 filename*=UTF-8'' の dual-form
+    const percentEncoded = encodeURIComponent("進捗レポート.pdf");
+    expect(decoded).toContain(
+      `Content-Disposition: attachment; filename="______.pdf"; filename*=UTF-8''${percentEncoded}`,
+    );
+    expect(decoded).toContain(
+      `Content-Type: application/pdf; name="______.pdf"; name*=UTF-8''${percentEncoded}`,
+    );
+  });
+
+  it("ASCII のみのファイル名は dual-form にせずシンプル形式 (filename=\"...\") のみ", () => {
+    const raw = buildRawMimeMessage({
+      to: "owner@example.com",
+      subject: "件名",
+      body: "本文",
+      attachment: {
+        filename: "progress-2026-05-15.pdf",
+        contentType: "application/pdf",
+        content: Buffer.from("x"),
+      },
+    });
+    const decoded = base64UrlDecode(raw);
+    expect(decoded).toContain(
+      'Content-Disposition: attachment; filename="progress-2026-05-15.pdf"',
+    );
+    // filename*= は出力されないこと
+    expect(decoded).not.toMatch(/filename\*=/);
   });
 
   it("base64url エンコードされ、+ / = が含まれない", () => {
@@ -119,6 +151,32 @@ describe("buildRawMimeMessage", () => {
       body: "y".repeat(200), // base64 で +/ が出やすい状況
     });
     expect(raw).not.toMatch(/[+/=]/);
+  });
+});
+
+describe("buildFilenameParam (Issue #389: RFC 2231/5987 form)", () => {
+  it("ASCII のみは filename=\"...\" 単体形式", () => {
+    expect(buildFilenameParam("filename", "progress.pdf")).toBe('filename="progress.pdf"');
+    expect(buildFilenameParam("name", "report-2026.pdf")).toBe('name="report-2026.pdf"');
+  });
+
+  it("日本語含む場合は ASCII fallback (非ASCII → _) + filename*=UTF-8''", () => {
+    const result = buildFilenameParam("filename", "進捗レポート.pdf");
+    expect(result).toBe(
+      `filename="______.pdf"; filename*=UTF-8''${encodeURIComponent("進捗レポート.pdf")}`,
+    );
+  });
+
+  it("絵文字を含む場合も dual-form で percent-encoding", () => {
+    const result = buildFilenameParam("filename", "🚀-rocket.pdf");
+    expect(result).toContain(`filename*=UTF-8''${encodeURIComponent("🚀-rocket.pdf")}`);
+    expect(result).toMatch(/^filename="[^"]+\.pdf"/);
+  });
+
+  it("ASCII 内の \" は escape", () => {
+    expect(buildFilenameParam("filename", 'has"quote.pdf')).toBe(
+      'filename="has\\"quote.pdf"',
+    );
   });
 });
 
