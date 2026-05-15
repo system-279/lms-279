@@ -37,13 +37,18 @@ function ensureFontRegistered() {
   fontRegistered = true;
 }
 
+// 本文 / 副次情報 / 構造線 のコントラスト階層 (印刷時の視認性を確保)
+const COLOR_BODY = "#000000"; // 本文 (純黒、紙印刷で最大コントラスト)
+const COLOR_SUB = "#374151"; // 副次情報 / ラベル (gray-700、本文との対比は維持しつつ十分な濃度)
+const COLOR_BORDER = "#9ca3af"; // 構造線 (gray-400)
+
 const styles = StyleSheet.create({
-  page: { fontFamily: "NotoSansJP", fontSize: 10, padding: 32, color: "#1f2937" },
+  page: { fontFamily: "NotoSansJP", fontSize: 10, padding: 32, color: COLOR_BODY },
   h1: { fontSize: 18, fontWeight: 700, marginBottom: 4 },
-  h2: { fontSize: 13, fontWeight: 700, marginTop: 14, marginBottom: 6, borderBottom: 1, borderColor: "#d1d5db", paddingBottom: 2 },
-  meta: { fontSize: 9, color: "#6b7280", marginBottom: 8 },
+  h2: { fontSize: 13, fontWeight: 700, marginTop: 14, marginBottom: 6, borderBottom: 1, borderColor: COLOR_BORDER, paddingBottom: 2 },
+  meta: { fontSize: 9, color: COLOR_SUB, marginBottom: 8 },
   row: { flexDirection: "row", marginBottom: 2 },
-  label: { width: 100, color: "#6b7280" },
+  label: { width: 100, color: COLOR_SUB },
   value: { flex: 1 },
   section: { marginBottom: 6 },
   courseHeader: { fontSize: 11, fontWeight: 700, marginTop: 8, marginBottom: 4 },
@@ -52,7 +57,7 @@ const styles = StyleSheet.create({
   lessonRow: { flexDirection: "row", marginBottom: 1.5, paddingVertical: 1 },
   lessonCheck: { width: 16, fontWeight: 700 },
   lessonTitle: { flex: 1 },
-  lessonMeta: { width: 80, color: "#6b7280", fontSize: 9, textAlign: "right" },
+  lessonMeta: { width: 80, color: COLOR_SUB, fontSize: 9, textAlign: "right" },
   expired: { color: "#dc2626", fontWeight: 700 },
   caution: { color: "#f59e0b" },
 });
