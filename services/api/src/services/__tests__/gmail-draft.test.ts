@@ -42,7 +42,7 @@ const {
   __internal,
 } = await import("../gmail-draft.js");
 
-const { encodeMimeHeader } = __internal;
+const { encodeMimeHeader, buildFilenameParam, rfc5987Encode, assertSafeFilename } = __internal;
 
 /** base64url decode (Node の Buffer は base64url を toString サポート) */
 function base64UrlDecode(s: string): string {
@@ -97,19 +97,57 @@ describe("buildRawMimeMessage", () => {
     expect(decoded).toMatch(/--lms279_boundary_\d+_[a-z0-9]+--/);
   });
 
-  it("添付の日本語ファイル名は RFC 2047 で encode", () => {
+  it("添付の日本語ファイル名は RFC 2231/5987 dual-form (filename + filename*=UTF-8'') で出力", () => {
+    const original = "進捗レポート.pdf";
     const raw = buildRawMimeMessage({
       to: "owner@example.com",
       subject: "件名",
       body: "本文",
       attachment: {
-        filename: "進捗レポート.pdf",
+        filename: original,
         contentType: "application/pdf",
         content: Buffer.from("x"),
       },
     });
     const decoded = base64UrlDecode(raw);
-    expect(decoded).toMatch(/filename="=\?UTF-8\?B\?[A-Za-z0-9+/=]+\?="/);
+
+    // RFC 2047 §5 違反 (parameter value に encoded-word 不可) のため
+    // そのパターンが含まれないことをアサート (退行防止)
+    expect(decoded).not.toMatch(/filename="=\?UTF-8\?B\?/);
+    expect(decoded).not.toMatch(/name="=\?UTF-8\?B\?/);
+
+    // ASCII fallback の `_` 数は文字数依存なので動的に算出する
+    const expectedFallback = original.replace(/[^\x20-\x7e]/g, "_");
+    const expectedEncoded = rfc5987Encode(original);
+    expect(decoded).toContain(
+      `Content-Disposition: attachment; filename="${expectedFallback}"; filename*=UTF-8''${expectedEncoded}`,
+    );
+    expect(decoded).toContain(
+      `Content-Type: application/pdf; name="${expectedFallback}"; name*=UTF-8''${expectedEncoded}`,
+    );
+  });
+
+  it("ASCII のみのファイル名は dual-form にせずシンプル形式 (filename=\"...\") のみ", () => {
+    const raw = buildRawMimeMessage({
+      to: "owner@example.com",
+      subject: "件名",
+      body: "本文",
+      attachment: {
+        filename: "progress-2026-05-15.pdf",
+        contentType: "application/pdf",
+        content: Buffer.from("x"),
+      },
+    });
+    const decoded = base64UrlDecode(raw);
+    expect(decoded).toContain(
+      'Content-Disposition: attachment; filename="progress-2026-05-15.pdf"',
+    );
+    expect(decoded).toContain(
+      'Content-Type: application/pdf; name="progress-2026-05-15.pdf"',
+    );
+    // filename*= / name*= は出力されないこと (ASCII のみで dual-form 不要)
+    expect(decoded).not.toMatch(/filename\*=/);
+    expect(decoded).not.toMatch(/name\*=/);
   });
 
   it("base64url エンコードされ、+ / = が含まれない", () => {
@@ -119,6 +157,118 @@ describe("buildRawMimeMessage", () => {
       body: "y".repeat(200), // base64 で +/ が出やすい状況
     });
     expect(raw).not.toMatch(/[+/=]/);
+  });
+});
+
+describe("rfc5987Encode (RFC 5987 §3.2.1 attr-char 準拠)", () => {
+  it("encodeURIComponent が残す ! ' ( ) * も追加で percent-encode", () => {
+    expect(rfc5987Encode("a!b'c(d)e*f")).toBe("a%21b%27c%28d%29e%2Af");
+  });
+
+  it("ASCII safe な文字はそのまま", () => {
+    expect(rfc5987Encode("progress-2026-05.pdf")).toBe("progress-2026-05.pdf");
+  });
+
+  it("絵文字 (U+1F680) は UTF-8 4 byte sequence で正しく percent-encode (lone surrogate に分解しない)", () => {
+    // 🚀 (U+1F680) は UTF-8 で F0 9F 9A 80
+    expect(rfc5987Encode("🚀.pdf")).toBe("%F0%9F%9A%80.pdf");
+  });
+
+  it("日本語をそのまま percent-encode", () => {
+    expect(rfc5987Encode("テスト.pdf")).toBe("%E3%83%86%E3%82%B9%E3%83%88.pdf");
+  });
+});
+
+describe("assertSafeFilename (制御文字 + lone surrogate 防御)", () => {
+  it("ASCII / 日本語 / 絵文字は throw しない", () => {
+    expect(() => assertSafeFilename("progress.pdf")).not.toThrow();
+    expect(() => assertSafeFilename("進捗.pdf")).not.toThrow();
+    expect(() => assertSafeFilename("🚀.pdf")).not.toThrow();
+  });
+
+  it("空文字は throw しない (route 層で必須化済の前提)", () => {
+    expect(() => assertSafeFilename("")).not.toThrow();
+  });
+
+  it("NUL (\\x00) を含むと throw (一部 MUA で truncate される)", () => {
+    expect(() => assertSafeFilename("a\x00b.pdf")).toThrow(/Invalid filename/);
+  });
+
+  it("ESC (\\x1b) / BEL (\\x07) など C0 制御文字を含むと throw", () => {
+    expect(() => assertSafeFilename("a\x1bb.pdf")).toThrow(/Invalid filename/);
+    expect(() => assertSafeFilename("a\x07b.pdf")).toThrow(/Invalid filename/);
+  });
+
+  it("DEL (\\x7f) を含むと throw", () => {
+    expect(() => assertSafeFilename("a\x7fb.pdf")).toThrow(/Invalid filename/);
+  });
+
+  it("lone high surrogate を含むと throw (encodeURIComponent URIError 防御)", () => {
+    expect(() => assertSafeFilename("a\uD83Db.pdf")).toThrow(/lone surrogate/);
+  });
+
+  it("lone low surrogate を含むと throw", () => {
+    expect(() => assertSafeFilename("a\uDC00b.pdf")).toThrow(/lone surrogate/);
+  });
+
+  it("valid surrogate pair (絵文字) は throw しない", () => {
+    expect(() => assertSafeFilename("🚀.pdf")).not.toThrow();
+  });
+});
+
+describe("buildFilenameParam (RFC 2231/5987 form)", () => {
+  it("ASCII のみは filename=\"...\" 単体形式", () => {
+    expect(buildFilenameParam("filename", "progress.pdf")).toBe('filename="progress.pdf"');
+    expect(buildFilenameParam("name", "report-2026.pdf")).toBe('name="report-2026.pdf"');
+  });
+
+  it("ASCII 内の _ は fallback char と衝突せずそのまま", () => {
+    expect(buildFilenameParam("filename", "my_progress_2026.pdf")).toBe(
+      'filename="my_progress_2026.pdf"',
+    );
+  });
+
+  it("日本語含む場合は ASCII fallback (非ASCII → _) + filename*=UTF-8''", () => {
+    const original = "進捗レポート.pdf";
+    const expectedFallback = original.replace(/[^\x20-\x7e]/g, "_");
+    expect(buildFilenameParam("filename", original)).toBe(
+      `filename="${expectedFallback}"; filename*=UTF-8''${rfc5987Encode(original)}`,
+    );
+  });
+
+  it("絵文字 (surrogate pair) も UTF-8 4 byte sequence で正しく percent-encode", () => {
+    const result = buildFilenameParam("filename", "🚀.pdf");
+    // ASCII fallback: 🚀 は JS 文字列上 2 code unit (surrogate pair) → __ になる
+    // RFC 5987 side: encodeURIComponent は code point 単位で正しく UTF-8 4 byte 化
+    expect(result).toBe("filename=\"__.pdf\"; filename*=UTF-8''%F0%9F%9A%80.pdf");
+  });
+
+  it("ASCII 内の \" は escape", () => {
+    expect(buildFilenameParam("filename", 'has"quote.pdf')).toBe(
+      'filename="has\\"quote.pdf"',
+    );
+  });
+
+  it("ASCII 内の \\ は RFC 5322 quoted-pair で escape", () => {
+    expect(buildFilenameParam("filename", 'a\\b.pdf')).toBe(
+      'filename="a\\\\b.pdf"',
+    );
+  });
+
+  it("非 ASCII + \" 両方を含む値: ASCII fallback の \" は \\\" escape、filename*= は %22", () => {
+    const result = buildFilenameParam("filename", 'テス"ト.pdf');
+    // ASCII fallback: " は維持 → \" escape、テスト は _ 化
+    // テス → __、" は維持 → \" escape、ト → _、.pdf
+    expect(result).toMatch(/^filename="__\\"_\.pdf"; filename\*=UTF-8''/);
+    expect(result).toContain(`filename*=UTF-8''${rfc5987Encode('テス"ト.pdf')}`);
+  });
+
+  it("RFC 5987 attr-char 外の文字 ( ' ( ) * ! ) を含む場合は filename*= 側で percent-encode", () => {
+    // 非ASCII を 1 つ含めて dual-form 経路に入れる
+    const result = buildFilenameParam("filename", "テ'ス(ト).pdf");
+    expect(result).toContain("%27"); // '
+    expect(result).toContain("%28"); // (
+    expect(result).toContain("%29"); // )
   });
 });
 
@@ -181,6 +331,53 @@ describe("buildRawMimeMessage CR/LF ヘッダインジェクション防御", ()
     });
     expect(typeof raw).toBe("string");
     expect(raw.length).toBeGreaterThan(0);
+  });
+});
+
+describe("buildRawMimeMessage attachment.filename 制御文字 / surrogate 防御", () => {
+  const validBody = {
+    to: "owner@example.com",
+    subject: "件名",
+    body: "本文",
+  };
+
+  it("filename に NUL を含むと GmailDraftError を throw (gmail_api_error への誤分類を防ぐ)", () => {
+    expect(() =>
+      buildRawMimeMessage({
+        ...validBody,
+        attachment: {
+          filename: "a\x00b.pdf",
+          contentType: "application/pdf",
+          content: Buffer.from("x"),
+        },
+      }),
+    ).toThrow(/control character/);
+  });
+
+  it("filename に lone surrogate を含むと throw (encodeURIComponent URIError を未然防御)", () => {
+    expect(() =>
+      buildRawMimeMessage({
+        ...validBody,
+        attachment: {
+          filename: "a\uD83Db.pdf",
+          contentType: "application/pdf",
+          content: Buffer.from("x"),
+        },
+      }),
+    ).toThrow(/lone surrogate/);
+  });
+
+  it("filename が空文字でも throw しない (route 層責務とする)", () => {
+    expect(() =>
+      buildRawMimeMessage({
+        ...validBody,
+        attachment: {
+          filename: "",
+          contentType: "application/pdf",
+          content: Buffer.from("x"),
+        },
+      }),
+    ).not.toThrow();
   });
 });
 

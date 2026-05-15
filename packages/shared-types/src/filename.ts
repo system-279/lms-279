@@ -8,8 +8,9 @@
  *
  * 設計:
  * - Gmail draft 経路: services/api/src/services/gmail-draft.ts の
- *   encodeMimeHeader が RFC 2047 (=?UTF-8?B?...?=) で Unicode を safe に
- *   エンコードするため、filename に日本語を含めても表示は崩れない。
+ *   buildFilenameParam が RFC 2231 / 5987 dual-form
+ *   (`filename="ASCII fallback"; filename*=UTF-8''<percent-encoded>`) を発行
+ *   しており、Unicode filename がダウンロード時にも保持される。
  * - HTTP attachment 経路: services/api/src/routes/super/progress-pdf.ts は
  *   Content-Disposition: filename*=UTF-8''<encoded> (RFC 6266) を発行
  *   しており、モダンブラウザは Unicode filename を正しく扱える。
