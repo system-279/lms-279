@@ -1,12 +1,12 @@
-# Session Handoff — 2026-05-15 (Session 25)
+# Session Handoff — 2026-05-15 (Session 26)
 
 ## TL;DR
 
-**Session 24 末ハンドオフ「優先度6: shared-types runtime export 責務境界明文化」を消化、PR #385 で ADR-035 + `packages/shared-types/README.md` を新規追加してマージ。**コード変更ゼロのドキュメント PR で、ローカル type-check / PR CI (Build/Lint/Test/Type Check) は全 PASS。マージ後の main トリガ workflow (CI / Deploy to Cloud Run / E2E Tests) は **GitHub Actions 障害 (2026-05-15 08:13 UTC〜 partial outage)** に巻き込まれて 3 件すべて失敗 / queued スタックとなったが、本 PR はドキュメントのみのため Cloud Run 動作・実害ゼロ。コード起因ではないため再実行はスキップし、次回コード PR 時に main の自動 CI で再検証される想定。
+**Session 25 末ハンドオフ「優先度1: PR #358 follow-up I2 (originalError 設計改善)」を消化、PR #387 で `GmailDraftError.originalError` フィールドを完全削除してマージ。**Session 20 から続いた I1/I2/I5 トリオの最後の 1 件 (I2) が解消され、handoff 内 Open follow-up は記録上ゼロ件化。コード変更は 2 ファイル / +14 / -13 行の小規模リファクタで、PR CI / main CI / E2E Tests いずれも PASS、Cloud Run Deploy も in_progress（コード起因の障害は想定されず）。GitHub Actions の 2026-05-15 08:13 UTC partial outage は完全復旧確認済。
 
-- **Issue Net**: **±0** (Close 0 / 起票 0、ドキュメント PR のため KPI 進捗なしは想定通り)
-- **Open 推移**: Session 24 末 3 件 → Session 25 末 **3 件** (全 postponed: #276 / #275 / #274 — 変化なし)
-- **本セッション成果**: PR 1 件マージ (#385) / ADR 1 件追加 (ADR-035) / shared-types README 新規 / GitHub Actions infra 障害観測と記録
+- **Issue Net**: **±0** (Close 0 / 起票 0、リファクタ PR のため KPI 上は進捗なし)
+- **Open 推移**: Session 25 末 3 件 → Session 26 末 **3 件** (全 postponed: #276 / #275 / #274 — 変化なし)
+- **本セッション成果**: PR 1 件マージ (#387) / handoff 内 follow-up 1 件消化 / token 漏洩ベクタを構造的に除去
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -14,14 +14,9 @@
 # 1. 状況復元
 cat docs/handoff/LATEST.md
 
-# 2. GitHub Actions 障害復旧確認 (本セッション末で未復旧)
+# 2. main CI 状況確認（本セッション末で Deploy in_progress、コード起因問題なし）
 gh run list --branch main --limit 5
-#  → run 25907042156 (E2E Tests) が queued のまま放置されていないか
-#  → 復旧していたら以下で再実行 (任意、ドキュメントのみで実害なし):
-#    gh run rerun 25907042161  # CI
-#    gh run rerun 25907042163  # Deploy to Cloud Run
-#    gh run rerun 25907042156  # E2E Tests
-#  GitHub Status: https://www.githubstatus.com/
+#  → 25915712995 (Deploy to Cloud Run) が success に遷移していることを確認
 
 # 3. 現在の OPEN Issue (3 件、全 postponed、Session 24 末から変化なし)
 gh issue list --state open --limit 15
@@ -29,125 +24,73 @@ gh issue list --state open --limit 15
 # 4. 現在の OPEN Dependabot PR (Session 24 末で全消化済)
 gh pr list --author "app/dependabot" --state open
 
-# 5. 次の着手候補（優先度順、Session 24 末からほぼ不変、(6) のみ消化済）:
-#    A. 【優先度1】PR #358 follow-up I2 (originalError 設計改善)
-#       — Session 22 から継続、decision-maker 判断待ち
-#       — 着手前に PR #358 body と Codex review コメントを読み返し、
-#         I2 (originalError 設計改善) の方向性をユーザーに提示してから実装
-#    B. 【優先度2】Issue #272 Phase 3 GCIP 移行 — 再評価期限 2026-10-24
+# 5. 次の着手候補（優先度順、Session 26 末で実作業対象は実質ゼロ件）:
+#    A. 【優先度1】Issue #272 Phase 3 GCIP 移行 — 再評価期限 2026-10-24
 #       — 期限到達まで着手不可、postponed #276 / #275 / #274 の再開条件
-#    C. 【優先度3】postponed #276 / #275 / #274 — Phase 3 GCIP 完了が再開条件
+#    B. 【優先度2】postponed #276 / #275 / #274 — Phase 3 GCIP 完了が再開条件
 #       — 明示指示なき限り着手不可
-#    D. 【優先度4】Dependabot semver-major 全 ignore 設定の月次/四半期棚卸し運用
+#    C. 【優先度3】Dependabot semver-major 全 ignore 設定の月次/四半期棚卸し運用
 #       — Codex review (PR #369) で指摘、Issue 化見送り。`/handoff` で記録継続中
 #       — 次回 weekly review で `npm outdated` / GitHub Insights / `gh api`
 #         で major 候補リストを抽出し、必要なら個別 PR を手動で起こす
-#    E. 【優先度5】PR #381 (playwright 1.58.2 → 1.60.0、CONFLICTING で自動 close)
+#    D. 【優先度4】PR #381 (playwright 1.58.2 → 1.60.0、CONFLICTING で自動 close)
 #       — lockfile は ^1.60.0 caret range 経由で 1.60.0 解決済、実害なし
 #       — 次回 Dependabot weekly で再 PR 来るか観察 (なければ手動 PR 不要)
-#    F. 【優先度6 ✅ 消化済】shared-types runtime export 責務境界明文化
-#       — PR #385 で ADR-035 + packages/shared-types/README.md 追加完了
+#    E. 【消化済】PR #358 follow-up I2 (originalError 設計改善)
+#       — Session 26 で PR #387 マージ完了。handoff 内 Open follow-up はゼロ件化
 ```
 
 ---
 
-## セッション成果物 (2026-05-15 Session 25)
+## セッション成果物 (2026-05-15 Session 26)
 
-### 🟢 PR #385: docs(adr): ADR-035 shared-types runtime export 責務境界の明文化
+### 🟢 PR #387: refactor(api): drop GmailDraftError.originalError to remove access token leak vector (I2)
 
-- ブランチ: `docs/adr-035-shared-types-runtime-export` (削除済)
-- 変更: 2 ファイル, +157 / -0 行 (1 commit)
-- 状態: **MERGED (2026-05-15T07:56:21Z, squash, commit `32b50f3`)**
-- PR CI: 全 4 check (Build 52s / Lint 29s / Test 1m27s / Type Check 45s) PASS
+- ブランチ: `refactor/gmail-draft-error-drop-original-error` (削除済)
+- 変更: 2 ファイル, +14 / -13 行 (1 commit)
+- 状態: **MERGED (2026-05-15T11:36 頃, squash, commit `4143095`)**
+- PR CI: 全 4 check (Build 49s / Lint 36s / Test 1m26s / Type Check 43s) PASS
+- main CI: CI 1m42s success / E2E Tests 1m26s success / Deploy to Cloud Run in_progress（コード起因問題なし）
 
-#### 追加内容
+#### 変更内容
 
-1. **`docs/adr/ADR-035-shared-types-runtime-export-boundary.md`**
-   - shared-types パッケージの責務を「型のみ」から「型 + 純粋ロジック helper」に拡張する判断を明文化
-   - 許可条件 C1〜C5:
-     - C1: FE/BE 両方から呼ばれる (既存呼出 ≥ 2 箇所)
-     - C2: 副作用なし (DOM/Node API/fetch/fs/Firestore/GCS/Buffer 依存ゼロ)
-     - C3: 外部依存なし (dependencies/peerDependencies を増やさない)
-     - C4: 小さい (1 ファイル / 1 export / 100 行以内)
-     - C5: ロジック不一致が即バグ (Issue/PR で証明)
-   - 除外条件: HTTP クライアント / 環境固有 / ビジネスロジック / 大規模 / ライブラリ依存
-   - 既存 `filename.ts` (PR #368) の遡及確認 → C1〜C5 全て満たす
-   - 不採用案 Alt-1 (別パッケージ `shared-utils` 化) / Alt-2 (FE/BE 個別実装)
-   - 再評価トリガ: runtime helper 3 ファイル超 / ライブラリ依存 helper 必要 / FE バンドル +10KB 観測
+1. **`services/api/src/services/gmail-draft.ts`**
+   - `GmailDraftError` コンストラクタから 4 引数目 (`originalError?: unknown`) を削除
+   - `classifyGmailError` 内 5 箇所 + `createGmailDraft` 内 1 箇所の `new GmailDraftError(..., err)` を 3 引数化
+   - セキュリティ意図 (`raw GaxiosError 参照を持たない`) をクラス上のコメントに明記:
+     `// SECURITY (I2 / ADR-034): GaxiosError は config.headers.Authorization に access token を保持するため、本クラスは raw error への参照を持たない。`
 
-2. **`packages/shared-types/README.md`**
-   - 責務 (型定義 / 純粋ロジック helper) を 2 カテゴリで明示
-   - 利用方法 (`import type` / `import` の使い分け、サブパス import 非採用)
-   - runtime helper 追加前チェックリスト (ADR-035 の C1〜C5 を抜粋)
-   - 開発コマンド + ファイル構成
+2. **`services/api/src/routes/super/progress-pdf-draft.ts`**
+   - L402-404 の `Evaluator HIGH-1 対応` コメントを設計反映後の表現に更新
+     - 旧: 「originalError には Authorization ヘッダを含む config が残存する可能性があるため access token を含む raw error はログに渡さない」
+     - 新: 「GmailDraftError は raw GaxiosError 参照を持たない設計のため、ここでは分類済みの errorCode / httpStatus / message のみを記録する」
 
 #### なぜ今やったか
 
-Session 23 末ハンドオフの「優先度6」消化。Codex review (PR #368) は許容範囲と評価したが、責務境界が暗黙ルールのままだと将来 helper が雪だるま式に追加されて shared-utils 化する懸念があり、機械的にチェック可能な条件を明示。次回 runtime helper 追加 PR では impl-plan 段階で C1〜C5 チェックが必須となる。
+Session 20 `/review-pr` (silent-failure-hunter agent) で発見、Session 22 `/codex` 計画レビュー (質問 3) で「分離継続が妥当」と判定された Important 級指摘 (rating 7)。Session 22〜25 の 4 セッションにわたり handoff 内 follow-up として記録継続中だった項目を、Session 26 で decision-maker 判断 (案 A: 完全削除) 確定後に消化。読み手ゼロ件 (grep 確認済) + YAGNI 適用 + 構造的に絶対漏れない設計を選択。
+
+#### 設計判断の比較表
+
+| 案 | 採用 | 理由 |
+|---|---|---|
+| **A. 完全削除** | ✅ | 読み手ゼロ件、YAGNI、構造的に絶対に漏れない、最小 diff |
+| B. narrow 型に絞る | ❌ | デバッグ情報のために YAGNI を許容する根拠なし、複雑度増 |
+| C. 衛生化 helper | ❌ | redact 漏れリスク、本質は「持たない」で解決可能 |
+| D. 現状維持 + ESLint | ❌ | 検出止まり、予防にならない |
+
+CLAUDE.md「Don't add error handling, fallbacks, or validation for scenarios that can't happen」「Don't design for hypothetical future requirements」に整合。
 
 ---
 
-## ⚠️ GitHub Actions 障害 (本セッション末で未復旧)
+## handoff 内 follow-up 消化状況（Session 20〜26 トリオ完結）
 
-### 観測タイムライン
+| ID | 概要 | rating | 消化 PR | セッション |
+|---|---|---|---|---|
+| I1 | `classifyGmailError` の `??` チェーンで `ECONNRESET`/`ETIMEDOUT` 等が permanent に誤分類 | 7 | PR #364 | Session 22 |
+| I2 | `GmailDraftError.originalError` が GaxiosError raw を保持 → logger 経由で Authorization 漏洩リスク | 7 | **PR #387** | **Session 26** |
+| I5 | FE `window.open === null` 未チェック → Safari/Firefox popup ブロックでサイレント失敗 | 7 | PR #364 | Session 22 |
 
-| 時刻 (UTC) | 出来事 |
-|---|---|
-| 07:56:21 | PR #385 squash merge → main commit `32b50f3` |
-| 07:56:23 | main の 3 workflow (CI / Deploy to Cloud Run / E2E Tests) 起動 |
-| 08:13 | **GitHub 公式: Actions partial outage** + Pages major outage を investigating で公表 |
-| 08:13:11 | CI run 25907042161 が 4 jobs (Build/Lint/Test/Type Check) 全て `queued` のまま failure 完了 |
-| ~08:14 | Deploy run 25907042163 が一部 job (Lint `in_progress` / Deploy Web `queued` / Deploy API `queued`) を残したまま failure 完了 |
-| 08:30 過ぎ | E2E Tests run 25907042156 が `queued` のまま `updated_at` も `run_started_at` から動かず完全スタック |
-
-### 影響範囲
-
-- **コード起因ではない**: PR #385 はドキュメントのみで src/ 変更ゼロ、PR CI は全 PASS 済 (PR の Check と main push 後の Check は同一 workflow を別 run で実行する構造)
-- **Cloud Run 反映**: 未実施 (Deploy Web / Deploy API が queued のままキャンセル) だが、本 PR は docs/ + README のみで Cloud Run 動作には影響なし
-- **実害**: ゼロ
-
-### 対応判断: スキップ (CLAUDE.md `rules/workflow.md §3` 選択肢 C)
-
-- A. 即 rerun: runner 障害中の rerun は再失敗確実
-- B. 復旧待ち rerun: ドキュメント PR で実害なし、次回コード push で main CI が自動再検証される
-- **C. スキップ (採用)**: 0 コスト、次回セッション開始時に `gh run list` で復旧確認するだけ
-- D. 監視継続: タイムアウトコスト割に合わず
-
-### 復旧確認手順 (次回セッション)
-
-```bash
-# GitHub 復旧確認
-curl -s https://www.githubstatus.com/api/v2/summary.json | jq '.components[] | select(.name=="Actions") | .status'
-# "operational" になっていれば復旧
-
-# main の最新 run が緑か確認
-gh run list --branch main --limit 5
-
-# 必要なら個別 rerun (任意)
-gh run rerun 25907042161  # CI
-gh run rerun 25907042163  # Deploy to Cloud Run
-gh run rerun 25907042156  # E2E Tests
-```
-
----
-
-## 残 open PR と Issue (次セッション要対応)
-
-### 残 open PR
-
-**0 件**
-
-### 起票 Issue (本セッション)
-
-**0 件**
-
-### Close Issue (本セッション)
-
-**0 件**
-
-### 残 active Issue
-
-**0 件** (Open 3 件はすべて `postponed`、Phase 3 GCIP 完了が再開条件、Session 24 末から変化なし)
+**Open follow-up は記録上ゼロ件**。次セッション開始時点で handoff 内に未消化指摘なし。
 
 ---
 
@@ -155,37 +98,45 @@ gh run rerun 25907042156  # E2E Tests
 
 - Close 数: **0 件**
 - 起票数: **0 件**
-- **Net: 0 件 (KPI 進捗なし、ドキュメント PR のため想定通り)**
+- **Net: 0 件 (KPI 上は進捗ゼロ扱い)**
 
-triage 評価: 本セッションはドキュメント整備のみで、新規バグ・rating ≥ 7 review agent 提案・ユーザー明示指示の個別タスクは発生せず。GitHub Actions 障害は GitHub 側 infra 起因のため Issue 化対象外 (実害ゼロ・自プロジェクト範囲外)。Net 0 だが、ADR-035 で将来の runtime helper 追加判断を機械化できるため、長期的な技術負債抑止効果あり。
+triage 評価:
+- 本セッションは handoff 内 follow-up の I2 消化が主目的で、新規バグ・rating ≥ 7 review agent 提案・ユーザー明示指示の個別タスクは発生せず
+- I2 自体は handoff 内記録のみで Issue 化していなかったため、消化しても close 対象 Issue がない（feedback_issue_triage.md §「rating 7 以上でも実害ゼロなら起票しない、handoff で記録継続」運用に準拠）
+- 結果 Net 0 だが、**handoff 内 follow-up を「1 件減 (3→0)」した実質進捗あり** — Session 20〜26 を通じて Open follow-up を完全消化したマイルストーンセッション
+- postponed 3 件 (#276 / #275 / #274) は据え置き — Phase 3 GCIP 完了が再開条件、2026-10-24 再評価まで保留
 
 ---
 
 ## 教訓・気づき
 
-### 1. PR CI と main push CI は別 run
+### 1. Session 22 の「分離継続が妥当」判定が正しく機能
 
-PR #385 は PR 上の 4 check (Build/Lint/Test/Type Check) を全 PASS で確認・マージしたが、squash merge 後 main に push されると **同じ workflow が main 用 run として再度起動される**。これが今回 GitHub Actions 障害発生時刻と重なって failure になった。**PR CI 緑 = main CI 緑 ではない** ことを再認識。今後 main 緑確認は `gh run list --branch main` で別途必須。
+Session 22 で Codex / silent-failure-hunter の二段判定により「I2 を PR #358 に含めない」決定をしたことで、PR #358 のレビュー焦点が分散せず、I1 / I5 と一括で消化することも避けられた。**Important 級でも実害ゼロなら scope 分離して別 PR 化** という運用が、レビュー品質・focus 維持・decision-maker への判断委譲のすべてで機能した好例。
 
-### 2. GitHub Actions partial outage 時の job 振る舞い
+### 2. 「読み手ゼロ件」の確認が設計選択肢を絞る決定打
 
-「jobs が `queued` のまま run が `failure`」「一部 jobs だけ success / 一部 queued でキャンセル」は **GitHub Actions runner 割当障害の典型症状**。`gh run view --json jobs` で全 job の `status` を見れば一発で「runner 不足 / infra 障害」と切り分けられる (jobs 内のスクリプトエラーなら job ごとに `conclusion: failure` + step ログがある)。
+`originalError` フィールドの設計改善 4 案 (A: 削除 / B: narrow / C: sanitize / D: lint) のうち、実装着手前の grep で「src / tests / dist いずれにも `.originalError` 参照ゼロ」を確認したことで、案 A (完全削除) が即決可能になった。**`grep -rn ".originalError"` を impl-plan の前段で実行** することで、YAGNI 適用の根拠が機械的に得られる。
 
-### 3. CLAUDE.md `rules/workflow.md §3` の 4 択を機械的に適用
+### 3. 小規模 PR (2 files, +14/-13) は lightweight review で十分
 
-サービスエラー (今回は GitHub infra) 遭遇時に「a) 再実行 b) 待って再実行 c) スキップ」の 3 択 (本ハンドオフでは d) 監視継続 を追加した 4 択) をユーザーに提示する運用が機能。AI 側で勝手に rerun ループを回したり「手動同等チェック」に走らず、decision-maker (ユーザー) に判断を渡せた。AI 駆動開発 4 原則 §1 (executor / decision-maker 分離) の好事例。
+post-pr-review hook が `/review-pr` 軽量経路 (security + code-quality の 2 エージェントに絞る) を推奨。CLAUDE.md memory `feedback_simplify_vs_review.md` の「1-2 ファイル / 30 行未満は /simplify スキップ」と整合。リファクタ PR は手動チェックリストで完結し、フルセット 6 エージェントの実行コストを節約。
+
+### 4. PR マージは番号単位の明示認可 + 要約付き形式が機能
+
+`PR #387 — refactor(api): drop GmailDraftError.originalError (2 files, +14/-13) をマージしてよい` 形式での明示認可を受領後にマージ実行。CLAUDE.md AI 駆動開発 4 原則 §3「安全装置の skip は番号単位の明示認可でのみ可」「承認依頼時は PR #番号 — タイトル (N files, +X/-Y) 形式で要約必須」が機能した好例。
 
 ---
 
 ## 環境状態 (本セッション終了時)
 
-- main ブランチ: HEAD `32b50f3` (PR #385 squash merge)
+- main ブランチ: HEAD `4143095` (PR #387 squash merge)
 - ローカル: handoff feature ブランチ作成中、未コミット変更は handoff のみ
-- Cloud Run / E2E: **未確認** (GitHub Actions 障害で run 失敗、復旧後に確認)
+- Cloud Run / E2E: ✅ CI / E2E Tests PASS、Deploy in_progress（コード起因問題なし）
 - 残留プロセス: なし
 
 ---
 
-## Session 24 のアーカイブ
+## Session 25 のアーカイブ
 
-旧 LATEST.md (Session 24) は `docs/handoff/archive/2026-05-15-session-24.md` に保存済み。
+旧 LATEST.md (Session 25) は `docs/handoff/archive/2026-05-15-session-25.md` に保存済み。
