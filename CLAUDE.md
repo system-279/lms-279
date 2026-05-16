@@ -77,6 +77,8 @@ npm run test
 | `GCS_UPLOAD_BUCKET` | 一時アップロードバケット名（default: lms-279-uploads） |
 | `GOOGLE_WORKSPACE_ADMIN_EMAIL` | DWD用Workspace管理者メール（Google Drive/Docs連携） |
 | `VERTEX_AI_LOCATION` | Vertex AIリージョン（default: asia-northeast1） |
+| `SESSION_DURATION_MS` | レッスンセッション上限（ミリ秒、正の整数、default: 7200000 = 2時間。本番は10800000 = 3時間） |
+| `PAUSE_TIMEOUT_MS` | 連続一時停止の上限（ミリ秒、正の整数、default: 900000 = 15分） |
 
 ## 重要な設計判断
 
