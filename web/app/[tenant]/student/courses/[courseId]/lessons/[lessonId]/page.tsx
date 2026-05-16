@@ -731,6 +731,13 @@ export default function StudentLessonDetailPage() {
   const fetchPdfDownloadUrl = useCallback(async (): Promise<LessonPdfDownloadResponse> => {
     return authFetch<LessonPdfDownloadResponse>(`/api/v1/lessons/${lessonId}/pdf-download`);
   }, [authFetch, lessonId]);
+  // 受講期間切れ判定 (動画なしレッスンでも enrollmentSetting から FE 側で判定する。
+  // 既存 setVideoAccessExpired は動画 fetch エラー時のみセットされるため、PDF DL の
+  // ゲート判定は enrollmentSetting.videoAccessUntil を直接見るのが正しい。Evaluator 指摘)
+  const isVideoAccessExpired =
+    videoAccessExpired ||
+    (enrollmentSetting != null &&
+      new Date(enrollmentSetting.videoAccessUntil).getTime() <= Date.now());
 
   // ============================================================
   // コース・レッスン一覧取得
@@ -1139,7 +1146,7 @@ export default function StudentLessonDetailPage() {
       <LessonPdfButton
         resource={lessonResource ?? undefined}
         quizPassed={quizPassed}
-        videoAccessExpired={videoAccessExpired}
+        videoAccessExpired={isVideoAccessExpired}
         fetchDownloadUrl={fetchPdfDownloadUrl}
       />
 

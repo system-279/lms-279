@@ -133,6 +133,16 @@ export async function confirmPdfUpload(
   fileName: string,
   sizeBytes: number,
 ): Promise<LessonResource> {
+  // CRITICAL: gcsPath のプレフィックス検証 (Evaluator 指摘、列挙/バケット横断攻撃対策)
+  // generatePdfUploadUrl が返したパス形式 `lessons/{masterLessonId}/...` のみ受け付ける
+  if (!gcsPath.startsWith(`lessons/${masterLessonId}/`)) {
+    throw new LessonResourceError("invalid_file_type", "GCS パスが不正です");
+  }
+  // sizeBytes の再検証 (Evaluator 指摘、upload-url と confirm 間で乖離する可能性)
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0 || sizeBytes > MAX_PDF_SIZE_BYTES) {
+    throw new LessonResourceError("file_too_large", "50 MB を超えるファイルはアップロードできません");
+  }
+
   const lesson = await ds.getLessonById(masterLessonId);
   if (!lesson) {
     throw new LessonResourceError("lesson_not_found", "対象レッスンが見つかりません");
@@ -247,7 +257,9 @@ export async function generatePdfDownloadUrl(
   }
 
   const setting = await ds.getTenantEnrollmentSetting();
-  if (setting && new Date(setting.videoAccessUntil).getTime() <= Date.now()) {
+  // 仕様: 受講期間設定がないテナントは DL 不可 (Evaluator 指摘、default close 設計で
+  // 未設定テナントが無制限にダウンロードできる穴を塞ぐ)。
+  if (!setting || new Date(setting.videoAccessUntil).getTime() <= Date.now()) {
     throw new LessonResourceError("access_expired", "受講期間が終了しています");
   }
 

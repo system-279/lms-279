@@ -123,6 +123,38 @@ describe("confirmPdfUpload", () => {
     ds = new InMemoryDataSource({ readOnly: false });
   });
 
+  it("invalid_file_type: gcsPath が lessons/{lessonId}/ プレフィックスでない → エラー", async () => {
+    const { storage } = buildMockStorage();
+    await expect(
+      confirmPdfUpload(ds, storage, MASTER_LESSON_ID, "../other/x.pdf", "x.pdf", 100),
+    ).rejects.toMatchObject({ code: "invalid_file_type" });
+  });
+
+  it("file_too_large: confirm 時の sizeBytes 再検証 → エラー", async () => {
+    const { storage } = buildMockStorage();
+    await expect(
+      confirmPdfUpload(
+        ds,
+        storage,
+        MASTER_LESSON_ID,
+        `lessons/${MASTER_LESSON_ID}/x.pdf`,
+        "x.pdf",
+        MAX_PDF_SIZE_BYTES + 1,
+      ),
+    ).rejects.toMatchObject({ code: "file_too_large" });
+  });
+
+  it("AC-9 メタ削除失敗 → throw が伝播する (状態復旧優先)", async () => {
+    // updateLesson に失敗を注入
+    const failingDs = new InMemoryDataSource({ readOnly: false });
+    const { storage } = buildMockStorage();
+    // 一度 PDF を付ける
+    await confirmPdfUpload(failingDs, storage, MASTER_LESSON_ID, `lessons/${MASTER_LESSON_ID}/old.pdf`, "old.pdf", 100);
+    // 次の updateLesson を失敗させる
+    vi.spyOn(failingDs, "updateLesson").mockRejectedValueOnce(new Error("firestore down"));
+    await expect(deletePdfResource(failingDs, storage, MASTER_LESSON_ID)).rejects.toThrow("firestore down");
+  });
+
   it("正常系: メタ書込み + 他フィールド未破壊", async () => {
     const before = await ds.getLessonById(MASTER_LESSON_ID);
     const { storage } = buildMockStorage();
@@ -130,7 +162,7 @@ describe("confirmPdfUpload", () => {
       ds,
       storage,
       MASTER_LESSON_ID,
-      "lessons/demo-lesson-1/123_x.pdf",
+      `lessons/${MASTER_LESSON_ID}/123_x.pdf`,
       "x.pdf",
       2048,
     );
@@ -139,7 +171,7 @@ describe("confirmPdfUpload", () => {
     expect(new Date(result.pdfUpdatedAt).getTime()).toBeGreaterThan(0);
 
     const after = await ds.getLessonById(MASTER_LESSON_ID);
-    expect(after?.pdfGcsPath).toBe("lessons/demo-lesson-1/123_x.pdf");
+    expect(after?.pdfGcsPath).toBe(`lessons/${MASTER_LESSON_ID}/123_x.pdf`);
     // Partial Update 検証: 他フィールド未破壊
     expect(after?.title).toBe(before?.title);
     expect(after?.order).toBe(before?.order);
@@ -151,18 +183,18 @@ describe("confirmPdfUpload", () => {
   it("gcs_file_missing: GCS にファイル不在 → エラー", async () => {
     const { storage } = buildMockStorage({ exists: vi.fn().mockResolvedValue([false]) });
     await expect(
-      confirmPdfUpload(ds, storage, MASTER_LESSON_ID, "lessons/x/y.pdf", "y.pdf", 100),
+      confirmPdfUpload(ds, storage, MASTER_LESSON_ID, `lessons/${MASTER_LESSON_ID}/y.pdf`, "y.pdf", 100),
     ).rejects.toMatchObject({ code: "gcs_file_missing" });
   });
 
   it("既存 PDF があれば旧 GCS ファイルを削除する", async () => {
     // 1 回目アップロード
     const { storage: s1 } = buildMockStorage();
-    await confirmPdfUpload(ds, s1, MASTER_LESSON_ID, "lessons/x/old.pdf", "old.pdf", 100);
+    await confirmPdfUpload(ds, s1, MASTER_LESSON_ID, `lessons/${MASTER_LESSON_ID}/old.pdf`, "old.pdf", 100);
 
     // 2 回目アップロード
     const { storage: s2, file: f2 } = buildMockStorage();
-    await confirmPdfUpload(ds, s2, MASTER_LESSON_ID, "lessons/x/new.pdf", "new.pdf", 200);
+    await confirmPdfUpload(ds, s2, MASTER_LESSON_ID, `lessons/${MASTER_LESSON_ID}/new.pdf`, "new.pdf", 200);
 
     expect(f2.delete).toHaveBeenCalled(); // 旧ファイル削除
   });
@@ -173,7 +205,7 @@ describe("deletePdfResource", () => {
   beforeEach(async () => {
     ds = new InMemoryDataSource({ readOnly: false });
     const { storage } = buildMockStorage();
-    await confirmPdfUpload(ds, storage, MASTER_LESSON_ID, "lessons/x/y.pdf", "y.pdf", 100);
+    await confirmPdfUpload(ds, storage, MASTER_LESSON_ID, `lessons/${MASTER_LESSON_ID}/y.pdf`, "y.pdf", 100);
   });
 
   it("正常系: メタクリア + GCS 削除", async () => {
@@ -222,7 +254,21 @@ describe("generatePdfDownloadUrl", () => {
     });
     // PDF 添付
     const { storage } = buildMockStorage();
-    await confirmPdfUpload(ds, storage, MASTER_LESSON_ID, "lessons/x/y.pdf", "資料.pdf", 100);
+    await confirmPdfUpload(ds, storage, MASTER_LESSON_ID, `lessons/${MASTER_LESSON_ID}/y.pdf`, "資料.pdf", 100);
+  });
+
+  it("access_expired: TenantEnrollmentSetting 未設定 → エラー (default close)", async () => {
+    const ds2 = new InMemoryDataSource({ readOnly: false });
+    const { storage: s2 } = buildMockStorage();
+    await confirmPdfUpload(ds2, s2, MASTER_LESSON_ID, `lessons/${MASTER_LESSON_ID}/y.pdf`, "資料.pdf", 100);
+    await ds2.upsertUserProgress(USER_ID, MASTER_LESSON_ID, {
+      courseId: COURSE_ID,
+      quizPassed: true,
+    });
+    // enrollment setting なし
+    await expect(
+      generatePdfDownloadUrl(ds2, s2, MASTER_LESSON_ID, USER_ID),
+    ).rejects.toMatchObject({ code: "access_expired" });
   });
 
   it("正常系: 15 分有効の署名 URL を返す", async () => {
