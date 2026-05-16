@@ -301,7 +301,7 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
       }
       res.status(403).json({
         error: "session_time_exceeded",
-        message: "入室から2時間が経過したため、セッションが終了しました",
+        message: "セッション制限時間を超過したため、セッションが終了しました",
       });
       return;
     }
