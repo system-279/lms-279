@@ -169,19 +169,25 @@ export async function distributeCourseToTenant(
   // レッスンドキュメント
   for (const lesson of lessons) {
     const ref = lessonRefs.get(lesson.id)!;
-    operations.push({
-      ref,
-      data: {
-        courseId: newCourseId,
-        title: lesson.title,
-        order: lesson.order,
-        hasVideo: lesson.hasVideo,
-        hasQuiz: lesson.hasQuiz,
-        videoUnlocksPrior: lesson.videoUnlocksPrior,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-    });
+    const lessonData: Record<string, unknown> = {
+      courseId: newCourseId,
+      title: lesson.title,
+      order: lesson.order,
+      hasVideo: lesson.hasVideo,
+      hasQuiz: lesson.hasQuiz,
+      videoUnlocksPrior: lesson.videoUnlocksPrior,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    // 講座資料 PDF メタのコピー: マスター側で添付済みのレッスンのみ転記する。
+    // GCS ファイル本体はマスターのパスをそのまま参照 (ADR-024 同方針)。
+    if (lesson.pdfGcsPath) {
+      lessonData.pdfGcsPath = lesson.pdfGcsPath;
+      lessonData.pdfFileName = lesson.pdfFileName;
+      lessonData.pdfSizeBytes = lesson.pdfSizeBytes;
+      lessonData.pdfUpdatedAt = lesson.pdfUpdatedAt;
+    }
+    operations.push({ ref, data: lessonData });
   }
 
   // 動画ドキュメント（gcsPathはGCSファイル共有のためそのまま保持）

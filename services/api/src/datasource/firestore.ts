@@ -334,7 +334,7 @@ export class FirestoreDataSource implements DataSource {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private toLesson(id: string, data: any): Lesson {
-    return {
+    const lesson: Lesson = {
       id,
       courseId: data.courseId,
       title: data.title,
@@ -345,6 +345,13 @@ export class FirestoreDataSource implements DataSource {
       createdAt: toISOStrict(data.createdAt, "Lesson.createdAt"),
       updatedAt: toISOStrict(data.updatedAt, "Lesson.updatedAt"),
     };
+    if (data.pdfGcsPath) {
+      lesson.pdfGcsPath = data.pdfGcsPath;
+      lesson.pdfFileName = data.pdfFileName;
+      lesson.pdfSizeBytes = data.pdfSizeBytes;
+      lesson.pdfUpdatedAt = toISOStrict(data.pdfUpdatedAt, "Lesson.pdfUpdatedAt");
+    }
+    return lesson;
   }
 
   // Users
