@@ -73,6 +73,19 @@
 | POST | `/admin/videos/import-from-drive` | Google Driveから動画インポート | Admin |
 | GET | `/admin/videos/:videoId/import-status` | インポート状況確認 | Admin |
 
+### 講座資料 PDF (ADR-036)
+
+| メソッド | パス | 説明 | 権限 |
+|---------|------|------|------|
+| POST | `/super/master/lessons/:lessonId/pdf-upload-url` | PDFアップロード署名URL発行（1h有効） | Super Admin |
+| POST | `/super/master/lessons/:lessonId/pdf` | アップロード完了確認＋メタ書込み | Super Admin |
+| DELETE | `/super/master/lessons/:lessonId/pdf` | PDF削除（メタクリア＋GCS削除） | Super Admin |
+| POST | `/super/master/courses/:courseId/sync-resources` | 配信先テナントへPDFメタ遡及反映 | Super Admin |
+| GET | `/lessons/:lessonId` | レッスン詳細（`resource?` 含む、`pdfGcsPath` 除外） | Student |
+| GET | `/lessons/:lessonId/pdf-download` | DL用署名URL取得（15min有効、合格+期間ゲート） | Student |
+
+エラーコード: `invalid_file_type` / `file_too_large` / `lesson_not_found` / `quiz_not_passed` / `access_expired` / `resource_not_found` / `gcs_unavailable` / `gcs_file_missing`。`gcs_unavailable` のみ transient (FE retry-after)、他は permanent。
+
 ### テスト
 
 | メソッド | パス | 説明 | 権限 |

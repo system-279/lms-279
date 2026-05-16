@@ -147,7 +147,9 @@ const lessonData = {
 | 用途 | 参照先 | 検証ロジック |
 |---|---|---|
 | 合格判定 | `user_progress.quizPassed` (ID: `{userId}_{lessonId}`) | `=== true` |
-| DL 期限 | `course_enrollment_settings.videoAccessUntil` (ID: `{courseId}`) | `now < videoAccessUntil` (ISO 文字列比較) |
+| DL 期限 | `TenantEnrollmentSetting.videoAccessUntil` (ID: `_config`、**テナント単位 1 設定**) | `now < videoAccessUntil` (ISO 文字列比較) |
+
+> **訂正 (2026-05-17 実装時)**: 当初記述「`course_enrollment_settings` (ID: `{courseId}`)」は誤り。実装は `TenantEnrollmentSetting` (テナント単位、`id = "_config"`、`getTenantEnrollmentSetting()` で取得) で、courseId 紐付けは存在しない。受講者がそのテナントに enrolled していれば、全コース共通の `videoAccessUntil` が適用される。
 
 両方サーバー側で検証 (security boundary は API)。
 

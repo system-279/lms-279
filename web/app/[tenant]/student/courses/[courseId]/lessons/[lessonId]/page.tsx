@@ -15,6 +15,8 @@ import { ForceExitDialog } from "@/components/session/ForceExitDialog";
 import { DeadlineWarningBanner } from "@/components/enrollment-deadline-banner";
 import type { LessonSessionResponse, QuizByLessonResponse, QuizByLessonQuiz, QuizAttemptSummary } from "@lms-279/shared-types";
 import { useVideoCompletion } from "@/lib/hooks/use-video-completion";
+import { LessonPdfButton } from "@/components/lesson/LessonPdfButton";
+import type { LessonResource, LessonPdfDownloadResponse } from "@lms-279/shared-types";
 
 // ============================================================
 // 型定義
@@ -114,10 +116,13 @@ function QuizSection({
   lessonId,
   authFetch,
   enrollmentSetting,
+  onAttemptsLoaded,
 }: {
   lessonId: string;
   authFetch: <T>(url: string, options?: RequestInit) => Promise<T>;
   enrollmentSetting: { quizAccessUntil: string; videoAccessUntil: string } | null;
+  /** 取得済みの attempt summaries に合格 (isPassed=true) が含まれるかを親に通知。 */
+  onAttemptsLoaded?: (hasPassed: boolean) => void;
 }) {
   const [quizState, setQuizState] = useState<QuizUIState>("idle");
   const [quiz, setQuiz] = useState<Quiz | null>(null);
@@ -148,6 +153,9 @@ function QuizSection({
       setQuiz(data.quiz);
       setUserAttemptCount(data.userAttemptCount);
       setAttemptSummaries(data.attemptSummaries);
+      if (onAttemptsLoaded) {
+        onAttemptsLoaded(data.attemptSummaries.some((a) => a.isPassed === true));
+      }
       if (data.accessExpired) {
         setQuizAccessExpired(true);
       }
@@ -714,6 +722,16 @@ export default function StudentLessonDetailPage() {
     videoAccessUntil: string;
   } | null>(null);
 
+  // 講座資料 PDF 用 (ADR-036)
+  const [lessonResource, setLessonResource] = useState<LessonResource | null>(null);
+  const [quizPassed, setQuizPassed] = useState(false);
+  const handleAttemptsLoaded = useCallback((hasPassed: boolean) => {
+    setQuizPassed(hasPassed);
+  }, []);
+  const fetchPdfDownloadUrl = useCallback(async (): Promise<LessonPdfDownloadResponse> => {
+    return authFetch<LessonPdfDownloadResponse>(`/api/v1/lessons/${lessonId}/pdf-download`);
+  }, [authFetch, lessonId]);
+
   // ============================================================
   // コース・レッスン一覧取得
   // ============================================================
@@ -747,6 +765,19 @@ export default function StudentLessonDetailPage() {
   useEffect(() => {
     fetchCourse();
   }, [fetchCourse]);
+
+  // レッスン詳細を取得 (講座資料 PDF のメタを含む)
+  useEffect(() => {
+    if (authLoading) return;
+    authFetch<{ lesson: unknown; resource?: LessonResource }>(`/api/v1/lessons/${lessonId}`)
+      .then((data) => {
+        setLessonResource(data.resource ?? null);
+      })
+      .catch(() => {
+        // resource 未取得時は何も表示しない (PDF DL ボタンは hidden になる)
+        setLessonResource(null);
+      });
+  }, [authFetch, authLoading, lessonId]);
 
   // ============================================================
   // セッション（入退室管理）
@@ -1082,7 +1113,12 @@ export default function StudentLessonDetailPage() {
       {/* テストセクション */}
       {currentLesson.hasQuiz && (
         showQuizSection ? (
-          <QuizSection lessonId={lessonId} authFetch={authFetch} enrollmentSetting={enrollmentSetting} />
+          <QuizSection
+            lessonId={lessonId}
+            authFetch={authFetch}
+            enrollmentSetting={enrollmentSetting}
+            onAttemptsLoaded={handleAttemptsLoaded}
+          />
         ) : (
           /* 動画未完了ゲートメッセージ */
           <div className="rounded-md border p-6 space-y-3">
@@ -1098,6 +1134,14 @@ export default function StudentLessonDetailPage() {
           </div>
         )
       )}
+
+      {/* 講座資料 PDF ダウンロード (ADR-036) */}
+      <LessonPdfButton
+        resource={lessonResource ?? undefined}
+        quizPassed={quizPassed}
+        videoAccessExpired={videoAccessExpired}
+        fetchDownloadUrl={fetchPdfDownloadUrl}
+      />
 
       {/* ナビゲーション */}
       <div className="flex items-center justify-between pt-4 border-t">
