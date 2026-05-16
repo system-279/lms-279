@@ -83,7 +83,9 @@ jobs:
           # NODE_ENV=production は Issue #290 fail-safe (tenant-auth.ts/super-admin.ts の
           # isProductionRuntime) の二重防御として明示。K_SERVICE 自動注入が効かないデプロイ
           # 経路（ローカル再現等）でも本番判定が効くようにする。
-          ENV_VARS="NODE_ENV=production,DEMO_ENABLED=true,AUTH_MODE=firebase,CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net"
+          # SESSION_DURATION_MS=10800000 (3時間): 動画 60-80分 + テスト所要時間で
+          # 2時間運用では time_limit 強制退室が頻発したため延長 (2026-05-16, 現場声対応)
+          ENV_VARS="NODE_ENV=production,DEMO_ENABLED=true,AUTH_MODE=firebase,CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net,SESSION_DURATION_MS=10800000"
           if [ -n "${{ secrets.SUPER_ADMIN_EMAILS }}" ]; then
             ENV_VARS="${ENV_VARS},SUPER_ADMIN_EMAILS=${{ secrets.SUPER_ADMIN_EMAILS }}"
           fi

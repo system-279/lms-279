@@ -1,13 +1,21 @@
 /**
  * レッスンセッション（出席管理）サービス
- * 入室打刻・退室打刻・一時停止リセット・2時間制限の管理
+ * 入室打刻・退室打刻・一時停止リセット・セッション制限時間の管理
  */
 
 import type { DataSource } from "../datasource/interface.js";
 import type { LessonSession, SessionExitReason } from "../types/entities.js";
+import { parsePositiveDurationMs } from "../utils/env-config.js";
 import { updateCourseProgress } from "./progress.js";
 
-const SESSION_DURATION_MS = 2 * 60 * 60 * 1000; // 2時間
+// セッション制限時間（ミリ秒、正の整数）。env var SESSION_DURATION_MS で上書き可、デフォルト 2 時間。
+// 不正値（NaN / 0 以下 / 非整数 / 単位付き文字列など）は logger.error 出力後デフォルトにフォールバック。
+// 動画 60-80 分 + テスト解答時間で詰まる現場運用に対応するため env で延長可能（本番は 3 時間運用）。
+export const SESSION_DURATION_MS = parsePositiveDurationMs(
+  process.env.SESSION_DURATION_MS,
+  2 * 60 * 60 * 1000,
+  "SESSION_DURATION_MS"
+);
 
 /**
  * 新しいレッスンセッションを作成（入室打刻）
@@ -76,7 +84,7 @@ export async function getOrCreateSession(
 /**
  * セッションを強制退室にし、レッスンの学習データを完全リセットする。
  * リセット対象: video_analytics, video_events, quiz_attempts, user_progress
- * （2時間以内に1セッションで完了する要件のため）
+ * （1 セッション内で動画視聴→テスト送信まで完了させる要件のため。セッション上限は SESSION_DURATION_MS）
  */
 export async function forceExitSession(
   ds: DataSource,
@@ -155,7 +163,7 @@ export async function completeSession(
 }
 
 /**
- * セッションが2時間制限内かチェック
+ * セッションが deadlineAt（= entryAt + SESSION_DURATION_MS）を過ぎていないかチェック
  */
 export function validateSessionDeadline(session: LessonSession): boolean {
   return new Date(session.deadlineAt).getTime() > Date.now();

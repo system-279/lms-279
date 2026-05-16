@@ -12,9 +12,16 @@ import { processVideoEvents } from "../../services/video-analytics.js";
 import { updateLessonProgress } from "../../services/progress.js";
 import { forceExitSession } from "../../services/lesson-session.js";
 import { guardVideoAccess } from "../../services/enrollment.js";
+import { parsePositiveDurationMs } from "../../utils/env-config.js";
 import { logger } from "../../utils/logger.js";
 
-const PAUSE_TIMEOUT_MS = Number(process.env.PAUSE_TIMEOUT_MS) || 15 * 60 * 1000; // デフォルト15分
+// 一時停止上限（ミリ秒、正の整数）。env var PAUSE_TIMEOUT_MS で上書き可、デフォルト 15 分。
+// 不正値は logger.error 出力後デフォルトにフォールバック。
+export const PAUSE_TIMEOUT_MS = parsePositiveDurationMs(
+  process.env.PAUSE_TIMEOUT_MS,
+  15 * 60 * 1000,
+  "PAUSE_TIMEOUT_MS"
+);
 
 const router = Router();
 

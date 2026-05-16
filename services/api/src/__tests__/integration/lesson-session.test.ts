@@ -63,14 +63,14 @@ describe("lesson-session service", () => {
       expect(session.longestPauseSec).toBe(0);
     });
 
-    it("sets deadlineAt to 2 hours after entryAt", async () => {
+    it("sets deadlineAt to entryAt + SESSION_DURATION_MS", async () => {
+      const { SESSION_DURATION_MS } = await import("../../services/lesson-session.js");
       const { lesson, video } = await setupLesson();
       const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
 
       const entry = new Date(session.entryAt).getTime();
       const deadline = new Date(session.deadlineAt).getTime();
-      const twoHoursMs = 2 * 60 * 60 * 1000;
-      expect(deadline - entry).toBe(twoHoursMs);
+      expect(deadline - entry).toBe(SESSION_DURATION_MS);
     });
   });
 

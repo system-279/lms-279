@@ -157,9 +157,14 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 const port = Number(process.env.PORT || 8080);
-const server = app.listen(port, () => {
+const server = app.listen(port, async () => {
+  // 起動時に env var で決まる主要設定値の採用値をログする（env タイポで silent fallback 発生時の検知のため）
+  const { SESSION_DURATION_MS } = await import("./services/lesson-session.js");
+  const { PAUSE_TIMEOUT_MS } = await import("./routes/shared/video-events.js");
   logger.info("LMS API service started", {
     port,
+    sessionDurationMs: SESSION_DURATION_MS,
+    pauseTimeoutMs: PAUSE_TIMEOUT_MS,
     routes: [
       "/health, /healthz, /api/health",
       "/api/v2/public/*",
