@@ -11,11 +11,16 @@ interface SessionRulesNoticeProps {
   session: SessionInfo | null;
 }
 
-function formatDurationHours(entryAtIso: string, deadlineAtIso: string): string {
+// 入室時刻と期限から制限時間を「3時間」「2.5時間」のような表記に整える。
+// 不正値（NaN / 1 時間未満）の場合は「定められた時間」を返し、後続テンプレートの
+// 「入室から{durationLabel}以内に...」が日本語として破綻しないようにする。
+const FALLBACK_DURATION_LABEL = "定められた時間";
+
+export function formatDurationHours(entryAtIso: string, deadlineAtIso: string): string {
   const ms = new Date(deadlineAtIso).getTime() - new Date(entryAtIso).getTime();
-  if (!Number.isFinite(ms) || ms <= 0) return "制限時間内";
+  const MIN_VALID_MS = 60 * 60 * 1000; // 1 時間未満は設定ミスとみなしフォールバック
+  if (!Number.isFinite(ms) || ms < MIN_VALID_MS) return FALLBACK_DURATION_LABEL;
   const hours = ms / (60 * 60 * 1000);
-  // 整数時間なら "3時間"、小数点ありなら "2.5時間" のように表示
   return Number.isInteger(hours) ? `${hours}時間` : `${hours.toFixed(1)}時間`;
 }
 
@@ -29,7 +34,7 @@ export function SessionRulesNotice({ session }: SessionRulesNoticeProps) {
 
   const durationLabel = session
     ? formatDurationHours(session.entryAt, session.deadlineAt)
-    : "制限時間内";
+    : FALLBACK_DURATION_LABEL;
 
   return (
     <div className="rounded-md border bg-muted/50 p-4 space-y-2 text-sm">
