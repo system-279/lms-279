@@ -1,13 +1,16 @@
 /**
  * レッスンセッション（出席管理）サービス
- * 入室打刻・退室打刻・一時停止リセット・2時間制限の管理
+ * 入室打刻・退室打刻・一時停止リセット・セッション制限時間の管理
  */
 
 import type { DataSource } from "../datasource/interface.js";
 import type { LessonSession, SessionExitReason } from "../types/entities.js";
 import { updateCourseProgress } from "./progress.js";
 
-const SESSION_DURATION_MS = 2 * 60 * 60 * 1000; // 2時間
+// セッション制限時間。env var で上書き可、デフォルト 2 時間。
+// 動画 60-80 分 + テスト解答時間 で詰まる現場運用に対応するため env で延長可能とする。
+export const SESSION_DURATION_MS =
+  Number(process.env.SESSION_DURATION_MS) || 2 * 60 * 60 * 1000;
 
 /**
  * 新しいレッスンセッションを作成（入室打刻）
