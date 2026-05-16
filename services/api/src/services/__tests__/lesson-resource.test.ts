@@ -19,12 +19,16 @@ interface MockFile {
   getSignedUrl: ReturnType<typeof vi.fn>;
   exists: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
+  getMetadata: ReturnType<typeof vi.fn>;
 }
 function buildMockStorage(overrides: Partial<MockFile> = {}): { storage: Storage; file: MockFile } {
   const file: MockFile = {
     getSignedUrl: vi.fn().mockResolvedValue(["https://signed.example.com/foo"]),
     exists: vi.fn().mockResolvedValue([true]),
     delete: vi.fn().mockResolvedValue([]),
+    getMetadata: vi
+      .fn()
+      .mockResolvedValue([{ size: "100", contentType: "application/pdf" }]),
     ...overrides,
   };
   const bucket = { file: vi.fn().mockReturnValue(file) };
@@ -53,7 +57,8 @@ describe("generatePdfUploadUrl", () => {
       1024,
     );
     expect(result.uploadUrl).toBe("https://signed.example.com/foo");
-    expect(result.gcsPath).toMatch(/^lessons\/demo-lesson-1\/\d+_資料\.pdf$/);
+    // path = `lessons/{lessonId}/{timestamp}_{uuid}_{sanitizedFileName}` (Codex 指摘の race condition 対策で UUID 追加)
+    expect(result.gcsPath).toMatch(/^lessons\/demo-lesson-1\/\d+_[\w-]+_資料\.pdf$/);
     expect(new Date(result.expiresAt).getTime()).toBeGreaterThan(Date.now());
     expect(file.getSignedUrl).toHaveBeenCalledWith(
       expect.objectContaining({ action: "write", contentType: PDF_MIME_TYPE }),
@@ -155,9 +160,14 @@ describe("confirmPdfUpload", () => {
     await expect(deletePdfResource(failingDs, storage, MASTER_LESSON_ID)).rejects.toThrow("firestore down");
   });
 
-  it("正常系: メタ書込み + 他フィールド未破壊", async () => {
+  it("正常系: メタ書込み + 他フィールド未破壊 (実 size は getMetadata の値)", async () => {
     const before = await ds.getLessonById(MASTER_LESSON_ID);
-    const { storage } = buildMockStorage();
+    // 実 size を 2048 に明示 (mock デフォルトの 100 を上書き)
+    const { storage } = buildMockStorage({
+      getMetadata: vi
+        .fn()
+        .mockResolvedValue([{ size: "2048", contentType: "application/pdf" }]),
+    });
     const result = await confirmPdfUpload(
       ds,
       storage,
@@ -181,13 +191,37 @@ describe("confirmPdfUpload", () => {
   });
 
   it("gcs_file_missing: GCS にファイル不在 → エラー", async () => {
-    const { storage } = buildMockStorage({ exists: vi.fn().mockResolvedValue([false]) });
+    const error = new Error("Not Found");
+    (error as Error & { code: number }).code = 404;
+    const { storage } = buildMockStorage({
+      getMetadata: vi.fn().mockRejectedValue(error),
+    });
     await expect(
       confirmPdfUpload(ds, storage, MASTER_LESSON_ID, `lessons/${MASTER_LESSON_ID}/y.pdf`, "y.pdf", 100),
     ).rejects.toMatchObject({ code: "gcs_file_missing" });
   });
 
-  it("既存 PDF があれば旧 GCS ファイルを削除する", async () => {
+  it("file_too_large: 実メタデータが 50MB 超 → エラー (Codex High #2)", async () => {
+    const { storage } = buildMockStorage({
+      getMetadata: vi
+        .fn()
+        .mockResolvedValue([{ size: String(MAX_PDF_SIZE_BYTES + 1), contentType: "application/pdf" }]),
+    });
+    await expect(
+      confirmPdfUpload(ds, storage, MASTER_LESSON_ID, `lessons/${MASTER_LESSON_ID}/y.pdf`, "y.pdf", 100),
+    ).rejects.toMatchObject({ code: "file_too_large" });
+  });
+
+  it("invalid_file_type: 実 contentType が PDF 以外 → エラー (Codex High #2)", async () => {
+    const { storage } = buildMockStorage({
+      getMetadata: vi.fn().mockResolvedValue([{ size: "100", contentType: "image/png" }]),
+    });
+    await expect(
+      confirmPdfUpload(ds, storage, MASTER_LESSON_ID, `lessons/${MASTER_LESSON_ID}/y.pdf`, "y.pdf", 100),
+    ).rejects.toMatchObject({ code: "invalid_file_type" });
+  });
+
+  it("旧 PDF があっても即削除しない (Codex High #1: 配信済みテナント参照保護)", async () => {
     // 1 回目アップロード
     const { storage: s1 } = buildMockStorage();
     await confirmPdfUpload(ds, s1, MASTER_LESSON_ID, `lessons/${MASTER_LESSON_ID}/old.pdf`, "old.pdf", 100);
@@ -196,7 +230,8 @@ describe("confirmPdfUpload", () => {
     const { storage: s2, file: f2 } = buildMockStorage();
     await confirmPdfUpload(ds, s2, MASTER_LESSON_ID, `lessons/${MASTER_LESSON_ID}/new.pdf`, "new.pdf", 200);
 
-    expect(f2.delete).toHaveBeenCalled(); // 旧ファイル削除
+    // 旧ファイル即削除はしない (配信済みテナントの参照を保護、cleanup は別 Issue)
+    expect(f2.delete).not.toHaveBeenCalled();
   });
 });
 
@@ -208,22 +243,13 @@ describe("deletePdfResource", () => {
     await confirmPdfUpload(ds, storage, MASTER_LESSON_ID, `lessons/${MASTER_LESSON_ID}/y.pdf`, "y.pdf", 100);
   });
 
-  it("正常系: メタクリア + GCS 削除", async () => {
+  it("正常系: メタクリア (GCS object は即削除しない、Codex High #1)", async () => {
     const { storage, file } = buildMockStorage();
     await deletePdfResource(ds, storage, MASTER_LESSON_ID);
     const lesson = await ds.getLessonById(MASTER_LESSON_ID);
     expect(lesson?.pdfGcsPath).toBeFalsy();
-    expect(file.delete).toHaveBeenCalled();
-  });
-
-  it("GCS 削除失敗は orphan ログのみで成功扱い (throw しない)", async () => {
-    const { storage } = buildMockStorage({
-      delete: vi.fn().mockRejectedValue(new Error("gcs down")),
-    });
-    await expect(deletePdfResource(ds, storage, MASTER_LESSON_ID)).resolves.toBeUndefined();
-    // メタは削除済み
-    const lesson = await ds.getLessonById(MASTER_LESSON_ID);
-    expect(lesson?.pdfGcsPath).toBeFalsy();
+    // GCS object は配信済みテナント参照保護のため即削除しない
+    expect(file.delete).not.toHaveBeenCalled();
   });
 
   it("resource_not_found: PDF 未添付レッスンに対する削除 → エラー", async () => {

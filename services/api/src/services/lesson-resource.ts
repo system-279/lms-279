@@ -8,6 +8,7 @@
  * 設計詳細: docs/specs/2026-05-17-course-pdf-download-design.md
  */
 
+import { randomUUID } from "node:crypto";
 import type { Storage } from "@google-cloud/storage";
 import type { DataSource } from "../datasource/interface.js";
 import type { Lesson } from "../types/entities.js";
@@ -102,7 +103,8 @@ export async function generatePdfUploadUrl(
     throw new LessonResourceError("invalid_file_type", "ファイル名が無効です");
   }
 
-  const gcsPath = `lessons/${masterLessonId}/${Date.now()}_${sanitized}`;
+  // path 衝突防止: Date.now() に加えて UUID を含める (Codex 指摘の race condition 対策)
+  const gcsPath = `lessons/${masterLessonId}/${Date.now()}_${randomUUID()}_${sanitized}`;
   const expiresAt = new Date(Date.now() + UPLOAD_URL_EXPIRES_MS);
 
   const [uploadUrl] = await withGcsErrorMapping(
@@ -148,38 +150,47 @@ export async function confirmPdfUpload(
     throw new LessonResourceError("lesson_not_found", "対象レッスンが見つかりません");
   }
 
-  const [exists] = await withGcsErrorMapping(
-    () => storage.bucket(RESOURCE_BUCKET()).file(gcsPath).exists(),
-    "confirmPdfUpload.exists",
-  );
-  if (!exists) {
-    throw new LessonResourceError("gcs_file_missing", "アップロードファイルが見つかりません");
+  // GCS object の実メタデータを検証 (Codex 指摘: クライアント値だけでは不足)。
+  // 漏洩した署名 URL や誤操作で 50 MB 超 / 非 PDF を upload しても、ここで弾く。
+  const file = storage.bucket(RESOURCE_BUCKET()).file(gcsPath);
+  let metadata: { size?: string | number; contentType?: string };
+  try {
+    const [m] = await file.getMetadata();
+    metadata = m;
+  } catch (e) {
+    const error = e as { code?: number };
+    if (error.code === 404) {
+      throw new LessonResourceError("gcs_file_missing", "アップロードファイルが見つかりません");
+    }
+    throw e;
+  }
+  const actualSize =
+    typeof metadata.size === "string" ? Number(metadata.size) : (metadata.size ?? 0);
+  if (!Number.isFinite(actualSize) || actualSize <= 0 || actualSize > MAX_PDF_SIZE_BYTES) {
+    // 不正な実サイズは object を消してから 400
+    await file.delete().catch(() => undefined);
+    throw new LessonResourceError("file_too_large", "アップロード済みファイルが上限を超えています");
+  }
+  if (metadata.contentType && metadata.contentType !== PDF_MIME_TYPE) {
+    await file.delete().catch(() => undefined);
+    throw new LessonResourceError("invalid_file_type", "PDF ファイル以外がアップロードされています");
   }
 
-  const previousGcsPath = lesson.pdfGcsPath;
+  // 旧 GCS object は即削除しない (Codex 指摘の High #1):
+  // ADR-024 / ADR-036 に基づき GCS path は全テナントで共有しているため、マスター差し替え時に
+  // 即削除すると配信済みテナントの受講者が 404 になる。orphan として残し、別途 cleanup ジョブで
+  // 全テナント参照が消えたタイミングで削除する (本 PR スコープ外、フォローアップ Issue 候補)。
   const pdfUpdatedAt = new Date().toISOString();
   await ds.updateLesson(masterLessonId, {
     pdfGcsPath: gcsPath,
     pdfFileName: fileName,
-    pdfSizeBytes: sizeBytes,
+    pdfSizeBytes: actualSize,
     pdfUpdatedAt,
   });
 
-  if (previousGcsPath && previousGcsPath !== gcsPath) {
-    try {
-      await storage.bucket(RESOURCE_BUCKET()).file(previousGcsPath).delete();
-    } catch (e) {
-      logger.error("pdf_old_object_delete_failed", {
-        masterLessonId,
-        previousGcsPath,
-        error: (e as Error).message,
-      });
-    }
-  }
+  logger.info("pdf_uploaded", { masterLessonId, gcsPath, sizeBytes: actualSize });
 
-  logger.info("pdf_uploaded", { masterLessonId, gcsPath, sizeBytes });
-
-  return { pdfFileName: fileName, pdfSizeBytes: sizeBytes, pdfUpdatedAt };
+  return { pdfFileName: fileName, pdfSizeBytes: actualSize, pdfUpdatedAt };
 }
 
 /**
@@ -204,12 +215,8 @@ export async function deletePdfResource(
   const previousGcsPath = lesson.pdfGcsPath;
 
   // Firestore メタ削除 (最優先)
-  // sentinel として undefined を渡しても applyUpdate で除去されてしまうため、
-  // FirestoreDataSource では set(merge: true) ではなく明示的に空文字を一旦書いてから
-  // FieldValue.delete() を使う方式が望ましいが、本実装では「pdfGcsPath を空文字に
-  // 書き換える」までを Wave 3 とし、削除完全化は Wave 4 でルート層に FieldValue.delete()
-  // を組み込むか、DataSource interface を拡張する方針とする。
-  // 現状: pdfGcsPath を空文字に上書き → 受講者 GET 側で `lesson.pdfGcsPath` falsy で 404 返す。
+  // 現状の DataSource interface は空文字書き込み相当で表現する (FieldValue.delete 完全化は
+  // フォローアップ Issue 候補)。受講者 GET 側で `lesson.pdfGcsPath` falsy 判定で 404 返す。
   await ds.updateLesson(masterLessonId, {
     pdfGcsPath: "",
     pdfFileName: "",
@@ -217,18 +224,14 @@ export async function deletePdfResource(
     pdfUpdatedAt: new Date().toISOString(),
   });
 
-  // GCS 削除 (失敗は orphan ログのみ)
-  try {
-    await storage.bucket(RESOURCE_BUCKET()).file(previousGcsPath).delete();
-  } catch (e) {
-    logger.error("pdf_gcs_delete_failed_orphan", {
-      masterLessonId,
-      previousGcsPath,
-      error: (e as Error).message,
-    });
-  }
-
-  logger.info("pdf_deleted", { masterLessonId, previousGcsPath });
+  // GCS object は即削除しない (Codex 指摘の High #1):
+  // ADR-024 / ADR-036 に基づき GCS path は全テナントで共有しているため、マスター削除時に
+  // 即 GCS object を消すと、配信済みテナントの受講者が 404 になる。
+  // 配信済みコース側で `sync-resources` を実行することでメタが空文字化され、テナント側でも
+  // 段階的に DL ボタンが hide される。GCS object 自体は別途 cleanup ジョブで全テナント
+  // 参照が消えてから削除する (本 PR スコープ外)。
+  void storage; // 引数互換維持 (現状は使わない)、将来 cleanup 経路で活用
+  logger.info("pdf_metadata_cleared", { masterLessonId, previousGcsPath });
 }
 
 /**
@@ -248,6 +251,15 @@ export async function generatePdfDownloadUrl(
 ): Promise<LessonPdfDownloadResponse> {
   const lesson = await ds.getLessonById(lessonId);
   if (!lesson) {
+    throw new LessonResourceError("lesson_not_found", "対象レッスンが見つかりません");
+  }
+
+  // コース status チェック (Codex 指摘 Medium #4):
+  // lessonId 直指定で archived/draft コースの PDF が DL できる迂回路を塞ぐ。
+  // `/courses/:id` 経由でなくても、ここで status を必ず確認する。
+  const course = await ds.getCourseById(lesson.courseId);
+  if (!course || course.status !== "published") {
+    // 列挙対策で lesson_not_found に統一 (course の状態を漏らさない)
     throw new LessonResourceError("lesson_not_found", "対象レッスンが見つかりません");
   }
 

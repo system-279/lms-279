@@ -345,11 +345,22 @@ export class FirestoreDataSource implements DataSource {
       createdAt: toISOStrict(data.createdAt, "Lesson.createdAt"),
       updatedAt: toISOStrict(data.updatedAt, "Lesson.updatedAt"),
     };
-    if (data.pdfGcsPath) {
-      lesson.pdfGcsPath = data.pdfGcsPath;
-      lesson.pdfFileName = data.pdfFileName;
-      lesson.pdfSizeBytes = data.pdfSizeBytes;
-      lesson.pdfUpdatedAt = toISOStrict(data.pdfUpdatedAt, "Lesson.pdfUpdatedAt");
+    // 講座資料 PDF メタ (ADR-036): 4 フィールドが揃っているときのみ resource として返す。
+    // 部分破損データ (例: 移行途中、手動修正失敗) で toISOStrict が throw して lesson 取得
+    // 全体が 500 になるのを防ぐ (Codex 指摘 Medium #5、fail-closed)。
+    if (data.pdfGcsPath && data.pdfFileName && data.pdfSizeBytes && data.pdfUpdatedAt) {
+      try {
+        const pdfUpdatedAt = toISOStrict(data.pdfUpdatedAt, "Lesson.pdfUpdatedAt");
+        lesson.pdfGcsPath = data.pdfGcsPath;
+        lesson.pdfFileName = data.pdfFileName;
+        lesson.pdfSizeBytes = data.pdfSizeBytes;
+        lesson.pdfUpdatedAt = pdfUpdatedAt;
+      } catch (e) {
+        logger.error("Lesson PDF metadata partially corrupt, ignoring", {
+          lessonId: id,
+          error: (e as Error).message,
+        });
+      }
     }
     return lesson;
   }
