@@ -99,7 +99,7 @@ npm run test
 - **マスターコンテンツ配信**: 深コピーでテナントに配信（ADR-024）
 - **セキュリティ強化**: Helmet, レート制限, CORS（ADR-025）
 - **Google Workspace連携**: DWDでDrive動画インポート + Docsテスト生成（ADR-026）
-- **出席管理**: lesson_sessionsで入退室打刻、15分一時停止/2時間制限で強制退室（ADR-027）
+- **出席管理**: lesson_sessionsで入退室打刻、15分一時停止/セッション制限時間で強制退室（`SESSION_DURATION_MS` env、デフォルト 2 時間。ADR-027）
 - **テスト戦略**: InMemoryDataSource中心の統合テスト（ADR-028）
 - **タイムゾーン基準**: 受講期限はUTC日末保存、JST表示（ADR-029）
 - **FE-BE共有型**: `@lms-279/shared-types`でAPIレスポンスDTOを共有。新規APIエンドポイント追加時はshared-typesに型を先に定義すること

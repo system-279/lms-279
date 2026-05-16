@@ -307,7 +307,7 @@ export interface LessonSession {
   entryAt: string;                        // 入室打刻（動画再生開始時）
   exitAt: string | null;                  // 退室打刻（テスト送信 or 強制退室時）
   exitReason: SessionExitReason | null;
-  deadlineAt: string;                     // entryAt + 2時間
+  deadlineAt: string;                     // entryAt + SESSION_DURATION_MS
   pauseStartedAt: string | null;
   longestPauseSec: number;
   sessionVideoCompleted: boolean;

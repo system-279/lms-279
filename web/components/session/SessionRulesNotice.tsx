@@ -11,6 +11,19 @@ interface SessionRulesNoticeProps {
   session: SessionInfo | null;
 }
 
+// 入室時刻と期限から制限時間を「3時間」「2.5時間」のような表記に整える。
+// 不正値（NaN / 1 時間未満）の場合は「定められた時間」を返し、後続テンプレートの
+// 「入室から{durationLabel}以内に...」が日本語として破綻しないようにする。
+const FALLBACK_DURATION_LABEL = "定められた時間";
+
+export function formatDurationHours(entryAtIso: string, deadlineAtIso: string): string {
+  const ms = new Date(deadlineAtIso).getTime() - new Date(entryAtIso).getTime();
+  const MIN_VALID_MS = 60 * 60 * 1000; // 1 時間未満は設定ミスとみなしフォールバック
+  if (!Number.isFinite(ms) || ms < MIN_VALID_MS) return FALLBACK_DURATION_LABEL;
+  const hours = ms / (60 * 60 * 1000);
+  return Number.isInteger(hours) ? `${hours}時間` : `${hours.toFixed(1)}時間`;
+}
+
 export function SessionRulesNotice({ session }: SessionRulesNoticeProps) {
   const formatDeadline = (isoString: string): string => {
     const d = new Date(isoString);
@@ -18,6 +31,10 @@ export function SessionRulesNotice({ session }: SessionRulesNoticeProps) {
     const m = d.getMinutes().toString().padStart(2, "0");
     return `${h}:${m}`;
   };
+
+  const durationLabel = session
+    ? formatDurationHours(session.entryAt, session.deadlineAt)
+    : FALLBACK_DURATION_LABEL;
 
   return (
     <div className="rounded-md border bg-muted/50 p-4 space-y-2 text-sm">
@@ -31,7 +48,7 @@ export function SessionRulesNotice({ session }: SessionRulesNoticeProps) {
         <li>テストに不合格の場合は退室となりません。合格するまで再受験できます</li>
         <li>動画を15分以上一時停止すると、強制退室となります</li>
         <li>
-          入室から2時間以内にテストに合格してください。超過すると強制退室となり、動画視聴・テスト回答がリセットされます（最初からやり直しです）
+          入室から{durationLabel}以内にテストに合格してください。超過すると強制退室となり、動画視聴・テスト回答がリセットされます（最初からやり直しです）
         </li>
       </ul>
       {session && (
