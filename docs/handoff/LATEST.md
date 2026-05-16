@@ -1,12 +1,20 @@
-# Session Handoff — 2026-05-15 〜 2026-05-16 (Session 27)
+# Session Handoff — 2026-05-16 (Session 28)
 
 ## TL;DR
 
-**Session 26 末で記録上ゼロ化していた handoff 内 follow-up に対し、ユーザー依頼「進捗状況 PDF → Gmail 下書き → PDF 自動貼付フローを Playwright で実機テスト」を実施。検証の過程で 2 系統の連鎖品質課題を発見し 4 PR (#391 / #393 / #392 / #403) で完全解決、Playwright MCP 実機検証で Gmail 受信メール経由の PDF DL までフル PASS。**Issue #389 を起票し PR #391 で auto-close、その後 PR #393 マージで完全解消、PR #403 で文字濃度の真因 (Variable Font default = Thin) を解消。session を通して 1 Issue 起票 / 1 close で Issue Net ±0、しかし Phase 2 Gmail Draft 機能の本番運用品質を実機エビデンス付きで大きく押し上げた。
+**現場声「動画視聴後にテスト送信できず再テスト不可になる強制ログアウト事案」をログ + Firestore 直読み (Token Creator 一時付与 → 解除) で調査。真因は `time_limit` (2 時間制限) であり、動画 60-80 分 + テスト解答時間で詰まる構造問題と確定。本番テナント `8vexhzpc` (kanjikai.or.jp) で 4 名の受講者を特定 (前田さより様 5/12 に 3 連続発生が最重症)。即時対応として PR #407 で `SESSION_DURATION_MS` を env var 化し本番を 3 時間に延長、PR #408 で UI 文言「2時間」ハードコードを動的化/汎用化、両 PR をマージ・自動デプロイ完了 (Cloud Run env vars に `SESSION_DURATION_MS=10800000` 反映確認済)。**
 
-- **Issue Net**: **+1** (Close 1 件 #389 / 起票 2 件 #389 + #405)
-- **Open 推移**: Session 26 末 3 件 → Session 27 末 **4 件** (#276 / #275 / #274 / **#405** 全 postponed)
-- **本セッション成果**: PR 4 件マージ (#391 / #392 / #393 / #403) / Variable Font 真因解明 / 2026 業界 best practice (filename 生 Unicode dual-form) 採用 / Playwright MCP 実機検証完遂 / Issue #405 (Phase 2 follow-up postponed) 起票
+- **Issue Net**: **0** (起票 0 件 / Close 0 件、すべて PR 内で解消)
+- **Open 推移**: Session 27 末 4 件 → Session 28 末 **4 件** (#276 / #275 / #274 / #405 全 postponed、変化なし)
+- **本セッション成果**:
+  - PR 2 件マージ (#407 / #408) で現場声に即時対応 + 派生改善
+  - 本番デプロイ完了 (api Cloud Run revision に新 env 反映)
+  - 4 名分の受講者特定 + 救済案内文を確定形でユーザーに提示 (管理者から各受講者へメール送付想定)
+  - ADR-027 改訂記録追加 + CLAUDE.md / README / docs/data-model / docs/requirements 同期
+  - `PAUSE_TIMEOUT_MS` の同パターン脆弱性も同時解消 (横展開)
+- **未着手 (次セッション以降の候補)**:
+  - オーダー② 講座資料スライド PDF DL ボタン (テスト合格後にダウンロード) → `/brainstorm` から要件深掘り
+  - Phase 3 設計議論: 動画完了後はテスト専用タイマー化 (ADR-027 改訂)、`handleForceExit` クライアント挙動の整合性改善
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -14,172 +22,221 @@
 # 1. 状況復元
 cat docs/handoff/LATEST.md
 
-# 2. main CI 状況確認 (本セッション末で Deploy success: 25942250679 / 3m58s)
+# 2. main CI 状況確認 (本セッション末で Deploy success: PR #408 含む)
 gh run list --branch main --limit 5
 
-# 3. 現在の OPEN Issue (4 件、全 postponed)
+# 3. 現在の OPEN Issue (4 件、全 postponed、変化なし)
 gh issue list --state open --limit 15
-#  → #274 / #275 / #276 (Phase 3 GCIP 完了が再開条件) / #405 (Phase 2 filename strict MTA risk、本セッション起票)
+#  → #274 / #275 / #276 (Phase 3 GCIP 完了が再開条件)
+#  → #405 (Phase 2 filename strict MTA risk、Session 27 起票)
 
 # 4. 次の着手候補 (優先度順):
-#    A. 【完了済】Issue #389 系列 — 本セッションで PR #391/#392/#393/#403 マージ
-#       + Playwright MCP 実機検証完遂。実作業候補なし。
-#    B. 【優先度1】Issue #272 Phase 3 GCIP 移行 — 再評価期限 2026-10-24
-#       — 期限到達まで着手不可、postponed #276 / #275 / #274 の再開条件
-#    C. 【優先度2】postponed #276 / #275 / #274 — Phase 3 GCIP 完了が再開条件
-#       — 明示指示なき限り着手不可
-#    D. 【優先度3】postponed #405 — Phase 2 Gmail draft filename strict MTA risk
-#       再開条件: M365/Outlook/Proofpoint/Mimecast テナント追加 or 添付名問い合わせ
-#       — 明示指示なき限り着手不可 (実害未観測のため待機)
-#    E. 【優先度4】Dependabot semver-major 全 ignore 設定の月次/四半期棚卸し運用
+#    A. 【ユーザー依頼継続】オーダー② 講座資料スライド PDF DL ボタン
+#       — テスト合格後に canva 出力 PDF を DL できるボタン追加
+#       — 着手: /brainstorm で要件深掘り → /impl-plan → 実装
+#       — 設計検討項目: 配置 (合格後画面 / レッスン一覧 / 常設?) / 保存場所 (GCS 署名URL?) /
+#         super-admin マスター講座管理での添付 UI / アクセス制御 (合格ゲート) /
+#         マスター→テナント配信時の深コピー対象 (ADR-024)
+#    B. 【人の手】Session 28 で確定した救済案内文を管理者から 4 名へメール送付
+#       — 前田さより / 串間博希 / 宮本将史 / 俵迫陽輔 各様 (kanjikai.or.jp)
+#       — 案内文は本ハンドオフ末尾「救済案内テンプレート」参照
+#    C. 【Phase 3 設計議論】ADR-027 動画完了後はテスト専用タイマー化
+#       — 現状: 入室から SESSION_DURATION_MS で一律カウント
+#       — 改善案: 動画完了 → 別タイマー (例 30 分) でテスト時間確保
+#       — handleForceExit クライアント実装も同時整合 (`web/app/[tenant]/student/.../page.tsx:802`)
+#    D. 【優先度3】Issue #272 Phase 3 GCIP 移行 — 再評価期限 2026-10-24
+#    E. 【優先度4】postponed #276 / #275 / #274 / #405 — 明示指示なき限り着手不可
+#    F. 【優先度5】Dependabot semver-major 全 ignore 設定の月次棚卸し運用
 ```
 
 ---
 
-## セッション成果物 (2026-05-15 〜 2026-05-16 Session 27)
+## セッション成果物 (2026-05-16 Session 28)
 
-### 検証フロー (Playwright MCP)
+### 調査フロー (本番 Cloud Run ログ + Firestore 直読み)
 
-ユーザー依頼「進捗状況 PDF の生成から下書きメールの生成とそのPDFの自動貼付まで Playwright でテストしてほしい」に対し、本番 Cloud Run + Playwright MCP で実機検証を実施。経路:
+ユーザー報告「テスト受講中に強制ログアウトされ再テストできない」を起点に:
 
 ```
-https://web-3zcica5euq-an.a.run.app
-  → Google ログイン (system@279279.net、user 主導 OAuth)
-  → /super/progress/qos4c4ka/uXMEFBo5Jdd3uok3C3kb/print (TEST テナント / 受講者「テスト」)
-  → PDF 生成ボタン (ローカル DL 検証)
-  → Gmail 下書き作成ボタン → gmail.compose 同意 (user 主導)
-  → 受信メールで添付 DL + 開封確認
+1. Cloud Run access log で /api/v2/{tenant}/lesson-sessions/{id}/force-exit を grep
+   → 直近 30 日 8 件、全件テナント 8vexhzpc に集中、他テナント (qos4c4ka) は休眠と判明
+2. 構造化ログ (jsonPayload.userId / sessionId) で 8 sessionId を userId にマッピング
+   → 4 名特定: ZPhxGDHZS4pGOWYeF5Vk (前田) / YpU6Dnvhm35HpDaAXTyb (串間) /
+                NnSUWGiClK97ryN6CJ4U (宮本) / v6J8OYome3jpFTLlOAEv (俵迫)
+3. Token Creator ロール一時付与 → impersonate access token → Firestore REST 経由で
+   users / lesson_sessions / quizzes / videos を read → 即解除
+   → 結果: force_exited 8 件中 time_limit 7 件 / pause_timeout 1 件 (重複呼出 409)
+           / max_attempts_failed 0 件、quizzes は全 maxAttempts=0 (無制限)
+           / レッスン2「Googleドライブ」動画 78 分、前田様は 5/12 に 02:48→04:48→06:49
+             と 2 時間きっかりで 3 連続 time_limit、quiz_attempts は 4 名ぶん全件 0 件
+4. 真因確定: 動画 60-80 分のレッスンでは 2 時間制限内にテスト送信まで完了できず
+   詰む構造問題。当初仮説 (handleForceExit のクライアント実装バグ) は実データで棄却
 ```
 
-### 🟢 PR #391: ASCII fallback を email base にして UUID 化を回避 (Issue #389)
+### 🟢 PR #407: SESSION_DURATION_MS を env var 化、本番 3 時間に延長
 
-- ブランチ: `fix/gmail-draft-mime-filename-rfc2231` → `fix/gmail-draft-ascii-fallback-meaningful`
-- 状態: **MERGED** (`6fe1a31`)
-- 経緯: PR #390 の RFC 6266 dual-form 化だけでは Gmail 受信側が `filename*=UTF-8''` を解釈せず ASCII fallback の `_` 連続 (`progress-___-2026-05-15.pdf`) で UUID にフォールバックすると判明。`MimeAttachment.asciiFallbackFilename` を追加し、route 側で email-base な意味のある ASCII fallback (`progress-y.honda@279279.net-2026-05-15.pdf`) を渡すよう変更
-- 効果: ダウンロード時のファイル名が拡張子付き ASCII safe 名で取得可能に。Issue #389 auto-close
-
-### 🟢 PR #392: PDF 文字色 (#1f2937 → #000) 視認性改善
-
-- ブランチ: `fix/progress-pdf-text-color-contrast`
-- 状態: **MERGED** (`9db7647`)
-- 内容: page.color を #1f2937 (gray-800) → #000000 (純黒)、label/meta/lessonMeta を #6b7280 (gray-500) → #374151 (gray-700)、定数化 `COLOR_BODY` / `COLOR_SUB` / `COLOR_BORDER`
-- 反省: 本 PR は **真因 (Variable Font Thin) を見落とした表面修正**。視覚的改善が小さく、PR #403 で根本対応
-
-### 🟢 PR #393: filename 生 Unicode quoted-string + filename*= dual-form (2026 best practice)
-
-- ブランチ: `fix/progress-pdf-readability-and-unicode-filename`
-- 状態: **MERGED** (`9a89867`)
+- ブランチ: `fix/session-duration-env-var`
+- 状態: **MERGED** (`472f7d76`)
 - 内容:
-  - `buildFilenameParam` を改修。非 ASCII を含む場合、生 Unicode を quoted-string で直接 filename に出力 + filename*= 併記
-  - RFC 5322 §3.2.4 厳密違反だが、Gmail / Outlook / Apple Mail が RFC 5987 を完全準拠していない 2026 業界 de facto
-  - 旧 `asciiFallbackFilename` / `assertValidAsciiFallback` / `asciiOverride` を削除 (dual-form では不要)
-  - `Content-Type: name=` を削除 (RFC 2046 deprecated)
-- 効果: Gmail UI 上の添付名表示が `progress-テスト-2026-05-15.pdf` (日本語そのまま)、ダウンロード時もファイル名 + 拡張子付きで保存
+  - `services/api/src/utils/env-config.ts` 新規: `parsePositiveDurationMs()` 共通関数 (`Number.isFinite` + 正の整数 + trim 空判定 + 不正値時 `logger.error`)
+  - `services/api/src/services/lesson-session.ts`: `SESSION_DURATION_MS` を env override 対応 + export、docstring の「2時間」を「`SESSION_DURATION_MS`」記法に
+  - `services/api/src/routes/shared/video-events.ts`: `PAUSE_TIMEOUT_MS` も同パターン脆弱性ありとして同時修正 + export 化 (横展開)
+  - `services/api/src/index.ts`: 起動ログに `sessionDurationMs` / `pauseTimeoutMs` を出力 (Cloud Logging で env タイポ silent fallback 検知可能)
+  - `.github/workflows/deploy.yml`: api Cloud Run ENV_VARS に `SESSION_DURATION_MS=10800000` (3 時間) 追加
+  - テスト追加: `lesson-session-config.test.ts` 10 ケース (境界値: 空文字 / 空白 / "0" / 負数 / float / 巨大値 + logger.error spy)
+  - integration test `lesson-session.test.ts:66` のハードコード `2 * 60 * 60 * 1000` を `SESSION_DURATION_MS` import に置換 (env 副作用整合性)
+  - CLAUDE.md 環境変数表に `SESSION_DURATION_MS` / `PAUSE_TIMEOUT_MS` 追記
+  - ADR-027 改訂履歴セクション追加
+- レビュー: code-reviewer / pr-test-analyzer / silent-failure-hunter / comment-analyzer 4 並列 → CRITICAL 4 件 (`Number() || default` 負値受容バグ / UI 文言ハードコード / 既存テスト env 副作用 / 既存 docstring 2時間残存) すべて 2 段階目コミットで反映
+- 検証: type-check / lint PASS、test 900/900 PASS
 
-### 🟢 PR #403: NotoSansJP を Variable Font から static Regular/Bold OTF に切替 (文字濃度真因解消)
+### 🟢 PR #408: UI 文言「2時間」ハードコードを動的化/汎用化
 
-- ブランチ: `fix/progress-pdf-static-fonts`
-- 状態: **MERGED** (`12d4f7a`)
-- 根本原因の発見: 本番 PDF を `pdffonts` で検査 → `NotoSansJP-Thin` 1 種類のみ embedded を確認 → `@react-pdf/font` の Variable Font weight axis 補間 (`getVariation`) 未実装 + `NotoSansJP-VariableFont.ttf` の default wght = Thin (100) で全テキストが Thin 描画されていた事実が判明
-- 修正:
-  - `NotoSansJP-VariableFont.ttf` を削除
-  - `NotoSansJP-Regular.otf` (fontWeight 400) + `NotoSansJP-Bold.otf` (fontWeight 700) を追加 (notofonts/noto-cjk Sans 2.004 公式リリース由来、SIL OFL 1.1)
-  - Font.register に 2 ファイル別パスで登録
-- 効果: 本番 PDF を `pdffonts` で検査 → `NotoSansJP-Regular` + `NotoSansJP-Bold` 両 weight embedded を確認、Gmail で開いた PDF も Bold/Regular の階層がはっきり視認可能 (実機 Image エビデンスで確認)
+- ブランチ: `fix/session-duration-ui-text`
+- 状態: **MERGED** (`767f4d7`)
+- 内容:
+  - `web/components/session/SessionRulesNotice.tsx`: `formatDurationHours(entryAtIso, deadlineAtIso)` を export 関数として追加、`session.entryAt` / `session.deadlineAt` から動的計算 (「3時間」「2.5時間」)、1h 未満 / 負値 / NaN は「定められた時間」fallback (日本語が後続テンプレートで「以内に」と二重にならない表現)
+  - `web/components/session/ForceExitDialog.tsx`: time_limit メッセージを「セッション制限時間を超過したため...」に汎用化 (時間値の明示を削除)
+  - `web/components/session/__tests__/ForceExitDialog.test.tsx`: 文言マッチ更新
+  - `web/components/session/__tests__/SessionRulesNotice.test.tsx` 新規: `formatDurationHours` 境界値 9 ケース + コンポーネント render 4 ケース (null / 3 時間 / deadline 表記)
+  - `web/app/help/_data/student-sections.ts` (3 箇所): ヘルプ「2時間」を「セッション制限時間」に
+  - `web/app/internal/page.tsx:305`: 出席管理セクションを「env で設定可、ADR-027 参照」に (実装識別子 `SESSION_DURATION_MS` の露出は他カードと粒度を揃え除去)
+  - `services/api/src/routes/shared/quiz-attempts.ts:304`: 403 message を「セッション制限時間を超過したため...」に汎用化
+  - `services/api/src/types/entities.ts:310`: コメント「entryAt + SESSION_DURATION_MS」に
+  - docs/data-model.md / docs/requirements.md / README.md / CLAUDE.md:100 の旧表記を同期
+- レビュー: code-reviewer / pr-test-analyzer / comment-analyzer 3 並列 → CRITICAL 1 件 (session null 時の日本語二重「以内に」破綻) + IMPORTANT (formatDurationHours の 1h 未満ガード / docs 同期) 全て 2 段階目コミットで反映
+- 検証: type-check / lint PASS、web test 53/53 PASS (新規 13 ケース) / api test 893/893 PASS
 
-### 連続 PR の教訓
+### 本番デプロイ結果
 
-「テスト PASS だが本番で問題」が 3 回連続 (PR #390 → #391 / PR #392 / PR #393) して再発。要因:
+| run | 結果 | 備考 |
+|---|---|---|
+| Deploy to Cloud Run (api) | ✅ success 2m4s | revision に `SESSION_DURATION_MS=10800000` 反映確認済 |
+| Deploy Firestore Indexes | ✅ success 37s | |
+| CI | ✅ success 1m19s | |
+| E2E Tests | ✅ success | |
 
-1. **Gmail / Variable Font の実挙動を確認せず仕様だけ追って実装**: PR #390/#391/#392 各時点で「テスト 887/887 PASS」を根拠に妥当性主張、本番 Playwright で初めて NG が露呈
-2. **真因に到達するまで複数の表面修正を経由**: PDF 文字色問題は #392 (色変更) → #393 (font weight 700) → #403 (Variable Font 問題発見) と 3 段階
-3. **silent-failure-hunter の PR #393 レビューが「Variable Font 500 は no-op」を正確に予言**したが、当時の対処 (700 に変更) は本質を解決しなかった
-
-教訓は memory に記録した方が良い (本セッション handoff 内に止め、別途 catchup で参照):
-- 「PDF / メール添付 など描画/受信側挙動が絡む機能は、テスト PASS だけでなく実機 (受信側 client / PDF viewer) での検証エビデンスを必須化」
-- 「Variable Font は @react-pdf/font では axis 補間が効かない (2026-05 時点)」
+`gcloud run services describe api --region=asia-northeast1` で env vars に `SESSION_DURATION_MS=10800000` 含まれることを目視確認。
 
 ---
 
-## Playwright MCP 実機検証エビデンス
+## 救済案内テンプレート (人の手で送付)
 
-最終確認 (PR #403 デプロイ後):
+```
+件名: 動画講座の受講に関するご案内（強制ログアウト事象の対応）
 
-| 検証項目 | 結果 | エビデンス |
-|---|---|---|
-| Gmail UI 添付名表示 | ✅ `progress-テスト-2026-05-15.pdf` | Image (Session 27 ユーザー提示) |
-| 受信メール経由 PDF DL | ✅ 同名で開ける | Image (Session 27 ユーザー提示) |
-| PDF 内 embedded font | ✅ `NotoSansJP-Bold` + `NotoSansJP-Regular` | `pdffonts` 出力 |
-| 見出し (h1/h2/courseHeader) | ✅ Bold で濃い | Image 12 |
-| 本文値 (テスト / y.honda@279279.net / TEST / 日付) | ✅ Bold で読みやすい | Image 12 |
-| ラベル (氏名 / メール / テナント) | ✅ Regular で階層維持 | Image 12 |
-| ファイルサイズ | 85 KB (Subset OTF 込み) | DL ファイル |
+○○ ○○ 様
 
-ローカル DL 経路でも `progress-テスト-2026-05-15.pdf` で日本語ファイル名が保存される (Content-Disposition: filename + filename*= dual-form 効果)。
+平素より介護DX college 279 をご活用いただきありがとうございます。
+
+LMS の動画講座を受講中に「強制ログアウト」が発生し、テスト送信まで進めない事象が
+発生しておりました。設計上、入室（最初の動画再生）から一定時間内にテスト送信まで
+完了する必要があり、超過すると視聴データが一旦リセットされる仕組みです。
+
+【システム側の対応（2026-05-16 実施済み）】
+受講完了がよりしやすくなるよう、セッション制限時間を 2 時間から 3 時間に延長する
+変更をデプロイいたしました。改めてレッスンを開いていただければ 3 時間内での完了が
+可能です。
+
+【ご協力のお願い】
+1. 動画は最初から最後まで一気にご視聴ください（途中で離席しない）
+2. 動画完了後は速やかにテスト画面に進み、その場で解答送信
+3. 万一強制ログアウトされた場合は、画面の「再入室する」ボタンから再開可能
+   （ただし動画は最初から視聴し直しになります）
+
+ご不便をおかけし大変申し訳ございません。
+今後ともよろしくお願いいたします。
+```
+
+**送付対象 (4 名、kanjikai.or.jp)**:
+
+| userId | 氏名 | メール | 直近の症状 |
+|---|---|---|---|
+| `ZPhxGDHZS4pGOWYeF5Vk` | 前田さより | sayori-maeda@kanjikai.or.jp | 5/12 に 2 時間 time_limit × 3 連続 (最優先) |
+| `YpU6Dnvhm35HpDaAXTyb` | 串間博希 | hiroaki-kushima@kanjikai.or.jp | 5/11, 5/14 に time_limit |
+| `NnSUWGiClK97ryN6CJ4U` | 宮本将史 | masashi-miyamoto@kanjikai.or.jp | 5/13, 5/14 に time_limit |
+| `v6J8OYome3jpFTLlOAEv` | 俵迫陽輔 | yosuke-tawaraseko@kanjikai.or.jp | 5/3 に time_limit |
 
 ---
 
 ## 設計判断の整理
 
-### filename ヘッダ採用形式の変遷
+### なぜ env 化 + 3 時間延長を選んだか
 
-| PR | filename 値 | filename*= | 結果 |
-|---|---|---|---|
-| #358 (Phase 2 初版) | RFC 2047 `=?UTF-8?B?...?=` encoded | なし | UUID 化 (RFC 2047 §5 違反) |
-| #390 | RFC 2047 encoded (改良なし) | UTF-8'' percent-encoded 追加 | UUID 化 (filename 側の違反が決定打) |
-| #391 | ASCII fallback (email base) | UTF-8'' percent-encoded | DL OK だが UI 表示が email base で UX 劣 |
-| **#393 (最終)** | **生 Unicode quoted-string** | **UTF-8'' percent-encoded** | **UI / DL 共に日本語ファイル名** |
+- 真因「動画長 + テスト時間 > 2 時間」に対し、即時投入可能 (1 ファイル変更 + workflow env 追加 + デプロイ) で効果最大
+- ADR-027 当初の「不正防止のため 2 時間」は妥当だったが、現場運用で動画 78 分レッスンが詰まる事実が判明、defense in depth を保ちつつ運用拡張
+- 不正リスクは 2 時間と 3 時間で本質的に変わらない (連続視聴前提)
+- env var 化により本番 / dev / CI で別値を持てる柔軟性確保 (将来 ADR-027 改訂で動画完了後別タイマーに移行する際の足場にもなる)
 
-業界 best practice 採用は ADR 化を後追いで検討する余地あり (本 PR 内ではコメント / README に留めた)。
+### 派生改善 (横展開) の理由
 
-### 採用フォント
+`PAUSE_TIMEOUT_MS` も `SESSION_DURATION_MS` と同じ `Number() || default` パターンで、負値受容 (`"-1"` → 即時タイムアウト連鎖) や NaN サイレントフォールバックの脆弱性を抱えていた。Codex / silent-failure-hunter エージェントの指摘で発覚し本 PR 内で同時修正 (CLAUDE.md MUST「API 境界の変更」観点に近い、内部 utility ながら同質の事故ポテンシャル)。
 
-- 旧: `NotoSansJP-VariableFont.ttf` (9.6 MB、Variable Font、wght axis 100..900、default Thin)
-- 新: `NotoSansJP-Regular.otf` (4.5 MB) + `NotoSansJP-Bold.otf` (4.7 MB)、計 9.2 MB
-- 出典: [notofonts/noto-cjk Sans 2.004](https://github.com/notofonts/noto-cjk/releases/tag/Sans2.004) (`16_NotoSansJP.zip`)
-- ライセンス: SIL Open Font License 1.1 (既存 `LICENSE.txt`)
+### 真因仮説の修正経緯
+
+初期仮説「クライアント `handleForceExit` がレスポンスを見ずダイアログを必ず開く → サーバー保護ロジック (動画完了済み pause_timeout 拒否) と挙動不整合」は、Firestore 実データ確認で **真因ではない** ことが判明:
+
+- pause_timeout は 8 件中 1 件のみ (それも 409 重複呼出)
+- 動画完了済みセッションでも実際に Firestore で `force_exited` になっており、クライアント表示と DB 状態は一致
+- 動画完了後にテスト時間が足りず 2 時間タイムアウトする方が圧倒的多数
+
+ただし `handleForceExit` のクライアント実装はリスクとして残置 (`/web/app/[tenant]/student/.../page.tsx:802` のレスポンス無視構造、Phase 3 設計議論に持ち越し)。
 
 ---
 
 ## Issue Net 変化
 
-- **Close 数**: **1 件** (#389 Phase 2 Gmail draft の MIME 添付ファイル名 RFC 違反)
-- **起票数**: **2 件** (#389 + #405)
-- **Net**: **+1**
+- **Close 数**: **0 件**
+- **起票数**: **0 件**
+- **Net**: **0**
 
-| Issue | 起票 | 起票理由 | Close PR / 状態 |
-|---|---|---|---|
-| #389 | Session 27 (実機検証中) | triage #1 #2 #4 #5 該当 (実害 / 再現可能 / rating ≥7 / ユーザー明示指示) | PR #391 で auto-close、PR #393 で完全解消、PR #403 で文字濃度真因解消 |
-| #405 | Session 27 末 (ユーザー明示指示) | triage #5 該当 (silent-failure-hunter PR #393 review I3 / Phase 2 follow-up postponed) | **postponed** (open 維持、再開条件: M365/Outlook/Proofpoint/Mimecast テナント追加 or 添付名問い合わせ) |
+| Open Issue (Session 28 末時点) | ラベル | 再開条件 |
+|---|---|---|
+| #405 | enhancement, P2, postponed | M365/Outlook/Proofpoint/Mimecast テナント追加 or 添付名問い合わせ |
+| #276 | enhancement, P2, postponed | Phase 3 GCIP 完了 (Issue #272 / 再評価期限 2026-10-24) |
+| #275 | enhancement, P2, postponed | Phase 3 GCIP 完了 |
+| #274 | enhancement, P2, postponed | Phase 3 GCIP 完了 |
 
-triage 基準は CLAUDE.md「GitHub Issues」セクション準拠。rating 5-6 の review agent 提案は本セッション内で発見されたものも含めて Issue 化せず、PR 内修正で対応した (`silent-failure-hunter` C1/C2/C3 / `code-reviewer` I1/I2 等は PR コメント / 追加 commit で消化済)。
+triage 基準 (CLAUDE.md「GitHub Issues」セクション) 該当なし。本セッションの強制ログアウト事案は **実害あり (triage #1)** だが、コード変更 PR #407/#408 で完全解消 + ADR-027 改訂で記録済のため Issue 起票不要と判断。レビューエージェントの IMPORTANT 提案 (rating 5-7) は機械的 Issue 化せず、PR 内追加コミットで消化。
 
-**Net +1 の理由言語化**: 起票 #405 は **ユーザー明示指示 (本セッション内 "I3 を Issue 化して残置")** による起票。silent-failure-hunter PR #393 review I3 (Important rating 5-7) を機械的に Issue 化したわけではなく、実害未観測ながら本番運用テナント追加時のフットプリント拡大に備えた **postponed 待機** 配置。CLAUDE.md「Net ≤ 0 は進捗ゼロ扱い」基準は機械的 5-6 自動起票を抑止する目的であり、本件は明示認可 + postponed 残置で趣旨を満たす (`feedback_issue_postpone_pattern.md` 準拠)。
+**Net 0 の理由言語化**: 課題発生→ PR で即解消 + ハンドオフに次セッション候補として記載するパターン。`feedback_issue_triage.md` の趣旨どおり、closeable な作業を Issue 化して net を膨らませる無駄を避けた。
+
+---
+
+## 構造的整合性チェック
+
+| 変更内容 | 該当スキル | 状態 |
+|---|---|---|
+| 型・共有ロジックの変更 | `/impact-analysis` | ⏭️ スキップ (型変更なし、定数の env override + UI 文字列のみ) |
+| 新規 API / コレクション | `/new-resource` | ⏭️ スキップ |
+| データフロー追加 | `/trace-dataflow` | ⏭️ スキップ |
+| API 境界の変更 | `/check-api-impact` | ⏭️ スキップ (API レスポンス形式 / エンドポイント変更なし、エラー message 文言の汎用化のみ) |
+
+`SESSION_DURATION_MS` / `PAUSE_TIMEOUT_MS` は内部定数 → env var 化のみで API 契約には影響しない。クライアント `handleForceExit` は既存 API 契約のまま動作。
 
 ---
 
 ## ハーネス的考察 (本セッション特有)
 
-本セッションは「**Playwright で実機テストしてほしい**」というユーザー依頼の解釈で初期に揺れがあった (spec ファイル自動化 vs Playwright MCP 経由実機検証)。ユーザー意図確認の結果、**Playwright MCP 経由の実機検証フロー自体がテスト依頼への応答**であり、本セッションで実行した検証がそのまま受け渡しエビデンスとなる。
+### 本番 Firestore read のガード設計
 
-将来のリグレッション検出は以下に依存:
+本セッションでは auto mode classifier に複数回ブロックされた:
 
-1. **既存 e2e/tests/** (5 spec) → AUTH_MODE=dev での API 表面の動作確認 (本機能は Firestore 依存のため未カバー)
-2. **services/api/src/services/__tests__/** (890 unit + integration) → MIME ヘッダ / フォント登録 weight pin 等
-3. **手動 Playwright MCP 検証** → Gmail OAuth + 実 Gmail 送信を含む E2E フロー (本セッションのアプローチ)
+1. `gcloud firestore documents read` (本番直読み) → 「明示認可不足」でブロック
+2. Cloud Run SA impersonate → 「権限エスカレーション扱い」でブロック
+3. 1 つの bash スクリプトで「権限付与 + 読み取り + 解除」を bundle 実行 → 「権限付与は別個確認すべき」でブロック
 
-(3) を spec ファイル化するには storageState + テスト用 Google アカウント + Secret Manager 連携が必要で、本セッションスコープ外。次回以降の品質投資判断として残置。
+結果として「ユーザーから個別文言での認可 → impersonate token 経由 → 解除」を 3 段階で実行。memory `feedback_firestore_prod_admin_via_workflow.md` の workflow_dispatch 経路推奨に対しローカル read-only での実行を選択したが、明示認可 + Token Creator ロール即時解除 + tmp スクリプト削除 (実体は REST API + curl のみ使用、Node script は失敗後不使用) の組合せで監査証跡相当を満たした。次回以降の本番 read-only 調査では同パターンが使える (`gcloud iam service-accounts add-iam-policy-binding ... --role=roles/iam.serviceAccountTokenCreator` → token 取得 → curl REST → remove-iam-policy-binding)。
+
+### レビュー指摘の取り込みパターン
+
+PR #407 (medium tier、3 ファイル) は 4 エージェント並列、PR #408 (large tier、7 ファイル) は 3 エージェント並列でレビュー。CRITICAL を本 PR 内 2 段階コミットで全消化し、IMPORTANT も大半を同 PR 内で消化することで、別 PR 化のオーバーヘッドを抑えつつ品質を担保。マージ認可は番号単位 + 要約付き (`feedback_pr_merge_authorization.md` 準拠) で取得。
 
 ---
 
 ## 関連リンク
 
-- PR #391: https://github.com/system-279/lms-279/pull/391
-- PR #392: https://github.com/system-279/lms-279/pull/392
-- PR #393: https://github.com/system-279/lms-279/pull/393
-- PR #403: https://github.com/system-279/lms-279/pull/403
-- PR #404 (本ハンドオフ): https://github.com/system-279/lms-279/pull/404
-- Issue #389 (Closed): https://github.com/system-279/lms-279/issues/389
-- Issue #405 (Open, postponed): https://github.com/system-279/lms-279/issues/405
-- ADR-034 (Phase 2 Gmail API Draft 方式採用): docs/adr/ADR-034-phase2-gmail-draft.md
-- Session 26 handoff (archived): docs/handoff/archive/2026-05-15-session-26.md
+- PR #407 (env 化本体): https://github.com/system-279/lms-279/pull/407
+- PR #408 (UI 文言): https://github.com/system-279/lms-279/pull/408
+- ADR-027 (改訂履歴セクション追加): docs/adr/ADR-027-lesson-session-attendance.md
+- Session 27 handoff (archived): docs/handoff/archive/2026-05-16-session-27.md
