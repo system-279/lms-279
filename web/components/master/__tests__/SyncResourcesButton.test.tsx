@@ -31,7 +31,7 @@ describe("SyncResourcesButton", () => {
     ).toBeInTheDocument();
   });
 
-  it("AC-14 配信先 0 件: 「更新対象がない」文言", async () => {
+  it("AC-14 配信先 0 件 (tenantsCount=0): 「配信先テナントが見つかりません」文言", async () => {
     superFetchMock.mockResolvedValueOnce({
       tenantsCount: 0,
       lessonsCount: 0,
@@ -43,8 +43,26 @@ describe("SyncResourcesButton", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "実行する" }));
     expect(
-      await screen.findByText(/配信先テナントが見つからない.*PDF メタ更新対象/),
+      await screen.findByText(/配信先テナントが見つかりませんでした/),
     ).toBeInTheDocument();
+  });
+
+  it("AC-14 配信先あり・更新対象 0 件: 文法的に正しい文言を返す (Evaluator HIGH 修正検証)", async () => {
+    superFetchMock.mockResolvedValueOnce({
+      tenantsCount: 3,
+      lessonsCount: 0,
+      removedCount: 0,
+    });
+    render(<SyncResourcesButton courseId="C1" />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /既存配信先に PDF メタを反映/ }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "実行する" }));
+    expect(
+      await screen.findByText(/配信先 3 テナントには PDF メタ更新対象のレッスンがありませんでした/),
+    ).toBeInTheDocument();
+    // 文法バグ防止: "X テナントに対し、しました。" のような不正文字列が出ないこと
+    expect(screen.queryByText(/に対し、しました/)).toBeNull();
   });
 
   it("AC-14 削除モード: removedCount > 0 で削除文言が含まれる", async () => {

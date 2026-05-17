@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   LessonResource,
   LessonPdfUploadUrlResponse,
@@ -83,6 +83,14 @@ export function MasterLessonPdfUploader({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // unmount 時に進行中のアップロードを abort し、setState の to-unmounted を防ぐ
+  // (codex review 指摘: AbortSignal + cleanup の二重防御)
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setValidationError(null);
     setError(null);
@@ -132,6 +140,7 @@ export function MasterLessonPdfUploader({
             contentType: selectedFile.type,
             sizeBytes: selectedFile.size,
           }),
+          signal: controller.signal,
         },
       );
 
@@ -141,6 +150,12 @@ export function MasterLessonPdfUploader({
         (event: UploadProgressEvent) => setProgress(event.percent),
         controller.signal,
       );
+
+      // GCS PUT 成功後 ~ confirm 前のキャンセル要求を明示的に検出
+      // (codex review 指摘: ここでチェックしないと意図に反してメタ登録される)
+      if (controller.signal.aborted) {
+        throw new UploadError("aborted", "aborted");
+      }
 
       await superFetch<LessonPdfConfirmResponse>(
         `/api/v2/super/master/lessons/${lessonId}/pdf`,
@@ -152,6 +167,7 @@ export function MasterLessonPdfUploader({
             fileName: selectedFile.name,
             sizeBytes: selectedFile.size,
           }),
+          signal: controller.signal,
         },
       );
 
@@ -233,7 +249,6 @@ export function MasterLessonPdfUploader({
             accept="application/pdf"
             onChange={handleFileChange}
             className="block w-full text-sm"
-            aria-describedby={`pdf-input-help-${lessonId}`}
           />
           {selectedFile && (
             <div className="flex items-center gap-2">

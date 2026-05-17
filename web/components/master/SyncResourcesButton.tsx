@@ -20,8 +20,11 @@ interface SyncResourcesButtonProps {
 
 function formatSyncResult(result: SyncResourcesResponse): string {
   const { tenantsCount, lessonsCount, removedCount } = result;
-  if (tenantsCount === 0 && lessonsCount === 0 && removedCount === 0) {
-    return "配信先テナントが見つからない、または PDF メタ更新対象のレッスンがありませんでした。";
+  // 配信先 0 件 OR 更新対象 0 件は同一文言で扱う (Evaluator HIGH 指摘: parts 空時の文法バグ防止)
+  if (lessonsCount === 0 && removedCount === 0) {
+    return tenantsCount === 0
+      ? "配信先テナントが見つかりませんでした。"
+      : `配信先 ${tenantsCount} テナントには PDF メタ更新対象のレッスンがありませんでした。`;
   }
   const parts: string[] = [];
   if (lessonsCount > 0) parts.push(`PDF メタを ${lessonsCount} レッスンに反映`);

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MasterLessonPdfUploader } from "../MasterLessonPdfUploader";
 import { ApiError } from "@/lib/api";
+import { UploadError } from "@/lib/upload";
 
 const superFetchMock = vi.fn();
 
@@ -134,6 +135,53 @@ describe("MasterLessonPdfUploader - upload flow", () => {
       await screen.findByText(/一時的に取得できません/),
     ).toBeInTheDocument();
   });
+
+  it("AC-11 GCS PUT 失敗時: confirm は呼ばれず、再試行可能 (Evaluator 推奨)", async () => {
+    superFetchMock.mockResolvedValueOnce({
+      uploadUrl: "https://gcs.example.com/put",
+      gcsPath: "lessons/L1/x.pdf",
+      expiresAt: "2026-05-17T15:00:00Z",
+    });
+    uploadFileWithProgressMock.mockRejectedValueOnce(
+      new UploadError("network error", "network"),
+    );
+    render(
+      <MasterLessonPdfUploader lessonId="L1" resource={undefined} onUpdated={vi.fn()} />,
+    );
+    const input = screen.getByLabelText(/PDF ファイル/) as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [makePdfFile(5)] } });
+    fireEvent.click(screen.getByRole("button", { name: "アップロード" }));
+    await waitFor(() =>
+      expect(screen.getByText(/ネットワークエラー/)).toBeInTheDocument(),
+    );
+    expect(superFetchMock).toHaveBeenCalledTimes(1);
+    // 再選択 + 再アップロードが可能であることを確認
+    expect(
+      screen.getByLabelText(/PDF ファイル/) as HTMLInputElement,
+    ).toBeInTheDocument();
+  });
+
+  it("AC-12 confirm が gcs_file_missing → 専用エラー表示", async () => {
+    superFetchMock
+      .mockResolvedValueOnce({
+        uploadUrl: "https://gcs.example.com/put",
+        gcsPath: "lessons/L1/x.pdf",
+        expiresAt: "2026-05-17T15:00:00Z",
+      })
+      .mockRejectedValueOnce(
+        new ApiError(500, "gcs_file_missing", "missing"),
+      );
+    uploadFileWithProgressMock.mockResolvedValueOnce(undefined);
+    render(
+      <MasterLessonPdfUploader lessonId="L1" resource={undefined} onUpdated={vi.fn()} />,
+    );
+    const input = screen.getByLabelText(/PDF ファイル/) as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [makePdfFile(5)] } });
+    fireEvent.click(screen.getByRole("button", { name: "アップロード" }));
+    expect(
+      await screen.findByText(/アップロードが完了していません/),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("MasterLessonPdfUploader - delete/error", () => {
@@ -178,5 +226,21 @@ describe("MasterLessonPdfUploader - a11y (AC-16)", () => {
     );
     expect(screen.getByText(/old\.pdf/)).toBeInTheDocument();
     expect(screen.getByText(/3\.0 MB/)).toBeInTheDocument();
+  });
+
+  it("AC-16 アップロード中 progressbar の ARIA 属性 (Evaluator 推奨)", async () => {
+    // upload-url は never-resolve でアップロード中状態を保持
+    superFetchMock.mockImplementationOnce(() => new Promise(() => {}));
+    render(
+      <MasterLessonPdfUploader lessonId="L1" resource={undefined} onUpdated={vi.fn()} />,
+    );
+    const input = screen.getByLabelText(/PDF ファイル/) as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [makePdfFile(5)] } });
+    fireEvent.click(screen.getByRole("button", { name: "アップロード" }));
+    const progressbar = await screen.findByRole("progressbar");
+    expect(progressbar).toHaveAttribute("aria-valuenow", "0");
+    expect(progressbar).toHaveAttribute("aria-valuemin", "0");
+    expect(progressbar).toHaveAttribute("aria-valuemax", "100");
+    expect(progressbar).toHaveAttribute("aria-label", "アップロード進捗");
   });
 });
