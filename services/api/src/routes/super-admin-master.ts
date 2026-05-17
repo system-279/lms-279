@@ -11,6 +11,13 @@ import { FirestoreDataSource } from "../datasource/firestore.js";
 import type { Lesson, CourseStatus } from "../types/entities.js";
 import { distributeCourseToTenant } from "../services/course-distributor.js";
 import { generateUploadUrl, generatePlaybackUrl } from "../services/gcs.js";
+import { Storage } from "@google-cloud/storage";
+import {
+  LessonResourceError,
+  confirmPdfUpload,
+  deletePdfResource,
+  generatePdfUploadUrl,
+} from "../services/lesson-resource.js";
 import { isWorkspaceIntegrationAvailable } from "../services/google-auth.js";
 import {
   prepareDriveImport,
@@ -44,10 +51,33 @@ function serializeLesson(lesson: Lesson) {
     hasVideo: lesson.hasVideo,
     hasQuiz: lesson.hasQuiz,
     videoUnlocksPrior: lesson.videoUnlocksPrior,
+    pdfGcsPath: lesson.pdfGcsPath || undefined,
+    pdfFileName: lesson.pdfFileName || undefined,
+    pdfSizeBytes: lesson.pdfSizeBytes || undefined,
+    pdfUpdatedAt: lesson.pdfUpdatedAt || undefined,
     createdAt: lesson.createdAt,
     updatedAt: lesson.updatedAt,
   };
 }
+
+/** lesson-resource エラーを HTTP レスポンスにマップする */
+function mapLessonResourceError(res: Response, err: unknown): boolean {
+  if (!(err instanceof LessonResourceError)) return false;
+  const statusMap: Record<LessonResourceError["code"], number> = {
+    invalid_file_type: 400,
+    file_too_large: 400,
+    lesson_not_found: 404,
+    quiz_not_passed: 403,
+    access_expired: 403,
+    resource_not_found: 404,
+    gcs_unavailable: 503,
+    gcs_file_missing: 500,
+  };
+  res.status(statusMap[err.code]).json({ error: err.code, message: err.message });
+  return true;
+}
+
+const storage = new Storage();
 
 // ============================================================
 // コースCRUD
@@ -1000,6 +1030,147 @@ router.get("/master/courses/:id/distributions", async (req: Request, res: Respon
   );
 
   res.json({ distributions });
+});
+
+// ============================================================
+// 講座資料スライド PDF 管理 (ADR-036 / docs/specs/2026-05-17-course-pdf-download-design.md)
+// ============================================================
+
+/**
+ * PDF アップロード用署名 PUT URL を発行
+ * POST /master/lessons/:lessonId/pdf-upload-url
+ * body: { fileName: string, contentType: string, sizeBytes: number }
+ */
+router.post("/master/lessons/:lessonId/pdf-upload-url", async (req: Request, res: Response) => {
+  const ds = getMasterDS();
+  const lessonId = req.params.lessonId as string;
+  const { fileName, contentType, sizeBytes } = req.body ?? {};
+  if (typeof fileName !== "string" || typeof contentType !== "string" || typeof sizeBytes !== "number") {
+    res.status(400).json({ error: "invalid_request", message: "fileName / contentType / sizeBytes が必要です。" });
+    return;
+  }
+  try {
+    const result = await generatePdfUploadUrl(ds, storage, lessonId, fileName, contentType, sizeBytes);
+    res.json(result);
+  } catch (e) {
+    if (mapLessonResourceError(res, e)) return;
+    throw e;
+  }
+});
+
+/**
+ * PDF アップロード完了確認 + Firestore メタ書込み
+ * POST /master/lessons/:lessonId/pdf
+ * body: { gcsPath: string, fileName: string, sizeBytes: number }
+ */
+router.post("/master/lessons/:lessonId/pdf", async (req: Request, res: Response) => {
+  const ds = getMasterDS();
+  const lessonId = req.params.lessonId as string;
+  const { gcsPath, fileName, sizeBytes } = req.body ?? {};
+  if (typeof gcsPath !== "string" || typeof fileName !== "string" || typeof sizeBytes !== "number") {
+    res.status(400).json({ error: "invalid_request", message: "gcsPath / fileName / sizeBytes が必要です。" });
+    return;
+  }
+  try {
+    const resource = await confirmPdfUpload(ds, storage, lessonId, gcsPath, fileName, sizeBytes);
+    res.json({ resource });
+  } catch (e) {
+    if (mapLessonResourceError(res, e)) return;
+    throw e;
+  }
+});
+
+/**
+ * マスターレッスンの PDF を削除
+ * DELETE /master/lessons/:lessonId/pdf
+ */
+router.delete("/master/lessons/:lessonId/pdf", async (req: Request, res: Response) => {
+  const ds = getMasterDS();
+  const lessonId = req.params.lessonId as string;
+  try {
+    await deletePdfResource(ds, storage, lessonId);
+    res.json({ status: "deleted" });
+  } catch (e) {
+    if (mapLessonResourceError(res, e)) return;
+    throw e;
+  }
+});
+
+/**
+ * 既存配信先テナントへ PDF メタを遡及反映
+ * POST /master/courses/:courseId/sync-resources
+ *
+ * 動画・テスト構造には触らず、配信済みテナント lessons の PDF 4 フィールドのみを
+ * マスター最新値に同期する。マスター更新後の追加配信が不要な PDF 専用後追い反映用。
+ */
+router.post("/master/courses/:courseId/sync-resources", async (req: Request, res: Response) => {
+  const masterDs = getMasterDS();
+  const masterCourseId = req.params.courseId as string;
+
+  const masterCourse = await masterDs.getCourseById(masterCourseId);
+  if (!masterCourse) {
+    res.status(404).json({ error: "not_found", message: "マスターコースが見つかりません。" });
+    return;
+  }
+
+  const masterLessons = await masterDs.getLessons({ courseId: masterCourseId });
+  const db = getFirestore();
+
+  // 配信済みテナントの sourceMasterCourseId が一致するコースを検索
+  const tenantsSnap = await db.collection("tenants").get();
+  const tenantDocs = tenantsSnap.docs.filter((d) => d.id !== "_master");
+  let tenantsCount = 0;
+  let lessonsCount = 0;
+  let removedCount = 0;
+
+  for (const tenantDoc of tenantDocs) {
+    const tenantId = tenantDoc.id;
+    const courseSnap = await db
+      .collection(`tenants/${tenantId}/courses`)
+      .where("sourceMasterCourseId", "==", masterCourseId)
+      .get();
+    if (courseSnap.empty) continue;
+
+    let tenantTouched = false;
+    for (const courseDoc of courseSnap.docs) {
+      const tenantLessonsSnap = await db
+        .collection(`tenants/${tenantId}/lessons`)
+        .where("courseId", "==", courseDoc.id)
+        .get();
+
+      // テナントの各レッスンに対応するマスターレッスンを title + order で照合
+      // (id はリマップ済みのため index は使えない。同コース内で title + order は一意の前提)
+      for (const tenantLessonDoc of tenantLessonsSnap.docs) {
+        const tenantLessonData = tenantLessonDoc.data();
+        const matched = masterLessons.find(
+          (m) => m.title === tenantLessonData.title && m.order === tenantLessonData.order,
+        );
+        if (!matched) continue;
+        const updateData: Record<string, unknown> = { updatedAt: new Date() };
+        if (matched.pdfGcsPath) {
+          updateData.pdfGcsPath = matched.pdfGcsPath;
+          updateData.pdfFileName = matched.pdfFileName;
+          updateData.pdfSizeBytes = matched.pdfSizeBytes;
+          updateData.pdfUpdatedAt = matched.pdfUpdatedAt;
+          lessonsCount++;
+        } else if (tenantLessonData.pdfGcsPath) {
+          // マスター側で PDF が削除されたら、テナント側のメタも空文字でクリア
+          updateData.pdfGcsPath = "";
+          updateData.pdfFileName = "";
+          updateData.pdfSizeBytes = 0;
+          updateData.pdfUpdatedAt = new Date().toISOString();
+          removedCount++;
+        }
+        if (Object.keys(updateData).length > 1) {
+          await tenantLessonDoc.ref.set(updateData, { merge: true });
+          tenantTouched = true;
+        }
+      }
+    }
+    if (tenantTouched) tenantsCount++;
+  }
+
+  res.json({ tenantsCount, lessonsCount, removedCount });
 });
 
 export const masterRouter = router;

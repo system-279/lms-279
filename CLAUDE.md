@@ -75,6 +75,7 @@ npm run test
 | `SUPER_ADMIN_EMAILS` | スーパー管理者メールアドレス（カンマ区切り） |
 | `GCS_VIDEO_BUCKET` | 動画保存バケット名（default: lms-279-videos） |
 | `GCS_UPLOAD_BUCKET` | 一時アップロードバケット名（default: lms-279-uploads） |
+| `GCS_RESOURCE_BUCKET` | 講座資料 PDF 保存バケット名（default: lms-279-resources、ADR-036） |
 | `GOOGLE_WORKSPACE_ADMIN_EMAIL` | DWD用Workspace管理者メール（Google Drive/Docs連携） |
 | `VERTEX_AI_LOCATION` | Vertex AIリージョン（default: asia-northeast1） |
 | `SESSION_DURATION_MS` | レッスンセッション上限（ミリ秒、正の整数、default: 7200000 = 2時間。本番は10800000 = 3時間） |
@@ -101,6 +102,7 @@ npm run test
 - **Google Workspace連携**: DWDでDrive動画インポート + Docsテスト生成（ADR-026）
 - **出席管理**: lesson_sessionsで入退室打刻、15分一時停止/セッション制限時間で強制退室（`SESSION_DURATION_MS` env、デフォルト 2 時間。ADR-027）
 - **テスト戦略**: InMemoryDataSource中心の統合テスト（ADR-028）
+- **講座資料PDF配信**: レッスン単位、テスト合格後DL、`videoAccessUntil`まで有効、新バケット`lms-279-resources`、GCSは全テナント共有（ADR-036）
 - **タイムゾーン基準**: 受講期限はUTC日末保存、JST表示（ADR-029）
 - **FE-BE共有型**: `@lms-279/shared-types`でAPIレスポンスDTOを共有。新規APIエンドポイント追加時はshared-typesに型を先に定義すること
 

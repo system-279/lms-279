@@ -93,6 +93,14 @@ export interface Lesson {
   hasVideo: boolean;
   hasQuiz: boolean;
   videoUnlocksPrior: boolean;
+  /** 講座資料 PDF: GCS オブジェクトキー。受講者向けレスポンスには含めない。 */
+  pdfGcsPath?: string;
+  /** 講座資料 PDF: 受講者 DL 時の Content-Disposition で使用するファイル名 (日本語可)。 */
+  pdfFileName?: string;
+  /** 講座資料 PDF: UI 表示用ファイルサイズ (バイト)。 */
+  pdfSizeBytes?: number;
+  /** 講座資料 PDF: 最終更新日時 (ISO 8601)。マスター/テナント間の追跡用。 */
+  pdfUpdatedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

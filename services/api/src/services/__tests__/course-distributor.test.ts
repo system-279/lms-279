@@ -408,4 +408,63 @@ describe("distributeCourseToTenant", () => {
     expect(result.reason).toContain("Firestore connection error");
     expect(batchSet).not.toHaveBeenCalled();
   });
+
+  // -------------------------------------------
+  // 講座資料 PDF メタのコピー (ADR-024 同方針: メタはディープコピー、GCS パス共有)
+  // -------------------------------------------
+  it("PDF 添付済みマスターレッスン → テナント側 lessons に 4 フィールドコピーされる", async () => {
+    const masterCourse = makeMasterCourse();
+    const lessonsWithPdf: Lesson[] = makeLessons().map((l, i) =>
+      i === 0
+        ? {
+            ...l,
+            pdfGcsPath: "lessons/lesson-1/123_intro.pdf",
+            pdfFileName: "intro.pdf",
+            pdfSizeBytes: 12345,
+            pdfUpdatedAt: "2026-05-17T00:00:00.000Z",
+          }
+        : l,
+    );
+    mockGetCourseById.mockResolvedValue(masterCourse);
+    mockGetLessons.mockResolvedValue(lessonsWithPdf);
+    mockGetVideos.mockResolvedValue([]);
+    mockGetQuizzes.mockResolvedValue([]);
+
+    const { mockDb, batchSet } = createMockDb();
+    await distributeCourseToTenant(mockDb as never, "master-course-1", "tenant-abc", "distributor-user");
+
+    const lessonCall1 = batchSet.mock.calls[1];
+    const lessonData1 = lessonCall1[1];
+    // GCS パスはマスターのまま共有
+    expect(lessonData1.pdfGcsPath).toBe("lessons/lesson-1/123_intro.pdf");
+    expect(lessonData1.pdfFileName).toBe("intro.pdf");
+    expect(lessonData1.pdfSizeBytes).toBe(12345);
+    expect(lessonData1.pdfUpdatedAt).toBe("2026-05-17T00:00:00.000Z");
+
+    // PDF 未添付のレッスン2 には PDF メタが書き込まれていない (undefined を Firestore に渡さない)
+    const lessonCall2 = batchSet.mock.calls[2];
+    const lessonData2 = lessonCall2[1];
+    expect(lessonData2.pdfGcsPath).toBeUndefined();
+    expect(lessonData2.pdfFileName).toBeUndefined();
+    expect(lessonData2.pdfSizeBytes).toBeUndefined();
+    expect(lessonData2.pdfUpdatedAt).toBeUndefined();
+  });
+
+  it("PDF 全未添付マスターコース → どのレッスンにも PDF メタが含まれない", async () => {
+    mockGetCourseById.mockResolvedValue(makeMasterCourse());
+    mockGetLessons.mockResolvedValue(makeLessons());
+    mockGetVideos.mockResolvedValue([]);
+    mockGetQuizzes.mockResolvedValue([]);
+
+    const { mockDb, batchSet } = createMockDb();
+    await distributeCourseToTenant(mockDb as never, "master-course-1", "tenant-abc", "distributor-user");
+
+    for (const call of batchSet.mock.calls.slice(1, 3)) {
+      const data = call[1];
+      expect(data.pdfGcsPath).toBeUndefined();
+      expect(data.pdfFileName).toBeUndefined();
+      expect(data.pdfSizeBytes).toBeUndefined();
+      expect(data.pdfUpdatedAt).toBeUndefined();
+    }
+  });
 });

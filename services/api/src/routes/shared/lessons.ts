@@ -4,9 +4,33 @@
  */
 
 import { Router, Request, Response } from "express";
-import { requireAdmin } from "../../middleware/auth.js";
+import { Storage } from "@google-cloud/storage";
+import { requireAdmin, requireUser } from "../../middleware/auth.js";
+import {
+  LessonResourceError,
+  generatePdfDownloadUrl,
+  toLessonResource,
+} from "../../services/lesson-resource.js";
 
 const router = Router();
+const storage = new Storage();
+
+/** lesson-resource エラーを HTTP レスポンスにマップする */
+function mapLessonResourceError(res: Response, err: unknown): boolean {
+  if (!(err instanceof LessonResourceError)) return false;
+  const statusMap: Record<LessonResourceError["code"], number> = {
+    invalid_file_type: 400,
+    file_too_large: 400,
+    lesson_not_found: 404,
+    quiz_not_passed: 403,
+    access_expired: 403,
+    resource_not_found: 404,
+    gcs_unavailable: 503,
+    gcs_file_missing: 500,
+  };
+  res.status(statusMap[err.code]).json({ error: err.code, message: err.message });
+  return true;
+}
 
 // ============================================================
 // 管理者向けエンドポイント（全て requireAdmin）
@@ -290,5 +314,67 @@ router.delete(
     res.status(204).send();
   }
 );
+
+// ============================================================
+// 受講者向けエンドポイント (ADR-036 / docs/specs/2026-05-17-course-pdf-download-design.md)
+// ============================================================
+
+/**
+ * レッスン詳細取得 (受講者向け)
+ * GET /lessons/:lessonId
+ *
+ * 講座資料 PDF メタを `resource?` として含める (pdfGcsPath は除外、内部実装を露出しない)。
+ * 認可は requireUser のみ (tenant guard は親ルーターで適用済み)。
+ * 列挙攻撃対策: 他テナントの lessonId はそもそも DataSource (tenant 別) で見つからず 404。
+ */
+router.get("/lessons/:lessonId", requireUser, async (req: Request, res: Response) => {
+  const ds = req.dataSource!;
+  const lessonId = req.params.lessonId as string;
+
+  const lesson = await ds.getLessonById(lessonId);
+  if (!lesson) {
+    res.status(404).json({ error: "lesson_not_found", message: "対象レッスンが見つかりません" });
+    return;
+  }
+
+  res.json({
+    lesson: {
+      id: lesson.id,
+      courseId: lesson.courseId,
+      title: lesson.title,
+      order: lesson.order,
+      hasVideo: lesson.hasVideo,
+      hasQuiz: lesson.hasQuiz,
+      videoUnlocksPrior: lesson.videoUnlocksPrior,
+      createdAt: lesson.createdAt,
+      updatedAt: lesson.updatedAt,
+    },
+    resource: toLessonResource(lesson),
+  });
+});
+
+/**
+ * 講座資料 PDF ダウンロード URL 取得 (受講者向け)
+ * GET /lessons/:lessonId/pdf-download
+ *
+ * 認可順序: lesson 存在 → quizPassed=true → videoAccessUntil 未経過 → pdf 添付済み。
+ * pass したら 15 分有効の署名 URL を返す。
+ */
+router.get("/lessons/:lessonId/pdf-download", requireUser, async (req: Request, res: Response) => {
+  const ds = req.dataSource!;
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ error: "unauthenticated", message: "認証されていません" });
+    return;
+  }
+  const lessonId = req.params.lessonId as string;
+  try {
+    const result = await generatePdfDownloadUrl(ds, storage, lessonId, userId);
+    res.json(result);
+  } catch (e) {
+    if (mapLessonResourceError(res, e)) return;
+    throw e;
+  }
+});
 
 export const lessonsRouter = router;
