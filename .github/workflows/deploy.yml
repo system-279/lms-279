@@ -87,7 +87,9 @@ jobs:
           # 2時間運用では time_limit 強制退室が頻発したため延長 (2026-05-16, 現場声対応)
           # GCS_RESOURCE_BUCKET=lms-279-resources: 講座資料 PDF (ADR-036) の保存先。
           # 動画バケットとは別に独立して IAM/lifecycle/監査を管理する。
-          # 単一バケット運用 (dev project / dev Cloud Run なし、demo は object prefix で分離)。
+          # 単一バケット運用 (dev project / dev Cloud Run なし)。
+          # PDF object は master lesson prefix (lessons/{masterLessonId}/...) で管理し、
+          # tenant 配信は Firestore メタ (pdfGcsPath) のディープコピーで分離する。
           # 2026-05-17 にバケット作成済み + default compute SA に objectAdmin (bucket scope) 付与済み。
           ENV_VARS="NODE_ENV=production,DEMO_ENABLED=true,AUTH_MODE=firebase,CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net,SESSION_DURATION_MS=10800000,GCS_RESOURCE_BUCKET=lms-279-resources"
           if [ -n "${{ secrets.SUPER_ADMIN_EMAILS }}" ]; then

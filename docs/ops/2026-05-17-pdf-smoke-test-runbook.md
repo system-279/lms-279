@@ -2,7 +2,9 @@
 
 **対象機能**: ADR-036 講座資料スライド PDF 配信 (PR #410)
 **目的**: 本番 Cloud Run 上で機能の end-to-end 動作を「smoke 専用リソースに封じ込めた」状態で検証し、実コンテンツ投入前に正常動作を確認する
-**ステータス**: Draft — 実行待ち
+**ステータス**: 初版 — 実行待ち（codex review 反映済み: High 2 件修正、Medium/Low の細部は実機実行時に AI と協調補正）
+
+> **重要**: 本 runbook は実機実行時に AI (Claude Code セッション) と協調進行する前提（§10 参照）。各 step のレスポンスを AI に共有し、route 実装との細部不整合があれば AI が補正コマンドを提案する設計。
 
 ## 1. 前提
 
@@ -74,7 +76,10 @@ https://api-3zcica5euq-an.a.run.app/api/v2
 export API_BASE="https://api-3zcica5euq-an.a.run.app/api/v2"
 export SUPER_TOKEN="eyJ..."          # 2.1 で取得
 export USER_TOKEN="eyJ..."           # 2.2 で取得
-export SMOKE_TENANT="demo"           # smoke 用テナント ID (実テナントは避ける)
+export SMOKE_TENANT="demo"           # smoke 用テナント ID
+# ⚠️ 禁止テナント (実コンテンツ配信先、絶対に SMOKE_TENANT に指定しない):
+#   - 8vexhzpc 等の本番運用テナント
+# 推奨: 既存の demo 系テナント、または事前に新規作成した smoke 専用テナント (例: smoke-2026-05-17)
 export SMOKE_PDF_PATH="$HOME/Desktop/smoke-test-2026-05-17.pdf"  # ローカルにダミー PDF
 ```
 
@@ -177,7 +182,7 @@ curl -X POST "$API_BASE/super/master/lessons/$SMOKE_LESSON_ID/pdf" \
 {"resource":{"pdfFileName":"smoke-test-2026-05-17.pdf","pdfSizeBytes":<実サイズ>,"pdfUpdatedAt":"..."}}
 ```
 
-> サーバーは実 GCS metadata を信頼するため `sizeBytes` がリクエスト値と異なれば 400 `file_too_large` 等が返る (Codex High #2 対策)
+> **実装挙動 (Codex High #2 対策)**: サーバーは GCS metadata の actual size を信頼して `pdfSizeBytes` に保存する。actual size が 50 MB を超える、または contentType が `application/pdf` でない場合のみ拒否 (`file_too_large` / `invalid_file_type`)。request の `sizeBytes` 値と実 GCS metadata の差異自体は reject 条件ではない。
 
 ### Step 7: マスターコース公開
 
@@ -197,30 +202,91 @@ curl -X POST "$API_BASE/super/master/distribute" \
   -d "{\"courseIds\":[\"$SMOKE_COURSE_ID\"],\"tenantIds\":[\"$SMOKE_TENANT\"]}"
 ```
 
-**期待レスポンス (200)**: `{"results":[{"tenantId":"<SMOKE_TENANT>","courseId":"<新 tenant courseId>","status":"distributed",...}]}`
+**期待レスポンス (200)** (`course-distributor.ts` の `DistributionResult` 型に基づく):
+```json
+{"results":[{"tenantId":"<SMOKE_TENANT>","courseId":"<新 tenant courseId>","masterCourseId":"<SMOKE_COURSE_ID>","status":"success","lessonsCount":1,"videosCount":0,"quizzesCount":1}]}
+```
 
 → `export TENANT_COURSE_ID="<新 tenant courseId>"`
-→ `export TENANT_LESSON_ID=` で TenantSide のレッスン ID を別途確認 (`GET /api/v2/$SMOKE_TENANT/courses/$TENANT_COURSE_ID/lessons` 等)
+
+> **注意**: 同じ smoke コースが既配信なら `status: "skipped"` が返る。その場合は事前にクリーンアップ (§6) 完了確認、または `"force": true` を付与して再配信。
+
+### Step 8.5: 配信先テナントの course を published 化
+
+配信直後の tenant course は `status: "draft"`。受講者向け `GET /courses/:id` と `GET /lessons/:lessonId/pdf-download` は course が `published` でないと 404 (`shared/courses.ts:283`, `lesson-resource.ts:261`)。
+
+**選択肢 A. Firestore コンソールで手動更新** (推奨、確実):
+
+1. https://console.firebase.google.com/project/lms-279/firestore で
+   `tenants/$SMOKE_TENANT/courses/$TENANT_COURSE_ID` を開く
+2. `status` フィールドを `draft` → `published` に編集して保存
+
+**選択肢 B. admin token があれば API 経由**:
+
+smoke テナントの admin role アカウントの ID Token を `ADMIN_TOKEN` として用意 (super-admin token は `role==="admin"` を満たさず 403 になるため admin 専用 token が必要):
+
+```bash
+curl -X PATCH "$API_BASE/$SMOKE_TENANT/admin/courses/$TENANT_COURSE_ID/publish" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+**期待 (200)**: `{"course":{"status":"published",...}}`
+
+### Step 8.6: 受講者ロールで tenant lesson ID を取得
+
+```bash
+curl "$API_BASE/$SMOKE_TENANT/courses/$TENANT_COURSE_ID" \
+  -H "Authorization: Bearer $USER_TOKEN"
+```
+
+**期待 (200)**: `{"enrollmentSetting":{"videoAccessUntil":"..."},"course":{...},"lessons":[{"id":"<TENANT_LESSON_ID>","title":"[SMOKE] レッスン1","hasQuiz":true,...}]}`
+
+→ `export TENANT_LESSON_ID="<lesson id>"`
+→ `enrollmentSetting.videoAccessUntil` が **未来日** であることを確認 (過去日なら Firestore コンソールで `tenants/$SMOKE_TENANT/tenant_enrollment_settings/_config` を確認・修正、ない場合は新規作成)
 
 ### Step 9: 受講者ロールで Quiz 受験 → 合格
 
-具体の attempt 開始/送信 endpoint は `docs/api.md` の Quiz セクション参照。流れ:
+quiz-attempts route の正確なパス (services/api/src/routes/shared/quiz-attempts.ts):
+
+#### 9a. tenant 側 quiz 情報を取得
 
 ```bash
-# 9a. attempt 開始
-curl -X POST "$API_BASE/$SMOKE_TENANT/lessons/$TENANT_LESSON_ID/quiz/attempts" \
+curl "$API_BASE/$SMOKE_TENANT/quizzes/by-lesson/$TENANT_LESSON_ID" \
   -H "Authorization: Bearer $USER_TOKEN"
-# → {"attemptId":"<ATTEMPT_ID>",...}
-
-# 9b. attempt 提出 (Step 3 の correctChoiceId="a" を選ぶ)
-curl -X POST "$API_BASE/$SMOKE_TENANT/quiz-attempts/<ATTEMPT_ID>/submit" \
-  -H "Authorization: Bearer $USER_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"answers":[{"questionId":"<Q_ID>","choiceId":"a"}]}'
-# → {"score":100,"passed":true}
 ```
 
-**期待**: `passed: true`
+**期待 (200)**:
+```json
+{"quiz":{"id":"<TENANT_QUIZ_ID>","title":"[SMOKE] 検証用テスト","passThreshold":50,"questions":[{"id":"<Q_ID>","text":"smoke test 用の自明問題","choices":[{"id":"<CHOICE_A_ID>","text":"正解"},{"id":"<CHOICE_B_ID>","text":"不正解"}]}]},"userAttemptCount":0,...}
+```
+
+→ `export TENANT_QUIZ_ID="<quiz id>"`、`export Q_ID="<question id>"`、`export CHOICE_A_ID="<正解 choice id>"`
+
+> **注意**: questions[].choices[].id は Step 3 の入力 (`"a"` / `"b"`) と異なる可能性あり。Step 3 で渡した値が保持されているか、サーバー側で UUID 等にリマップされているかは実機レスポンスで確認。
+
+#### 9b. attempt 開始
+
+```bash
+curl -X POST "$API_BASE/$SMOKE_TENANT/quizzes/$TENANT_QUIZ_ID/attempts" \
+  -H "Authorization: Bearer $USER_TOKEN"
+```
+
+**期待 (201)**: `{"attempt":{"id":"<ATTEMPT_ID>","quizId":"<TENANT_QUIZ_ID>","attemptNumber":1,"status":"in_progress",...}}`
+
+→ `export ATTEMPT_ID="<attempt id>"`
+
+#### 9c. attempt 提出（採点）
+
+```bash
+curl -X PATCH "$API_BASE/$SMOKE_TENANT/quiz-attempts/$ATTEMPT_ID" \
+  -H "Authorization: Bearer $USER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"answers\":{\"$Q_ID\":[\"$CHOICE_A_ID\"]}}"
+```
+
+> **重要**: body は `answers: {[questionId]: [choiceId 配列]}` のオブジェクト形式（複数選択対応のため値が配列）。`[{questionId, choiceId}]` 配列形式ではない。
+
+**期待 (200)**: `{"attempt":{"score":100,"isPassed":true,"status":"submitted",...}}`
 
 ### Step 10: PDF DL URL 取得 (合格後)
 
@@ -249,8 +315,13 @@ curl "$API_BASE/$SMOKE_TENANT/lessons/$TENANT_LESSON_ID/pdf-download" \
 
 #### 11b. lessonId を別テナントのものに置換 (列挙攻撃対策確認)
 
+> **禁止**: 本番運用テナント (`8vexhzpc` 等) の lessonId は使わない (アクセス試行ログが残るため誤検知リスク)。
+>
+> **推奨**: smoke 用に第二のテストテナントを準備し、その lessonId を使う。または同一テナント内の意図的に存在しない UUID (`00000000-0000-0000-0000-000000000000`) を使う (この場合 404 だが lesson_not_found の存在確認のみ。テナント跨ぎの列挙対策は別途検証が必要)。
+
 ```bash
-curl "$API_BASE/$SMOKE_TENANT/lessons/<他テナントの lessonId>/pdf-download" \
+# 同一テナントの存在しない UUID で 404 を確認
+curl "$API_BASE/$SMOKE_TENANT/lessons/00000000-0000-0000-0000-000000000000/pdf-download" \
   -H "Authorization: Bearer $USER_TOKEN"
 ```
 
@@ -258,25 +329,45 @@ curl "$API_BASE/$SMOKE_TENANT/lessons/<他テナントの lessonId>/pdf-download
 
 ## 6. クリーンアップ
 
-smoke 検証が完了したら以下を順次実行:
+smoke 検証が完了したら以下を順次実行。**tenant 側は cascade 削除されないため Firestore コンソールでの個別削除が必須**。
+
+### 6.1 マスターレッスンの PDF メタ削除
 
 ```bash
-# 6.1 マスターレッスンの PDF メタ削除 (GCS object は orphan に残る → 別途 cleanup ジョブ)
 curl -X DELETE "$API_BASE/super/master/lessons/$SMOKE_LESSON_ID/pdf" \
   -H "Authorization: Bearer $SUPER_TOKEN"
-
-# 6.2 配信先テナントの smoke コース削除 (テナント管理者 admin endpoint)
-#     → admin API の course/lesson 削除 endpoint を使う、または Firestore コンソールから手動削除
-
-# 6.3 マスターコース削除 (関連 lessons / quiz / video も一括削除)
-curl -X DELETE "$API_BASE/super/master/courses/$SMOKE_COURSE_ID" \
-  -H "Authorization: Bearer $SUPER_TOKEN"
-
-# 6.4 (任意) GCS object 手動削除
-gcloud storage rm "gs://lms-279-resources/$SMOKE_GCS_PATH"
 ```
 
-> **note**: master 側 PDF 削除では GCS object は残す設計 (Codex High #1、配信済みテナント保護)。smoke では tenant 側も即削除するので 6.4 で明示的に GCS object も削除する
+> master 側 PDF 削除では GCS object は残す設計 (Codex High #1、配信済みテナント保護)。smoke では 6.4 で明示的に削除する。
+
+### 6.2 配信先テナントの smoke コース関連データ削除 (Firestore コンソール手動)
+
+tenant 側は admin endpoint の cascade がなく、`courses` を archive→delete しても `lessons` / `quizzes` / `quiz_attempts` / `user_progress` / `course_progress` は残る。以下を https://console.firebase.google.com/project/lms-279/firestore で個別削除:
+
+- `tenants/$SMOKE_TENANT/courses/$TENANT_COURSE_ID`
+- `tenants/$SMOKE_TENANT/lessons/$TENANT_LESSON_ID`
+- `tenants/$SMOKE_TENANT/quizzes/$TENANT_QUIZ_ID`
+- `tenants/$SMOKE_TENANT/quiz_attempts` の中で `quizId == $TENANT_QUIZ_ID` のドキュメント全て
+- `tenants/$SMOKE_TENANT/user_progress` の中で `lessonId == $TENANT_LESSON_ID` のドキュメント全て
+- `tenants/$SMOKE_TENANT/course_progress` の中で `courseId == $TENANT_COURSE_ID` のドキュメント全て
+
+または Firestore SDK のスクリプトで `where("sourceMasterCourseId", "==", $SMOKE_COURSE_ID)` 等で一括削除。
+
+### 6.3 マスターコース削除 (関連 lessons / quiz / video も一括削除、`super-admin-master.ts:254` で cascade)
+
+```bash
+curl -X DELETE "$API_BASE/super/master/courses/$SMOKE_COURSE_ID" \
+  -H "Authorization: Bearer $SUPER_TOKEN"
+```
+
+### 6.4 GCS object 明示削除
+
+`pdf-upload-url` は retry や差し替えで複数 object が残り得るため、master lesson prefix 配下を一括確認・削除:
+
+```bash
+gcloud storage ls "gs://lms-279-resources/lessons/$SMOKE_LESSON_ID/" 2>&1
+gcloud storage rm -r "gs://lms-279-resources/lessons/$SMOKE_LESSON_ID/" 2>&1
+```
 
 ## 7. 完了判定 (Definition of Done)
 
@@ -301,6 +392,9 @@ gcloud storage rm "gs://lms-279-resources/$SMOKE_GCS_PATH"
 | Step 10 で 403 `quiz_not_passed` | Step 9 が成功していない | quiz_attempts 再実行、`user_progress` doc を Firestore コンソールで確認 |
 | Step 10 で 403 `access_expired` | `TenantEnrollmentSetting.videoAccessUntil` の値 | smoke テナント `_config` doc を Firestore コンソールで確認、過去日なら未来日に更新 |
 | Step 10 で 404 `resource_not_found` | Step 6 confirm 失敗 / Step 8 配信が PDF メタを伝播していない | Firestore で master / tenant 両方の lesson doc を確認 |
+| Step 8.6 で 404 / Step 10 で 404 `lesson_not_found` (PDF メタは正しいのに) | tenant course が `status: "draft"` のまま (`shared/courses.ts:283`, `lesson-resource.ts:261`) | **Step 8.5** で tenant course を `published` 化 (Firestore コンソール手動 or admin token) |
+| Step 8.6 / Step 9 / Step 10 で 403 `access_expired` | `TenantEnrollmentSetting` 未作成 (`_config` doc 不在) または `videoAccessUntil` が過去日 | Firestore で `tenants/$SMOKE_TENANT/tenant_enrollment_settings/_config` を確認、`videoAccessUntil` を未来日 (ISO 8601、例: `"2027-12-31T23:59:59.999Z"`) で新規作成 or 更新 |
+| Step 9b で 403 `quiz_access_expired` | `TenantEnrollmentSetting.quizAccessUntil` が過去日 | 同上 doc の `quizAccessUntil` も未来日に更新 |
 
 ## 9. 監査ログ確認
 
