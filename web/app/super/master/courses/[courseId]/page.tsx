@@ -23,6 +23,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useSuperAdminFetch } from "@/lib/super-api";
+import { MasterLessonPdfUploader } from "@/components/master/MasterLessonPdfUploader";
+import { SyncResourcesButton } from "@/components/master/SyncResourcesButton";
 
 // --- Types ---
 
@@ -45,6 +47,10 @@ type Lesson = {
   order: number;
   hasVideo: boolean;
   hasQuiz: boolean;
+  videoUnlocksPrior?: boolean;
+  pdfFileName?: string;
+  pdfSizeBytes?: number;
+  pdfUpdatedAt?: string;
 };
 
 type VideoSummary = {
@@ -814,13 +820,16 @@ export default function MasterCourseDetailPage() {
       </div>
 
       {/* Course info */}
-      <div>
-        <h1 className="text-2xl font-bold">{course?.name}</h1>
-        {course?.description && (
-          <p className="text-sm text-muted-foreground mt-1">
-            {course.description}
-          </p>
-        )}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">{course?.name}</h1>
+          {course?.description && (
+            <p className="text-sm text-muted-foreground mt-1">
+              {course.description}
+            </p>
+          )}
+        </div>
+        <SyncResourcesButton courseId={courseId} />
       </div>
 
       {/* Lessons header */}
@@ -1355,6 +1364,26 @@ export default function MasterCourseDetailPage() {
                           {quizError}
                         </div>
                       )}
+                    </div>
+
+                    {/* PDF section (ADR-036) */}
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-semibold">講座資料 (PDF)</h3>
+                      <MasterLessonPdfUploader
+                        lessonId={lesson.id}
+                        resource={
+                          lesson.pdfFileName &&
+                          lesson.pdfSizeBytes !== undefined &&
+                          lesson.pdfUpdatedAt
+                            ? {
+                                pdfFileName: lesson.pdfFileName,
+                                pdfSizeBytes: lesson.pdfSizeBytes,
+                                pdfUpdatedAt: lesson.pdfUpdatedAt,
+                              }
+                            : undefined
+                        }
+                        onUpdated={fetchData}
+                      />
                     </div>
                   </div>
                 )}
