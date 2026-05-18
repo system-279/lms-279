@@ -1368,7 +1368,6 @@ export default function MasterCourseDetailPage() {
 
                     {/* PDF section (ADR-036) */}
                     <div className="space-y-3">
-                      <h3 className="text-sm font-semibold">講座資料 (PDF)</h3>
                       <MasterLessonPdfUploader
                         lessonId={lesson.id}
                         resource={
