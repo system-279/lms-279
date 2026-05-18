@@ -23,22 +23,22 @@ function formatSyncResult(result: SyncResourcesResponse): string {
   // 配信先 0 件 OR 更新対象 0 件は同一文言で扱う (Evaluator HIGH 指摘: parts 空時の文法バグ防止)
   if (lessonsCount === 0 && removedCount === 0) {
     return tenantsCount === 0
-      ? "配信先テナントが見つかりませんでした。"
-      : `配信先 ${tenantsCount} テナントには PDF メタ更新対象のレッスンがありませんでした。`;
+      ? "このコースを配信しているテナントがありません。"
+      : `配信先の ${tenantsCount} 件のテナントには、更新対象の資料がありませんでした。`;
   }
   const parts: string[] = [];
-  if (lessonsCount > 0) parts.push(`PDF メタを ${lessonsCount} レッスンに反映`);
-  if (removedCount > 0) parts.push(`${removedCount} レッスンの PDF メタを削除`);
-  return `${tenantsCount} テナントに対し、${parts.join("、")}しました。`;
+  if (lessonsCount > 0) parts.push(`${lessonsCount} 件のレッスン資料を反映`);
+  if (removedCount > 0) parts.push(`${removedCount} 件のレッスン資料を削除`);
+  return `${tenantsCount} 件のテナントに対し、${parts.join("、")}しました。`;
 }
 
 function formatSyncError(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.code === "not_found") return "マスターコースが見つかりません。";
-    return err.message || "同期に失敗しました。";
+    return err.message || "反映に失敗しました。";
   }
   if (err instanceof Error) return err.message;
-  return "同期に失敗しました。";
+  return "反映に失敗しました。";
 }
 
 export function SyncResourcesButton({
@@ -79,7 +79,7 @@ export function SyncResourcesButton({
           setConfirmOpen(true);
         }}
       >
-        既存配信先に PDF メタを反映
+        配信済みテナントに資料情報を反映
       </Button>
 
       {result && (
@@ -95,12 +95,13 @@ export function SyncResourcesButton({
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>PDF メタを既存配信先に反映しますか?</DialogTitle>
+            <DialogTitle>資料情報を、配信済みテナントに反映しますか?</DialogTitle>
             <DialogDescription>
-              本コースの配信済みテナント全てに対し、マスターレッスンの PDF メタ
-              (ファイル名 / サイズ / 更新日時) を遡及反映します。マスター側で
-              PDF を削除済みのレッスンは、テナント側のメタもクリアします。
-              GCS のファイル本体は移動しません。
+              このコースを既に配信しているテナントすべてに、各レッスンの資料
+              PDF の情報 (ファイル名・サイズ・更新日時) を最新に揃えます。
+              マスター側で削除した PDF は、テナント側でも見えなくなります。
+              クラウドに保存されている PDF ファイル本体はそのままで、移動も
+              削除もされません。
             </DialogDescription>
           </DialogHeader>
           {error && (
