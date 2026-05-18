@@ -47,8 +47,8 @@ gh issue list --state open --limit 15
 ### 🟢 PR #420 マージ: マスターレッスン PDF 周辺 UI の専門用語を平易な日本語に書き換え
 
 - マージコミット: `013744d`
-- ファイル: 5 (page.tsx + SyncResourcesButton.tsx + MasterLessonPdfUploader.tsx + SyncResourcesButton.test.tsx + polish commit)
-- 差分: +40 / -31 行 (初版 +36/-27 + polish +4/-4)
+- ファイル: 4 (page.tsx + SyncResourcesButton.tsx + MasterLessonPdfUploader.tsx + SyncResourcesButton.test.tsx)
+- 差分: +40 / -31 行 (初版 +36/-27 + polish +4/-4 の 2 コミット累計)
 - CI: Build / Lint / Type Check / Test 4/4 PASS、Deploy to Cloud Run success (3m57s)
 - レビュー: `/review-pr` 3 エージェント並列 (code-reviewer / pr-test-analyzer / code-simplifier) 全員 Critical/Important なし、マージ可判定
 - polish: code-simplifier rating 6 軽微指摘 2 件を反映 (助数詞ゆれ「N テナント」→「N 件のテナント」統一、削除 Dialog 冗長表現の意味重複解消)
@@ -136,7 +136,7 @@ Session 32 (PR #417 UI/UX) → Session 33 (PR #420 用語平易化) の同日 2 
 3. **Issue 化を経由せず**、計画提示 → AskUserQuestion で文言/呼称確定 → 実装 → CI green → 番号単位明示認可 → マージ → 本番反映確認
 
 判断根拠 (Session 32 と同様):
-- スコープ明確 (4-5 ファイル / 27-40 行)
+- スコープ明確 (2-4 ファイル / 17-40 行)
 - 実装期間 < 1 時間
 - triage 基準で「ユーザー明示指示」に該当するが、PR 1 本で完結するため Issue 起票はオーバーヘッド
 - decision-maker (ユーザー) が即座にスクショで結果を確認可能
