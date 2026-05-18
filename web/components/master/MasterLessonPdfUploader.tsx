@@ -345,8 +345,8 @@ export function MasterLessonPdfUploader({
             <DialogTitle>PDF を削除しますか?</DialogTitle>
             <DialogDescription>
               この資料の情報をマスター側で削除します。配信済みテナント側からは、
-              上のボタン「配信済みテナントに資料情報を反映」を実行したタイミングで
-              見えなくなります (実行するまでは表示されたままです)。
+              上のボタン「配信済みテナントに資料情報を反映」を実行するまでは
+              表示されたままです。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

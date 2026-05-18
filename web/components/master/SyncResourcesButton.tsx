@@ -24,7 +24,7 @@ function formatSyncResult(result: SyncResourcesResponse): string {
   if (lessonsCount === 0 && removedCount === 0) {
     return tenantsCount === 0
       ? "このコースを配信しているテナントがありません。"
-      : `配信先の ${tenantsCount} テナントには、更新対象の資料がありませんでした。`;
+      : `配信先の ${tenantsCount} 件のテナントには、更新対象の資料がありませんでした。`;
   }
   const parts: string[] = [];
   if (lessonsCount > 0) parts.push(`${lessonsCount} 件のレッスン資料を反映`);

@@ -59,7 +59,7 @@ describe("SyncResourcesButton", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "実行する" }));
     expect(
-      await screen.findByText(/配信先の 3 テナントには、更新対象の資料がありませんでした/),
+      await screen.findByText(/配信先の 3 件のテナントには、更新対象の資料がありませんでした/),
     ).toBeInTheDocument();
     // 文法バグ防止: "X テナントに対し、しました。" のような不正文字列が出ないこと
     expect(screen.queryByText(/に対し、しました/)).toBeNull();
