@@ -153,8 +153,8 @@ questions配列の各要素:
 | status | string | active / completed / force_exited / abandoned |
 | entryAt | Timestamp | 入室打刻（動画再生開始時） |
 | exitAt | Timestamp? | 退室打刻（テスト送信 or 強制退室時） |
-| exitReason | string? | quiz_submitted / pause_timeout / time_limit / browser_close |
-| deadlineAt | Timestamp | entryAt + セッション制限時間（事前計算、`SESSION_DURATION_MS` env で設定。デフォルト 2 時間） |
+| exitReason | string? | quiz_submitted / pause_timeout / time_limit / browser_close / max_attempts_failed |
+| deadlineAt | Timestamp | entryAt + セッション制限時間（事前計算、`SESSION_DURATION_MS` env で設定。デフォルト 2 時間、本番運用は 3 時間） |
 | pauseStartedAt | Timestamp? | 現在の一時停止開始時刻 |
 | longestPauseSec | number | セッション中の最長一時停止秒数 |
 | sessionVideoCompleted | boolean | セッション内で動画完了したか |

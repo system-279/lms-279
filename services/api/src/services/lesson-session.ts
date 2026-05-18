@@ -8,9 +8,9 @@ import type { LessonSession, SessionExitReason } from "../types/entities.js";
 import { parsePositiveDurationMs } from "../utils/env-config.js";
 import { updateCourseProgress } from "./progress.js";
 
-// セッション制限時間（ミリ秒、正の整数）。env var SESSION_DURATION_MS で上書き可、デフォルト 2 時間。
+// セッション制限時間（ミリ秒、正の整数）。env var SESSION_DURATION_MS で上書き可、デフォルト 2 時間、本番運用は 3 時間（10800000）。
 // 不正値（NaN / 0 以下 / 非整数 / 単位付き文字列など）は logger.error 出力後デフォルトにフォールバック。
-// 動画 60-80 分 + テスト解答時間で詰まる現場運用に対応するため env で延長可能（本番は 3 時間運用）。
+// 動画 60-80 分 + テスト解答時間で詰まる現場運用に対応するため env で延長可能（ADR-027 / PR #407 参照）。
 export const SESSION_DURATION_MS = parsePositiveDurationMs(
   process.env.SESSION_DURATION_MS,
   2 * 60 * 60 * 1000,
