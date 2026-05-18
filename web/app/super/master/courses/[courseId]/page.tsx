@@ -884,6 +884,13 @@ export default function MasterCourseDetailPage() {
                       ) : (
                         <Badge variant="outline">テストなし</Badge>
                       )}
+                      {lesson.pdfFileName ? (
+                        <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200">
+                          資料あり
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline">資料なし</Badge>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -898,7 +905,7 @@ export default function MasterCourseDetailPage() {
                       size="sm"
                       onClick={() => toggleExpanded(lesson.id)}
                     >
-                      {isExpanded ? "閉じる" : "動画/テスト管理"}
+                      {isExpanded ? "閉じる" : "動画 / テスト / 資料 を編集"}
                     </Button>
                     <Button
                       variant="outline"

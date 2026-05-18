@@ -344,8 +344,9 @@ export function MasterLessonPdfUploader({
           <DialogHeader>
             <DialogTitle>PDF を削除しますか?</DialogTitle>
             <DialogDescription>
-              マスター側 PDF メタを削除します。配信済みテナント側のメタは
-              `sync-resources` 実行時に消えます (即時削除されません)。
+              この資料の情報をマスター側で削除します。配信済みテナント側からは、
+              上のボタン「配信済みテナントに資料情報を反映」を実行したタイミングで
+              見えなくなります (実行するまでは表示されたままです)。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

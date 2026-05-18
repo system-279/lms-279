@@ -22,16 +22,16 @@ describe("SyncResourcesButton", () => {
     });
     render(<SyncResourcesButton courseId="C1" />);
     fireEvent.click(
-      screen.getByRole("button", { name: /既存配信先に PDF メタを反映/ }),
+      screen.getByRole("button", { name: /配信済みテナントに資料情報を反映/ }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "実行する" }));
     await waitFor(() => expect(superFetchMock).toHaveBeenCalled());
     expect(
-      await screen.findByText(/3 テナント.*10 レッスン.*反映/),
+      await screen.findByText(/3 件のテナント.*10 件のレッスン資料を反映/),
     ).toBeInTheDocument();
   });
 
-  it("AC-14 配信先 0 件 (tenantsCount=0): 「配信先テナントが見つかりません」文言", async () => {
+  it("AC-14 配信先 0 件 (tenantsCount=0): 「コースを配信しているテナントがありません」文言", async () => {
     superFetchMock.mockResolvedValueOnce({
       tenantsCount: 0,
       lessonsCount: 0,
@@ -39,11 +39,11 @@ describe("SyncResourcesButton", () => {
     });
     render(<SyncResourcesButton courseId="C1" />);
     fireEvent.click(
-      screen.getByRole("button", { name: /既存配信先に PDF メタを反映/ }),
+      screen.getByRole("button", { name: /配信済みテナントに資料情報を反映/ }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "実行する" }));
     expect(
-      await screen.findByText(/配信先テナントが見つかりませんでした/),
+      await screen.findByText(/このコースを配信しているテナントがありません/),
     ).toBeInTheDocument();
   });
 
@@ -55,11 +55,11 @@ describe("SyncResourcesButton", () => {
     });
     render(<SyncResourcesButton courseId="C1" />);
     fireEvent.click(
-      screen.getByRole("button", { name: /既存配信先に PDF メタを反映/ }),
+      screen.getByRole("button", { name: /配信済みテナントに資料情報を反映/ }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "実行する" }));
     expect(
-      await screen.findByText(/配信先 3 テナントには PDF メタ更新対象のレッスンがありませんでした/),
+      await screen.findByText(/配信先の 3 テナントには、更新対象の資料がありませんでした/),
     ).toBeInTheDocument();
     // 文法バグ防止: "X テナントに対し、しました。" のような不正文字列が出ないこと
     expect(screen.queryByText(/に対し、しました/)).toBeNull();
@@ -73,11 +73,11 @@ describe("SyncResourcesButton", () => {
     });
     render(<SyncResourcesButton courseId="C1" />);
     fireEvent.click(
-      screen.getByRole("button", { name: /既存配信先に PDF メタを反映/ }),
+      screen.getByRole("button", { name: /配信済みテナントに資料情報を反映/ }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "実行する" }));
     expect(
-      await screen.findByText(/2 テナント.*5 レッスン.*PDF メタを削除/),
+      await screen.findByText(/2 件のテナント.*5 件のレッスン資料を削除/),
     ).toBeInTheDocument();
   });
 
@@ -87,7 +87,7 @@ describe("SyncResourcesButton", () => {
     );
     render(<SyncResourcesButton courseId="C1" />);
     fireEvent.click(
-      screen.getByRole("button", { name: /既存配信先に PDF メタを反映/ }),
+      screen.getByRole("button", { name: /配信済みテナントに資料情報を反映/ }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "実行する" }));
     const alert = await screen.findByRole("alert");
@@ -97,7 +97,7 @@ describe("SyncResourcesButton", () => {
   it("確認 dialog でキャンセル → API 未呼出", async () => {
     render(<SyncResourcesButton courseId="C1" />);
     fireEvent.click(
-      screen.getByRole("button", { name: /既存配信先に PDF メタを反映/ }),
+      screen.getByRole("button", { name: /配信済みテナントに資料情報を反映/ }),
     );
     fireEvent.click(
       await screen.findByRole("button", { name: "キャンセル" }),
