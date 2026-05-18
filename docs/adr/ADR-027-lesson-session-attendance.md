@@ -4,8 +4,8 @@
 承認済み（2026-05-16 改訂: セッション上限を環境変数化）
 
 ## 改訂履歴
-- **2026-05-16**: セッション上限 `SESSION_DURATION_MS` および一時停止上限 `PAUSE_TIMEOUT_MS` を環境変数で上書き可能化（PR #407）。本番運用で動画 60-80 分のレッスン + テスト解答時間が 2 時間制限内に収まらない事例が複数発生（kanjikai.or.jp テナント、5/3〜5/14 で `time_limit` 強制退室 7 件）。本番は `SESSION_DURATION_MS=10800000`（3 時間）にデプロイ。不正値は `logger.error` 後にデフォルトへフォールバック。受講者向け UI 文言の「2 時間」表記の動的化は PR #408 で対応完了（`SessionRulesNotice` / `ForceExitDialog` / ヘルプ等を `deadlineAt - entryAt` から動的算出）。長期的には動画完了後にテスト専用タイマーに切り替える設計案（"Phase 3" として議論中）も検討。
-- **2026-03-30**: 強制退室発生時にそのレッスンの学習データ（`video_analytics` / `user_progress` / `quiz_attempts` の該当エントリ）を完全リセットする実装を追加（PR #134、Issue #133）。`exitReason` が `pause_timeout` / `time_limit` / `max_attempts_failed` のいずれかで `forceExitSession()` が呼ばれると、`resetLessonDataForUser()` が同期実行される。受講者は強制退室後に白紙状態から再受講可能。
+- **2026-05-16**: セッション上限 `SESSION_DURATION_MS` および一時停止上限 `PAUSE_TIMEOUT_MS` を環境変数で上書き可能化（PR #407）。本番運用で動画 60-80 分のレッスン + テスト解答時間が 2 時間制限内に収まらない事例が複数発生（kanjikai.or.jp テナント、5/3〜5/14 で `time_limit` 強制退室 7 件）。本番は `SESSION_DURATION_MS=10800000`（3 時間）にデプロイ。不正値は `logger.error` 後にデフォルトへフォールバック。受講者向け UI 文言の「2 時間」表記は PR #408 で対応完了（`SessionRulesNotice` は `deadlineAt - entryAt` から動的算出、`ForceExitDialog` / ヘルプ / API 403 message は時間値を明示しない汎用表現に変更）。長期的には動画完了後にテスト専用タイマーに切り替える設計案（"Phase 3" として議論中）も検討。
+- **2026-03-30**: 強制退室発生時にそのレッスンの学習データ（`video_analytics` / `video_events` / `quiz_attempts` / `user_progress` の該当エントリ）を完全リセットする実装を追加（PR #134、Issue #133）。`exitReason` が `pause_timeout` / `time_limit` / `max_attempts_failed` のいずれかで `forceExitSession()` が呼ばれると、`resetLessonDataForUser()` が同期実行される。**ただし `sessionVideoCompleted=true` のセッションはリセットを skip**（HTML5 video の `ended` が pause 状態を伴うため、完了後の自然な pause タイムアウトでデータが全消去されるのを防止）。受講者は強制退室後に白紙状態から再受講可能。
 
 ## コンテキスト
 受講者の出席を「入室打刻（動画再生開始）」「退室打刻（テスト送信）」で管理する要件がある。不正防止のため、一時停止 15 分超過および入室からセッション上限（`SESSION_DURATION_MS`、デフォルト 2 時間 / 本番運用は 3 時間）超過で強制退室をかける。強制退室時はそのレッスンの学習データを完全リセットし、白紙状態から再受講可能とする（PR #134）。
@@ -22,7 +22,11 @@
                           └── [ブラウザ閉じ]                    → abandoned
 ```
 
-`force_exited` 各遷移では `resetLessonDataForUser()` が同期実行され、該当レッスンの動画進捗・テスト解答記録を完全リセットする（PR #134、Issue #133）。受講者は再入室で白紙からやり直す。
+`force_exited` 各遷移では `resetLessonDataForUser()` が同期実行され、該当レッスンの動画進捗・テスト解答記録（`video_analytics` / `video_events` / `quiz_attempts` / `user_progress`）を完全リセットする（PR #134、Issue #133）。受講者は再入室で白紙からやり直す。
+
+ただし `sessionVideoCompleted=true` のセッションについては以下の例外がある:
+- `pause_timeout` 要求は受理せず active を維持（HTML5 video `ended` が pause を伴うため）
+- `forceExitSession()` が呼ばれた場合もリセットを skip（完了後のリセットを防止）
 
 セッション制限値（デフォルト / 本番運用）:
 - `SESSION_DURATION_MS`: 2 時間 / 3 時間（`10800000`）
@@ -39,7 +43,7 @@
 ### 強制退室
 - 一時停止 `PAUSE_TIMEOUT_MS`（デフォルト 15 分）: クライアントサイドカウントダウン → サーバーに force-exit 送信
 - セッション上限 `SESSION_DURATION_MS`（デフォルト 2 時間、本番運用 3 時間）: クライアントカウントダウン + サーバーサイドでテスト送信時に検証
-- 強制退室時はレッスン学習データを完全リセット（PR #134）。受講者は新規セッション（再入室）で白紙状態から再受講できる
+- 強制退室時はレッスン学習データを完全リセット（PR #134、`sessionVideoCompleted=true` のセッションは skip）。受講者は新規セッション（再入室）で白紙状態から再受講できる
 
 ### UI表示
 - 各レッスンページに受講ルールを常時表示
@@ -62,4 +66,4 @@
 - フロントエンド: 4つの新コンポーネント（SessionRulesNotice, SessionTimer, PauseTimeoutOverlay, ForceExitDialog）
 - Firestoreインデックス: `(userId, lessonId, status)`, `(courseId, status, entryAt)`
 - 環境変数: `SESSION_DURATION_MS` / `PAUSE_TIMEOUT_MS`（CLAUDE.md / Cloud Run env vars 反映）
-- DataSource API 拡張: `resetLessonDataForUser()`（InMemory / Firestore 両実装）— 強制退室時に `video_analytics` / `user_progress` / `quiz_attempts` の該当エントリを batched delete
+- DataSource API 拡張: `resetLessonDataForUser()`（InMemory / Firestore 両実装）— 強制退室時に `video_analytics` / `video_events` / `quiz_attempts` / `user_progress` の該当エントリを batched delete
