@@ -238,9 +238,9 @@ export function MasterLessonPdfUploader({
 
       {!uploading && (
         <div className="space-y-2">
-          <label className="text-xs text-muted-foreground" htmlFor={`pdf-input-${lessonId}`}>
-            PDF ファイル (最大 50 MB) を選択して
-            {resource ? "差し替え" : "アップロード"}
+          {/* label と input は a11y / 既存テスト (getByLabelText) 互換のため sr-only で残す */}
+          <label className="sr-only" htmlFor={`pdf-input-${lessonId}`}>
+            PDF ファイル (最大 50 MB)
           </label>
           <input
             ref={inputRef}
@@ -248,25 +248,41 @@ export function MasterLessonPdfUploader({
             type="file"
             accept="application/pdf"
             onChange={handleFileChange}
-            className="block w-full text-sm"
+            className="sr-only"
           />
-          {selectedFile && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">
-                選択中: {selectedFile.name} (
-                {(selectedFile.size / (1024 * 1024)).toFixed(1)} MB)
-              </span>
-              <Button type="button" size="sm" onClick={handleUpload}>
-                アップロード
-              </Button>
+          {!selectedFile ? (
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
+                variant="outline"
                 size="sm"
-                variant="ghost"
-                onClick={resetSelection}
+                onClick={() => inputRef.current?.click()}
               >
-                クリア
+                {resource ? "別の PDF を選択" : "PDF ファイルを選択"}
               </Button>
+              <span className="text-xs text-muted-foreground">
+                PDF 形式 / 最大 50 MB
+              </span>
+            </div>
+          ) : (
+            <div className="space-y-2 rounded-md border border-dashed bg-muted/30 p-3">
+              <p className="text-xs text-foreground">
+                <span className="font-medium">選択中:</span> {selectedFile.name} (
+                {(selectedFile.size / (1024 * 1024)).toFixed(1)} MB)
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" size="sm" onClick={handleUpload}>
+                  アップロード
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={resetSelection}
+                >
+                  クリア
+                </Button>
+              </div>
             </div>
           )}
         </div>
