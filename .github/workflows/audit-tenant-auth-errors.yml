@@ -1,0 +1,84 @@
+name: Audit Tenant Auth Errors
+
+# tenant 配下の auth_error_logs を直近 N 時間で集計し、reason 別件数と
+# (email_filter_domain 指定時のみ) email 別件数を表示する切り分け workflow。
+#
+# 用途:
+#   audit-allowlist-status で「対象 email では拒否ログ 0 件」と判明したとき、
+#   別 email で拒否されている可能性を切り分ける（個人 Gmail で試している等）。
+#
+# 安全機構:
+#   - read-only スクリプト（書き込み一切なし）
+#   - tenant_id 入力必須
+#   - email 別表示は email_filter_domain 指定時に限定（PII 漏洩防止）
+#
+# セキュリティ: workflow_dispatch 入力はすべて env 経由で受け、run: 内で直接 inputs を
+# 補間しない（command injection 対策）。
+# 参考: https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: 'テナント ID（必須）例: atali82i'
+        required: true
+        type: string
+      since_hours:
+        description: 'auth_error_logs を遡る時間（既定 72 時間、最大 720 時間=30 日）'
+        required: false
+        default: '72'
+        type: string
+      email_filter_domain:
+        description: 'email 別件数を表示する domain。例: fuku-no-tane.com。未指定なら reason 別のみ表示'
+        required: false
+        default: ''
+        type: string
+      top_emails:
+        description: 'email 別の上位件数（既定 20、最大 200）'
+        required: false
+        default: '20'
+        type: string
+
+jobs:
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FIREBASE_PROJECT_ID: lms-279
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
+
+      - name: Run audit script
+        env:
+          GOOGLE_CLOUD_PROJECT: lms-279
+          TENANT_ID: ${{ inputs.tenant_id }}
+          SINCE_HOURS: ${{ inputs.since_hours }}
+          EMAIL_FILTER_DOMAIN: ${{ inputs.email_filter_domain }}
+          TOP_EMAILS: ${{ inputs.top_emails }}
+        run: |
+          set -euo pipefail
+          FLAGS=("--tenant-id=$TENANT_ID")
+          if [ -n "$SINCE_HOURS" ]; then FLAGS+=("--since-hours=$SINCE_HOURS"); fi
+          if [ -n "$EMAIL_FILTER_DOMAIN" ]; then FLAGS+=("--email-filter-domain=$EMAIL_FILTER_DOMAIN"); fi
+          if [ -n "$TOP_EMAILS" ]; then FLAGS+=("--top-emails=$TOP_EMAILS"); fi
+          echo "Running with tenant=$TENANT_ID since-hours=$SINCE_HOURS domain=${EMAIL_FILTER_DOMAIN:-(none)} top-emails=$TOP_EMAILS"
+          npx tsx scripts/audit-tenant-auth-errors.ts "${FLAGS[@]}"
