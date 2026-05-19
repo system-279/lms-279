@@ -336,6 +336,115 @@ describe("buildRawMimeMessage CR/LF ヘッダインジェクション防御", ()
   });
 });
 
+describe("buildRawMimeMessage CC ヘッダサポート (案 B、Issue #433)", () => {
+  /** base64url を復号して MIME 文字列を取得するヘルパー */
+  function decodeMime(raw: string): string {
+    return Buffer.from(raw, "base64url").toString("utf-8");
+  }
+
+  it("AC-2: cc を渡すと添付なしメッセージに `Cc:` ヘッダが入る", () => {
+    const raw = buildRawMimeMessage({
+      to: "student@example.com",
+      cc: "owner@example.com",
+      subject: "件名",
+      body: "本文",
+    });
+    const mime = decodeMime(raw);
+    expect(mime).toMatch(/^To: student@example\.com\r\nCc: owner@example\.com\r\n/);
+  });
+
+  it("AC-2: cc を渡すと添付ありメッセージにも `Cc:` ヘッダが入る", () => {
+    const raw = buildRawMimeMessage({
+      to: "student@example.com",
+      cc: "owner@example.com",
+      subject: "件名",
+      body: "本文",
+      attachment: {
+        filename: "report.pdf",
+        contentType: "application/pdf",
+        content: Buffer.from("pdf-content"),
+      },
+    });
+    const mime = decodeMime(raw);
+    expect(mime).toContain("To: student@example.com\r\nCc: owner@example.com\r\n");
+  });
+
+  it("AC-3: cc が undefined なら `Cc:` ヘッダ行を出さない", () => {
+    const raw = buildRawMimeMessage({
+      to: "student@example.com",
+      subject: "件名",
+      body: "本文",
+    });
+    const mime = decodeMime(raw);
+    expect(mime).not.toMatch(/^Cc:/m);
+    expect(mime).toContain("To: student@example.com\r\nSubject:");
+  });
+
+  it("AC-3: cc が空文字なら `Cc:` ヘッダ行を出さない", () => {
+    const raw = buildRawMimeMessage({
+      to: "student@example.com",
+      cc: "",
+      subject: "件名",
+      body: "本文",
+    });
+    const mime = decodeMime(raw);
+    expect(mime).not.toMatch(/^Cc:/m);
+  });
+
+  it("AC-3: cc が全空白文字 (trim 後空) なら `Cc:` ヘッダ行を出さない", () => {
+    const raw = buildRawMimeMessage({
+      to: "student@example.com",
+      cc: "   \t  ",
+      subject: "件名",
+      body: "本文",
+    });
+    const mime = decodeMime(raw);
+    expect(mime).not.toMatch(/^Cc:/m);
+  });
+
+  it("cc は trim されてから MIME に出力される", () => {
+    const raw = buildRawMimeMessage({
+      to: "student@example.com",
+      cc: "  owner@example.com  ",
+      subject: "件名",
+      body: "本文",
+    });
+    const mime = decodeMime(raw);
+    expect(mime).toContain("Cc: owner@example.com\r\n");
+    expect(mime).not.toContain("Cc:   owner@example.com");
+  });
+
+  it("AC-5: cc に \\r\\n を含むと GmailDraftError (gmail_api_error, 400) を throw", () => {
+    expect(() =>
+      buildRawMimeMessage({
+        to: "student@example.com",
+        cc: "owner@example.com\r\nBcc: attacker@evil.com",
+        subject: "件名",
+        body: "本文",
+      }),
+    ).toThrow(GmailDraftError);
+    expect(() =>
+      buildRawMimeMessage({
+        to: "student@example.com",
+        cc: "owner@example.com\r\nBcc: attacker@evil.com",
+        subject: "件名",
+        body: "本文",
+      }),
+    ).toThrow(/MIME header injection blocked: cc/);
+  });
+
+  it("AC-5: cc に \\n のみでも throw", () => {
+    expect(() =>
+      buildRawMimeMessage({
+        to: "student@example.com",
+        cc: "owner@example.com\nX-Injected: yes",
+        subject: "件名",
+        body: "本文",
+      }),
+    ).toThrow(/MIME header injection blocked: cc/);
+  });
+});
+
 describe("buildRawMimeMessage attachment.filename 制御文字 / surrogate 防御", () => {
   const validBody = {
     to: "owner@example.com",

@@ -24,6 +24,12 @@ export interface PdfDraftAuditLog {
   createdByUid: string;
   createdByEmail: string;
   userId: string;
+  /**
+   * 受講者本人 email (To 宛先)。case B 採用後の新規宛先。
+   * 失敗時 (PDF 生成前のバリデーションエラー等) で未確定なら null を許容。
+   */
+  toEmail: string | null;
+  /** テナント管理者 email (旧 To / 新 CC)。未設定なら null。 */
   ownerEmail: string | null;
   draftId: string | null;
   status: "success" | "failed";
@@ -52,12 +58,22 @@ export async function recordPdfDraftLog(
   const now = new Date();
   const ttlAt = Timestamp.fromMillis(now.getTime() + TTL_DAYS * 86400 * 1000);
 
+  // Dual-write 戦略 (ADR-034 §7):
+  // - 旧 `ownerEmailHash`: 後方互換のため残置。読み手 (運用 query / 旧分析) が両方を読める間は維持。
+  // - 新 `recipientToHash`: To 宛先 (受講者本人) のハッシュ。
+  // - 新 `recipientCcHash`: CC 宛先 (テナント管理者) のハッシュ。CC 省略時は null。
+  // 旧スキーマのみのドキュメントとの idempotency 互換は route 層で `status + draftId`
+  // のみで判定するため、本フィールドの有無は idempotency 取得に影響しない。
+  const ccHash = log.ownerEmail ? hashEmail(log.ownerEmail) : null;
   const document = {
     createdAt: now.toISOString(),
     createdByUid: log.createdByUid,
     createdByEmailHash: hashEmail(log.createdByEmail),
     userId: log.userId,
-    ownerEmailHash: log.ownerEmail ? hashEmail(log.ownerEmail) : null,
+    // 旧 (deprecated) と新は移行期間中は同値
+    ownerEmailHash: ccHash,
+    recipientCcHash: ccHash,
+    recipientToHash: log.toEmail ? hashEmail(log.toEmail) : null,
     draftId: log.draftId,
     status: log.status,
     errorCode: log.errorCode,

@@ -36,6 +36,12 @@ export interface MimeAttachment {
 
 export interface BuildRawMimeMessageInput {
   to: string;
+  /**
+   * Optional CC header. undefined または空文字 (trim 後) なら Cc: ヘッダを発行しない。
+   * route 層で email バリデーション済 (CRLF/カンマ/制御文字を含む値は事前に拒否) の
+   * 値のみ渡す前提。library 層でも assertNoCRLF で二重防御する。
+   */
+  cc?: string;
   subject: string;
   body: string;
   attachment?: MimeAttachment;
@@ -44,6 +50,8 @@ export interface BuildRawMimeMessageInput {
 export interface CreateGmailDraftInput {
   accessToken: string;
   to: string;
+  /** Optional CC. 詳細は BuildRawMimeMessageInput.cc 参照 */
+  cc?: string;
   subject: string;
   body: string;
   attachment?: MimeAttachment;
@@ -168,11 +176,16 @@ function toBase64Url(input: string | Buffer): string {
  * pure function、テストしやすいよう外部依存なし。
  */
 export function buildRawMimeMessage(input: BuildRawMimeMessageInput): string {
-  const { to, subject, body, attachment } = input;
+  const { to, cc, subject, body, attachment } = input;
 
   // SECURITY: library 層でのヘッダインジェクション二重防御。
   // body 内の CR/LF は base64 エンコードされるため許容。
   assertNoCRLF(to, "to");
+  // CC は省略可能。空文字 (trim 後) や undefined のときは Cc: ヘッダを出さない。
+  const normalizedCc = typeof cc === "string" ? cc.trim() : "";
+  if (normalizedCc.length > 0) {
+    assertNoCRLF(normalizedCc, "cc");
+  }
   assertNoCRLF(subject, "subject");
   if (attachment) {
     assertNoCRLF(attachment.filename, "attachment.filename");
@@ -182,10 +195,14 @@ export function buildRawMimeMessage(input: BuildRawMimeMessageInput): string {
 
   const encodedSubject = encodeMimeHeader(subject);
 
+  /** Cc ヘッダ行を条件付きで挿入するヘルパー */
+  const ccLines = normalizedCc.length > 0 ? [`Cc: ${normalizedCc}`] : [];
+
   if (!attachment) {
     // 添付なしのシンプルメッセージ
     const lines = [
       `To: ${to}`,
+      ...ccLines,
       `Subject: ${encodedSubject}`,
       "MIME-Version: 1.0",
       "Content-Type: text/plain; charset=UTF-8",
@@ -207,6 +224,7 @@ export function buildRawMimeMessage(input: BuildRawMimeMessageInput): string {
 
   const lines = [
     `To: ${to}`,
+    ...ccLines,
     `Subject: ${encodedSubject}`,
     "MIME-Version: 1.0",
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
@@ -365,7 +383,7 @@ export function buildGmailDraftUrl(draftId: string): string {
 export async function createGmailDraft(
   input: CreateGmailDraftInput,
 ): Promise<CreateGmailDraftResult> {
-  const { accessToken, to, subject, body, attachment } = input;
+  const { accessToken, to, cc, subject, body, attachment } = input;
 
   if (!accessToken) {
     throw new GmailDraftError(
@@ -375,7 +393,7 @@ export async function createGmailDraft(
     );
   }
 
-  const raw = buildRawMimeMessage({ to, subject, body, attachment });
+  const raw = buildRawMimeMessage({ to, cc, subject, body, attachment });
 
   const oauth2Client = new google.auth.OAuth2();
   oauth2Client.setCredentials({ access_token: accessToken });

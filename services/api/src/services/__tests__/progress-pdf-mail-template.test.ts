@@ -254,3 +254,73 @@ describe("buildMailTemplate", () => {
     expect(result.body).toContain("推奨ペース: 完了");
   });
 });
+
+describe("buildMailTemplate 案 B (Issue #433): 二人称整合 + CC 注記条件分岐", () => {
+  it("AC-9: 本文先頭が「{userName} 様」の呼びかけで始まる", () => {
+    const result = buildMailTemplate({ data: makeData(), senderName: "管理者" });
+    const firstLine = result.body.split("\r\n")[0];
+    expect(firstLine).toBe("山田 太郎 様");
+  });
+
+  it("AC-9: userName が null なら email を「様」呼びかけに使う", () => {
+    const data = makeData();
+    data.user.name = null;
+    const result = buildMailTemplate({ data, senderName: "管理者" });
+    const firstLine = result.body.split("\r\n")[0];
+    expect(firstLine).toBe("yamada@example.com 様");
+  });
+
+  it("AC-9: 本文の二人称が「様」で統一される (旧「さん」から変更)", () => {
+    const result = buildMailTemplate({ data: makeData(), senderName: "管理者" });
+    // 件名は元の「さん」を維持 (Gmail 通知などの慣習に合わせる)
+    expect(result.subject).toContain("山田 太郎 さんの受講進捗レポート");
+    // 本文中は「様」を使う
+    expect(result.body).toContain("山田 太郎 様の受講進捗レポート");
+    expect(result.body).not.toMatch(/山田 太郎 さんの受講進捗レポートを作成しました/);
+  });
+
+  it("AC-11: ccEmail を渡さないと本文に CC 注記が含まれない", () => {
+    const result = buildMailTemplate({ data: makeData(), senderName: "管理者" });
+    expect(result.body).not.toContain("CC でお送りしています");
+    expect(result.body).not.toMatch(/ご担当者様/);
+  });
+
+  it("AC-11: ccEmail が空文字でも CC 注記が含まれない", () => {
+    const result = buildMailTemplate({ data: makeData(), senderName: "管理者", ccEmail: "" });
+    expect(result.body).not.toContain("CC でお送りしています");
+  });
+
+  it("AC-11: ccEmail が全空白文字でも CC 注記が含まれない (stripCRLF 後 0 文字)", () => {
+    const result = buildMailTemplate({ data: makeData(), senderName: "管理者", ccEmail: "   \t  " });
+    expect(result.body).not.toContain("CC でお送りしています");
+  });
+
+  it("AC-2/AC-9: ccEmail を渡すと本文末尾に CC 注記が追加される", () => {
+    const result = buildMailTemplate({
+      data: makeData(),
+      senderName: "管理者",
+      ccEmail: "owner@example.com",
+    });
+    expect(result.body).toContain("莞爾会 長遊園 のご担当者様 (owner@example.com) にも CC でお送りしています。");
+    // 注記は senderName より後に配置される
+    const lines = result.body.split("\r\n");
+    const senderIdx = lines.lastIndexOf("管理者");
+    const ccNoteIdx = lines.findIndex((l) => l.includes("CC でお送りしています"));
+    expect(ccNoteIdx).toBeGreaterThan(senderIdx);
+  });
+
+  it("ccEmail に CR/LF を含んでも本文に CR/LF が注入されない (stripCRLF で空白置換)", () => {
+    const result = buildMailTemplate({
+      data: makeData(),
+      senderName: "管理者",
+      ccEmail: "owner@example.com\r\nBcc: attacker@evil.com",
+    });
+    // CR/LF が物理的な改行として残らないこと
+    const ccNoteLine = result.body
+      .split("\r\n")
+      .find((l) => l.includes("CC でお送りしています"));
+    expect(ccNoteLine).toBeDefined();
+    expect(ccNoteLine).not.toContain("\r");
+    expect(ccNoteLine).not.toContain("\n");
+  });
+});

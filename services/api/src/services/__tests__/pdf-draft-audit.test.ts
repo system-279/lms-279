@@ -4,13 +4,24 @@
  * 観点:
  * - hashEmail: 正規化 (trim+lowercase) 後の sha256
  * - recordPdfDraftLog: Firestore モックへの書き込み引数検証
- * - PII 最小化: createdByEmail / ownerEmail が raw で保存されないこと
+ * - PII 最小化: createdByEmail / toEmail / ownerEmail が raw で保存されないこと
+ * - 案 B (Issue #433) dual-write: ownerEmailHash + recipientToHash + recipientCcHash
  * - status=failed のとき errorCode 必須
  * - ttlAt が 90 日後相当の Timestamp
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { hashEmail, recordPdfDraftLog, __internal } from "../pdf-draft-audit.js";
+
+const ALL_SECTIONS = {
+  profile: true,
+  deadline: true,
+  summary: true,
+  lessons: true,
+  quiz: true,
+  pace: true,
+  video: true,
+};
 
 describe("hashEmail", () => {
   it("trim + lowercase してから sha256 でハッシュ化", () => {
@@ -47,11 +58,12 @@ describe("recordPdfDraftLog", () => {
       createdByUid: "uid-super",
       createdByEmail: "super@example.com",
       userId: "user-1",
+      toEmail: "student@example.com",
       ownerEmail: "owner@example.com",
       draftId: "draft-xyz",
       status: "success",
       errorCode: null,
-      sections: { profile: true, deadline: true, summary: true, lessons: true, quiz: true, pace: true, video: true },
+      sections: ALL_SECTIONS,
       pdfSizeBytes: 102400,
     });
 
@@ -69,7 +81,7 @@ describe("recordPdfDraftLog", () => {
     expect(writeArg.pdfSizeBytes).toBe(102400);
   });
 
-  it("createdByEmail / ownerEmail が hash 化されて raw 文字列が保存されない", async () => {
+  it("createdByEmail / toEmail / ownerEmail が hash 化されて raw 文字列が保存されない", async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await recordPdfDraftLog(dbMock as any, {
       requestId: "req-002",
@@ -77,6 +89,7 @@ describe("recordPdfDraftLog", () => {
       createdByUid: "uid-super",
       createdByEmail: "super@example.com",
       userId: "user-1",
+      toEmail: "student@example.com",
       ownerEmail: "owner@example.com",
       draftId: "draft-xyz",
       status: "success",
@@ -87,13 +100,42 @@ describe("recordPdfDraftLog", () => {
 
     const writeArg = setMock.mock.calls[0][0];
     expect(writeArg.createdByEmailHash).toBe(hashEmail("super@example.com"));
+    expect(writeArg.recipientToHash).toBe(hashEmail("student@example.com"));
+    expect(writeArg.recipientCcHash).toBe(hashEmail("owner@example.com"));
+    // 後方互換 (案 B 移行後は recipientCcHash と同値)
     expect(writeArg.ownerEmailHash).toBe(hashEmail("owner@example.com"));
-    // raw が保存されていないこと
+    // raw が保存されていないこと (AC-14)
     expect(JSON.stringify(writeArg)).not.toContain("super@example.com");
+    expect(JSON.stringify(writeArg)).not.toContain("student@example.com");
     expect(JSON.stringify(writeArg)).not.toContain("owner@example.com");
   });
 
-  it("ownerEmail が null のときも ownerEmailHash=null で記録される", async () => {
+  it("AC-6/AC-14: dual-write スキーマ - 新規 recipientToHash + recipientCcHash と旧 ownerEmailHash が併存する", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await recordPdfDraftLog(dbMock as any, {
+      requestId: "req-dual",
+      tenantId: "tenant-1",
+      createdByUid: "uid",
+      createdByEmail: "super@example.com",
+      userId: "user-1",
+      toEmail: "student@example.com",
+      ownerEmail: "owner@example.com",
+      draftId: "draft-1",
+      status: "success",
+      errorCode: null,
+      sections: ALL_SECTIONS,
+      pdfSizeBytes: 1024,
+    });
+
+    const writeArg = setMock.mock.calls[0][0];
+    // 新規フィールド (案 B)
+    expect(writeArg).toHaveProperty("recipientToHash");
+    expect(writeArg).toHaveProperty("recipientCcHash");
+    // 後方互換フィールド (deprecated だが残置)
+    expect(writeArg).toHaveProperty("ownerEmailHash");
+  });
+
+  it("AC-11: ownerEmail が null のときは recipientCcHash=null + ownerEmailHash=null (CC 省略時の dual-write)", async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await recordPdfDraftLog(dbMock as any, {
       requestId: "req-003",
@@ -101,20 +143,43 @@ describe("recordPdfDraftLog", () => {
       createdByUid: "uid",
       createdByEmail: "super@example.com",
       userId: "user-1",
+      toEmail: "student@example.com",
+      ownerEmail: null,
+      draftId: "draft-1",
+      status: "success",
+      errorCode: null,
+      sections: ALL_SECTIONS,
+      pdfSizeBytes: 1024,
+    });
+
+    const writeArg = setMock.mock.calls[0][0];
+    expect(writeArg.recipientToHash).toBe(hashEmail("student@example.com"));
+    expect(writeArg.recipientCcHash).toBe(null);
+    expect(writeArg.ownerEmailHash).toBe(null);
+  });
+
+  it("toEmail が null (PDF 生成前の失敗等) のときは recipientToHash=null で記録される", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await recordPdfDraftLog(dbMock as any, {
+      requestId: "req-null-to",
+      tenantId: "tenant-1",
+      createdByUid: "uid",
+      createdByEmail: "super@example.com",
+      userId: "user-1",
+      toEmail: null,
       ownerEmail: null,
       draftId: null,
       status: "failed",
-      errorCode: "owner_email_not_set",
-      sections: { profile: true, deadline: true, summary: true, lessons: true, quiz: true, pace: true, video: true },
+      errorCode: "user_email_not_configured",
+      sections: ALL_SECTIONS,
       pdfSizeBytes: null,
     });
 
     const writeArg = setMock.mock.calls[0][0];
-    expect(writeArg.ownerEmailHash).toBe(null);
+    expect(writeArg.recipientToHash).toBe(null);
+    expect(writeArg.recipientCcHash).toBe(null);
     expect(writeArg.status).toBe("failed");
-    expect(writeArg.errorCode).toBe("owner_email_not_set");
-    expect(writeArg.draftId).toBe(null);
-    expect(writeArg.pdfSizeBytes).toBe(null);
+    expect(writeArg.errorCode).toBe("user_email_not_configured");
   });
 
   it("ttlAt が 90 日後相当の Timestamp", async () => {
@@ -126,11 +191,12 @@ describe("recordPdfDraftLog", () => {
       createdByUid: "uid",
       createdByEmail: "super@example.com",
       userId: "user-1",
+      toEmail: "student@example.com",
       ownerEmail: "owner@example.com",
       draftId: "draft-1",
       status: "success",
       errorCode: null,
-      sections: { profile: true, deadline: true, summary: true, lessons: true, quiz: true, pace: true, video: true },
+      sections: ALL_SECTIONS,
       pdfSizeBytes: 1024,
     });
     const after = Date.now();
@@ -154,11 +220,12 @@ describe("recordPdfDraftLog", () => {
         createdByUid: "uid",
         createdByEmail: "super@example.com",
         userId: "user-1",
+        toEmail: "student@example.com",
         ownerEmail: "owner@example.com",
         draftId: "draft-1",
         status: "success",
         errorCode: null,
-        sections: { profile: true, deadline: true, summary: true, lessons: true, quiz: true, pace: true, video: true },
+        sections: ALL_SECTIONS,
         pdfSizeBytes: 1024,
       }),
     ).rejects.toThrow("firestore unavailable");

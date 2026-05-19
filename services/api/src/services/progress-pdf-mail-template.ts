@@ -15,6 +15,14 @@ export interface MailTemplateInput {
   data: ProgressPdfData;
   /** 送信者表示名 (Firebase Auth displayName、なければ email) */
   senderName: string;
+  /**
+   * CC 宛先 (テナント管理者 email)。設定済なら本文末に CC 共有の注記を追加する。
+   * undefined / 空文字 (trim 後) なら注記を省略する。
+   *
+   * SECURITY: route 層で CRLF/カンマ/制御文字バリデーション済の値のみ受け付ける前提。
+   * 本関数内でも stripCRLF で本文インジェクションを二重防御する。
+   */
+  ccEmail?: string;
 }
 
 export interface MailTemplateOutput {
@@ -115,8 +123,8 @@ export function formatPaceSummary(pace: Pace): string {
  * ADR-034 §4 のテンプレートに準拠。スーパー管理者は Gmail UI で編集可能。
  */
 export function buildMailTemplate(input: MailTemplateInput): MailTemplateOutput {
-  const { data, senderName } = input;
-  // SECURITY: 件名行に注入される可能性のあるフィールドは CR/LF を除去 (空白置換)。
+  const { data, senderName, ccEmail } = input;
+  // SECURITY: 件名行・本文に注入される可能性のあるフィールドは CR/LF を除去 (空白置換)。
   const userDisplay = stripCRLF(data.user.name ?? data.user.email);
   const tenantName = stripCRLF(data.tenant.name);
   const safeSenderName = stripCRLF(senderName);
@@ -128,12 +136,26 @@ export function buildMailTemplate(input: MailTemplateInput): MailTemplateOutput 
 
   const subject = `【${tenantName}】${userDisplay} さんの受講進捗レポート (${generatedDate})`;
 
+  // CC 注記は ownerEmail (= ccEmail) が実際に設定されているときのみ追加する
+  // (未設定で省略しているのに「CC でお送りしています」と書くと本文が虚偽になる)。
+  // stripCRLF は前後 trim を行うが、追加で .trim() でも防御し空白のみケースを確実に弾く。
+  const normalizedCcEmail = typeof ccEmail === "string" ? stripCRLF(ccEmail).trim() : "";
+  const ccNoteLines: string[] = normalizedCcEmail.length > 0
+    ? [
+        "",
+        `※ ${tenantName} のご担当者様 (${normalizedCcEmail}) にも CC でお送りしています。`,
+      ]
+    : [];
+
   // RFC 5322 準拠で CRLF を採用 (MIME 本文と整合)。Gmail UI 上では LF/CRLF どちらでも
   // 表示されるが、Content-Transfer-Encoding 系の処理で安全側に倒す。
+  // 二人称: 受講者本人宛 (To) であるため「{userName} 様」呼びかけに統一。
   const body = [
+    `${userDisplay} 様`,
+    "",
     "お世話になっております。",
     "",
-    `${tenantName} の ${userDisplay} さんの受講進捗レポートを作成しました。`,
+    `${tenantName} での ${userDisplay} 様の受講進捗レポートをお送りいたします。`,
     "PDF を添付しておりますのでご確認ください。",
     "",
     "【現在の状況】",
@@ -144,6 +166,7 @@ export function buildMailTemplate(input: MailTemplateInput): MailTemplateOutput 
     "ご質問やご相談がありましたら、本メールにご返信ください。",
     "",
     safeSenderName,
+    ...ccNoteLines,
   ].join("\r\n");
 
   return { subject, body };

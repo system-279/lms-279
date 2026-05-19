@@ -69,8 +69,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("AC-3: ownerEmail 未設定でボタン disabled", () => {
-  it("ownerEmail が null のとき 「Gmail 下書き作成」 ボタンが disabled", async () => {
+describe("案 B (Issue #433) disable 条件", () => {
+  it("AC-15: ownerEmail が null でも userEmail があれば 「Gmail 下書き作成」 ボタンが enabled (CC 省略で送信可)", async () => {
     mocks.superFetchMock
       .mockReset()
       .mockResolvedValueOnce({ tenant: { ownerEmail: null } })
@@ -79,14 +79,74 @@ describe("AC-3: ownerEmail 未設定でボタン disabled", () => {
     render(<PrintPage />);
 
     const draftButton = await screen.findByRole("button", { name: /Gmail 下書き作成/ });
-    expect(draftButton).toBeDisabled();
-    expect(draftButton.getAttribute("title")).toContain("テナント管理者メールが未設定");
+    expect(draftButton).not.toBeDisabled();
   });
 
-  it("ownerEmail 設定済みのとき 「Gmail 下書き作成」 ボタンが enabled", async () => {
+  it("AC-4/AC-15: userEmail が空文字のとき 「Gmail 下書き作成」 ボタンが disabled", async () => {
+    mocks.superFetchMock
+      .mockReset()
+      .mockResolvedValueOnce({ tenant: { ownerEmail: "owner@example.com" } })
+      .mockResolvedValueOnce({
+        ...META_FIXTURE,
+        students: [{ userId: "user-1", userName: "山田 太郎", userEmail: "" }],
+      });
+
+    render(<PrintPage />);
+
+    const draftButton = await screen.findByRole("button", { name: /Gmail 下書き作成/ });
+    expect(draftButton).toBeDisabled();
+    expect(draftButton.getAttribute("title")).toContain("受講者のメールアドレスが未設定");
+  });
+
+  it("AC-15: userEmail が全空白文字 (trim 後 0 文字) でも disabled", async () => {
+    mocks.superFetchMock
+      .mockReset()
+      .mockResolvedValueOnce({ tenant: { ownerEmail: "owner@example.com" } })
+      .mockResolvedValueOnce({
+        ...META_FIXTURE,
+        students: [{ userId: "user-1", userName: "山田 太郎", userEmail: "   \t  " }],
+      });
+
+    render(<PrintPage />);
+
+    const draftButton = await screen.findByRole("button", { name: /Gmail 下書き作成/ });
+    expect(draftButton).toBeDisabled();
+  });
+
+  it("ownerEmail / userEmail 両方設定済みのとき enabled", async () => {
     render(<PrintPage />);
     const draftButton = await screen.findByRole("button", { name: /Gmail 下書き作成/ });
     expect(draftButton).not.toBeDisabled();
+  });
+});
+
+describe("AC-8: 宛先 (To) / CC 表示", () => {
+  it("ownerEmail 設定済: 「宛先 (To): {userEmail}」「CC: {ownerEmail}」が表示される", async () => {
+    render(<PrintPage />);
+
+    // 受講者情報の読み込み完了を待つ
+    await screen.findByRole("button", { name: /Gmail 下書き作成/ });
+
+    // 受講者 email (To)
+    const toLabel = screen.getByText(/宛先 \(To\):/);
+    expect(toLabel.parentElement?.textContent).toContain("yamada@example.com");
+
+    // 管理者 email (CC)
+    const ccLabel = screen.getByText(/CC \(テナント管理者\):/);
+    expect(ccLabel.parentElement?.textContent).toContain("owner@example.com");
+  });
+
+  it("ownerEmail 未設定: CC 行に「未設定 (CC 省略)」が表示される", async () => {
+    mocks.superFetchMock
+      .mockReset()
+      .mockResolvedValueOnce({ tenant: { ownerEmail: null } })
+      .mockResolvedValueOnce(META_FIXTURE);
+
+    render(<PrintPage />);
+    await screen.findByRole("button", { name: /Gmail 下書き作成/ });
+
+    const ccLabel = screen.getByText(/CC \(テナント管理者\):/);
+    expect(ccLabel.parentElement?.textContent).toContain("未設定 (CC 省略)");
   });
 });
 

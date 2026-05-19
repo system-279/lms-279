@@ -136,6 +136,19 @@ export default function ProgressPdfPrintPage() {
     [sections],
   );
 
+  // To 宛先 (受講者本人 email) が有効かどうか。送信可否の判定軸。
+  const hasValidUserEmail = useMemo(
+    () => Boolean(meta?.userEmail && meta.userEmail.trim().length > 0),
+    [meta?.userEmail],
+  );
+
+  // CC 宛先 (テナント管理者 email) が設定済かどうか。CC は省略可能なので
+  // disable 条件には使わず、UI 表示と本文 CC 注記の分岐にのみ使う。
+  const hasOwnerEmail = useMemo(
+    () => Boolean(ownerEmail && ownerEmail.trim().length > 0),
+    [ownerEmail],
+  );
+
   const handleGenerate = useCallback(async () => {
     if (!meta) return;
     setGenerating(true);
@@ -201,7 +214,8 @@ export default function ProgressPdfPrintPage() {
    * 4. scope 不足 (gmail_scope_required) は同意 popup を再起動して 1 回だけリトライ
    */
   const handleCreateDraft = useCallback(async () => {
-    if (!meta || !ownerEmail) return;
+    // 必須は受講者 email (To)。ownerEmail (CC) は省略可能。
+    if (!meta || !hasValidUserEmail) return;
     setDraftCreating(true);
     setDraftError(null);
     setDraftFallbackUrl(null);
@@ -282,6 +296,8 @@ export default function ProgressPdfPrintPage() {
           gmail_scope_required: "Gmail 送信権限の同意が必要です。再度お試しください。",
           gmail_api_transient: "Gmail サーバーへの接続が一時的に不安定です。しばらく後に再試行してください。",
           pdf_too_large_for_gmail: "PDF サイズが上限 (5MB) を超えました。出力項目を絞ってください。",
+          user_email_not_configured: "受講者のメールアドレスが未設定または不正です。受講者情報を確認してください。",
+          invalid_owner_email: "テナント管理者メール (CC) に不正な文字が含まれています。テナント詳細画面で修正してください。",
           owner_email_not_set: "テナント管理者メールが未設定です。テナント詳細画面で設定してください。",
           no_sections_selected: "出力項目を少なくとも 1 つ選択してください。",
         };
@@ -295,7 +311,8 @@ export default function ProgressPdfPrintPage() {
     } finally {
       setDraftCreating(false);
     }
-  }, [meta, ownerEmail, getIdToken, tenantId, userId, draftRequestId, sections]);
+    // ownerEmail は依存外 (CC 省略可)。送信可否は hasValidUserEmail で判定。
+  }, [meta, hasValidUserEmail, getIdToken, tenantId, userId, draftRequestId, sections]);
 
   return (
     <div className="space-y-6">
@@ -321,8 +338,16 @@ export default function ProgressPdfPrintPage() {
               {meta.tenantName}
             </div>
             <div className="text-sm">
-              <span className="text-muted-foreground mr-2">テナント管理者宛先 (Phase 2 用):</span>
-              {ownerEmail ?? <span className="text-amber-700">未設定</span>}
+              <span className="text-muted-foreground mr-2">宛先 (To):</span>
+              {hasValidUserEmail
+                ? meta.userEmail
+                : <span className="text-amber-700">未設定 (送信不可)</span>}
+            </div>
+            <div className="text-sm">
+              <span className="text-muted-foreground mr-2">CC (テナント管理者):</span>
+              {hasOwnerEmail
+                ? ownerEmail
+                : <span className="text-muted-foreground">未設定 (CC 省略)</span>}
             </div>
           </div>
 
@@ -360,10 +385,10 @@ export default function ProgressPdfPrintPage() {
             <Button
               variant="secondary"
               onClick={handleCreateDraft}
-              disabled={draftCreating || generating || !ownerEmail || !anySelected}
+              disabled={draftCreating || generating || !hasValidUserEmail || !anySelected}
               title={
-                !ownerEmail
-                  ? "テナント管理者メールが未設定のため利用できません"
+                !hasValidUserEmail
+                  ? "受講者のメールアドレスが未設定のため利用できません"
                   : !anySelected
                   ? "出力項目を少なくとも 1 つ選択してください"
                   : "Gmail 下書きフォルダにメールを作成し、新しいタブで開きます"
@@ -389,7 +414,10 @@ export default function ProgressPdfPrintPage() {
             </p>
           )}
           <p className="text-xs text-muted-foreground">
-            「Gmail 下書き作成」はスーパー管理者本人の Gmail 下書きフォルダに、宛先 ({ownerEmail ?? "未設定"}) と PDF 添付付きで下書きを作成します。Gmail が新しいタブで開きますので内容を確認・編集してから送信してください。
+            「Gmail 下書き作成」はスーパー管理者本人の Gmail 下書きフォルダに、
+            宛先 To: {hasValidUserEmail ? meta.userEmail : "未設定"}{" "}
+            / CC: {hasOwnerEmail ? ownerEmail : "未設定 (CC 省略)"}{" "}
+            と PDF 添付付きで下書きを作成します。Gmail が新しいタブで開きますので内容を確認・編集してから送信してください。
           </p>
         </>
       )}

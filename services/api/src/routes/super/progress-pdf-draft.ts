@@ -6,7 +6,7 @@
  *   201:  { draftId, draftUrl }
  *   400:  bad_request / invalid_sections / invalid_request_id / invalid_access_token
  *         / demo_tenant_not_supported / invalid_tenant_id / invalid_user_id
- *         / no_sections_selected / owner_email_not_set
+ *         / no_sections_selected / user_email_not_configured / invalid_owner_email
  *   401:  invalid_access_token (Gmail API token 期限切れ)
  *   403:  gmail_scope_required (gmail.compose scope 不足)
  *   404:  tenant_not_found / user_not_in_tenant
@@ -20,6 +20,11 @@
  *
  * ADR-034 に準拠。Phase 1 (progress-pdf.ts) と同じ越境チェック・パストラバーサル防止・
  * PDF 生成ロジックを再利用し、追加で Gmail draft 作成・監査ログ書き込みを行う。
+ *
+ * 宛先ロジック (ADR-034 §5): To=受講者本人 (users/{userId}.email) / CC=テナント管理者 (ownerEmail)
+ * - ownerEmail 未設定 → CC 省略で送信成功 (旧 owner_email_not_set 経路は廃止)
+ * - ownerEmail CRLF/カンマ/制御文字 → 400 invalid_owner_email
+ * - user.email 未設定/空白/不正 → 400 user_email_not_configured
  */
 
 import { Router, type Request, type Response } from "express";
@@ -62,6 +67,34 @@ const SECTION_KEYS: ProgressPdfSectionKey[] = [
   "pace",
   "video",
 ];
+
+/**
+ * 受講者 / テナント管理者の email を Gmail 宛先として使う前のバリデーション。
+ * Gmail API 投入前の defense-in-depth として、CRLF / カンマ / 制御文字 / 形式違反を拒否する。
+ *
+ * @returns 正規化済 (trim 後) の email、またはエラー理由 (logger 用途のみ、外部レスポンスには出さない)
+ */
+type EmailValidation =
+  | { ok: true; value: string }
+  | { ok: false; reason: "empty" | "crlf" | "comma" | "control" | "format" };
+
+function validateRecipientEmail(input: unknown): EmailValidation {
+  if (typeof input !== "string") return { ok: false, reason: "empty" };
+  const trimmed = input.trim();
+  if (trimmed.length === 0) return { ok: false, reason: "empty" };
+  // CRLF チェックは trim 後だが、前後の `\r` / `\n` 単独パターンは trim で除去される。
+  // それらは MIME ヘッダ注入のリスクではないため除去後の値で問題ない。
+  // 内部に挟まる `\r` / `\n` は trim で消えないためここで捕捉する。
+  if (/[\r\n]/.test(trimmed)) return { ok: false, reason: "crlf" };
+  // 複数宛先 (カンマ区切り) を許すと「受講者本人単体宛」の前提が崩れる
+  if (/,/.test(trimmed)) return { ok: false, reason: "comma" };
+  // CRLF 以外の C0/DEL 制御文字も拒否 (CRLF は上で捕捉済)
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f]/.test(trimmed)) return { ok: false, reason: "control" };
+  // RFC 5321 完全準拠は Gmail 側の責務。ここは最小限の形式チェックのみ。
+  if (!/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(trimmed)) return { ok: false, reason: "format" };
+  return { ok: true, value: trimmed };
+}
 
 const router = Router();
 
@@ -202,6 +235,10 @@ router.post(
 
     // tenant doc + DataSource 取得 (Phase 1 と同じ)
     let tenant: TenantInfo;
+    // PdfDraftAuditLog.toEmail (string | null) と整合させる。catch 経路で未代入のまま
+    // 監査ログを呼ぶ可能性に備えた null 初期化 (Gmail 呼び出しに進む前に検証で代入される)。
+    let validatedToEmail: string | null = null;
+    let validatedCcEmail: string | null;
     let pdfBuffer: Buffer;
     let subject: string;
     let body: string;
@@ -224,12 +261,24 @@ router.post(
             : null,
       };
 
-      // ownerEmail 未設定なら 400 (FE 側でボタン disabled だが二重防御)
-      // Evaluator MEDIUM 対応: ヘッダインジェクション防止 (CR/LF を含む値は拒否)
-      if (!tenant.ownerEmail || /[\r\n]/.test(tenant.ownerEmail)) {
+      // ownerEmail バリデーション:
+      // - null / 空文字 / 全空白 → CC 省略 (送信成功、後方互換)
+      // - CRLF / カンマ / 制御文字 / 形式違反 → 400 invalid_owner_email
+      // validateRecipientEmail は null/空文字も `reason: "empty"` で扱うため null チェックを吸収できる。
+      const ownerCheck = validateRecipientEmail(tenant.ownerEmail);
+      if (ownerCheck.ok) {
+        validatedCcEmail = ownerCheck.value;
+      } else if (ownerCheck.reason === "empty") {
+        validatedCcEmail = null;
+      } else {
+        logger.warn("Invalid tenant ownerEmail rejected for Gmail draft", {
+          tenantId,
+          requestId: parsed.requestId,
+          reason: ownerCheck.reason,
+        });
         res.status(400).json({
-          error: "owner_email_not_set",
-          message: "Tenant ownerEmail is not configured or contains invalid characters",
+          error: "invalid_owner_email",
+          message: "Tenant ownerEmail is invalid",
         });
         return;
       }
@@ -243,6 +292,25 @@ router.post(
         tenant,
         userId,
       });
+
+      // 受講者本人 email バリデーション (新規 To 宛先):
+      // student-progress 経路で空文字に落ちる可能性があるため、
+      // BE/FE/監査ログでズレが起きないよう trim + 多角的バリデーションを行う。
+      const userEmailCheck = validateRecipientEmail(pdfData.user.email);
+      if (!userEmailCheck.ok) {
+        logger.warn("Invalid student email rejected for Gmail draft", {
+          tenantId,
+          userId,
+          requestId: parsed.requestId,
+          reason: userEmailCheck.reason,
+        });
+        res.status(400).json({
+          error: "user_email_not_configured",
+          message: "Student email is missing or invalid",
+        });
+        return;
+      }
+      validatedToEmail = userEmailCheck.value;
 
       // PDF 生成 (Phase 1 ロジック再利用)
       pdfBuffer = await renderToBuffer(
@@ -264,7 +332,8 @@ router.post(
           createdByUid,
           createdByEmail,
           userId,
-          ownerEmail: tenant.ownerEmail,
+          toEmail: validatedToEmail,
+          ownerEmail: validatedCcEmail,
           draftId: null,
           status: "failed",
           errorCode: "pdf_too_large_for_gmail",
@@ -292,6 +361,8 @@ router.post(
       const template = buildMailTemplate({
         data: pdfData,
         senderName: createdByEmail, // displayName は dev では取得不可なので email を使用
+        // ownerEmail 設定済のときだけ本文に CC 注記を追加 (未設定時の虚偽記載防止)
+        ccEmail: validatedCcEmail ?? undefined,
       });
       subject = template.subject;
       body = template.body;
@@ -336,7 +407,9 @@ router.post(
     try {
       const draftResult = await createGmailDraft({
         accessToken: parsed.accessToken,
-        to: tenant.ownerEmail as string,
+        to: validatedToEmail,
+        // CC 省略時 (ownerEmail 未設定 or 空) は undefined を渡し Cc: ヘッダ自体を出さない
+        cc: validatedCcEmail ?? undefined,
         subject,
         body,
         attachment,
@@ -349,7 +422,8 @@ router.post(
         createdByUid,
         createdByEmail,
         userId,
-        ownerEmail: tenant.ownerEmail,
+        toEmail: validatedToEmail,
+        ownerEmail: validatedCcEmail,
         draftId: draftResult.draftId,
         status: "success",
         errorCode: null,
@@ -382,7 +456,8 @@ router.post(
         createdByUid,
         createdByEmail,
         userId,
-        ownerEmail: tenant.ownerEmail,
+        toEmail: validatedToEmail,
+        ownerEmail: validatedCcEmail,
         draftId: null,
         status: "failed",
         errorCode,
