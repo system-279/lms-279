@@ -120,7 +120,7 @@ export interface ProgressPdfData {
 export interface ProgressPdfDraftRequest {
   /** Idempotency 用。FE で crypto.randomUUID() を生成して送信 */
   requestId: string;
-  /** 各セクションを PDF に含めるかどうか。AC-10: 全 false は 400 で拒否 */
+  /** 各セクションを PDF に含めるかどうか。全 false は 400 で拒否 */
   sections: ProgressPdfSections;
   /** Google OAuth access token (gmail.compose scope 必須)。BE で保持しない */
   accessToken: string;
@@ -144,7 +144,11 @@ export interface ProgressPdfDraftResponse {
  * FE はこのコードで動線を分岐する:
  * - gmail_scope_required: reauthenticateWithPopup で再同意フロー
  * - gmail_quota_exceeded: 「しばらく待ってから再試行」メッセージ
- * - owner_email_not_set: ボタン disabled (本来到達しない、二重防御)
+ * - user_email_not_configured: 受講者 email 未設定/空白 → ボタン disabled (二重防御)
+ * - invalid_owner_email: ownerEmail に CRLF/カンマ/制御文字 → ヘッダインジェクション拒否
+ * - owner_email_not_set: (deprecated) 旧仕様で ownerEmail 未設定時に返していた。
+ *   ADR-034 改訂 (To=受講者本人 / CC=テナント管理者) 後は ownerEmail 未設定でも送信成功するため、
+ *   通常経路では返らない。後方互換のため型からは外さない。
  */
 export type ProgressPdfDraftErrorCode =
   | "bad_request"
@@ -152,6 +156,8 @@ export type ProgressPdfDraftErrorCode =
   | "invalid_request_id"
   | "invalid_access_token"
   | "no_sections_selected"
+  | "user_email_not_configured"
+  | "invalid_owner_email"
   | "owner_email_not_set"
   | "demo_tenant_not_supported"
   | "invalid_tenant_id"

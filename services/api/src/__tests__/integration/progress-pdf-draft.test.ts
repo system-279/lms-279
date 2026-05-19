@@ -237,17 +237,40 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(res.body.error).toBe("tenant_not_found");
     });
 
-    it("owner_email_not_set → 400", async () => {
+    it("AC-3/AC-11: ownerEmail=null は CC 省略で送信成功 (案 B、旧 owner_email_not_set の置き換え)", async () => {
+      const { user } = await seedTenant(ds);
       mocks.tenantDocGetMock.mockResolvedValueOnce({
         exists: true,
         data: () => ({ name: "Tenant", ownerEmail: null }),
       });
 
       const res = await request
-        .post("/api/v2/super/tenants/tenant-1/users/u1/progress-pdf-draft")
-        .send({ requestId: "r", sections: ALL_ON, accessToken: "t" });
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBe("owner_email_not_set");
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-cc-null", sections: ALL_ON, accessToken: "t" });
+      expect(res.status).toBe(201);
+      // createGmailDraft が cc=undefined で呼ばれる (Cc: ヘッダ自体を出さない)
+      expect(mocks.createGmailDraftMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "student@example.com",
+          cc: undefined,
+        }),
+      );
+    });
+
+    it("AC-3/AC-11: ownerEmail=空文字も CC 省略で送信成功", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.tenantDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({ name: "Tenant", ownerEmail: "" }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-cc-empty", sections: ALL_ON, accessToken: "t" });
+      expect(res.status).toBe(201);
+      expect(mocks.createGmailDraftMock).toHaveBeenCalledWith(
+        expect.objectContaining({ cc: undefined }),
+      );
     });
 
     it("AC-7: 越境 (user_not_in_tenant) → 404", async () => {
@@ -261,7 +284,7 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
   });
 
   describe("成功系", () => {
-    it("AC-2: 下書き作成成功 → 201 + draftId/draftUrl", async () => {
+    it("AC-1/AC-2: 下書き作成成功 → 201 + draftId/draftUrl、To=受講者本人 / CC=管理者", async () => {
       const { user } = await seedTenant(ds);
 
       const res = await request
@@ -272,11 +295,12 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(res.body.draftId).toBe("r-12345");
       expect(res.body.draftUrl).toBe("https://mail.google.com/mail/u/0/?ogbl#drafts/r-12345");
 
-      // createGmailDraft が正しい引数で呼ばれた
+      // createGmailDraft が正しい引数で呼ばれた (案 B: To=受講者、CC=管理者)
       expect(mocks.createGmailDraftMock).toHaveBeenCalledWith(
         expect.objectContaining({
           accessToken: "ya29.test_token",
-          to: "owner@example.com",
+          to: "student@example.com",
+          cc: "owner@example.com",
           subject: expect.stringContaining("莞爾会 長遊園"),
           body: expect.stringContaining("山田 太郎"),
           attachment: expect.objectContaining({
@@ -306,7 +330,7 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(filename).not.toMatch(/_{3,}/);
     });
 
-    it("AC-8: 成功時 監査ログに status=success + PII 最小化", async () => {
+    it("AC-6/AC-8: 成功時 監査ログに status=success + toEmail/ownerEmail + PII 最小化", async () => {
       const { user } = await seedTenant(ds);
 
       await request
@@ -321,6 +345,8 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
           createdByUid: mocks.superAdminUid,
           createdByEmail: mocks.superAdminEmail,
           userId: user.id,
+          // 案 B 新規: To=受講者本人、CC=管理者を両方記録
+          toEmail: "student@example.com",
           ownerEmail: "owner@example.com",
           draftId: "r-12345",
           status: "success",
@@ -497,8 +523,8 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
     });
   });
 
-  describe("ownerEmail バリデーション", () => {
-    it("ownerEmail に \\r\\n を含むテナントは owner_email_not_set として拒否 (ヘッダインジェクション防止)", async () => {
+  describe("ownerEmail バリデーション (案 B、AC-12)", () => {
+    it("AC-12: ownerEmail に \\r\\n を含むテナントは invalid_owner_email として拒否 (ヘッダインジェクション防止)", async () => {
       const { user } = await seedTenant(ds);
       mocks.tenantDocGetMock.mockResolvedValueOnce({
         exists: true,
@@ -510,7 +536,168 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
         .send({ requestId: "req-inject", sections: ALL_ON, accessToken: "t" });
 
       expect(res.status).toBe(400);
-      expect(res.body.error).toBe("owner_email_not_set");
+      expect(res.body.error).toBe("invalid_owner_email");
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+    });
+
+    it("AC-12: ownerEmail にカンマを含むテナントは invalid_owner_email として拒否 (複数宛先化防止)", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.tenantDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({ name: "evil", ownerEmail: "owner@example.com,attacker@evil.com" }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-comma", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_owner_email");
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+    });
+
+    it("AC-12: ownerEmail が email 形式違反なら invalid_owner_email", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.tenantDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({ name: "Tenant", ownerEmail: "not-an-email" }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-bad-format", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_owner_email");
+    });
+
+    it("AC-11: ownerEmail が全空白文字なら CC 省略で送信成功 (empty 相当)", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.tenantDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({ name: "Tenant", ownerEmail: "   \t  " }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-cc-whitespace", sections: ALL_ON, accessToken: "t" });
+
+      // empty 扱いで CC 省略、送信成功
+      expect(res.status).toBe(201);
+      expect(mocks.createGmailDraftMock).toHaveBeenCalledWith(
+        expect.objectContaining({ cc: undefined }),
+      );
+    });
+  });
+
+  describe("受講者 email バリデーション (案 B、AC-4/AC-10)", () => {
+    /**
+     * user.email を任意値で seed するヘルパー。InMemoryDataSource.createUser は
+     * email 必須なので、後で書き換える。
+     */
+    async function seedUserWithEmail(email: string): Promise<string> {
+      const user = await ds.createUser({
+        email: "tmp@example.com",
+        name: "山田 太郎",
+        role: "student",
+      });
+      // テスト目的: email 検証経路を発火させるため、直接書き換える
+      // (InMemoryDataSource は public mutation 経路がないので type-cast で介入)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const target = (ds as any).users.find((u: { id: string }) => u.id === user.id);
+      if (!target) throw new Error("seeded user not found");
+      target.email = email;
+      await ds.createCourse({
+        name: "サンプル", description: null, status: "published", lessonOrder: [], passThreshold: 70, createdBy: "x",
+      });
+      await ds.upsertTenantEnrollmentSetting({
+        enrolledAt: "2026-04-01T00:00:00Z",
+        videoAccessUntil: "2027-05-13T14:59:59.999Z",
+        quizAccessUntil: "2026-07-13T14:59:59.999Z",
+        createdBy: "x",
+      });
+      return user.id;
+    }
+
+    it("AC-4/AC-10: user.email が空文字なら 400 user_email_not_configured", async () => {
+      const userId = await seedUserWithEmail("");
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${userId}/progress-pdf-draft`)
+        .send({ requestId: "req-empty-email", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("user_email_not_configured");
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+    });
+
+    it("AC-4/AC-10: user.email が全空白文字 (trim 後空) なら 400 user_email_not_configured", async () => {
+      const userId = await seedUserWithEmail("   \t  ");
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${userId}/progress-pdf-draft`)
+        .send({ requestId: "req-blank-email", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("user_email_not_configured");
+    });
+
+    it("AC-10: user.email に \\r\\n を含むなら 400 user_email_not_configured", async () => {
+      const userId = await seedUserWithEmail("student@example.com\r\nBcc: attacker@evil.com");
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${userId}/progress-pdf-draft`)
+        .send({ requestId: "req-crlf-email", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("user_email_not_configured");
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+    });
+
+    it("AC-10: user.email にカンマを含むなら 400 user_email_not_configured (複数宛先化防止)", async () => {
+      const userId = await seedUserWithEmail("a@example.com,b@example.com");
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${userId}/progress-pdf-draft`)
+        .send({ requestId: "req-comma-email", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("user_email_not_configured");
+    });
+
+    it("AC-10: user.email が email 形式違反なら 400 user_email_not_configured", async () => {
+      const userId = await seedUserWithEmail("not-an-email");
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${userId}/progress-pdf-draft`)
+        .send({ requestId: "req-bad-email-format", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("user_email_not_configured");
+    });
+  });
+
+  describe("idempotency 旧スキーマ互換 (案 B、AC-13)", () => {
+    it("AC-13: 旧スキーマ success ログ (ownerEmailHash のみ、recipient* なし) でも 200 を返す", async () => {
+      const { user } = await seedTenant(ds);
+      // 旧スキーマ: status + draftId + ownerEmailHash のみ
+      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          status: "success",
+          draftId: "legacy-draft-001",
+          ownerEmailHash: "abcd1234",
+          // recipientToHash / recipientCcHash 不在 (旧スキーマ)
+        }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-legacy", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.draftId).toBe("legacy-draft-001");
+      // Gmail API は再呼び出ししない (idempotency)
       expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
     });
   });
