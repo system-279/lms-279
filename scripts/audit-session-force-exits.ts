@@ -43,27 +43,41 @@ import { resolve } from "path";
 // 純粋関数（smoke test 対象）
 // ============================================================
 
+/**
+ * sessionVideoCompleted の tri-state。
+ * - `true`: 動画完了済（ケース B 候補）
+ * - `false`: 動画未完了（ケース E 候補）
+ * - `null`: フィールド欠落 / boolean 以外の型（KPI 不明、E/B どちらにも分類せず別バケット）
+ *
+ * `Boolean()` で false に潰すと「フィールド欠落」が黙ってケース E に算入されて
+ * 「本末転倒の発生数」を誤って膨らませるため、明示的に null と区別する。
+ */
+export type SessionVideoCompletedFlag = boolean | null;
+
+/** 集計対象（"force_exited" 限定、Timestamp は ISO 文字列に正規化済み）。 */
 export interface RawSession {
-  lessonId: string | null;
-  exitReason: string | null;
-  sessionVideoCompleted: boolean;
-  exitAt: string;
+  readonly lessonId: string | null;
+  readonly exitReason: string | null;
+  readonly sessionVideoCompleted: SessionVideoCompletedFlag;
+  readonly exitAt: string;
 }
 
 export interface AggregatedSummary {
-  totalForceExits: number;
+  readonly totalForceExits: number;
   /** reason → 件数（降順）。reason=null は "(missing)" として集計。 */
-  reasonCounts: Array<{ reason: string; count: number }>;
+  readonly reasonCounts: ReadonlyArray<{ readonly reason: string; readonly count: number }>;
   /** time_limit のうち sessionVideoCompleted=false（ケース E）= 動画再生中 time_limit で全リセット */
-  timeLimitVideoIncomplete: number;
+  readonly timeLimitVideoIncomplete: number;
   /** time_limit のうち sessionVideoCompleted=true（ケース B）= 動画完了後 time_limit、reset skip */
-  timeLimitVideoCompleted: number;
+  readonly timeLimitVideoCompleted: number;
+  /** time_limit のうち sessionVideoCompleted=null（不明）= データ不整合 / 欠落、E/B 分類保留 */
+  readonly timeLimitVideoUnknown: number;
   /** ケース E に該当する lessonId → 件数（降順、top N でカット） */
-  caseELessonCounts: Array<{ lessonId: string; count: number }>;
+  readonly caseELessonCounts: ReadonlyArray<{ readonly lessonId: string; readonly count: number }>;
   /** top N でカットされた残り lesson 件数 */
-  caseELessonTruncated: number;
+  readonly caseELessonTruncated: number;
   /** ケース E にマッチした unique lesson 数（top で切られても全体数として把握） */
-  caseELessonUniqueCount: number;
+  readonly caseELessonUniqueCount: number;
 }
 
 /**
@@ -73,12 +87,13 @@ export interface AggregatedSummary {
  * @param topLessons ケース E の lesson 別上位件数。1 以上。
  */
 export function aggregateSessions(
-  sessions: RawSession[],
+  sessions: ReadonlyArray<RawSession>,
   topLessons: number
 ): AggregatedSummary {
   const reasonMap = new Map<string, number>();
   let timeLimitVideoIncomplete = 0;
   let timeLimitVideoCompleted = 0;
+  let timeLimitVideoUnknown = 0;
   const caseELessonMap = new Map<string, number>();
 
   for (const s of sessions) {
@@ -86,12 +101,15 @@ export function aggregateSessions(
     reasonMap.set(reason, (reasonMap.get(reason) ?? 0) + 1);
 
     if (s.exitReason === "time_limit") {
-      if (s.sessionVideoCompleted) {
+      if (s.sessionVideoCompleted === true) {
         timeLimitVideoCompleted++;
-      } else {
+      } else if (s.sessionVideoCompleted === false) {
         timeLimitVideoIncomplete++;
         const lessonId = s.lessonId ?? "(missing-lessonId)";
         caseELessonMap.set(lessonId, (caseELessonMap.get(lessonId) ?? 0) + 1);
+      } else {
+        // null: フィールド欠落 / boolean 以外。E/B どちらにも算入しない。
+        timeLimitVideoUnknown++;
       }
     }
   }
@@ -112,6 +130,7 @@ export function aggregateSessions(
     reasonCounts,
     timeLimitVideoIncomplete,
     timeLimitVideoCompleted,
+    timeLimitVideoUnknown,
     caseELessonCounts,
     caseELessonTruncated,
     caseELessonUniqueCount: allCaseELessons.length,
@@ -162,9 +181,9 @@ async function main(): Promise<void> {
     ?.replace("--since-days=", "")
     .trim();
   const sinceDays = sinceDaysRaw ? Number(sinceDaysRaw) : 30;
-  if (!Number.isFinite(sinceDays) || sinceDays <= 0 || sinceDays > 90) {
+  if (!Number.isInteger(sinceDays) || sinceDays <= 0 || sinceDays > 90) {
     console.error(
-      `[FATAL] --since-days は 1〜90 の数値: 受け取った値="${sinceDaysRaw}"`
+      `[FATAL] --since-days は 1〜90 の整数: 受け取った値="${sinceDaysRaw}"`
     );
     process.exit(1);
   }
@@ -174,9 +193,9 @@ async function main(): Promise<void> {
     ?.replace("--top-lessons=", "")
     .trim();
   const topLessons = topLessonsRaw ? Number(topLessonsRaw) : 20;
-  if (!Number.isFinite(topLessons) || topLessons <= 0 || topLessons > 200) {
+  if (!Number.isInteger(topLessons) || topLessons <= 0 || topLessons > 200) {
     console.error(
-      `[FATAL] --top-lessons は 1〜200 の数値: 受け取った値="${topLessonsRaw}"`
+      `[FATAL] --top-lessons は 1〜200 の整数: 受け取った値="${topLessonsRaw}"`
     );
     process.exit(1);
   }
@@ -223,11 +242,36 @@ async function main(): Promise<void> {
     console.error(`[FATAL] tenant not found: ${tenantId}`);
     process.exit(1);
   }
-  console.log(`tenant 確認: ${tenantId} (name="${tenantDoc.data()?.name ?? ""}")\n`);
+  const tenantName = tenantDoc.data()?.name;
+  if (typeof tenantName !== "string" || tenantName === "") {
+    console.warn(
+      `[WARN] tenant ${tenantId} の name フィールドが空または非 string。tenant ID 自体は exists のため処理続行するが、対象テナントが正しいか再確認してください。`
+    );
+  }
+  console.log(
+    `tenant 確認: ${tenantId} (name="${typeof tenantName === "string" ? tenantName : ""}")\n`
+  );
 
   const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
-  const sessions = await fetchForceExitsSince(db, tenantId, since);
-  console.log(`取得件数: ${sessions.length}\n`);
+  const { sessions, stats } = await fetchForceExitsSince(db, tenantId, since);
+  console.log(
+    `取得件数: ${stats.fetchedCount}（うち集計対象: ${sessions.length} / 期間外: ${stats.outOfRange} / exitAt 欠落: ${stats.exitAtMissing} / exitAt 形式不正: ${stats.exitAtMalformed}）`
+  );
+  if (stats.hitFetchCap) {
+    console.warn(
+      `[WARN] Firestore 取得が上限 ${FETCH_LIMIT} 件に達しました。tenant の累積 force_exited が大きく、古いセッションが欠落している可能性があります。集計値は最大 ${FETCH_LIMIT} 件分のみを反映している点に注意してください。`
+    );
+  }
+  if (
+    stats.lessonIdNonString > 0 ||
+    stats.exitReasonNonString > 0 ||
+    stats.sessionVideoCompletedNonBoolean > 0
+  ) {
+    console.warn(
+      `[WARN] データ品質: lessonId 非 string=${stats.lessonIdNonString}, exitReason 非 string=${stats.exitReasonNonString}, sessionVideoCompleted 非 boolean=${stats.sessionVideoCompletedNonBoolean}`
+    );
+  }
+  console.log();
 
   const summary = aggregateSessions(sessions, topLessons);
   printSummary(summary);
@@ -237,41 +281,129 @@ async function main(): Promise<void> {
 // Firestore 取得（read-only）
 // ============================================================
 
+/** I/O 層で観測したデータ品質の集計（最後に operator に提示する）。 */
+interface IoSkipStats {
+  hitFetchCap: boolean;
+  fetchedCount: number;
+  exitAtMissing: number;
+  exitAtMalformed: number;
+  outOfRange: number;
+  lessonIdNonString: number;
+  exitReasonNonString: number;
+  sessionVideoCompletedNonBoolean: number;
+}
+
+const FETCH_LIMIT = 2000;
+
 async function fetchForceExitsSince(
   db: Firestore,
   tenantId: string,
   since: Date
-): Promise<RawSession[]> {
+): Promise<{ sessions: RawSession[]; stats: IoSkipStats }> {
   // status=force_exited に絞ってから exitAt 範囲で再フィルタ（Firestore composite index 回避）。
-  // 件数は数十〜数百件想定（本番 8vexhzpc で 30 日分 force_exited は <100 件オーダー）。
+  // FETCH_LIMIT 到達時は警告し、operator に再設計（composite index + orderBy）を促す。
   const snap = await db
     .collection(`tenants/${tenantId}/lesson_sessions`)
     .where("status", "==", "force_exited")
-    .limit(2000)
+    .limit(FETCH_LIMIT)
     .get();
 
-  const result: RawSession[] = [];
+  const stats: IoSkipStats = {
+    hitFetchCap: snap.size === FETCH_LIMIT,
+    fetchedCount: snap.size,
+    exitAtMissing: 0,
+    exitAtMalformed: 0,
+    outOfRange: 0,
+    lessonIdNonString: 0,
+    exitReasonNonString: 0,
+    sessionVideoCompletedNonBoolean: 0,
+  };
+
+  const sessions: RawSession[] = [];
   for (const d of snap.docs) {
     const data = d.data() ?? {};
+
+    // exitAt: Timestamp / 有効な ISO 文字列 / null/undefined / その他 の 4 状態に分離
     const exitAtRaw = data.exitAt;
     let exitAtIso: string;
     if (exitAtRaw instanceof Timestamp) {
       exitAtIso = exitAtRaw.toDate().toISOString();
     } else if (typeof exitAtRaw === "string") {
-      exitAtIso = exitAtRaw;
+      const parsed = new Date(exitAtRaw);
+      if (Number.isNaN(parsed.getTime())) {
+        stats.exitAtMalformed++;
+        console.warn(
+          `[WARN] doc ${d.id}: exitAt 文字列がパース不可 ("${exitAtRaw}")。集計から除外`
+        );
+        continue;
+      }
+      exitAtIso = parsed.toISOString();
+    } else if (exitAtRaw == null) {
+      stats.exitAtMissing++;
+      continue;
     } else {
-      continue; // exitAt がない force_exited は集計対象外
+      stats.exitAtMalformed++;
+      const ctor = (exitAtRaw as { constructor?: { name?: string } } | null)?.constructor?.name;
+      console.warn(
+        `[WARN] doc ${d.id}: exitAt が想定外の型 (typeof=${typeof exitAtRaw}, ctor=${ctor ?? "n/a"})。集計から除外`
+      );
+      continue;
     }
+
     const exitAtDate = new Date(exitAtIso);
-    if (Number.isNaN(exitAtDate.getTime()) || exitAtDate < since) continue;
-    result.push({
-      lessonId: (data.lessonId as string | undefined) ?? null,
-      exitReason: (data.exitReason as string | undefined) ?? null,
-      sessionVideoCompleted: Boolean(data.sessionVideoCompleted),
-      exitAt: exitAtIso,
-    });
+    if (exitAtDate < since) {
+      stats.outOfRange++;
+      continue;
+    }
+
+    // lessonId / exitReason は string 以外を null に正規化し、件数を観測
+    let lessonId: string | null;
+    if (typeof data.lessonId === "string") {
+      lessonId = data.lessonId;
+    } else if (data.lessonId == null) {
+      lessonId = null;
+    } else {
+      stats.lessonIdNonString++;
+      console.warn(
+        `[WARN] doc ${d.id}: lessonId が string でない (typeof=${typeof data.lessonId})。null として扱う`
+      );
+      lessonId = null;
+    }
+
+    let exitReason: string | null;
+    if (typeof data.exitReason === "string") {
+      exitReason = data.exitReason;
+    } else if (data.exitReason == null) {
+      exitReason = null;
+    } else {
+      stats.exitReasonNonString++;
+      console.warn(
+        `[WARN] doc ${d.id}: exitReason が string でない (typeof=${typeof data.exitReason})。null として扱う`
+      );
+      exitReason = null;
+    }
+
+    // sessionVideoCompleted: boolean 以外（欠落含む）は null として E/B 分類保留
+    let sessionVideoCompleted: SessionVideoCompletedFlag;
+    if (typeof data.sessionVideoCompleted === "boolean") {
+      sessionVideoCompleted = data.sessionVideoCompleted;
+    } else {
+      sessionVideoCompleted = null;
+      stats.sessionVideoCompletedNonBoolean++;
+      if (data.sessionVideoCompleted != null) {
+        // 欠落（undefined/null）は legacy doc 等で発生し得るため warn まで出さない。
+        // 非 boolean の異常値のみ警告して operator に報告。
+        console.warn(
+          `[WARN] doc ${d.id}: sessionVideoCompleted が boolean でない (typeof=${typeof data.sessionVideoCompleted}, value=${JSON.stringify(
+            data.sessionVideoCompleted
+          )})。ケース判定不能のため別バケットへ`
+        );
+      }
+    }
+
+    sessions.push({ lessonId, exitReason, sessionVideoCompleted, exitAt: exitAtIso });
   }
-  return result;
+  return { sessions, stats };
 }
 
 // ============================================================
@@ -299,6 +431,11 @@ function printSummary(summary: AggregatedSummary): void {
     `  ${summary.timeLimitVideoCompleted
       .toString()
       .padStart(5)}  true （ケース B: 動画完了後 time_limit → reset skip = 規律どおり）`
+  );
+  console.log(
+    `  ${summary.timeLimitVideoUnknown
+      .toString()
+      .padStart(5)}  null （不明: フィールド欠落 / boolean 以外。データ品質要確認、E/B どちらにも算入せず）`
   );
   console.log();
 
