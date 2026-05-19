@@ -10,9 +10,15 @@ name: Audit Session Force Exits
 #   sessionVideoCompleted=false、全リセット）がどの程度発生しているかを観察し、
 #   恒久対応（コンテンツ側のレッスン分割）の優先度判断に使う。
 #
+# 前提:
+#   - Firestore composite index (status ASC, exitAt DESC) on lesson_sessions が必要。
+#     firestore.indexes.json に登録済だが、`firebase deploy --only firestore:indexes -P <alias>`
+#     を手動実行する必要あり（CI/CD には含まれない、rules/firebase.md 参照）。
+#     未デプロイ時は最初の workflow 実行が FAILED_PRECONDITION で失敗する。
+#
 # 安全機構:
 #   - read-only スクリプト（書き込み一切なし）
-#   - tenant_id 入力必須
+#   - tenant_id 入力必須（英数 / _ / - のみ許可）
 #   - userId / email は表示せず、lessonId 別件数のみ表示（PII 制限）
 #
 # セキュリティ: workflow_dispatch 入力はすべて env 経由で受け、run: 内で直接 inputs を

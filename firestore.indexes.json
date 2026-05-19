@@ -195,6 +195,14 @@
         { "fieldPath": "courseId", "order": "ASCENDING" },
         { "fieldPath": "entryAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "lesson_sessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "exitAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

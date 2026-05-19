@@ -175,6 +175,14 @@ async function main(): Promise<void> {
     console.error("[FATAL] --tenant-id=<id> は必須");
     process.exit(1);
   }
+  // Firestore document ID safety: 英数 / アンダースコア / ハイフンのみ許可。
+  // path traversal や予期しない collection アクセスを防ぐ。
+  if (!/^[A-Za-z0-9_-]+$/.test(tenantId)) {
+    console.error(
+      `[FATAL] --tenant-id の形式が不正（英数/_/-のみ許可）: "${tenantId}"`
+    );
+    process.exit(1);
+  }
 
   const sinceDaysRaw = args
     .find((a) => a.startsWith("--since-days="))
@@ -259,7 +267,7 @@ async function main(): Promise<void> {
   );
   if (stats.hitFetchCap) {
     console.warn(
-      `[WARN] Firestore 取得が上限 ${FETCH_LIMIT} 件に達しました。tenant の累積 force_exited が大きく、古いセッションが欠落している可能性があります。集計値は最大 ${FETCH_LIMIT} 件分のみを反映している点に注意してください。`
+      `[WARN] Firestore 取得が上限 ${FETCH_LIMIT} 件に達しました。orderBy("exitAt", "desc") により取得済みは「直近 ${FETCH_LIMIT} 件」が保証されますが、これより古い force_exited セッションは集計対象外です。--since-days で指定した期間が ${FETCH_LIMIT} 件目より古い場合、その範囲は不完全になります。`
     );
   }
   if (
@@ -300,11 +308,19 @@ async function fetchForceExitsSince(
   tenantId: string,
   since: Date
 ): Promise<{ sessions: RawSession[]; stats: IoSkipStats }> {
-  // status=force_exited に絞ってから exitAt 範囲で再フィルタ（Firestore composite index 回避）。
-  // FETCH_LIMIT 到達時は警告し、operator に再設計（composite index + orderBy）を促す。
+  // status=force_exited を exitAt 降順で取得（直近 FETCH_LIMIT 件保証）。
+  // orderBy なしで limit すると Firestore は未定義順で返すため、
+  // 累積件数が FETCH_LIMIT 超のテナントで「直近 N 日が拾えず KPI が 0 件」と
+  // 誤って観測されるリスクがあった（Codex review 2026-05-20 指摘）。
+  // since-days フィルタは client 側で続けるが、orderBy("exitAt", "desc") により
+  // 「拾えなかったのは直近 FETCH_LIMIT 件より古い force_exited」と意味が確定する。
+  // 必要な composite index は firestore.indexes.json の
+  // (status ASC, exitAt DESC) として追加済（firebase deploy --only firestore:indexes
+  // を手動実行する必要あり、CI/CD には含まれない）。
   const snap = await db
     .collection(`tenants/${tenantId}/lesson_sessions`)
     .where("status", "==", "force_exited")
+    .orderBy("exitAt", "desc")
     .limit(FETCH_LIMIT)
     .get();
 
