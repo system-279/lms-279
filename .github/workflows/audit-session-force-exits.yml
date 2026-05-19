@@ -1,0 +1,80 @@
+name: Audit Session Force Exits
+
+# tenant 配下の lesson_sessions force_exited を直近 N 日で集計し、
+# reason 別件数と time_limit の sessionVideoCompleted 別内訳（ケース E / B）、
+# ケース E の lessonId 別上位件数を表示する read-only workflow。
+#
+# 用途:
+#   ADR-027 改訂履歴（2026-05-20）の Phase A 効果測定。
+#   3 時間延長（PR #407、2026-05-16 デプロイ）後にケース E（動画再生中の time_limit で
+#   sessionVideoCompleted=false、全リセット）がどの程度発生しているかを観察し、
+#   恒久対応（コンテンツ側のレッスン分割）の優先度判断に使う。
+#
+# 安全機構:
+#   - read-only スクリプト（書き込み一切なし）
+#   - tenant_id 入力必須
+#   - userId / email は表示せず、lessonId 別件数のみ表示（PII 制限）
+#
+# セキュリティ: workflow_dispatch 入力はすべて env 経由で受け、run: 内で直接 inputs を
+# 補間しない（command injection 対策）。
+# 参考: https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: 'テナント ID（必須）例: 8vexhzpc'
+        required: true
+        type: string
+      since_days:
+        description: 'lesson_sessions を遡る日数（既定 30 日、最大 90 日）'
+        required: false
+        default: '30'
+        type: string
+      top_lessons:
+        description: 'ケース E（動画未完了 time_limit）の lesson 別上位件数（既定 20、最大 200）'
+        required: false
+        default: '20'
+        type: string
+
+jobs:
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FIREBASE_PROJECT_ID: lms-279
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
+
+      - name: Run audit script
+        env:
+          GOOGLE_CLOUD_PROJECT: lms-279
+          TENANT_ID: ${{ inputs.tenant_id }}
+          SINCE_DAYS: ${{ inputs.since_days }}
+          TOP_LESSONS: ${{ inputs.top_lessons }}
+        run: |
+          set -euo pipefail
+          FLAGS=("--tenant-id=$TENANT_ID")
+          if [ -n "$SINCE_DAYS" ]; then FLAGS+=("--since-days=$SINCE_DAYS"); fi
+          if [ -n "$TOP_LESSONS" ]; then FLAGS+=("--top-lessons=$TOP_LESSONS"); fi
+          echo "Running with tenant=$TENANT_ID since-days=$SINCE_DAYS top-lessons=$TOP_LESSONS"
+          npx tsx scripts/audit-session-force-exits.ts "${FLAGS[@]}"
