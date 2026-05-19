@@ -1,0 +1,80 @@
+name: Audit Allowlist Status
+
+# 福の種テナント等で「ユーザー管理画面に表示されているのにログイン不可」が
+# 報告された場合の切り分け workflow。
+#
+# 実行方法:
+#   GitHub Actions UI > Audit Allowlist Status > Run workflow
+#   tenant_id（必須）と emails（必須、カンマ区切り）を指定して dry-run（read-only）実行
+#
+# 安全機構:
+#   - read-only スクリプト（書き込み一切なし）
+#   - tenant_id と emails 入力必須（無指定で全テナント全 email 走査はしない）
+#
+# 出力規範（feedback_firestore_prod_admin_via_workflow.md 出力規範）:
+#   - 入力で明示指定された email のみ出力（リスト走査による PII 漏洩はない）
+#   - tenant_id / email / reason / 件数のみ表示、name は users コレクションに記録された
+#     表示名（運用上必要）に限定
+#
+# セキュリティ: workflow_dispatch 入力はすべて env 経由で受け、run: 内で直接 ${{ inputs.* }}
+# を補間しない（command injection 対策）。
+# 参考: https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: 'テナント ID（必須）例: atali82i'
+        required: true
+        type: string
+      emails:
+        description: 'カンマ区切り email リスト（必須、最大 50 件）'
+        required: true
+        type: string
+      since_hours:
+        description: 'auth_error_logs を遡る時間（既定 72 時間、最大 720 時間=30 日）'
+        required: false
+        default: '72'
+        type: string
+
+jobs:
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FIREBASE_PROJECT_ID: lms-279
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
+
+      - name: Run audit script
+        env:
+          GOOGLE_CLOUD_PROJECT: lms-279
+          TENANT_ID: ${{ inputs.tenant_id }}
+          EMAILS: ${{ inputs.emails }}
+          SINCE_HOURS: ${{ inputs.since_hours }}
+        run: |
+          set -euo pipefail
+          FLAGS=("--tenant-id=$TENANT_ID" "--emails=$EMAILS")
+          if [ -n "$SINCE_HOURS" ]; then FLAGS+=("--since-hours=$SINCE_HOURS"); fi
+          EMAIL_COUNT=$(printf '%s' "$EMAILS" | tr ',' '\n' | grep -c . || true)
+          echo "Running with tenant=$TENANT_ID emails=(count $EMAIL_COUNT) since-hours=$SINCE_HOURS"
+          npx tsx scripts/audit-allowlist-status.ts "${FLAGS[@]}"
