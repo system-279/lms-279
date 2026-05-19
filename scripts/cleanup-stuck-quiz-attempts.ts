@@ -145,15 +145,27 @@ async function runCli(): Promise<void> {
   }
 
   // Firebase 初期化
+  // GOOGLE_APPLICATION_CREDENTIALS には以下のいずれかが入り得る:
+  //   1. type=service_account の JSON（ローカル開発時のサービスアカウントキー）→ cert() で初期化
+  //   2. type=external_account の JSON（GitHub Actions WIF 経由）→ applicationDefault() で初期化
+  // type を読まずに cert() を使うと WIF JSON で "project_id" property エラーになる
   const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   try {
     if (credPath) {
       const jsonPath = resolve(process.cwd(), credPath);
-      const serviceAccount = JSON.parse(
-        readFileSync(jsonPath, "utf8")
-      ) as ServiceAccount;
-      initializeApp({ credential: cert(serviceAccount) });
-      console.log(`認証: サービスアカウントJSON (${jsonPath})`);
+      const credJson = JSON.parse(readFileSync(jsonPath, "utf8")) as {
+        type?: string;
+      };
+      if (credJson.type === "service_account") {
+        initializeApp({ credential: cert(credJson as ServiceAccount) });
+        console.log(`認証: サービスアカウントJSON (${jsonPath})`);
+      } else {
+        // External Account (WIF) は ADC 経由で初期化する
+        initializeApp({ credential: applicationDefault() });
+        console.log(
+          `認証: Application Default Credentials (cred file type=${credJson.type ?? "unknown"})`
+        );
+      }
     } else {
       initializeApp({ credential: applicationDefault() });
       console.log("認証: Application Default Credentials");
