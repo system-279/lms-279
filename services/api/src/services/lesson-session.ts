@@ -82,9 +82,57 @@ export async function getOrCreateSession(
 }
 
 /**
+ * セッション終了時、同一ユーザー・同一レッスンの in_progress quiz_attempt を
+ * timed_out に遷移させ、再受験を可能にする（Issue #422）。
+ *
+ * sessionVideoCompleted=true で resetLessonDataForUser がスキップされる経路でも
+ * attempt のロックが残らないよう、session 終了処理と独立に attempt を終端化する。
+ * answers は監査証跡として保持し、score/isPassed は null のまま、submittedAt のみ now を入れる。
+ * timed_out は maxAttempts カウントから除外されるため、救済による受験回数消費はない。
+ */
+async function cleanupInProgressAttempts(
+  ds: DataSource,
+  userId: string,
+  lessonId: string
+): Promise<void> {
+  let quiz;
+  try {
+    quiz = await ds.getQuizByLessonId(lessonId);
+  } catch (err) {
+    console.error(`cleanupInProgressAttempts: failed to load quiz for lesson ${lessonId}:`, err);
+    return;
+  }
+  if (!quiz) return;
+
+  let attempts;
+  try {
+    attempts = await ds.getQuizAttempts({ quizId: quiz.id, userId });
+  } catch (err) {
+    console.error(`cleanupInProgressAttempts: failed to load attempts for quiz ${quiz.id}:`, err);
+    return;
+  }
+
+  const now = new Date().toISOString();
+  for (const attempt of attempts) {
+    if (attempt.status !== "in_progress") continue;
+    try {
+      await ds.updateQuizAttempt(attempt.id, {
+        status: "timed_out",
+        submittedAt: now,
+      });
+    } catch (err) {
+      // 1件失敗しても他は続行
+      console.error(`cleanupInProgressAttempts: failed to cleanup attempt ${attempt.id}:`, err);
+    }
+  }
+}
+
+/**
  * セッションを強制退室にし、レッスンの学習データを完全リセットする。
  * リセット対象: video_analytics, video_events, quiz_attempts, user_progress
  * （1 セッション内で動画視聴→テスト送信まで完了させる要件のため。セッション上限は SESSION_DURATION_MS）
+ *
+ * Issue #422: in_progress な quiz_attempt のロック解除も実施する（reset スキップ経路の救済）。
  */
 export async function forceExitSession(
   ds: DataSource,
@@ -109,6 +157,9 @@ export async function forceExitSession(
     await ds.resetLessonDataForUser(session.userId, session.lessonId, session.courseId);
     await updateCourseProgress(ds, session.userId, session.courseId);
   }
+
+  // attempt ロック解除（reset スキップ時の救済 / reset 実施時は noop）
+  await cleanupInProgressAttempts(ds, session.userId, session.lessonId);
 
   return updated!;
 }
@@ -139,6 +190,10 @@ export async function abandonSession(
   if (!updated) {
     throw new Error(`Session ${sessionId} not found`);
   }
+
+  // Issue #422: ブラウザクローズ後も in_progress attempt が残ると次回テスト開始不能になるため終端化
+  await cleanupInProgressAttempts(ds, session.userId, session.lessonId);
+
   return updated;
 }
 

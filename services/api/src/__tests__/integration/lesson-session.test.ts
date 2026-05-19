@@ -47,6 +47,47 @@ describe("lesson-session service", () => {
     return { course, lesson, video };
   }
 
+  // レッスン + quiz + in_progress attempt を作成するヘルパー
+  async function setupLessonWithInProgressAttempt(userId: string) {
+    const setup = await setupLesson();
+    const quiz = await ds.createQuiz({
+      lessonId: setup.lesson.id,
+      courseId: setup.course.id,
+      title: "Test Quiz",
+      passThreshold: 70,
+      maxAttempts: 3,
+      timeLimitSec: null,
+      randomizeQuestions: false,
+      randomizeAnswers: false,
+      requireVideoCompletion: false,
+      questions: [
+        {
+          id: "q1",
+          text: "Q1",
+          type: "single",
+          options: [
+            { id: "a", text: "A", isCorrect: true },
+            { id: "b", text: "B", isCorrect: false },
+          ],
+          points: 100,
+          explanation: "",
+        },
+      ],
+    });
+    const attempt = await ds.createQuizAttempt({
+      quizId: quiz.id,
+      userId,
+      attemptNumber: 1,
+      status: "in_progress",
+      answers: { q1: ["a"] },
+      score: null,
+      isPassed: null,
+      startedAt: new Date().toISOString(),
+      submittedAt: null,
+    });
+    return { ...setup, quiz, attempt };
+  }
+
   describe("createSession", () => {
     it("creates an active session with correct fields", async () => {
       const { lesson, video } = await setupLesson();
@@ -110,6 +151,88 @@ describe("lesson-session service", () => {
       const exited = await forceExitSession(ds, session.id, "time_limit");
 
       expect(exited.exitReason).toBe("time_limit");
+    });
+
+    // Issue #422: forceExitSession 後に in_progress attempt が残ると次回テスト開始不能になる
+    it("cleans up in_progress quiz attempts to timed_out (sessionVideoCompleted=true path)", async () => {
+      const { lesson, video, attempt } = await setupLessonWithInProgressAttempt("user1");
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+
+      // 動画完了済みフラグを立てて、resetLessonDataForUser がスキップされる経路をシミュレート
+      await ds.updateLessonSession(session.id, { sessionVideoCompleted: true });
+
+      await forceExitSession(ds, session.id, "time_limit");
+
+      const cleaned = await ds.getQuizAttemptById(attempt.id);
+      expect(cleaned).not.toBeNull();
+      expect(cleaned!.status).toBe("timed_out");
+      expect(cleaned!.submittedAt).toBeTruthy();
+    });
+
+    it("preserves answers when cleaning up in_progress attempts (audit trail)", async () => {
+      const { lesson, video, attempt } = await setupLessonWithInProgressAttempt("user1");
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+      await ds.updateLessonSession(session.id, { sessionVideoCompleted: true });
+
+      await forceExitSession(ds, session.id, "time_limit");
+
+      const cleaned = await ds.getQuizAttemptById(attempt.id);
+      expect(cleaned!.answers).toEqual({ q1: ["a"] }); // 既存値が保持される
+      expect(cleaned!.score).toBeNull();
+      expect(cleaned!.isPassed).toBeNull();
+      expect(cleaned!.attemptNumber).toBe(1);
+    });
+
+    it("allows creating a new attempt after force-exit (regression for stuck-in-progress bug)", async () => {
+      const { lesson, video, quiz } = await setupLessonWithInProgressAttempt("user1");
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+      await ds.updateLessonSession(session.id, { sessionVideoCompleted: true });
+
+      await forceExitSession(ds, session.id, "time_limit");
+
+      // 次の attempt 作成が成功すること（in_progress 一意性制約を超えられる）
+      const result = await ds.createQuizAttemptAtomic(
+        quiz.id,
+        "user1",
+        quiz.maxAttempts,
+        quiz.timeLimitSec,
+        {
+          quizId: quiz.id,
+          userId: "user1",
+          status: "in_progress",
+          answers: {},
+          score: null,
+          isPassed: null,
+          startedAt: new Date().toISOString(),
+          submittedAt: null,
+        }
+      );
+      expect(result).not.toBeNull();
+      expect(result!.existing).toBe(false);
+      expect(result!.attempt.attemptNumber).toBe(2);
+    });
+
+    it("does not affect other users' in_progress attempts", async () => {
+      const { lesson, video, quiz } = await setupLessonWithInProgressAttempt("user1");
+      // 別ユーザーの in_progress attempt
+      const otherAttempt = await ds.createQuizAttempt({
+        quizId: quiz.id,
+        userId: "user2",
+        attemptNumber: 1,
+        status: "in_progress",
+        answers: {},
+        score: null,
+        isPassed: null,
+        startedAt: new Date().toISOString(),
+        submittedAt: null,
+      });
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+      await ds.updateLessonSession(session.id, { sessionVideoCompleted: true });
+
+      await forceExitSession(ds, session.id, "time_limit");
+
+      const other = await ds.getQuizAttemptById(otherAttempt.id);
+      expect(other!.status).toBe("in_progress"); // 他ユーザーには影響しない
     });
   });
 
@@ -211,6 +334,44 @@ describe("lesson-session service", () => {
       await expect(abandonSession(ds, "nonexistent-id")).rejects.toThrow("not found");
     });
 
+    // Issue #422: abandonSession 後も in_progress attempt が残ると次回テスト開始不能になる
+    it("cleans up in_progress quiz attempts to timed_out (Issue #422 path 5)", async () => {
+      const { lesson, video, attempt } = await setupLessonWithInProgressAttempt("user1");
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+
+      await abandonSession(ds, session.id);
+
+      const cleaned = await ds.getQuizAttemptById(attempt.id);
+      expect(cleaned!.status).toBe("timed_out");
+      expect(cleaned!.answers).toEqual({ q1: ["a"] }); // 証跡保持
+    });
+
+    it("allows creating a new attempt after abandon", async () => {
+      const { lesson, video, quiz } = await setupLessonWithInProgressAttempt("user1");
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+
+      await abandonSession(ds, session.id);
+
+      const result = await ds.createQuizAttemptAtomic(
+        quiz.id,
+        "user1",
+        quiz.maxAttempts,
+        quiz.timeLimitSec,
+        {
+          quizId: quiz.id,
+          userId: "user1",
+          status: "in_progress",
+          answers: {},
+          score: null,
+          isPassed: null,
+          startedAt: new Date().toISOString(),
+          submittedAt: null,
+        }
+      );
+      expect(result).not.toBeNull();
+      expect(result!.existing).toBe(false);
+    });
+
     it("returns session as-is if already completed (TOCTOU safety)", async () => {
       const { lesson, video } = await setupLesson();
       const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
@@ -251,6 +412,23 @@ describe("lesson-session service", () => {
 
       const result = await handleStaleSession(ds, session);
       expect(result.status).toBe("active");
+    });
+
+    // Issue #422: stale session を回収する際も in_progress attempt をクリーンアップする
+    it("cleans up in_progress attempt when force-exiting stale session", async () => {
+      const { lesson, video, attempt } = await setupLessonWithInProgressAttempt("user1");
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+
+      await ds.updateLessonSession(session.id, {
+        sessionVideoCompleted: true,
+        deadlineAt: new Date(Date.now() - 1000).toISOString(),
+      });
+
+      const stale = await ds.getLessonSession(session.id);
+      await handleStaleSession(ds, stale!);
+
+      const cleaned = await ds.getQuizAttemptById(attempt.id);
+      expect(cleaned!.status).toBe("timed_out");
     });
   });
 });
