@@ -275,6 +275,15 @@ export interface DataSource {
     data: Omit<QuizAttempt, "id" | "attemptNumber">
   ): Promise<{ attempt: QuizAttempt; existing: boolean } | null>;
   updateQuizAttempt(id: string, data: Partial<Omit<QuizAttempt, "id">>): Promise<QuizAttempt | null>;
+  /**
+   * quiz attempt を in_progress から timed_out へ条件付きで遷移させる（TOCTOU 安全）。
+   * - in_progress 以外（submitted / timed_out 等）の場合は更新せず transitioned: false を返す
+   * - 存在しない場合は { transitioned: false, attempt: null }
+   * - submittedAt を now にセット、answers / score / isPassed は触らない（既存値保持・監査証跡）
+   *
+   * Issue #422: cleanup と並行 PATCH 提出が競合した場合の submitted → timed_out 上書きを防ぐ。
+   */
+  transitionQuizAttemptToTimedOut(attemptId: string): Promise<{ transitioned: boolean; attempt: QuizAttempt | null }>;
 
   // User Progress
   getUserProgress(userId: string, lessonId: string): Promise<UserProgress | null>;
