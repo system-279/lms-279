@@ -1313,6 +1313,29 @@ export class FirestoreDataSource implements DataSource {
     return this.toQuizAttempt(updated.id, updated.data()!);
   }
 
+  async transitionQuizAttemptToTimedOut(
+    attemptId: string
+  ): Promise<{ transitioned: boolean; attempt: QuizAttempt | null }> {
+    return this.db.runTransaction(async (tx) => {
+      const docRef = this.collection("quiz_attempts").doc(attemptId);
+      const doc = await tx.get(docRef);
+      if (!doc.exists) return { transitioned: false, attempt: null };
+
+      const current = this.toQuizAttempt(doc.id, doc.data()!);
+      if (current.status !== "in_progress") {
+        return { transitioned: false, attempt: current };
+      }
+
+      const submittedAt = new Date().toISOString();
+      tx.update(docRef, { status: "timed_out", submittedAt });
+
+      return {
+        transitioned: true,
+        attempt: { ...current, status: "timed_out", submittedAt },
+      };
+    });
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private toQuizAttempt(id: string, data: any): QuizAttempt {
     return {

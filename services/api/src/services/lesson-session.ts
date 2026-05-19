@@ -4,8 +4,9 @@
  */
 
 import type { DataSource } from "../datasource/interface.js";
-import type { LessonSession, SessionExitReason } from "../types/entities.js";
+import type { LessonSession, Quiz, QuizAttempt, SessionExitReason } from "../types/entities.js";
 import { parsePositiveDurationMs } from "../utils/env-config.js";
+import { logger } from "../utils/logger.js";
 import { updateCourseProgress } from "./progress.js";
 
 // セッション制限時間（ミリ秒、正の整数）。env var SESSION_DURATION_MS で上書き可、デフォルト 2 時間、本番運用は 3 時間（10800000）。
@@ -88,42 +89,112 @@ export async function getOrCreateSession(
  * sessionVideoCompleted=true で resetLessonDataForUser がスキップされる経路でも
  * attempt のロックが残らないよう、session 終了処理と独立に attempt を終端化する。
  * answers は監査証跡として保持し、score/isPassed は null のまま、submittedAt のみ now を入れる。
- * timed_out は maxAttempts カウントから除外されるため、救済による受験回数消費はない。
+ *
+ * timed_out が maxAttempts カウントから除外される責務は createQuizAttemptAtomic
+ * （services/quiz-attempt-utils.ts の countEffectiveAttempts）が持つため、
+ * 救済による受験回数消費はない。
+ *
+ * 並行 PATCH 提出との競合対策として transitionQuizAttemptToTimedOut の条件付き更新
+ * （in_progress 状態のみ遷移）を使用。submitted attempt を timed_out で上書きしない。
+ *
+ * 失敗ハンドリング: 本ヘルパー内のエラーは呼び出し元（forceExitSession / abandonSession）に
+ * propagate せず、session 終了処理を継続する。cleanup 失敗の検知は Cloud Logging の
+ * `errorType=cleanup_in_progress_attempts_*` フィルタで行うこと。
+ * 個別 attempt の cleanup 失敗 = 該当 user の次回テスト開始失敗を意味するため要監視。
  */
 async function cleanupInProgressAttempts(
   ds: DataSource,
   userId: string,
   lessonId: string
 ): Promise<void> {
-  let quiz;
+  let quiz: Quiz | null;
   try {
     quiz = await ds.getQuizByLessonId(lessonId);
   } catch (err) {
-    console.error(`cleanupInProgressAttempts: failed to load quiz for lesson ${lessonId}:`, err);
+    logger.error("cleanupInProgressAttempts: failed to load quiz", {
+      errorType: "cleanup_in_progress_attempts_quiz_load_failed",
+      userId,
+      lessonId,
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
     return;
   }
-  if (!quiz) return;
+  if (!quiz) {
+    // lesson に quiz が紐づかないケース（quiz 削除済み + 過去の in_progress 残留など）は
+    // 正常運用では起きにくいため warn で観測可能化
+    logger.warn("cleanupInProgressAttempts: quiz not found for lesson; skipping", {
+      errorType: "cleanup_in_progress_attempts_quiz_missing",
+      userId,
+      lessonId,
+    });
+    return;
+  }
 
-  let attempts;
+  let attempts: QuizAttempt[];
   try {
     attempts = await ds.getQuizAttempts({ quizId: quiz.id, userId });
   } catch (err) {
-    console.error(`cleanupInProgressAttempts: failed to load attempts for quiz ${quiz.id}:`, err);
+    logger.error("cleanupInProgressAttempts: failed to load attempts", {
+      errorType: "cleanup_in_progress_attempts_load_failed",
+      userId,
+      lessonId,
+      quizId: quiz.id,
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
     return;
   }
 
-  const now = new Date().toISOString();
+  let cleaned = 0;
+  let failed = 0;
+  let skipped = 0;
+  const failedAttemptIds: string[] = [];
+
   for (const attempt of attempts) {
     if (attempt.status !== "in_progress") continue;
     try {
-      await ds.updateQuizAttempt(attempt.id, {
-        status: "timed_out",
-        submittedAt: now,
-      });
+      const result = await ds.transitionQuizAttemptToTimedOut(attempt.id);
+      if (result.transitioned) {
+        cleaned++;
+      } else {
+        // 並行 PATCH 提出で submitted に遷移済 / 別経路で timed_out 化済の場合
+        skipped++;
+      }
     } catch (err) {
-      // 1件失敗しても他は続行
-      console.error(`cleanupInProgressAttempts: failed to cleanup attempt ${attempt.id}:`, err);
+      // 部分救済 > 全停止: 1件失敗しても他の attempt の救済は続行
+      failed++;
+      failedAttemptIds.push(attempt.id);
+      logger.error("cleanupInProgressAttempts: failed to transition attempt", {
+        errorType: "cleanup_in_progress_attempts_individual_failed",
+        userId,
+        lessonId,
+        quizId: quiz.id,
+        attemptId: attempt.id,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
     }
+  }
+
+  if (failed > 0) {
+    // ユーザーの次回テスト開始失敗を意味するため別 errorType でアラート可能に
+    logger.error("cleanupInProgressAttempts: partial failure", {
+      errorType: "cleanup_in_progress_attempts_partial_failure",
+      userId,
+      lessonId,
+      quizId: quiz.id,
+      cleaned,
+      failed,
+      skipped,
+      failedAttemptIds,
+    });
+  } else if (cleaned > 0) {
+    logger.info("cleanupInProgressAttempts: success", {
+      eventType: "cleanup_in_progress_attempts_success",
+      userId,
+      lessonId,
+      quizId: quiz.id,
+      cleaned,
+      skipped,
+    });
   }
 }
 
@@ -149,19 +220,23 @@ export async function forceExitSession(
     exitAt: new Date().toISOString(),
     exitReason: reason,
   });
+  if (!updated) {
+    throw new Error(`Session ${sessionId} not found`);
+  }
 
   // 動画完了済みセッションでは学習データをリセットしない。
   // HTML5 videoのendedはpause状態を伴うため、完了後のpauseタイムアウトや
   // ページリロード等でデータが全消去されるのを防止する。
-  if (!session.sessionVideoCompleted) {
+  if (session.sessionVideoCompleted) {
+    // Issue #422: reset スキップ経路では attempt が残るため明示的に終端化
+    await cleanupInProgressAttempts(ds, session.userId, session.lessonId);
+  } else {
+    // reset 経路: resetLessonDataForUser が quiz_attempts を全削除するため cleanup 不要
     await ds.resetLessonDataForUser(session.userId, session.lessonId, session.courseId);
     await updateCourseProgress(ds, session.userId, session.courseId);
   }
 
-  // attempt ロック解除（reset スキップ時の救済 / reset 実施時は noop）
-  await cleanupInProgressAttempts(ds, session.userId, session.lessonId);
-
-  return updated!;
+  return updated;
 }
 
 /**

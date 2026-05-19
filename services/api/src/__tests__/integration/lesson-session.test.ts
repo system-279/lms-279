@@ -234,6 +234,127 @@ describe("lesson-session service", () => {
       const other = await ds.getQuizAttemptById(otherAttempt.id);
       expect(other!.status).toBe("in_progress"); // 他ユーザーには影響しない
     });
+
+    // Issue #422: 動画完了済みデータ（video_analytics）が保護されることの回帰検証
+    it("preserves video_analytics when sessionVideoCompleted=true (data protection)", async () => {
+      const { lesson, video } = await setupLessonWithInProgressAttempt("user1");
+      await ds.upsertVideoAnalytics("user1", video.id, {
+        coverageRatio: 0.98,
+        isComplete: true,
+        watchedRanges: [{ start: 0, end: 294 }],
+        totalWatchTimeSec: 294,
+        seekCount: 0,
+        suspiciousFlags: [],
+      });
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+      await ds.updateLessonSession(session.id, { sessionVideoCompleted: true });
+
+      await forceExitSession(ds, session.id, "time_limit");
+
+      const analytics = await ds.getVideoAnalytics("user1", video.id);
+      expect(analytics).not.toBeNull();
+      expect(analytics!.coverageRatio).toBe(0.98); // 動画データは保護される
+      expect(analytics!.isComplete).toBe(true);
+    });
+
+    // Issue #422: maxAttempts 除外の不変条件（救済による受験回数消費なし）
+    it("timed_out from cleanup is excluded from maxAttempts (recovery does not consume attempts)", async () => {
+      const setup = await setupLesson();
+      const quiz = await ds.createQuiz({
+        lessonId: setup.lesson.id,
+        courseId: setup.course.id,
+        title: "Test Quiz maxAttempts=2",
+        passThreshold: 70,
+        maxAttempts: 2,
+        timeLimitSec: null,
+        randomizeQuestions: false,
+        randomizeAnswers: false,
+        requireVideoCompletion: false,
+        questions: [
+          {
+            id: "q1",
+            text: "Q1",
+            type: "single",
+            options: [
+              { id: "a", text: "A", isCorrect: true },
+              { id: "b", text: "B", isCorrect: false },
+            ],
+            points: 100,
+            explanation: "",
+          },
+        ],
+      });
+      await ds.createQuizAttempt({
+        quizId: quiz.id,
+        userId: "user1",
+        attemptNumber: 1,
+        status: "in_progress",
+        answers: {},
+        score: null,
+        isPassed: null,
+        startedAt: new Date().toISOString(),
+        submittedAt: null,
+      });
+      const session = await createSession(ds, "user1", setup.lesson.id, setup.course.id, setup.video.id, "token-1");
+      await ds.updateLessonSession(session.id, { sessionVideoCompleted: true });
+
+      await forceExitSession(ds, session.id, "time_limit");
+
+      // 2回目作成（救済で消費されていないなら成功）
+      const second = await ds.createQuizAttemptAtomic(
+        quiz.id, "user1", quiz.maxAttempts, quiz.timeLimitSec,
+        {
+          quizId: quiz.id,
+          userId: "user1",
+          status: "in_progress",
+          answers: {},
+          score: null,
+          isPassed: null,
+          startedAt: new Date().toISOString(),
+          submittedAt: null,
+        }
+      );
+      expect(second).not.toBeNull();
+      expect(second!.attempt.attemptNumber).toBe(2);
+    });
+
+    // TOCTOU 対策: 並行 PATCH 提出で submitted になった attempt を上書きしない
+    it("does not overwrite submitted attempts (TOCTOU safety via conditional update)", async () => {
+      const { lesson, video, attempt } = await setupLessonWithInProgressAttempt("user1");
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+      await ds.updateLessonSession(session.id, { sessionVideoCompleted: true });
+
+      // PATCH 提出が cleanup より先に完了したシナリオ
+      await ds.updateQuizAttempt(attempt.id, {
+        status: "submitted",
+        score: 100,
+        isPassed: true,
+        submittedAt: new Date().toISOString(),
+      });
+
+      await forceExitSession(ds, session.id, "time_limit");
+
+      const after = await ds.getQuizAttemptById(attempt.id);
+      expect(after!.status).toBe("submitted"); // timed_out で上書きされない
+      expect(after!.score).toBe(100);
+      expect(after!.isPassed).toBe(true);
+    });
+
+    // エラーパス: cleanup 内の例外は session 終了を止めない
+    it("completes session even when getQuizByLessonId throws", async () => {
+      const { lesson, video } = await setupLessonWithInProgressAttempt("user1");
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+      await ds.updateLessonSession(session.id, { sessionVideoCompleted: true });
+
+      const original = ds.getQuizByLessonId.bind(ds);
+      ds.getQuizByLessonId = async () => { throw new Error("simulated firestore error"); };
+      try {
+        const result = await forceExitSession(ds, session.id, "time_limit");
+        expect(result.status).toBe("force_exited"); // session 終了は完了する
+      } finally {
+        ds.getQuizByLessonId = original;
+      }
+    });
   });
 
   describe("completeSession", () => {
@@ -335,7 +456,7 @@ describe("lesson-session service", () => {
     });
 
     // Issue #422: abandonSession 後も in_progress attempt が残ると次回テスト開始不能になる
-    it("cleans up in_progress quiz attempts to timed_out (Issue #422 path 5)", async () => {
+    it("cleans up in_progress quiz attempts to timed_out (browser_close path)", async () => {
       const { lesson, video, attempt } = await setupLessonWithInProgressAttempt("user1");
       const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
 

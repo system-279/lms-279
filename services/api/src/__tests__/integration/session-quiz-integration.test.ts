@@ -201,6 +201,51 @@ describe("Quiz submission × Session integration", () => {
   });
 
   // =========================================================
+  // 3-bis. Issue #422: 期限切れ拒否後に新規 attempt 作成が可能になること（回帰テスト）
+  // =========================================================
+  it("session_time_exceeded 拒否後、新規 attempt 作成が 409 ではなく成功する (Issue #422 path 1)", async () => {
+    // sessionVideoCompleted=true 経路をシミュレートするため動画完了状態を作る
+    const sessionRes = await studentRequest
+      .post("/lesson-sessions")
+      .send({
+        lessonId,
+        videoId: "dummy-video",
+        sessionToken: "issue-422-token",
+      });
+    const sessionId = sessionRes.body.session.id;
+
+    // attempt 作成
+    const attemptRes = await studentRequest
+      .post(`/quizzes/${quizId}/attempts`)
+      .send({});
+    expect(attemptRes.status).toBe(201);
+    const attemptId = attemptRes.body.attempt.id;
+
+    // session を期限切れ + 動画完了済みに（resetLessonDataForUser がスキップされる経路）
+    await ds.updateLessonSession(sessionId, {
+      deadlineAt: new Date(Date.now() - 1000).toISOString(),
+      sessionVideoCompleted: true,
+    });
+
+    // 提出 → 403 + forceExitSession が走る
+    const submitRes = await studentRequest
+      .patch(`/quiz-attempts/${attemptId}`)
+      .send({ answers: { q1: ["q1-a"] } });
+    expect(submitRes.status).toBe(403);
+
+    // attempt が cleanup で timed_out 化されていること
+    const oldAttempt = await ds.getQuizAttemptById(attemptId);
+    expect(oldAttempt!.status).toBe("timed_out");
+
+    // 新規 attempt 作成が成功すること（旧バグなら 409 attempt_in_progress）
+    const newAttemptRes = await studentRequest
+      .post(`/quizzes/${quizId}/attempts`)
+      .send({});
+    expect(newAttemptRes.status).toBe(201);
+    expect(newAttemptRes.body.attempt.attemptNumber).toBe(2);
+  });
+
+  // =========================================================
   // 4. セッション強制退室APIのテスト
   // =========================================================
   it("PATCH /lesson-sessions/:id/force-exit でセッションが強制退室になる", async () => {

@@ -1050,6 +1050,24 @@ export class InMemoryDataSource implements DataSource {
     return this.quizAttempts[index];
   }
 
+  async transitionQuizAttemptToTimedOut(
+    attemptId: string
+  ): Promise<{ transitioned: boolean; attempt: QuizAttempt | null }> {
+    this.throwIfReadOnly();
+    const index = this.quizAttempts.findIndex((a) => a.id === attemptId);
+    if (index === -1) return { transitioned: false, attempt: null };
+    const current = this.quizAttempts[index];
+    if (current.status !== "in_progress") {
+      return { transitioned: false, attempt: current };
+    }
+    this.quizAttempts[index] = {
+      ...current,
+      status: "timed_out",
+      submittedAt: new Date().toISOString(),
+    };
+    return { transitioned: true, attempt: this.quizAttempts[index] };
+  }
+
   // User Progress
   async getUserProgress(userId: string, lessonId: string): Promise<UserProgress | null> {
     const key = `${userId}_${lessonId}`;
