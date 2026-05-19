@@ -1,0 +1,95 @@
+name: Cleanup Stuck Quiz Attempts
+
+# Issue #422 follow-up: in_progress のまま詰まった quiz_attempt を timed_out に救済する管理 workflow。
+# PR #423 の恒久対応では未来の発生を防ぐが、既詰まりユーザーは自動回復しないため本 workflow が必要。
+#
+# 実行方法:
+#   GitHub Actions UI > Cleanup Stuck Quiz Attempts > Run workflow
+#   インプット未指定で dry-run（全テナント横断、件数 + サンプル表示のみ）
+#   execute=true で実際に更新
+#
+# 安全機構:
+#   - dry-run 既定（execute 入力で apply）
+#   - スコープ絞り込み（tenant_id / user_email / user_id）
+#   - 件数アサーション（max_targets を超えると中断）
+#   - 更新前バックアップを artifact に保存
+#
+# セキュリティ: workflow_dispatch 入力はすべて env 経由で受け、run: 内で直接補間しない
+# (https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/)
+
+on:
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: '実更新モード（false=dry-run / true=apply）'
+        type: boolean
+        default: false
+      tenant_id:
+        description: 'テナント ID で絞り込み（空 = 全テナント横断）'
+        required: false
+        type: string
+      user_email:
+        description: 'ユーザー email で絞り込み（user_id と排他）'
+        required: false
+        type: string
+      user_id:
+        description: 'ユーザー ID で絞り込み（user_email と排他）'
+        required: false
+        type: string
+      max_targets:
+        description: '救済対象の上限件数（既定 1000、超えると中断）'
+        required: false
+        default: '1000'
+        type: string
+
+jobs:
+  cleanup:
+    name: Cleanup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FIREBASE_PROJECT_ID: lms-279
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
+
+      - name: Run cleanup script
+        env:
+          GOOGLE_CLOUD_PROJECT: lms-279
+          EXECUTE: ${{ inputs.execute }}
+          TENANT_ID: ${{ inputs.tenant_id }}
+          USER_EMAIL: ${{ inputs.user_email }}
+          USER_ID: ${{ inputs.user_id }}
+          MAX_TARGETS: ${{ inputs.max_targets }}
+        run: |
+          set -euo pipefail
+          FLAGS=()
+          if [ "$EXECUTE" = "true" ]; then FLAGS+=("--execute"); fi
+          if [ -n "$TENANT_ID" ]; then FLAGS+=("--tenant-id=$TENANT_ID"); fi
+          if [ -n "$USER_EMAIL" ]; then FLAGS+=("--user-email=$USER_EMAIL"); fi
+          if [ -n "$USER_ID" ]; then FLAGS+=("--user-id=$USER_ID"); fi
+          if [ -n "$MAX_TARGETS" ]; then FLAGS+=("--max-targets=$MAX_TARGETS"); fi
+          echo "Running with flags: ${FLAGS[*]:-(none)}"
+          npx tsx scripts/cleanup-stuck-quiz-attempts.ts "${FLAGS[@]}"
+
+      - name: Upload backup artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleanup-backup-${{ github.run_id }}
+          path: cleanup-stuck-backup-*.json
+          if-no-files-found: ignore
+          retention-days: 30
