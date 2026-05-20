@@ -83,7 +83,6 @@ export async function withTransientRetry<T>(
         });
       } catch (loggerErr) {
         // logger 失敗時は console.error にだけ落とし、retry は止めない
-        // eslint-disable-next-line no-console
         console.error("withTransientRetry: logger.warn failed (continuing retry):", loggerErr);
       }
       await new Promise((r) => setTimeout(r, delay));

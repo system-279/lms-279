@@ -556,8 +556,10 @@ describe("Quiz submission × Session integration", () => {
 
   // =========================================================
   // 12. レースコンディション: セッションがnull（削除済み）の場合も409
+  //    Issue #424 (Codex M2): null は force_exited ではなく
+  //    `session_no_longer_active` (sessionStatus=not_found) として扱う。
   // =========================================================
-  it("セッション再確認でnullが返ると409を返す", async () => {
+  it("セッション再確認でnullが返ると409 session_no_longer_active を返す (Issue #424)", async () => {
     // セッション作成（有効期限内）
     const sessionRes = await studentRequest
       .post("/lesson-sessions")
@@ -588,10 +590,109 @@ describe("Quiz submission × Session integration", () => {
         .patch(`/quiz-attempts/${attemptId}`)
         .send({ answers: { q1: ["q1-a"] } });
       expect(submitRes.status).toBe(409);
-      expect(submitRes.body.error).toBe("session_force_exited");
+      // Issue #424: null (not_found) は force_exited ではないため新 code
+      expect(submitRes.body.error).toBe("session_no_longer_active");
+      expect(submitRes.body.sessionStatus).toBe("not_found");
 
       const progress = await ds.getUserProgress(studentUserId, lessonId);
       expect(progress).toBeNull();
+    } finally {
+      ds.getLessonSession = originalGetLessonSession;
+    }
+  });
+
+  // =========================================================
+  // 13. Issue #424 (Codex M2): abandoned セッションとの並行 PATCH 提出
+  //    abandonSession と PATCH 提出が並行した場合、abandoned セッションへの
+  //    進捗更新が走らないこと (旧実装は force_exited のみ見ていたため 200 で進捗更新されていた)
+  // =========================================================
+  it("Issue #424: 並行 abandonSession 後の PATCH 提出 → 409 session_no_longer_active (進捗更新スキップ)", async () => {
+    const sessionRes = await studentRequest
+      .post("/lesson-sessions")
+      .send({
+        lessonId,
+        videoId: "dummy-video",
+        sessionToken: "test-token-abandoned-race",
+      });
+    expect(sessionRes.status).toBe(201);
+    const sessionId = sessionRes.body.session.id;
+
+    const attemptRes = await studentRequest
+      .post(`/quizzes/${quizId}/attempts`)
+      .send({});
+    expect(attemptRes.status).toBe(201);
+    const attemptId = attemptRes.body.attempt.id;
+
+    // getLessonSession を mock して abandoned を返す (並行 abandon をシミュレート)
+    const originalGetLessonSession = ds.getLessonSession.bind(ds);
+    ds.getLessonSession = async (id: string) => {
+      const session = await originalGetLessonSession(id);
+      if (session && session.id === sessionId) {
+        return { ...session, status: "abandoned" as const };
+      }
+      return session;
+    };
+
+    try {
+      const submitRes = await studentRequest
+        .patch(`/quiz-attempts/${attemptId}`)
+        .send({ answers: { q1: ["q1-a"] } });
+
+      expect(submitRes.status).toBe(409);
+      // Issue #424: abandoned は force_exited ではないため新 code
+      expect(submitRes.body.error).toBe("session_no_longer_active");
+      expect(submitRes.body.sessionStatus).toBe("abandoned");
+
+      // 409 レスポンスに attempt 情報は含まれる (提出自体は完了している)
+      expect(submitRes.body.attempt).toBeDefined();
+      expect(submitRes.body.attempt.id).toBe(attemptId);
+      expect(submitRes.body.attempt.status).toBe("submitted");
+
+      // データ整合性: abandoned セッションに対して user_progress 更新が走らないこと
+      const progress = await ds.getUserProgress(studentUserId, lessonId);
+      expect(progress).toBeNull();
+    } finally {
+      ds.getLessonSession = originalGetLessonSession;
+    }
+  });
+
+  // =========================================================
+  // 14. Issue #424: completed セッション (= 既に退室済) との並行 PATCH も同様に competition 検知
+  // =========================================================
+  it("Issue #424: completed セッションとの並行 PATCH 提出 → 409 session_no_longer_active", async () => {
+    const sessionRes = await studentRequest
+      .post("/lesson-sessions")
+      .send({
+        lessonId,
+        videoId: "dummy-video",
+        sessionToken: "test-token-completed-race",
+      });
+    expect(sessionRes.status).toBe(201);
+    const sessionId = sessionRes.body.session.id;
+
+    const attemptRes = await studentRequest
+      .post(`/quizzes/${quizId}/attempts`)
+      .send({});
+    expect(attemptRes.status).toBe(201);
+    const attemptId = attemptRes.body.attempt.id;
+
+    const originalGetLessonSession = ds.getLessonSession.bind(ds);
+    ds.getLessonSession = async (id: string) => {
+      const session = await originalGetLessonSession(id);
+      if (session && session.id === sessionId) {
+        return { ...session, status: "completed" as const };
+      }
+      return session;
+    };
+
+    try {
+      const submitRes = await studentRequest
+        .patch(`/quiz-attempts/${attemptId}`)
+        .send({ answers: { q1: ["q1-a"] } });
+
+      expect(submitRes.status).toBe(409);
+      expect(submitRes.body.error).toBe("session_no_longer_active");
+      expect(submitRes.body.sessionStatus).toBe("completed");
     } finally {
       ds.getLessonSession = originalGetLessonSession;
     }
