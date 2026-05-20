@@ -7,6 +7,10 @@
 
 ## 改訂履歴
 
+- **2026-05-21 (Issue #437)**: Gmail API エラー message の PII フィルタ。
+  - §8 エラー分類: `GmailDraftError` に **`publicMessage` getter** (errorCode → 固定文言マップ `GMAIL_ERROR_PUBLIC_MESSAGES`) を追加。`message` (Error 標準フィールド) は内部診断用 (raw Gmail API error 含む可能性、logger / HTTP レスポンスへ出さない)、`publicMessage` は外部公開用 (PII フリーの固定文言)。
+  - route 層 (`progress-pdf-draft.ts`): logger.error / HTTP レスポンスの `message` フィールドを `gmailErr.publicMessage` に統一。logger からは raw `errorMessage` を撤去 (errorCode + httpStatus のみで運用追跡、Cloud Logging req/res telemetry で詳細は別途参照)。
+  - 効果: Gmail API が `response.data.error.message` に raw email / MIME 断片 / アカウント情報を含めて返してきた場合でも、Cloud Logging / HTTP レスポンスに PII が漏洩しない (ismap 準拠の観点でも改善)。
 - **2026-05-21 (Issue #435)**: idempotency アトミック化 + 状態遷移ログ。Codex review High 1 / 3 を反映 (High 90: `recordPdfDraftLog().set()` 混在 / Medium 86: orphan pending 復旧 / Low 82: failed mock test は本 PR scope 外、follow-up Issue 化)。
   - §7 監査ログスキーマ: `status` を `"pending" | "success" | "failed"` に拡張。`finalizedAt` (状態遷移時刻) を追加。
   - §3 idempotency 構造を全面再設計 (transaction ベース):

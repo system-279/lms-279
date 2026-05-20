@@ -455,6 +455,71 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(res.status).toBe(502);
       expect(res.body.error).toBe("gmail_api_error");
     });
+
+    // Issue #437: Gmail API raw error message (受講者 email や MIME 断片を含む可能性) を
+    // HTTP レスポンスに露出させない。res.body.message は固定文言。
+    it("AC-3 (Issue #437): Gmail API failure 時 res.body.message に raw PII が含まれず、publicMessage (固定文言) が返る", async () => {
+      const { user } = await seedTenant(ds);
+      const piiEmail = "victim@private.example.com";
+      // Gmail API が raw error message に PII を含んで返してきたケースを mock
+      mocks.createGmailDraftMock.mockRejectedValueOnce(
+        new GmailDraftError(
+          `Cannot send to ${piiEmail}: invalid recipient`,
+          "gmail_api_error",
+          502,
+        ),
+      );
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-pii", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe("gmail_api_error");
+      // PII が含まれないこと
+      expect(res.body.message).not.toContain(piiEmail);
+      expect(res.body.message).not.toContain("victim");
+      // 固定文言 (GMAIL_ERROR_PUBLIC_MESSAGES.gmail_api_error) が返ること
+      expect(res.body.message).toBe("Gmail API error");
+    });
+
+    it("AC-3 (Issue #437): scope 不足時も res.body.message は固定文言 (reauthenticateWithPopup ガイダンス)", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.createGmailDraftMock.mockRejectedValueOnce(
+        new GmailDraftError(
+          "insufficientPermissions for account leak@example.com",
+          "gmail_scope_required",
+          403,
+        ),
+      );
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-scope-pii", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(403);
+      expect(res.body.message).not.toContain("leak@example.com");
+      expect(res.body.message).toBe("Gmail compose scope is required (please re-authenticate)");
+    });
+
+    it("AC-2 (Issue #437): tokeninfo failure 時も res.body.message は固定文言", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.verifyAccessTokenOwnerMock.mockRejectedValueOnce(
+        new GmailDraftError(
+          "token bound to user secret@victim.com revoked",
+          "invalid_access_token",
+          401,
+        ),
+      );
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-tokeninfo-pii", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(401);
+      expect(res.body.message).not.toContain("secret@victim.com");
+      expect(res.body.message).toBe("Access token is invalid or expired");
+    });
   });
 
   describe("PDF サイズ上限", () => {

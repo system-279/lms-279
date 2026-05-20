@@ -314,13 +314,15 @@ router.post(
       const gmailErr = err instanceof GmailDraftError ? err : null;
       const errorCode: ProgressPdfDraftErrorCode = gmailErr?.errorCode ?? "gmail_api_error";
       const httpStatus = gmailErr?.httpStatus ?? 502;
+      // Issue #437 (PII フィルタ): logger に raw Gmail API error message を出さない。
+      // errorCode + httpStatus のみで運用追跡し、内容の詳細は GCP Logs Explorer で
+      // Cloud Run の stderr (req/res の telemetry) を別途参照する。
       logger.warn("Failed to verify access token owner (Gmail API call skipped)", {
         tenantId,
         userId,
         requestId: parsed.requestId,
         errorCode,
         httpStatus,
-        errorMessage: gmailErr?.message ?? (err instanceof Error ? err.message : "unknown error"),
       });
       await recordPdfDraftLog(db, {
         requestId: parsed.requestId,
@@ -346,9 +348,10 @@ router.post(
           errorMessage: auditErr instanceof Error ? auditErr.message : String(auditErr),
         });
       });
+      // Issue #437: 外部レスポンスには publicMessage (固定文言) のみ返す
       res.status(httpStatus).json({
         error: errorCode,
-        message: gmailErr?.message ?? "Failed to verify access token",
+        message: gmailErr?.publicMessage ?? "Failed to verify access token",
       });
       return;
     }
@@ -677,9 +680,9 @@ router.post(
         });
       }
 
-      // SECURITY (I2 / ADR-034): GmailDraftError は raw GaxiosError 参照を持たない
-      // 設計 (gmail-draft.ts §GmailDraftError) のため、ここでは分類済みの
-      // errorCode / httpStatus / message のみを記録する。
+      // SECURITY (I2 / ADR-034 / Issue #437): GmailDraftError の `message` は Gmail API の
+      // raw error を含む可能性があるため、logger.error にも HTTP レスポンスにも出さない。
+      // 運用追跡には errorCode + httpStatus のみで十分 (Cloud Logging で req/res telemetry を参照)。
       logger.error("Gmail draft creation failed", {
         errorType: "gmail_draft_failed",
         tenantId,
@@ -687,11 +690,11 @@ router.post(
         requestId: parsed.requestId,
         errorCode,
         httpStatus,
-        errorMessage: gmailErr?.message ?? (err instanceof Error ? err.message : "unknown error"),
       });
+      // Issue #437: 外部レスポンスには publicMessage (固定文言) のみ返す
       res.status(httpStatus).json({
         error: errorCode,
-        message: gmailErr?.message ?? "Gmail draft creation failed",
+        message: gmailErr?.publicMessage ?? "Gmail draft creation failed",
       });
     }
   },
