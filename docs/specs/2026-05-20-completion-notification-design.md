@@ -3,7 +3,8 @@
 | 項目 | 値 |
 |---|---|
 | 起票日 | 2026-05-20 |
-| 改訂日 | 2026-05-20 (Codex セカンドオピニオン反映) |
+| 改訂日 | 2026-05-21 (ADR-037 OQ-2 RESOLVED 反映、SendAs 案 X 採用) / 2026-05-20 (Codex セカンドオピニオン反映) |
+| 関連 ADR (追加) | ADR-037 (送信元 impersonation: SendAs) |
 | 起票者 | 本田様 (要件) / system-279 (設計) |
 | 関連 ADR | ADR-026 (DWD) / ADR-029 (JST) / ADR-034 (Phase 2 Gmail 下書き) |
 | 関連 PR | #434 (Phase 2 Gmail 下書き、Manual flow、本機能と独立) |
@@ -649,7 +650,7 @@ UI からの直接削除ボタンは提供しない (誤操作リスク回避、
 
 - **AC-1**: published コース全件母集合に対して、`course_progress.isCompleted=true` かつ `totalLessons === lessonOrder.length` の全件達成かつ未通知の受講者のみが Gmail に送信される (Critical-2 反映)
 - **AC-2**: 既通知 (Reserved / Sent / FailedPermanent / ManualReviewRequired) の受講者には二度と Gmail 送信されない (idempotency)
-- **AC-3**: 送信元 `From:` ヘッダが `dxcollege@279279.net` (DWD subject = 実 mailbox + SendAs で偽装、ADR-037)
+- **AC-3**: 送信元 `From:` ヘッダが `DXCOLLEGE_SENDER_EMAIL` (初期値 `dxcollege@279279.net`) に一致。DWD subject は `DXCOLLEGE_DISPATCH_SUBJECT` (初期値 `system@279279.net`) を実 mailbox として用い、SendAs 経由で From を偽装する (ADR-037)
 - **AC-4**: `To:` = 受講者本人、`Cc:` = `ownerEmail` + 個別 validate 済 `notificationCcEmails` 配列 (重複排除)
 - **AC-5**: 完了通知本文に `completionMessageBody` 設定値 + `signatureName` 設定値が含まれる
 - **AC-6**: スケジュール曜日・時刻が現在 JST と一致しない時は何もしない
