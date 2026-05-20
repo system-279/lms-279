@@ -509,40 +509,88 @@ async function acquireRunLock(): Promise<{ runId: string } | null> {
 }
 ```
 
-### 6.4 403 reason 分類 (Codex Important-4)
+### 6.4 403 reason 分類 (Codex Important-4 + PR #442 review Critical 4+5)
+
+**入力前提**: HTTP 403 専用。429/503/timeout/401 は呼び出し側で別経路に流す。403 以外で呼ぶと例外 throw。
+
+**全体中断対象 reason (`scope_revoked`)** — 設計仕様書管理下の確定リスト:
+- `insufficientPermissions`: DWD scope 未反映 / 認可不足
+- `delegationDenied`: なりすまし送信が拒否された (subject 設定ミス等)
+- `userRateLimitExceeded`: sender 単位の制限超過 (実質 sender disabled)
+
+上記以外 (`recipientRejected` / `forbidden` / `messageRejected` / 未知 reason) は宛先固有 (`user_permanent`)。
+仕様書未記載の reason を独断追加することは AI 駆動開発 4 原則 §1 違反のため、変更時は spec 改訂 → 本田様承認 → 実装の順を厳守する。
 
 ```typescript
 // services/dispatch/dispatch-403-classifier.ts
-function classifyGmail403(err: GaxiosError): "scope_revoked" | "user_permanent" {
-  const reason = err.response?.data?.error?.errors?.[0]?.reason;
-  // run 全体中断 (全 user に影響する全体設定ミス)
-  if (reason === "insufficientPermissions") return "scope_revoked";
-  if (reason === "delegationDenied") return "scope_revoked";
-  if (reason === "userRateLimitExceeded") return "scope_revoked"; // sender disabled 系
-  // 宛先固有 (受講者の Gmail 受信拒否設定等)
-  return "user_permanent";
+const SCOPE_REVOKED_REASONS = new Set<string>([
+  "insufficientPermissions",
+  "delegationDenied",
+  "userRateLimitExceeded",
+]);
+
+function classifyGmail403(err: unknown): "scope_revoked" | "user_permanent" {
+  // PR #442 review Critical 5: HTTP 403 ガード (呼び出し側のバグを早期検知)
+  const status = (err as { response?: { status?: number } })?.response?.status;
+  if (status !== 403) {
+    throw new Error(`classifyGmail403 called for non-403 (status=${status ?? "unknown"})`);
+  }
+  // PR #442 review Critical 4: errors 配列を全件走査 (1 番目だけ見ない)
+  const errors = (err as { response?: { data?: { error?: { errors?: Array<{ reason?: unknown }> } } } })
+    ?.response?.data?.error?.errors ?? [];
+  const hasScopeRevoked = errors.some(
+    (e) => typeof e.reason === "string" && SCOPE_REVOKED_REASONS.has(e.reason),
+  );
+  return hasScopeRevoked ? "scope_revoked" : "user_permanent";
 }
 ```
 
-### 6.5 PII sanitize (NFR-11、Codex Important-7)
+### 6.5 PII sanitize (NFR-11、Codex Important-7 + PR #442 review Critical 2)
+
+対象 PII / トークン (取りこぼし防止のため広めに redaction):
+- email (ASCII 一般形式)
+- access token (`ya29.<...>`)
+- JWT 3-part (`eyJ<...>.<...>.<...>`) — ID token / Bearer 中身
+- refresh token (`1//<...>`)
+- API key (`AIza<35 chars>`)
+- `Authorization: Bearer <token>`
+- MIME headers (`To`/`Cc`/`Bcc`/`From`/`Reply-To`/`Sender`、folded continuation 含む)
+
+UTF-8 マルチバイト境界を割らないよう、置換後に Array.from で grapheme 単位で truncate する。
 
 ```typescript
 // services/dispatch/dispatch-error-sanitizer.ts
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-const ACCESS_TOKEN_RE = /ya29\.[A-Za-z0-9_-]+/g;
+const ACCESS_TOKEN_RE = /ya29\.[A-Za-z0-9_.-]+/g;
+const JWT_RE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
+const REFRESH_TOKEN_RE = /1\/\/[A-Za-z0-9_-]+/g;
+const API_KEY_RE = /AIza[0-9A-Za-z_-]{35}/g;
 const BEARER_RE = /Bearer\s+[A-Za-z0-9_.-]+/g;
-const MIME_HEADER_RE = /(?:To|Cc|Bcc|From):\s*[^\r\n]+/gi;
+const MIME_HEADER_RE =
+  /(?:To|Cc|Bcc|From|Reply-To|Sender):\s*[^\r\n]+(?:\r?\n[ \t][^\r\n]*)*/gi;
+
+function safeTruncate(s: string, maxLength: number): string {
+  if (s.length <= maxLength) return s;
+  return Array.from(s).slice(0, maxLength).join(""); // UTF-8 safe
+}
 
 export function sanitizeErrorForAudit(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
-  return raw
-    .replace(EMAIL_RE, "[EMAIL]")
-    .replace(ACCESS_TOKEN_RE, "[ACCESS_TOKEN]")
-    .replace(BEARER_RE, "[BEARER]")
+  // 置換順序: MIME ヘッダ → Bearer → JWT → access_token → refresh_token → API key → email
+  // (Bearer の中身が JWT / ya29 の場合があるため Bearer を先に処理)
+  const sanitized = raw
     .replace(MIME_HEADER_RE, "[MIME_HEADER]")
-    .slice(0, 1024);  // 上限
+    .replace(BEARER_RE, "[BEARER]")
+    .replace(JWT_RE, "[JWT]")
+    .replace(ACCESS_TOKEN_RE, "[ACCESS_TOKEN]")
+    .replace(REFRESH_TOKEN_RE, "[REFRESH_TOKEN]")
+    .replace(API_KEY_RE, "[API_KEY]")
+    .replace(EMAIL_RE, "[EMAIL]");
+  return safeTruncate(sanitized, 1024);
 }
 ```
+
+**scripts/smoke-dwd-gmail-send.ts も同 sanitizer を経由して error を出力する** (workflow ログから PII を排除、PR #442 review Critical 3)。
 
 ### 6.6 permanent_failed / manual_review_required の手動復旧フロー
 

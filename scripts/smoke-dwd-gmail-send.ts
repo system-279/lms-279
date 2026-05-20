@@ -36,6 +36,7 @@
 
 import { google } from "googleapis";
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
+import { sanitizeErrorForAudit } from "../services/api/src/services/dispatch/dispatch-error-sanitizer.js";
 
 const GCP_PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT ?? "lms-279";
 const DWD_SECRET_NAME = `projects/${GCP_PROJECT_ID}/secrets/dwd-workspace-key/versions/latest`;
@@ -204,27 +205,48 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("");
-  console.error("=== smoke check FAILED ===");
-  if (err instanceof Error) {
-    console.error(`Error: ${err.message}`);
-    // GaxiosError 形式から reason を取り出して原因の手がかりを出す
-    const gax = err as Error & {
-      response?: { status?: number; data?: unknown };
+  // PR #442 review Critical 3 対応:
+  //   workflow log は organization 内で閲覧可能なため、raw response.data を吐くと
+  //   PII (受講者 email / access token / API key 等) が漏れる。
+  //   sanitizeErrorForAudit を通してから出力する。
+  process.exitCode = 1;
+  process.stderr.write("\n=== smoke check FAILED ===\n");
+
+  const sanitizedMessage = sanitizeErrorForAudit(err);
+  process.stderr.write(`Error: ${sanitizedMessage}\n`);
+
+  // 安全部分のみ個別に抽出 (status / code / reason)。
+  // response.data 全体は dump しない (PII 漏洩リスク、Critical 3)。
+  const gax = err as Error & {
+    code?: unknown;
+    response?: {
+      status?: number;
+      data?: { error?: { errors?: Array<{ reason?: unknown }> } };
     };
-    if (gax.response) {
-      console.error(`HTTP status: ${gax.response.status}`);
-      console.error(`Response data: ${JSON.stringify(gax.response.data, null, 2)}`);
-    }
-  } else {
-    console.error(String(err));
+  };
+  if (typeof gax.code === "string") {
+    process.stderr.write(`Error code: ${gax.code}\n`);
   }
-  console.error("");
-  console.error("対処:");
-  console.error("  - 403 insufficientPermissions: DWD scope 反映待ち (最大 24h)");
-  console.error("  - 403 delegationDenied: dxcollege@279279.net への DWD なりすまし不可");
-  console.error("                          → SendAs 設定 or 実ユーザー mailbox 化を判断");
-  console.error("  - 401: SA キー無効 / Secret Manager 読取り失敗");
-  console.error("");
-  process.exit(1);
+  if (gax.response?.status !== undefined) {
+    process.stderr.write(`HTTP status: ${gax.response.status}\n`);
+  }
+  const reasons = gax.response?.data?.error?.errors;
+  if (Array.isArray(reasons)) {
+    const reasonList = reasons
+      .map((entry) => (typeof entry.reason === "string" ? entry.reason : null))
+      .filter((r): r is string => r !== null);
+    if (reasonList.length > 0) {
+      process.stderr.write(`Reasons: ${reasonList.join(", ")}\n`);
+    }
+  }
+
+  process.stderr.write("\n対処:\n");
+  process.stderr.write("  - 403 insufficientPermissions: DWD scope 反映待ち (最大 24h)\n");
+  process.stderr.write(
+    "  - 403 delegationDenied: dxcollege@279279.net への DWD なりすまし不可\n",
+  );
+  process.stderr.write(
+    "                          → SendAs 設定 or 実ユーザー mailbox 化を判断\n",
+  );
+  process.stderr.write("  - 401: SA キー無効 / Secret Manager 読取り失敗\n\n");
 });
