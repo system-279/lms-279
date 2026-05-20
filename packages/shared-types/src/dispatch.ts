@@ -35,16 +35,23 @@ export interface DispatchSettings {
 /** 設定取得レスポンス (senderEmail は env から読み取って併記、編集不可) */
 export type GetDispatchSettingsResponse = DispatchSettings;
 
-/** 設定更新リクエスト (version 不一致で 409) */
-export interface PutDispatchSettingsRequest {
-  enabled: boolean;
-  scheduleDaysOfWeek: number[];
-  scheduleHourJst: number;
-  signatureName: string;
-  completionMessageBody: string;
-  /** 楽観的ロック用、現在の DB version と一致しないと 409 */
-  version: number;
-}
+/**
+ * 設定更新リクエスト (version 不一致で 409)。
+ *
+ * DispatchSettings から派生 (Pick) し、サーバー側で設定する senderEmail /
+ * updatedAt / updatedBy は除外する。version は楽観的ロック用に含める。
+ * DispatchSettings に新規 field を追加した際は、本 Pick にも追加するか
+ * 自動的に PutRequest 対象外として扱うかを意識的に判断する。
+ */
+export type PutDispatchSettingsRequest = Pick<
+  DispatchSettings,
+  | "enabled"
+  | "scheduleDaysOfWeek"
+  | "scheduleHourJst"
+  | "signatureName"
+  | "completionMessageBody"
+  | "version"
+>;
 
 export type DispatchSettingsErrorCode =
   | "invalid_schedule_days"
@@ -82,8 +89,7 @@ export type TenantNotificationCcErrorCode =
   | "unauthorized"
   | "forbidden";
 
-/** notificationCcEmails 上限 */
-export const NOTIFICATION_CC_EMAILS_MAX = 10;
+// notificationCcEmails 上限 / その他の制約値は DISPATCH_CONSTRAINTS に統一 (本ファイル末尾)
 
 // ============================================================
 // 完了通知 (tenants/{tenantId}/completion_notifications/{userId})
@@ -271,8 +277,7 @@ export type TestSendErrorCode =
   | "unauthorized"
   | "forbidden";
 
-/** test-send 1 日あたりレート制限 (スーパー管理者あたり) */
-export const TEST_SEND_DAILY_LIMIT = 50;
+// test-send 1 日あたりレート制限は DISPATCH_CONSTRAINTS.TEST_SEND_DAILY_LIMIT を参照
 
 // ============================================================
 // Reservation transaction の結果 (内部 service 用)
