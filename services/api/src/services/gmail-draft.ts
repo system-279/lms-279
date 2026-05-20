@@ -12,17 +12,62 @@
 import { google } from "googleapis";
 import type { ProgressPdfDraftErrorCode } from "@lms-279/shared-types";
 
-// SECURITY (I2 / ADR-034): GaxiosError は config.headers.Authorization に
-// access token を保持するため、本クラスは raw error への参照を持たない。
-// 分類済みの errorCode / httpStatus / message のみを公開する。
+/**
+ * Issue #437 (PII フィルタ): GmailDraftError は 2 種類の message を持つ:
+ * - `message` (内部診断用): Error 標準フィールド。Gmail API の raw error message が
+ *   含まれる可能性があるため、**logger.error / HTTP レスポンスに直接出してはならない**。
+ * - `publicMessage` (外部公開用): `errorCode` ごとの固定文言。PII を含まないため
+ *   logger.error / HTTP レスポンスの `message` フィールドにそのまま出してよい。
+ *
+ * SECURITY (I2 / ADR-034): GaxiosError は config.headers.Authorization に
+ * access token を保持するため、本クラスは raw error への参照を持たない。
+ * 加えて Issue #437 対応で raw error message の外部漏洩も防ぐ。
+ */
+export const GMAIL_ERROR_PUBLIC_MESSAGES: Readonly<
+  Record<ProgressPdfDraftErrorCode, string>
+> = Object.freeze({
+  bad_request: "Bad request",
+  invalid_sections: "Invalid sections",
+  invalid_request_id: "Invalid requestId",
+  invalid_access_token: "Access token is invalid or expired",
+  access_token_owner_mismatch: "Access token owner does not match authenticated user",
+  no_sections_selected: "At least one section must be selected",
+  user_email_not_configured: "Student email is missing or invalid",
+  invalid_owner_email: "Tenant ownerEmail is invalid",
+  owner_email_not_set: "Tenant ownerEmail is not configured",
+  demo_tenant_not_supported: "Demo tenant is not supported",
+  invalid_tenant_id: "Invalid tenant ID",
+  invalid_user_id: "Invalid user ID",
+  tenant_not_found: "Tenant not found",
+  user_not_in_tenant: "User not found in the specified tenant",
+  pdf_too_large_for_gmail: "Generated PDF exceeds Gmail attachment limit",
+  pdf_generation_failed: "Failed to generate PDF",
+  gmail_scope_required: "Gmail compose scope is required (please re-authenticate)",
+  gmail_quota_exceeded: "Gmail API quota exceeded — please retry later",
+  gmail_api_error: "Gmail API error",
+  gmail_api_transient: "Gmail API is temporarily unavailable — please retry",
+});
+
 export class GmailDraftError extends Error {
   constructor(
+    /**
+     * 内部診断用 message (Error 標準フィールド)。
+     * Gmail API raw error message が含まれる可能性があるため、外部公開禁止。
+     */
     message: string,
     public errorCode: ProgressPdfDraftErrorCode,
     public httpStatus: number,
   ) {
     super(message);
     this.name = "GmailDraftError";
+  }
+
+  /**
+   * Issue #437: 外部公開用の固定文言 (PII フリー)。
+   * logger.error / HTTP レスポンスの `message` フィールドにはこちらを使う。
+   */
+  get publicMessage(): string {
+    return GMAIL_ERROR_PUBLIC_MESSAGES[this.errorCode] ?? "Gmail API error";
   }
 }
 

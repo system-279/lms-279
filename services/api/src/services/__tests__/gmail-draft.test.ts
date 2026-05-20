@@ -43,6 +43,7 @@ const {
   createGmailDraft,
   verifyAccessTokenOwner,
   GmailDraftError,
+  GMAIL_ERROR_PUBLIC_MESSAGES,
   TRANSIENT_NETWORK_CODES,
   __internal,
 } = await import("../gmail-draft.js");
@@ -821,5 +822,76 @@ describe("verifyAccessTokenOwner (Issue #436)", () => {
       errorCode: "gmail_api_error",
       httpStatus: 502,
     });
+  });
+});
+
+// Issue #437: PII フィルタ。Gmail API raw error message (受講者 email や MIME 断片を含む可能性) を
+// 外部 (logger / HTTP レスポンス) に露出させないため、固定文言の publicMessage を別途持つ。
+describe("GmailDraftError.publicMessage (Issue #437)", () => {
+  it("AC-1: 各 errorCode に対応する固定文言が GMAIL_ERROR_PUBLIC_MESSAGES から取得される", () => {
+    const err = new GmailDraftError("raw api error", "gmail_scope_required", 403);
+    expect(err.publicMessage).toBe(GMAIL_ERROR_PUBLIC_MESSAGES.gmail_scope_required);
+    // raw message と publicMessage は分離されている (Issue #437 の要)
+    expect(err.publicMessage).not.toBe(err.message);
+  });
+
+  it("AC-1: GMAIL_ERROR_PUBLIC_MESSAGES の各値に PII リテラル (@ / .com 等の email-like 文字列) が含まれない", () => {
+    for (const [code, msg] of Object.entries(GMAIL_ERROR_PUBLIC_MESSAGES)) {
+      // 各固定文言はテンプレート的に安全な文字列であること
+      expect(msg, `${code} publicMessage`).not.toMatch(/[\w.-]+@[\w.-]+/);
+    }
+  });
+
+  it("AC-5: raw email を含む Gmail API error を classifyGmailError に渡しても publicMessage に PII が含まれない", () => {
+    const piiEmail = "victim@example.com";
+    // Gmail API が返す error message に raw email が含まれているケースをシミュレート
+    const gaxiosError = {
+      response: {
+        status: 502,
+        data: {
+          error: {
+            message: `Cannot send to ${piiEmail}: invalid recipient (MIME header issue)`,
+          },
+        },
+      },
+    };
+
+    const classified = classifyGmailError(gaxiosError);
+
+    // 内部診断用 message には raw が残る (logger.error から外す責任は呼び出し側)
+    expect(classified.message).toContain(piiEmail);
+    // publicMessage は固定文言なので PII は含まれない
+    expect(classified.publicMessage).not.toContain(piiEmail);
+    expect(classified.publicMessage).not.toContain("@");
+    expect(classified.publicMessage).toBe(GMAIL_ERROR_PUBLIC_MESSAGES.gmail_api_error);
+  });
+
+  it("AC-5: scope 不足エラーで raw account info が含まれていても publicMessage は固定文言", () => {
+    const gaxiosError = {
+      response: {
+        status: 403,
+        data: {
+          error: {
+            message: "insufficientPermissions for account admin@victim-tenant.com",
+            errors: [{ reason: "insufficientPermissions" }],
+          },
+        },
+      },
+    };
+
+    const classified = classifyGmailError(gaxiosError);
+
+    expect(classified.errorCode).toBe("gmail_scope_required");
+    expect(classified.publicMessage).toBe(GMAIL_ERROR_PUBLIC_MESSAGES.gmail_scope_required);
+    expect(classified.publicMessage).not.toContain("admin@");
+    expect(classified.publicMessage).not.toContain("victim-tenant");
+  });
+
+  it("不明な errorCode (fallback) でも publicMessage は固定文言を返す", () => {
+    // ProgressPdfDraftErrorCode に存在しない code (テスト上のみ) → fallback
+    // 型システム上は通らないが、ランタイム安全性として確認
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const err = new GmailDraftError("raw", "non_existent_code" as any, 500);
+    expect(err.publicMessage).toBe("Gmail API error");
   });
 });
