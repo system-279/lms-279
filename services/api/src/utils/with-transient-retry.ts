@@ -17,11 +17,15 @@ import { classifyFirestoreError } from "./grpc-errors.js";
 import { logger } from "./logger.js";
 
 export interface WithTransientRetryOptions {
-  /** 最大試行回数 (初回 + リトライ)。default 3。 */
+  /** 最大試行回数 (初回 + リトライ)。default 3。1 以上の整数。 */
   maxAttempts?: number;
-  /** 初回 retry 待機時間 (ms)。default 100。指数的に baseDelayMs * 2^attempt で増加。 */
+  /** 初回 retry 待機時間 (ms)。default 100。指数的に baseDelayMs * 2^attempt で増加。0 以上。 */
   baseDelayMs?: number;
-  /** logger.warn に出す追加コンテキスト (tenantId / userId / operation 名等)。PII を含めない。 */
+  /**
+   * logger.warn に出す追加コンテキスト (tenantId / userId / operation 名等)。
+   * 既存の `cleanupInProgressAttempts` 等の Cloud Logging 方針に合わせ、必要最小限の識別子のみ渡す
+   * (raw email / 個人氏名等の PII は含めない)。
+   */
   context?: Record<string, unknown>;
 }
 
@@ -39,6 +43,20 @@ export async function withTransientRetry<T>(
 ): Promise<T> {
   const maxAttempts = opts.maxAttempts ?? 3;
   const baseDelayMs = opts.baseDelayMs ?? 100;
+
+  // Codex review (Low 74) 対応: 共通 util として広く使われる前提で入力検証。
+  // 不正値で「fn が一度も呼ばれず undefined を throw」のサイレント失敗を防ぐ。
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new TypeError(
+      `withTransientRetry: maxAttempts must be a positive integer (got ${maxAttempts})`,
+    );
+  }
+  if (typeof baseDelayMs !== "number" || baseDelayMs < 0 || !Number.isFinite(baseDelayMs)) {
+    throw new TypeError(
+      `withTransientRetry: baseDelayMs must be a non-negative finite number (got ${baseDelayMs})`,
+    );
+  }
+
   let lastError: unknown;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -52,14 +70,22 @@ export async function withTransientRetry<T>(
         throw err;
       }
       const delay = baseDelayMs * Math.pow(2, attempt);
-      logger.warn("withTransientRetry: retrying", {
-        errorType: "transient_retry",
-        attempt: attempt + 1,
-        maxAttempts,
-        delay,
-        grpcCode,
-        ...opts.context,
-      });
+      // Codex review (Medium 78) 対応: rules/error-handling.md §1「状態復旧 > ログ記録」原則に従い、
+      // logger.warn が throw (例: 循環参照付き context で JSON.stringify 失敗) しても retry 自体は継続する。
+      try {
+        logger.warn("withTransientRetry: retrying", {
+          errorType: "transient_retry",
+          attempt: attempt + 1,
+          maxAttempts,
+          delay,
+          grpcCode,
+          ...opts.context,
+        });
+      } catch (loggerErr) {
+        // logger 失敗時は console.error にだけ落とし、retry は止めない
+        // eslint-disable-next-line no-console
+        console.error("withTransientRetry: logger.warn failed (continuing retry):", loggerErr);
+      }
       await new Promise((r) => setTimeout(r, delay));
     }
   }

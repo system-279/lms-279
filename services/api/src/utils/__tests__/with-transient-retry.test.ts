@@ -168,4 +168,52 @@ describe("withTransientRetry (Issue #425)", () => {
     expect(fn).toHaveBeenCalledTimes(1);
     expect(loggerWarnSpy).not.toHaveBeenCalled();
   });
+
+  // Codex review (Medium 78) 対応: rules/error-handling.md §1
+  // ログ記録の失敗で復旧処理 (retry) が止まってはいけない。
+  it("Codex Medium 78: logger.warn が throw しても retry は継続する (ログ失敗 < 状態復旧)", async () => {
+    loggerWarnSpy.mockImplementation(() => {
+      throw new Error("logger pipeline broken");
+    });
+    // console.error は spy で抑制 (テストノイズ排除)
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("transient"), { code: 14 }))
+      .mockResolvedValueOnce("recovered");
+
+    try {
+      // logger.warn が throw しても fn の retry は実行され、最終的に "recovered" を返す
+      const result = await withTransientRetry(fn, OPTS);
+
+      expect(result).toBe("recovered");
+      expect(fn).toHaveBeenCalledTimes(2);
+      // logger.warn は呼ばれた (1 回、retry 直前) が throw して
+      expect(loggerWarnSpy).toHaveBeenCalledTimes(1);
+      // console.error にフォールバックされている
+      expect(consoleErrorSpy).toHaveBeenCalled();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  // Codex review (Low 74) 対応: 共通 util の入力検証
+  it("Codex Low 74: maxAttempts が不正値 (0 / 負数 / 非整数) → TypeError throw、fn は呼ばれない", async () => {
+    const fn = vi.fn();
+
+    await expect(withTransientRetry(fn, { maxAttempts: 0 })).rejects.toThrow(TypeError);
+    await expect(withTransientRetry(fn, { maxAttempts: -1 })).rejects.toThrow(TypeError);
+    await expect(withTransientRetry(fn, { maxAttempts: 1.5 })).rejects.toThrow(TypeError);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("Codex Low 74: baseDelayMs が不正値 (負数 / Infinity / NaN) → TypeError throw", async () => {
+    const fn = vi.fn();
+
+    await expect(withTransientRetry(fn, { baseDelayMs: -10 })).rejects.toThrow(TypeError);
+    await expect(withTransientRetry(fn, { baseDelayMs: Infinity })).rejects.toThrow(TypeError);
+    await expect(withTransientRetry(fn, { baseDelayMs: NaN })).rejects.toThrow(TypeError);
+    expect(fn).not.toHaveBeenCalled();
+  });
 });
