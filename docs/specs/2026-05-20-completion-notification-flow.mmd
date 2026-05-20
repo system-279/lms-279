@@ -1,0 +1,92 @@
+%% DXcollege 自動完了通知システム 処理フロー図
+%% brainstorm Phase 2 視覚補助 (2026-05-20、Codex セカンドオピニオン反映)
+%% 関連 ADR: ADR-026 (DWD), ADR-029 (JST), ADR-034 (PII ハッシュ化)
+%% 既存の手動 Gmail 下書き機能 (PR #434) とは完全に独立した別レーン
+
+flowchart TD
+  Scheduler["Cloud Scheduler<br/>毎時 JST 00 分起動<br/>time-zone: Asia/Tokyo"] -->|HTTP POST + OIDC| InternalAPI["/api/internal/dispatch/<br/>run-completion-notifications"]
+
+  InternalAPI -->|OIDC 認証 NG| Unauth["401 終了"]
+  InternalAPI -->|認証 OK| AcquireLock{"super_dispatch_runs<br/>lock 取得?"}
+
+  AcquireLock -->|失敗 (重複起動)| LockFail["409 終了"]
+  AcquireLock -->|成功| LoadSettings["super_dispatch_settings/global<br/>読込"]
+
+  LoadSettings -->|enabled=false| KillSwitch["何もせず 200<br/>(kill switch)"]
+  LoadSettings -->|enabled=true| ScheduleCheck{"JST 現在時刻が<br/>scheduleDaysOfWeek<br/>+ scheduleHourJst<br/>と一致?"}
+
+  ScheduleCheck -->|不一致| Skip200["何もせず 200"]
+  ScheduleCheck -->|一致| GetDwdToken["DWD トークン取得<br/>(subject=dxcollege@279279.net,<br/>scope=gmail.send 専用 client)"]
+
+  GetDwdToken -->|失敗| RunAbort1["run aborted<br/>Error Reporting critical"]
+  GetDwdToken -->|成功| LoadCourses["published コース全件取得<br/>(母集合構築)"]
+
+  LoadCourses --> TenantLoop["全テナント走査 (直列)"]
+
+  TenantLoop --> UserLoop["テナント内 users 走査<br/>(並列度 8)"]
+
+  UserLoop --> CheckEmail{"users/{userId}.email<br/>有効?"}
+  CheckEmail -->|空 / 不正| SkipUser["スキップ + Error Reporting"]
+  CheckEmail -->|有効| Check100{"全 published コースが<br/>course_progress.isCompleted=true<br/>かつ totalLessons一致?"}
+
+  Check100 -->|未達| SkipUser
+  Check100 -->|100% 達成| TryReserve["Reservation transaction<br/>(create-if-not-exists)"]
+
+  TryReserve -->|既存 sent / failed_permanent / manual_review| SkipUser
+  TryReserve -->|既存 reserved lease 内| SkipReserved["スキップ<br/>(他 run が処理中)"]
+  TryReserve -->|既存 reserved lease 期限切れ| PromoteManual["status=manual_review_required<br/>に降格 + Error Reporting"]
+  TryReserve -->|新規予約成功| BuildPdf["PDF 生成<br/>(30 秒 timeout)"]
+
+  BuildPdf -->|タイムアウト/失敗| TransientUser["Reservation 維持<br/>(次回 cron で再試行)"]
+  BuildPdf -->|成功| BuildMail["メール本文構築<br/>+ CC 個別 validate<br/>+ ownerEmail 結合"]
+
+  BuildMail --> SendGmail["gmail.users.messages.send<br/>(DWD なりすまし)"]
+
+  SendGmail -->|成功 200| MarkSent["completion_notifications<br/>status=sent + messageId<br/>+ courseIdsSnapshot<br/>+ progressSnapshot"]
+  SendGmail -->|transient 429/503/timeout| TransientUser
+  SendGmail -->|permanent 400/422<br/>宛先固有| MarkFailedPermanent["status=failed_permanent<br/>+ sanitized errorMessage"]
+  SendGmail -->|403 insufficientPermissions<br/>delegationDenied<br/>sender disabled| RunAbort2["run 全体中断<br/>後続 reservation rollback<br/>Error Reporting critical"]
+  SendGmail -->|403 宛先固有| MarkFailedPermanent
+  SendGmail -->|401 token 失効| RetryToken["DWD token 再取得<br/>1 回 retry"]
+
+  RetryToken -->|成功| SendGmail
+  RetryToken -->|再失敗| RunAbort2
+
+  MarkSent --> AuditSuccess["audit_logs user_notified"]
+  MarkFailedPermanent --> AuditPermanent["audit_logs user_failed_permanent<br/>+ Error Reporting warning"]
+  TransientUser --> AuditTransient["audit_logs user_failed_transient"]
+  PromoteManual --> AuditManual["audit_logs manual_review_required<br/>+ Error Reporting warning"]
+  SkipReserved --> AuditSkipped["audit_logs user_skipped"]
+
+  AuditSuccess --> NextUser["次の user"]
+  AuditPermanent --> NextUser
+  AuditTransient --> NextUser
+  AuditManual --> NextUser
+  AuditSkipped --> NextUser
+  SkipUser --> NextUser
+
+  NextUser --> UserLoopEnd{"残 user 有?"}
+  UserLoopEnd -->|有| UserLoop
+  UserLoopEnd -->|無| TenantLoopEnd{"残テナント有?"}
+  TenantLoopEnd -->|有| TenantLoop
+  TenantLoopEnd -->|無| FinalizeRun["super_dispatch_runs<br/>status=completed<br/>カウンタ更新"]
+
+  FinalizeRun --> Done200["全件処理完了 200"]
+
+  RunAbort1 --> AbortRun["super_dispatch_runs<br/>status=aborted"]
+  RunAbort2 --> AbortRun
+  AbortRun --> Done500["500 終了"]
+
+  classDef external fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+  classDef terminal fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px
+  classDef error fill:#ffcdd2,stroke:#b71c1c,stroke-width:2px
+  classDef decision fill:#fff9c4,stroke:#f57f17,stroke-width:2px
+  classDef write fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+  classDef critical fill:#ff8a80,stroke:#b71c1c,stroke-width:3px
+
+  class Scheduler,SendGmail,GetDwdToken,RetryToken external
+  class Done200,Skip200,KillSwitch,Unauth,LockFail terminal
+  class RunAbort1,RunAbort2,MarkFailedPermanent,AuditPermanent,AuditTransient,AuditManual,Done500 error
+  class AcquireLock,ScheduleCheck,CheckEmail,Check100,UserLoopEnd,TenantLoopEnd decision
+  class MarkSent,AuditSuccess,FinalizeRun write
+  class TryReserve,PromoteManual,AbortRun critical
