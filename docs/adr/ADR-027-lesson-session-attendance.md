@@ -4,6 +4,20 @@
 承認済み（2026-05-16 改訂: セッション上限を環境変数化）
 
 ## 改訂履歴
+- **2026-05-21**: ケース E の救済を拡張。`forceExitSession` のリセット skip 条件に **「現在 lesson の video に対する永続 `video_analytics.isComplete=true`」** を追加（`services/api/src/services/lesson-session.ts` の `hasPersistentVideoCompletion`）。これにより、過去にレッスンを完了済みのユーザーが再受験時に動画を再視聴して時間切れ／一時停止超過に陥っても、既存学習データ（`video_analytics` / `video_events` / `quiz_attempts` / `user_progress`）は保護される。救済対象 reason は `time_limit` / `pause_timeout` のみで、`max_attempts_failed` は受験規律破りのため永続フラグに関わらず全リセット維持（ケース F semantics）。動画差し替え検知として `getVideoByLessonId(session.lessonId)` で取得した現在 video の id が `session.videoId` と一致する場合のみ永続完了を尊重（旧 video の `isComplete` で誤救済しない）。`getVideoAnalytics` / `getVideoByLessonId` の例外は保守的に false（リセット側）にフォールバック。**規律装置の本質（初回視聴完遂の担保）は不変**で、初回視聴中（永続 `isComplete=false`）の time_limit は引き続き全リセット。
+
+  ### ケース定義表（2026-05-21 改訂）
+
+  | ID | 条件 | 挙動 | 再受験可否 |
+  |---|---|---|---|
+  | A | 不合格 + セッション内（time_limit 未到達）+ maxAttempts 未到達 | セッション継続 | ✅ 即時再受験 |
+  | B | `time_limit` + `sessionVideoCompleted=true`（現セッション内で完了） | リセット skip、in_progress attempt のみ `timed_out` 化 | ✅ 新セッションで再受験 |
+  | C | `browser_close`（abandoned） | リセットせず、in_progress attempt のみ `timed_out` 化 | ✅ 新セッションで再受験 |
+  | D | セッション未作成（動画再生せず直接テスト送信） | activeSession=null でセッション制約スキップ | ✅ 受講期間内なら受験可 |
+  | E | `time_limit` + `sessionVideoCompleted=false` + **永続 `isComplete=false`** | 全リセット（初回視聴中の規律装置） | ❌ 動画から見直し |
+  | **E'**（新） | `time_limit` / `pause_timeout` + `sessionVideoCompleted=false` + **永続 `isComplete=true`**（再視聴中の完了経験者）| **リセット skip**、in_progress attempt のみ `timed_out` 化 | ✅ 新セッションで再受験 |
+  | F | `max_attempts_failed`（`maxAttempts > 0 && attemptNumber >= maxAttempts`） | 全リセット（永続フラグ無視、規律破り） | ❌ 動画から見直し |
+
 - **2026-05-20**: 現場声「テスト不合格時にいつでも再受験できる方が望ましいのではないか」を起点に再設計を検討。実コード検証で **`maxAttempts=0`（本番テナント `8vexhzpc` の全 quiz 設定。Codex review PR #407 body 参照）配下では既にケース A〜D で何度でも再受験可能** と判明。再受験不可はケース E と F のみ。E/F のリセット廃止 / 動画ゲート（ADR-019）撤廃 / 「いつでも再受験」設計変更は **規律装置（強制退室時の全リセット）を破壊する本末転倒** と判断し、いずれも不採用。3h 延長（PR #407）は対症療法として暫定維持、**恒久対応は業務側のコンテンツ設計**（レッスン単位で「動画長 + テスト所要時間 < `SESSION_DURATION_MS`」を満たす分割）で対応する。効果測定として `scripts/audit-session-force-exits.ts` + `.github/workflows/audit-session-force-exits.yml`（read-only）を追加し、ケース E の発生数を継続観察する。
 
   ### ケース A〜F 定義（2026-05-20 時点）
