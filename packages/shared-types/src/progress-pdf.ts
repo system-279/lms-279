@@ -155,6 +155,7 @@ export type ProgressPdfDraftErrorCode =
   | "invalid_sections"
   | "invalid_request_id"
   | "invalid_access_token"
+  | "access_token_owner_mismatch"
   | "no_sections_selected"
   | "user_email_not_configured"
   | "invalid_owner_email"

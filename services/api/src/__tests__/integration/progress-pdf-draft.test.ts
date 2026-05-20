@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   superAdminEmail: "super@example.com",
   superAdminUid: "uid-super",
   createGmailDraftMock: vi.fn(),
+  verifyAccessTokenOwnerMock: vi.fn(),
   renderToBufferMock: vi.fn(),
   recordPdfDraftLogMock: vi.fn(),
   tenantDocGetMock: vi.fn(),
@@ -73,6 +74,7 @@ vi.mock("../../services/gmail-draft.js", async () => {
   return {
     ...actual,
     createGmailDraft: mocks.createGmailDraftMock,
+    verifyAccessTokenOwner: mocks.verifyAccessTokenOwnerMock,
   };
 });
 
@@ -161,6 +163,11 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
     mocks.createGmailDraftMock.mockResolvedValue({
       draftId: "r-12345",
       draftUrl: "https://mail.google.com/mail/u/0/?ogbl#drafts/r-12345",
+    });
+    // Issue #436: access token owner 検証はデフォルトで一致する mock
+    mocks.verifyAccessTokenOwnerMock.mockResolvedValue({
+      email: mocks.superAdminEmail.trim().toLowerCase(),
+      verified: true,
     });
 
     app = buildApp();
@@ -755,6 +762,289 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
 
       expect(res.status).toBe(201);
       expect(res.body.draftId).toBe("r-12345");
+    });
+  });
+
+  // Issue #436: access token の発行元 Google アカウント email が
+  // Firebase Auth (superAdmin.email) と一致するかを検証する。
+  describe("Issue #436: access token owner 検証", () => {
+    it("AC-1: 一致時は 201 + 監査ログに tokenOwnerEmail 記録", async () => {
+      const { user } = await seedTenant(ds);
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-owner-ok",
+          sections: ALL_ON,
+          accessToken: "ya29.matching_token",
+        });
+
+      expect(res.status).toBe(201);
+      // AC-3: 成功監査ログに tokenOwnerEmail が記録される
+      expect(mocks.recordPdfDraftLogMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          requestId: "req-owner-ok",
+          status: "success",
+          tokenOwnerEmail: mocks.superAdminEmail.toLowerCase(),
+        }),
+      );
+    });
+
+    it("AC-2: token owner と superAdmin.email が不一致 → 403 access_token_owner_mismatch + Gmail API 呼ばれない", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.verifyAccessTokenOwnerMock.mockResolvedValueOnce({
+        email: "attacker@example.com",
+        verified: true,
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-owner-mismatch",
+          sections: ALL_ON,
+          accessToken: "ya29.attacker_token",
+        });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe("access_token_owner_mismatch");
+      // Gmail API は呼ばれない (副作用なし)
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+      // AC-3: 失敗監査ログに tokenOwnerEmail (不一致値) が記録される
+      expect(mocks.recordPdfDraftLogMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          requestId: "req-owner-mismatch",
+          status: "failed",
+          errorCode: "access_token_owner_mismatch",
+          tokenOwnerEmail: "attacker@example.com",
+          draftId: null,
+        }),
+      );
+    });
+
+    it("AC-2: 大文字小文字差異は許容する (一致と判定)", async () => {
+      const { user } = await seedTenant(ds);
+      // tokeninfo は通常 lowercase で返すが、念のため大文字混在を検証
+      mocks.verifyAccessTokenOwnerMock.mockResolvedValueOnce({
+        email: "SUPER@example.com".toLowerCase(),
+        verified: true,
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-owner-case",
+          sections: ALL_ON,
+          accessToken: "ya29.case_diff",
+        });
+
+      expect(res.status).toBe(201);
+    });
+
+    it("AC-5: tokeninfo が 401 → 401 invalid_access_token + Gmail API 呼ばれない", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.verifyAccessTokenOwnerMock.mockRejectedValueOnce(
+        new GmailDraftError("token expired", "invalid_access_token", 401),
+      );
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-tokeninfo-401",
+          sections: ALL_ON,
+          accessToken: "ya29.expired",
+        });
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe("invalid_access_token");
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+      // 失敗監査ログ
+      expect(mocks.recordPdfDraftLogMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          requestId: "req-tokeninfo-401",
+          status: "failed",
+          errorCode: "invalid_access_token",
+        }),
+      );
+    });
+
+    it("AC-5: tokeninfo transient (503) → 503 gmail_api_transient + Gmail API 呼ばれない", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.verifyAccessTokenOwnerMock.mockRejectedValueOnce(
+        new GmailDraftError("upstream unavailable", "gmail_api_transient", 503),
+      );
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-tokeninfo-503",
+          sections: ALL_ON,
+          accessToken: "ya29.transient",
+        });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error).toBe("gmail_api_transient");
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+    });
+
+    it("AC-4: token owner 検証は idempotency check の後に行われる (success 既存ログがあれば検証スキップ)", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({ status: "success", draftId: "existing-1" }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-idempotency",
+          sections: ALL_ON,
+          accessToken: "ya29.does_not_matter",
+        });
+
+      expect(res.status).toBe(200);
+      // idempotency hit 時は token 検証も Gmail API もスキップ
+      expect(mocks.verifyAccessTokenOwnerMock).not.toHaveBeenCalled();
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+    });
+
+    // Codex review (Issue #436): verified_email が false の access token は拒否する。
+    it("verified_email=false (Google が email 所有未確認) → 401 invalid_access_token + Gmail API 呼ばれない", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.verifyAccessTokenOwnerMock.mockResolvedValueOnce({
+        // email は一致するが verified が false (所有確認なし)
+        email: mocks.superAdminEmail.toLowerCase(),
+        verified: false,
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-unverified",
+          sections: ALL_ON,
+          accessToken: "ya29.unverified",
+        });
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe("invalid_access_token");
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+      // 失敗監査ログに tokenOwnerEmail は記録される (運用追跡のため)
+      expect(mocks.recordPdfDraftLogMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          requestId: "req-unverified",
+          status: "failed",
+          errorCode: "invalid_access_token",
+          tokenOwnerEmail: mocks.superAdminEmail.toLowerCase(),
+        }),
+      );
+    });
+  });
+
+  // Codex review (Issue #436): idempotency hit 時の認可境界。
+  // 旧実装は `requestId` 単独で既存 draftId を返していたため、
+  // 別 super admin / 別 userId の既存 success ログを拾える余地があった。
+  describe("Issue #436: idempotency 認可境界 (Codex review)", () => {
+    it("既存 success ログの createdByUid が現在 actor と異なる → 409 (別 actor の draft 横取り防止)", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          status: "success",
+          draftId: "victim-draft-1",
+          createdByUid: "uid-other-admin", // 別 super admin
+          userId: user.id,
+        }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-collision",
+          sections: ALL_ON,
+          accessToken: "ya29.attacker",
+        });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("invalid_request_id");
+      // 攻撃者は victim の draftId を取得できない
+      expect(res.body.draftId).toBeUndefined();
+      // 新規 Gmail API も呼ばれない
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+    });
+
+    it("既存 success ログの userId が path userId と異なる → 409 (別 受講者 draft 横取り防止)", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          status: "success",
+          draftId: "victim-draft-2",
+          createdByUid: mocks.superAdminUid, // 同じ actor
+          userId: "user-different", // 別 受講者
+        }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-user-collision",
+          sections: ALL_ON,
+          accessToken: "ya29.token",
+        });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("invalid_request_id");
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+    });
+
+    it("旧スキーマ (createdByUid 不在) は後方互換で 200 を返す", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          status: "success",
+          draftId: "legacy-200",
+          // createdByUid / userId フィールド不在 = 旧スキーマ
+        }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-legacy-compat",
+          sections: ALL_ON,
+          accessToken: "ya29.token",
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.draftId).toBe("legacy-200");
+    });
+
+    it("一致時は通常通り 200 で既存 draftId 返却", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          status: "success",
+          draftId: "match-draft",
+          createdByUid: mocks.superAdminUid,
+          userId: user.id,
+        }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-match",
+          sections: ALL_ON,
+          accessToken: "ya29.token",
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.draftId).toBe("match-draft");
     });
   });
 });

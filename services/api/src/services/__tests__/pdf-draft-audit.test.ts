@@ -209,6 +209,80 @@ describe("recordPdfDraftLog", () => {
     expect(ttlMillis).toBeLessThanOrEqual(expectedMax);
   });
 
+  // Issue #436: access token の発行元 Google アカウント email を sha256 で記録する。
+  describe("AC-3 (Issue #436): tokenOwnerHash", () => {
+    it("tokenOwnerEmail を渡すと sha256 で hash 化されて tokenOwnerHash として保存される", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await recordPdfDraftLog(dbMock as any, {
+        requestId: "req-owner-hash",
+        tenantId: "tenant-1",
+        createdByUid: "uid",
+        createdByEmail: "super@example.com",
+        userId: "user-1",
+        toEmail: "student@example.com",
+        ownerEmail: null,
+        tokenOwnerEmail: "super@example.com",
+        draftId: "draft-1",
+        status: "success",
+        errorCode: null,
+        sections: ALL_SECTIONS,
+        pdfSizeBytes: 1024,
+      });
+
+      const writeArg = setMock.mock.calls[0][0];
+      expect(writeArg.tokenOwnerHash).toBe(hashEmail("super@example.com"));
+      // raw email は保存されない
+      expect(JSON.stringify(writeArg)).not.toContain("super@example.com");
+    });
+
+    it("tokenOwnerEmail 未指定なら tokenOwnerHash=null", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await recordPdfDraftLog(dbMock as any, {
+        requestId: "req-owner-null",
+        tenantId: "tenant-1",
+        createdByUid: "uid",
+        createdByEmail: "super@example.com",
+        userId: "user-1",
+        toEmail: null,
+        ownerEmail: null,
+        // tokenOwnerEmail を省略
+        draftId: null,
+        status: "failed",
+        errorCode: "gmail_api_transient",
+        sections: ALL_SECTIONS,
+        pdfSizeBytes: null,
+      });
+
+      const writeArg = setMock.mock.calls[0][0];
+      expect(writeArg.tokenOwnerHash).toBe(null);
+    });
+
+    it("不一致時 (token owner と createdByEmail が異なる) でも tokenOwnerHash には実際の owner が記録される", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await recordPdfDraftLog(dbMock as any, {
+        requestId: "req-mismatch",
+        tenantId: "tenant-1",
+        createdByUid: "uid",
+        createdByEmail: "super@example.com",
+        userId: "user-1",
+        toEmail: null,
+        ownerEmail: null,
+        tokenOwnerEmail: "attacker@example.com",
+        draftId: null,
+        status: "failed",
+        errorCode: "access_token_owner_mismatch",
+        sections: ALL_SECTIONS,
+        pdfSizeBytes: null,
+      });
+
+      const writeArg = setMock.mock.calls[0][0];
+      expect(writeArg.tokenOwnerHash).toBe(hashEmail("attacker@example.com"));
+      expect(writeArg.createdByEmailHash).toBe(hashEmail("super@example.com"));
+      // 異なる hash になっていることで監査側で不一致が検出可能
+      expect(writeArg.tokenOwnerHash).not.toBe(writeArg.createdByEmailHash);
+    });
+  });
+
   it("Firestore 書き込みエラーは throw する", async () => {
     setMock.mockRejectedValueOnce(new Error("firestore unavailable"));
 

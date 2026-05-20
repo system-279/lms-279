@@ -47,9 +47,10 @@ import {
   buildGmailDraftUrl,
   createGmailDraft,
   GmailDraftError,
+  verifyAccessTokenOwner,
   type MimeAttachment,
 } from "../../services/gmail-draft.js";
-import { recordPdfDraftLog } from "../../services/pdf-draft-audit.js";
+import { hashEmail, recordPdfDraftLog } from "../../services/pdf-draft-audit.js";
 import { logger } from "../../utils/logger.js";
 import { classifyFirestoreError, TRANSIENT_RETRY_MESSAGE_JA } from "../../utils/grpc-errors.js";
 
@@ -205,6 +206,10 @@ router.post(
     // Evaluator MEDIUM-2 対応: idempotency 重複ガード
     // 同一 requestId で既に success ログがあれば、Gmail draft 再作成せず既存結果を返す。
     // 確認失敗時は新規作成にフォールバック (idempotency check のためにメイン処理を止めない)。
+    //
+    // Codex review (Issue #436): 認可境界として `requestId` 単独では不足。
+    // 別 super admin / 別 userId の既存 success ログを拾える余地があるため、
+    // `createdByUid` + `userId` 一致 (旧スキーマで `createdByUid` 不在なら許容) を追加で確認する。
     try {
       const existingLog = await db
         .collection("tenants")
@@ -215,12 +220,32 @@ router.post(
       if (existingLog.exists) {
         const data = existingLog.data();
         if (data && data.status === "success" && typeof data.draftId === "string") {
-          const existingDraftId = data.draftId;
-          const response: ProgressPdfDraftResponse = {
-            draftId: existingDraftId,
-            draftUrl: buildGmailDraftUrl(existingDraftId),
-          };
-          res.status(200).json(response);
+          // 認可境界: 別 actor / 別 受講者 の既存 draft を横取りできないよう照合
+          // (旧スキーマで `createdByUid` 不在ならスキップして後方互換維持)
+          const ownerMatches =
+            typeof data.createdByUid !== "string" || data.createdByUid === createdByUid;
+          const userMatches = typeof data.userId !== "string" || data.userId === userId;
+          if (ownerMatches && userMatches) {
+            const existingDraftId = data.draftId;
+            const response: ProgressPdfDraftResponse = {
+              draftId: existingDraftId,
+              draftUrl: buildGmailDraftUrl(existingDraftId),
+            };
+            res.status(200).json(response);
+            return;
+          }
+          // 不一致 → 別 actor が同じ requestId で先取った可能性、再利用拒否
+          logger.warn("Idempotency log exists but actor/userId mismatch — rejecting reuse", {
+            tenantId,
+            requestId: parsed.requestId,
+            // PII を残さないため hash で記録
+            currentActorHash: hashEmail(createdByUid),
+            currentUserId: userId,
+          });
+          res.status(409).json({
+            error: "invalid_request_id",
+            message: "requestId is already used by a different actor or user",
+          });
           return;
         }
         // status=failed の場合は再試行を許容するためフォールスルー
@@ -231,6 +256,137 @@ router.post(
         requestId: parsed.requestId,
         errorMessage: err instanceof Error ? err.message : String(err),
       });
+    }
+
+    // Issue #436: access token の発行元 Google アカウント email を取得し、
+    // Firebase Auth (superAdmin.email) と一致するか検証する。
+    // - 一致 → 続行
+    // - 不一致 → 403 access_token_owner_mismatch + 失敗監査ログ + Gmail API 呼ばない
+    // - tokeninfo 失敗 (transient/401 等) → 該当 httpStatus + 失敗監査ログ + Gmail API 呼ばない
+    // 監査用に取得した owner email は tokenOwnerEmail として後続の recordPdfDraftLog に渡す。
+    let tokenOwnerEmail: string | null = null;
+    try {
+      const ownerResult = await verifyAccessTokenOwner(parsed.accessToken);
+      tokenOwnerEmail = ownerResult.email;
+      // Codex review (Issue #436): Google が email 所有を確認していない (verified_email !== true)
+      // token を受理すると、Google アカウント乗っ取り経路の所有性偽装を見逃す。
+      // 通常 OAuth では verified_email は true、false の場合は防御強化として 401 で拒否する。
+      if (!ownerResult.verified) {
+        logger.warn("Access token owner email is not verified by Google", {
+          tenantId,
+          userId,
+          requestId: parsed.requestId,
+          tokenOwnerHash: hashEmail(tokenOwnerEmail),
+        });
+        await recordPdfDraftLog(db, {
+          requestId: parsed.requestId,
+          tenantId,
+          createdByUid,
+          createdByEmail,
+          userId,
+          toEmail: null,
+          ownerEmail: null,
+          tokenOwnerEmail,
+          draftId: null,
+          status: "failed",
+          errorCode: "invalid_access_token",
+          sections: parsed.sections,
+          pdfSizeBytes: null,
+        }).catch((auditErr: unknown) => {
+          logger.warn("Failed to record unverified-email audit log", {
+            errorType: "pdf_draft_audit_write_failed_unverified",
+            tenantId,
+            requestId: parsed.requestId,
+            errorMessage: auditErr instanceof Error ? auditErr.message : String(auditErr),
+          });
+        });
+        res.status(401).json({
+          error: "invalid_access_token",
+          message: "Access token owner email is not verified by Google",
+        });
+        return;
+      }
+      const expected = createdByEmail.trim().toLowerCase();
+      if (tokenOwnerEmail !== expected) {
+        // 不一致: Gmail API 呼ばずに 403 を返す + 失敗監査ログ
+        logger.warn("Access token owner does not match super admin email", {
+          tenantId,
+          userId,
+          requestId: parsed.requestId,
+          // PII を出さないため hash で記録
+          tokenOwnerHash: hashEmail(tokenOwnerEmail),
+          expectedHash: hashEmail(expected),
+        });
+        await recordPdfDraftLog(db, {
+          requestId: parsed.requestId,
+          tenantId,
+          createdByUid,
+          createdByEmail,
+          userId,
+          toEmail: null,
+          ownerEmail: null,
+          tokenOwnerEmail,
+          draftId: null,
+          status: "failed",
+          errorCode: "access_token_owner_mismatch",
+          sections: parsed.sections,
+          pdfSizeBytes: null,
+        }).catch((auditErr: unknown) => {
+          logger.warn("Failed to record access_token_owner_mismatch audit log", {
+            errorType: "pdf_draft_audit_write_failed_403_owner_mismatch",
+            tenantId,
+            requestId: parsed.requestId,
+            errorMessage: auditErr instanceof Error ? auditErr.message : String(auditErr),
+          });
+        });
+        res.status(403).json({
+          error: "access_token_owner_mismatch",
+          message:
+            "Access token owner does not match authenticated super admin email",
+        });
+        return;
+      }
+    } catch (err) {
+      const gmailErr = err instanceof GmailDraftError ? err : null;
+      const errorCode: ProgressPdfDraftErrorCode = gmailErr?.errorCode ?? "gmail_api_error";
+      const httpStatus = gmailErr?.httpStatus ?? 502;
+      logger.warn("Failed to verify access token owner (Gmail API call skipped)", {
+        tenantId,
+        userId,
+        requestId: parsed.requestId,
+        errorCode,
+        httpStatus,
+        errorMessage: gmailErr?.message ?? (err instanceof Error ? err.message : "unknown error"),
+      });
+      await recordPdfDraftLog(db, {
+        requestId: parsed.requestId,
+        tenantId,
+        createdByUid,
+        createdByEmail,
+        userId,
+        toEmail: null,
+        ownerEmail: null,
+        tokenOwnerEmail: null,
+        draftId: null,
+        status: "failed",
+        errorCode,
+        sections: parsed.sections,
+        pdfSizeBytes: null,
+      }).catch((auditErr: unknown) => {
+        logger.warn("Failed to record tokeninfo failure audit log", {
+          errorType: "pdf_draft_audit_write_failed_tokeninfo",
+          tenantId,
+          requestId: parsed.requestId,
+          primaryErrorCode: errorCode,
+          primaryHttpStatus: httpStatus,
+          errorMessage: auditErr instanceof Error ? auditErr.message : String(auditErr),
+        });
+      });
+      res.status(httpStatus).json({
+        error: errorCode,
+        message: gmailErr?.message ?? "Failed to verify access token",
+      });
+      return;
     }
 
     // tenant doc + DataSource 取得 (Phase 1 と同じ)
@@ -334,6 +490,7 @@ router.post(
           userId,
           toEmail: validatedToEmail,
           ownerEmail: validatedCcEmail,
+          tokenOwnerEmail,
           draftId: null,
           status: "failed",
           errorCode: "pdf_too_large_for_gmail",
@@ -424,6 +581,7 @@ router.post(
         userId,
         toEmail: validatedToEmail,
         ownerEmail: validatedCcEmail,
+        tokenOwnerEmail,
         draftId: draftResult.draftId,
         status: "success",
         errorCode: null,
@@ -458,6 +616,7 @@ router.post(
         userId,
         toEmail: validatedToEmail,
         ownerEmail: validatedCcEmail,
+        tokenOwnerEmail,
         draftId: null,
         status: "failed",
         errorCode,
