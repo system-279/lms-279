@@ -909,5 +909,142 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(mocks.verifyAccessTokenOwnerMock).not.toHaveBeenCalled();
       expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
     });
+
+    // Codex review (Issue #436): verified_email が false の access token は拒否する。
+    it("verified_email=false (Google が email 所有未確認) → 401 invalid_access_token + Gmail API 呼ばれない", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.verifyAccessTokenOwnerMock.mockResolvedValueOnce({
+        // email は一致するが verified が false (所有確認なし)
+        email: mocks.superAdminEmail.toLowerCase(),
+        verified: false,
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-unverified",
+          sections: ALL_ON,
+          accessToken: "ya29.unverified",
+        });
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe("invalid_access_token");
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+      // 失敗監査ログに tokenOwnerEmail は記録される (運用追跡のため)
+      expect(mocks.recordPdfDraftLogMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          requestId: "req-unverified",
+          status: "failed",
+          errorCode: "invalid_access_token",
+          tokenOwnerEmail: mocks.superAdminEmail.toLowerCase(),
+        }),
+      );
+    });
+  });
+
+  // Codex review (Issue #436): idempotency hit 時の認可境界。
+  // 旧実装は `requestId` 単独で既存 draftId を返していたため、
+  // 別 super admin / 別 userId の既存 success ログを拾える余地があった。
+  describe("Issue #436: idempotency 認可境界 (Codex review)", () => {
+    it("既存 success ログの createdByUid が現在 actor と異なる → 409 (別 actor の draft 横取り防止)", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          status: "success",
+          draftId: "victim-draft-1",
+          createdByUid: "uid-other-admin", // 別 super admin
+          userId: user.id,
+        }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-collision",
+          sections: ALL_ON,
+          accessToken: "ya29.attacker",
+        });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("invalid_request_id");
+      // 攻撃者は victim の draftId を取得できない
+      expect(res.body.draftId).toBeUndefined();
+      // 新規 Gmail API も呼ばれない
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+    });
+
+    it("既存 success ログの userId が path userId と異なる → 409 (別 受講者 draft 横取り防止)", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          status: "success",
+          draftId: "victim-draft-2",
+          createdByUid: mocks.superAdminUid, // 同じ actor
+          userId: "user-different", // 別 受講者
+        }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-user-collision",
+          sections: ALL_ON,
+          accessToken: "ya29.token",
+        });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("invalid_request_id");
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+    });
+
+    it("旧スキーマ (createdByUid 不在) は後方互換で 200 を返す", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          status: "success",
+          draftId: "legacy-200",
+          // createdByUid / userId フィールド不在 = 旧スキーマ
+        }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-legacy-compat",
+          sections: ALL_ON,
+          accessToken: "ya29.token",
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.draftId).toBe("legacy-200");
+    });
+
+    it("一致時は通常通り 200 で既存 draftId 返却", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({
+          status: "success",
+          draftId: "match-draft",
+          createdByUid: mocks.superAdminUid,
+          userId: user.id,
+        }),
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({
+          requestId: "req-match",
+          sections: ALL_ON,
+          accessToken: "ya29.token",
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.draftId).toBe("match-draft");
+    });
   });
 });

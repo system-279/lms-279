@@ -7,11 +7,12 @@
 
 ## 改訂履歴
 
-- **2026-05-21 (Issue #436)**: access token owner 検証を追加。
-  - §3 OAuth フロー: BE は Gmail API 呼び出し前に `oauth2.tokeninfo` で access token の発行元 Google アカウント email を取得し、Firebase Auth (`superAdmin.email`) と一致するか検証する。不一致なら **403 `access_token_owner_mismatch`** + Gmail API 呼ばない。
+- **2026-05-21 (Issue #436)**: access token owner 検証を追加。Codex review (Medium 2 件) 反映済み。
+  - §3 OAuth フロー: BE は Gmail API 呼び出し前に `oauth2.tokeninfo` で access token の発行元 Google アカウント email を取得し、Firebase Auth (`superAdmin.email`) と一致するか検証する。不一致なら **403 `access_token_owner_mismatch`** + Gmail API 呼ばない。`verified_email !== true` (Google が email 所有を確認していない) も **401 `invalid_access_token`** で拒否する (Codex Medium 68 対応)。
+  - §3 idempotency 認可境界: 既存 success ログを 200 で返す際に、`createdByUid` + `userId` が現在 actor と一致する場合のみ返す。不一致なら **409 `invalid_request_id`** (別 super admin / 別 受講者 の既存 draft 横取り防止、Codex Medium 82 対応)。旧スキーマ (`createdByUid` 不在) は後方互換で従来通り許容。
   - §7 監査ログスキーマ: `tokenOwnerHash` (sha256(token owner email)) を追加。一致/不一致/取得不能のいずれでも記録 (取得不能時は null)。
-  - §8 エラー分類: `access_token_owner_mismatch` (403) を追加。
-  - 目的: API 直叩き (curl/Postman) で別 Google アカウントの access token (gmail.compose scope) を渡されたとき、その mailbox に PDF 下書きが作成されるのを防ぐ + 監査ログで token owner 不一致を検出可能にする。
+  - §8 エラー分類: `access_token_owner_mismatch` (403) / `invalid_access_token` (401、unverified email) / `invalid_request_id` (409、idempotency 認可境界) を追加 (`invalid_request_id` は既存コードで HTTP 状態のみ追加)。
+  - 目的: API 直叩き (curl/Postman) で別 Google アカウントの access token (gmail.compose scope) を渡されたとき、その mailbox に PDF 下書きが作成されるのを防ぐ + idempotency 経路でも認可境界を保つ + 監査ログで token owner 不一致を検出可能にする。
 - **2026-05-19 (Issue #433)**: 宛先ロジックを **案 B (To = 受講者本人 / CC = テナント管理者)** に改訂。
   - 旧 §5: To = ownerEmail のみ (UI 単位 = 受講者なのに宛先が管理者で不整合)
   - 新 §5: To = `users/{userId}.email` (受講者本人) / CC = `tenants/{tenantId}.ownerEmail` (省略可)
@@ -217,9 +218,10 @@ function validateRecipientEmail(input: unknown):
 | 400 | `invalid_owner_email` | ownerEmail に CRLF/カンマ/制御文字/形式違反 (案 B 新規) | エラーメッセージ表示 |
 | 400 | `owner_email_not_set` (deprecated) | 旧仕様で ownerEmail 未設定時に返していた。案 B 移行後は通常経路で返らない | (後方互換用、型からは外さない) |
 | 401 | `unauthorized` | Firebase ID token 期限切れ | 再ログイン誘導 |
-| 401 | `invalid_access_token` | access token 期限切れ / `tokeninfo` で 401 (Issue #436) | reauthenticateWithPopup で再取得 |
+| 401 | `invalid_access_token` | access token 期限切れ / `tokeninfo` で 401 / `verified_email !== true` (Issue #436) | reauthenticateWithPopup で再取得 |
 | 403 | `gmail_scope_required` | access token に gmail.compose scope なし | reauthenticateWithPopup で再同意 |
 | 403 | `access_token_owner_mismatch` | access token の owner email が `superAdmin.email` と不一致 (Issue #436) | エラーメッセージ表示 (API 直叩きでないと通常経路で出ない) |
+| 409 | `invalid_request_id` | idempotency collision: 既存 success ログの `createdByUid`/`userId` が現在 actor と不一致 (Issue #436) | エラーメッセージ表示 (API 直叩きでないと通常経路で出ない) |
 | 404 | `tenant_not_found` / `user_not_in_tenant` | 越境/不存在 | エラーメッセージ表示 (Phase 1 と整合) |
 | 413 | `pdf_too_large_for_gmail` | PDF > 5MB | エラーメッセージ表示 |
 | 429 | `gmail_quota_exceeded` | Gmail API quota 超過 | 「しばらく待ってから再試行」メッセージ |
