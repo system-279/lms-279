@@ -597,10 +597,60 @@ describe("lesson-session service", () => {
       const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
       const completed = await completeSession(ds, session.id, "attempt-123");
 
-      expect(completed.status).toBe("completed");
-      expect(completed.exitReason).toBe("quiz_submitted");
-      expect(completed.quizAttemptId).toBe("attempt-123");
-      expect(completed.exitAt).toBeTruthy();
+      expect(completed).not.toBeNull();
+      expect(completed!.status).toBe("completed");
+      expect(completed!.exitReason).toBe("quiz_submitted");
+      expect(completed!.quizAttemptId).toBe("attempt-123");
+      expect(completed!.exitAt).toBeTruthy();
+    });
+
+    // Issue #424 (Codex Medium 88): TOCTOU 縮小 - status が active でなければ skip (null を返す)
+    it("Issue #424: session が abandoned に変化していたら skip して null を返す (TOCTOU 防御)", async () => {
+      const { lesson, video } = await setupLesson();
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+
+      // getLessonSession を mock して abandoned を返す (並行 abandon 後の状態)
+      const originalGetLessonSession = ds.getLessonSession.bind(ds);
+      ds.getLessonSession = async (id: string) => {
+        const s = await originalGetLessonSession(id);
+        if (s && s.id === session.id) {
+          return { ...s, status: "abandoned" as const };
+        }
+        return s;
+      };
+
+      try {
+        const result = await completeSession(ds, session.id, "attempt-456");
+
+        expect(result).toBeNull();
+        // 元 session の status は更新されていない (abandoned のまま)
+        const verifyResult = await originalGetLessonSession(session.id);
+        expect(verifyResult?.status).toBe("active"); // mock 経由ではない実 DS は active のまま
+      } finally {
+        ds.getLessonSession = originalGetLessonSession;
+      }
+    });
+
+    it("Issue #424: session が completed (= 既に完了済) なら skip して null を返す", async () => {
+      const { lesson, video } = await setupLesson();
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+
+      // 既に completed の状態 (mock)
+      const originalGetLessonSession = ds.getLessonSession.bind(ds);
+      ds.getLessonSession = async (id: string) => {
+        const s = await originalGetLessonSession(id);
+        if (s && s.id === session.id) {
+          return { ...s, status: "completed" as const };
+        }
+        return s;
+      };
+
+      try {
+        const result = await completeSession(ds, session.id, "attempt-789");
+        expect(result).toBeNull();
+      } finally {
+        ds.getLessonSession = originalGetLessonSession;
+      }
     });
   });
 

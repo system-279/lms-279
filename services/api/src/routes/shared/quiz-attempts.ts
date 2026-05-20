@@ -389,9 +389,16 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
     }
 
     // セッション完了（退室打刻）— 合格時のみ実行、不合格時は再挑戦可能
+    // Issue #424 (Codex Medium 88): completeSession 内で再 active 確認 → 非 active なら null。
+    // null の場合は並行 abandon/forceExit があったため、ログのみ残して quiet pass する。
     if (activeSession) {
       try {
-        await completeSession(ds, activeSession.id, updated!.id);
+        const completed = await completeSession(ds, activeSession.id, updated!.id);
+        if (completed === null) {
+          console.warn(
+            `completeSession skipped for attempt ${attemptId} (session no longer active, concurrent abandon/forceExit)`,
+          );
+        }
       } catch (err) {
         console.error(`Failed to complete session for attempt ${attemptId}:`, err);
       }

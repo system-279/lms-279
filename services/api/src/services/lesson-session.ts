@@ -390,12 +390,34 @@ export async function abandonSession(
 
 /**
  * セッションをテスト送信で完了（退室打刻）
+ *
+ * Issue #424 (Codex Medium 88): TOCTOU 縮小のため updateLessonSession 直前に status を再確認する。
+ * 並行 abandonSession / forceExitSession で active でなくなっていた場合は skip (null を返す)。
+ *
+ * 完全な atomicity (transaction レベル) は DataSource インターフェースに条件付き更新
+ * (transitionLessonSessionToCompleted 等) を追加する必要があり、scope 拡大のため follow-up 候補。
+ * 本実装は再確認 → 更新の間の race window を最小化する best-effort 改善。
  */
 export async function completeSession(
   ds: DataSource,
   sessionId: string,
   quizAttemptId: string
-): Promise<LessonSession> {
+): Promise<LessonSession | null> {
+  const current = await ds.getLessonSession(sessionId);
+  if (!current) {
+    throw new Error(`Session ${sessionId} not found`);
+  }
+  if (current.status !== "active") {
+    // 並行 abandon / forceExit で active でなくなった → 完了処理 skip
+    logger.warn("completeSession: session is no longer active, skipping", {
+      eventType: "complete_session_skipped_non_active",
+      sessionId,
+      currentStatus: current.status,
+      quizAttemptId,
+    });
+    return null;
+  }
+
   const updated = await ds.updateLessonSession(sessionId, {
     status: "completed",
     exitAt: new Date().toISOString(),
