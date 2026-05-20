@@ -204,6 +204,15 @@ async function cleanupInProgressAttempts(
  * （1 セッション内で動画視聴→テスト送信まで完了させる要件のため。セッション上限は SESSION_DURATION_MS）
  *
  * Issue #422: in_progress な quiz_attempt のロック解除も実施する（reset スキップ経路の救済）。
+ *
+ * ADR-027 改訂履歴 2026-05-21（ケース E 救済拡張）:
+ *   過去に動画を完了済みのユーザー（永続 video_analytics.isComplete=true）が
+ *   再受験時に動画を再生して time_limit / pause_timeout に陥った場合も
+ *   既存完了データを保護する。max_attempts_failed は受験規律破りとして
+ *   全リセット維持（ADR-027 ケース F semantics）。
+ *
+ *   永続完了の判定は「現在 lesson の video」と一致するセッションのみ尊重。
+ *   動画差し替え後のセッションは既存挙動（全リセット）にフォールバックする。
  */
 export async function forceExitSession(
   ds: DataSource,
@@ -227,7 +236,15 @@ export async function forceExitSession(
   // 動画完了済みセッションでは学習データをリセットしない。
   // HTML5 videoのendedはpause状態を伴うため、完了後のpauseタイムアウトや
   // ページリロード等でデータが全消去されるのを防止する。
-  if (session.sessionVideoCompleted) {
+  //
+  // さらに、過去に動画完了済みのユーザーが再受験時に動画再生 → time_limit /
+  // pause_timeout に陥った場合も、永続 video_analytics.isComplete=true を尊重し
+  // データを保護する（ケース E 救済拡張、ADR-027 改訂履歴 2026-05-21）。
+  // max_attempts_failed は受験規律破りなので永続フラグに関わらず全リセット。
+  const hasCompletedCurrentVideo = await hasPersistentVideoCompletion(ds, session, reason);
+  const shouldSkipReset = session.sessionVideoCompleted || hasCompletedCurrentVideo;
+
+  if (shouldSkipReset) {
     // Issue #422: reset スキップ経路では attempt が残るため明示的に終端化
     await cleanupInProgressAttempts(ds, session.userId, session.lessonId);
   } else {
@@ -237,6 +254,77 @@ export async function forceExitSession(
   }
 
   return updated;
+}
+
+/**
+ * 現在 lesson の video に対する永続完了状態を確認する（ケース E' 救済判定）。
+ *
+ * 救済対象 reason は time_limit / pause_timeout のみ。
+ * max_attempts_failed は受験規律破りのため永続フラグを尊重しない（ADR-027 ケース F）。
+ *
+ * 動画差し替え検知: getVideoByLessonId で取得した現在 video の id が
+ * session.videoId と一致する場合のみ永続完了を尊重する。
+ * セッション開始後にレッスンの動画が差し替えられた場合は false を返し、
+ * 既存挙動（全リセット）にフォールバックする（observability 確保のため warn ログ出力）。
+ *
+ * 例外時のフォールバック方針（safe-by-default）:
+ *   getVideoAnalytics / getVideoByLessonId の例外時は true を返す（skip reset 側）。
+ *   理由: 本 PR の目的は完了済みデータの保護。fetch 失敗時に false → 全リセットに
+ *   倒すと、永続 isComplete=true の真値を持つユーザーのデータも transient エラーで
+ *   破壊される（PR 趣旨と矛盾）。Firestore 不健全時はデータ保護を優先する。
+ *   副作用として初回視聴中ユーザーの false positive 救済が起こり得るが、
+ *   cleanupInProgressAttempts は走るため in_progress attempt は終端化され、
+ *   次回新セッションで動画完了させれば規律装置の元の挙動に戻る。
+ *   logger.error は errorType=persistent_completion_check_failed で記録するため、
+ *   発火頻度の監視は Cloud Logging のフィルタで実施する（alerting 設定は follow-up）。
+ */
+async function hasPersistentVideoCompletion(
+  ds: DataSource,
+  session: LessonSession,
+  reason: SessionExitReason
+): Promise<boolean> {
+  if (reason !== "time_limit" && reason !== "pause_timeout") {
+    return false;
+  }
+  try {
+    const currentVideo = await ds.getVideoByLessonId(session.lessonId);
+    if (!currentVideo) {
+      // 動画が削除済（lesson から video が外された）。旧 video の永続完了は尊重しない。
+      logger.warn("hasPersistentVideoCompletion: lesson video missing, routing to reset", {
+        eventType: "persistent_completion_skip_video_missing",
+        sessionId: session.id,
+        userId: session.userId,
+        lessonId: session.lessonId,
+        sessionVideoId: session.videoId,
+      });
+      return false;
+    }
+    if (currentVideo.id !== session.videoId) {
+      // セッション開始後に動画差し替え。observability のため info ログを残す。
+      logger.info("hasPersistentVideoCompletion: video swapped after session start, routing to reset", {
+        eventType: "persistent_completion_skip_video_swapped",
+        sessionId: session.id,
+        userId: session.userId,
+        lessonId: session.lessonId,
+        sessionVideoId: session.videoId,
+        currentVideoId: currentVideo.id,
+      });
+      return false;
+    }
+    const analytics = await ds.getVideoAnalytics(session.userId, session.videoId);
+    return analytics?.isComplete === true;
+  } catch (err) {
+    logger.error("hasPersistentVideoCompletion: failed to query video/analytics", {
+      errorType: "persistent_completion_check_failed",
+      sessionId: session.id,
+      userId: session.userId,
+      lessonId: session.lessonId,
+      videoId: session.videoId,
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+    // safe-by-default: skip reset 側にフォールバック（データ保護優先、本 PR 趣旨と整合）
+    return true;
+  }
 }
 
 /**
