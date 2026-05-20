@@ -1,14 +1,13 @@
-# Session Handoff — 2026-05-19 (Session 36)
+# Session Handoff — 2026-05-20 (Session 37)
 
 ## TL;DR
 
-**受講者進捗 PDF Gmail 下書きの宛先ロジック改訂セッション。** 現場から「個人ごとの送付先が手動入力で誤送信リスクがある」との要望を受け、案 B (To=受講者本人 / CC=テナント管理者、CC は省略可) で改訂。Phase 2 元実装 (PR #358) は To=ownerEmail のみで、UI フロー (userId 指定) と宛先が不整合だった点を修正。Codex review (plan / code 各 1 回) + /simplify 3 並列 + /safe-refactor + Evaluator 分離プロトコル + Codex code review (実装後) の **5 段階品質ゲート** を全通過、AC 15/15 PASS、テスト 1062 件 PASS、CI success で squash merge 完了。
+**「テスト不合格時いつでも再受験」設計議論 → 規律装置維持 + 部分的救済拡張セッション。** ユーザー提案「動画完了済みなら時間制限なしで再受験可能にすべきでは？」を起点に、(1) 実コード検証で本番 `maxAttempts=0` 配下では既に大半のケースで再受験可能と判明、(2) 規律装置 (強制退室時の全リセット) を廃止する変更は本末転倒と判断し不採用、(3) Phase A 効果測定 workflow (PR #439) で 3h 延長後ケース E 0 件を確認、(4) エッジケース (動画完了経験者の再視聴中時間切れ) を発見し新ケース E' 救済を実装 (PR #440)。**2 PR マージ + Cloud Run Deploy success + 社内チャット文面ドラフト作成完了**。
 
-- **Issue Net**: **+3** (起票 4 件 / Close 1 件)
-- **Open 推移**: Session 35 末 6 件 → Session 36 末 **9 件** (active 5 / postponed 4)
-- **マージ済み PR**: #434 (受講者進捗 PDF Gmail draft 宛先改訂、12 files +789/-71)
-- **新規 follow-up Issue**: #435 [P1] idempotency umbrella / #436 [P1] accessToken owner 検証 / #437 [P2] Gmail PII フィルタ — いずれも Phase 2 元実装 (PR #358) からの継承課題、Codex code review で rating ≥ 7 / triage #4 該当のため起票
-- **本番反映**: ✅ main push 後 Cloud Run Deploy success (4m8s)
+- **Issue Net**: **0** (起票 0 件 / Close 0 件) ※ implementation work で完結、Issue 化基準該当なし
+- **Open 推移**: Session 36 末 9 件 → Session 37 末 **9 件** (active 5 / postponed 4、変化なし)
+- **マージ済み PR**: #439 (Phase A 効果測定 workflow + ADR-027 判断記録) / #440 (ケース E' 救済実装)
+- **本番反映**: ✅ PR #440 後 Cloud Run Deploy success (3m57s)
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -20,14 +19,14 @@ cat docs/handoff/LATEST.md
 git fetch origin main && git log --oneline -10 origin/main
 gh run list --branch main --limit 5
 
-# 3. 現在の OPEN Issue (9 件: active 5 / postponed 4)
+# 3. 現在の OPEN Issue (9 件: active 5 / postponed 4、Session 36 から変化なし)
 gh issue list --state open --limit 15
 
 # 4. 次の着手候補:
-#    A. 【ユーザー判断・最優先】福の種様への返信送信状況確認 + 返信受領時の追加切り分け
-#       - 返信文面は Session 35 で本田さん承認済 (archive/2026-05-19-session-35.md 参照)
-#       - スクショ・URL・ブラウザ情報を受領後、原因切り分け継続
-#    B. 【新規 Issue 着手判断】(decision-maker 領分):
+#    A. 【社内チャット文面の送付確認】(decision-maker 領分):
+#       - Session 37 で作成済の更新版文面 (ケース E' 救済反映済)
+#       - 本田様判断で社内展開タイミング・宛先・修正を決定
+#    B. 【新規 Issue 着手判断】(Session 36 から変化なし、decision-maker 領分):
 #       - #435 [P1] idempotency 非アトミック + 判定強化 umbrella
 #       - #436 [P1] accessToken owner 検証
 #       - #437 [P2] Gmail API エラーメッセージ PII フィルタ
@@ -35,126 +34,150 @@ gh issue list --state open --limit 15
 #    D. 【active Issue】#425 Firestore transient エラー用リトライ共通ユーティリティ
 #    E. 【postponed・着手不可】#276 / #275 / #274 / #405 — 明示指示なき限り着手不可
 
-# 5. PR #434 後の動作確認 (必要なら本番で実施)
-#    - /super/progress/[tenantId]/[userId]/print で「Gmail 下書き作成」を押下
-#    - To=受講者本人 / CC=テナント管理者 (or 未設定なら CC 省略) が自動入力されることを確認
-#    - 本文に「{userName} 様」呼びかけ + (ownerEmail 設定時のみ) CC 注記が含まれることを確認
+# 5. PR #440 後の動作確認 (必要に応じて、本番影響なし)
+#    - lesson_sessions 配下で動画完了経験者の force_exited が発生した場合、
+#      cleanupInProgressAttempts のみ実行されデータ温存されることを Firestore で確認
+#    - 通常運用で発火しないため、特定問い合わせ受信時に Phase A workflow で集計
+
+# 6. 必要時のみ Phase A workflow を実行 (ad-hoc fact-check)
+#    gh workflow run audit-session-force-exits.yml \
+#      -f tenant_id=8vexhzpc -f since_days=N -f top_lessons=20
 ```
 
 ---
 
-## セッション成果物 (2026-05-19 Session 36)
+## セッション成果物 (2026-05-20 Session 37)
 
-### 🟢 PR #434 マージ: 受講者進捗 PDF Gmail 下書きの宛先を案 B に改訂
+### 🟢 PR #439 マージ: 「ルール緩和は本末転倒」判断記録 + Phase A 効果測定 workflow
 
-- マージコミット: `d8a151e` (squash)
-- ファイル: 12 (実装 6 + テスト 5 + ADR 1)
-- 差分: +789 / -71
-- CI: Build / Lint / Type Check / Test 全 PASS、Deploy to Cloud Run 4m8s success
+- マージコミット: `a7bf807` (squash)
+- ファイル: 5 (script + smoke test + workflow + ADR + firestore index)
+- 差分: +810 / -0
+- CI: 全 PASS
 
-#### 改訂の核心 (旧 → 新)
-| 項目 | 旧 (Phase 2 元実装) | 新 (案 B) |
+#### 主要内容
+- **設計議論記録**: ADR-027 改訂履歴 (2026-05-20) に「不合格時いつでも再受験」案 / ケース E のリセット廃止案を **規律装置を破壊する本末転倒と判断し不採用** とした経緯を記録
+- **Phase A 効果測定 workflow** (read-only) 追加:
+  - `scripts/audit-session-force-exits.ts`: tenant 配下 lesson_sessions force_exited を reason 別 / sessionVideoCompleted フラグ別 / ケース E lesson 別に集計
+  - `scripts/__tests__/audit-session-force-exits.smoke.ts`: 純粋関数 smoke test 11 ブロック (算術不変量 + 境界 + tri-state + tie-break)
+  - `.github/workflows/audit-session-force-exits.yml`: workflow_dispatch ラッパー
+  - `firestore.indexes.json`: composite index `(status ASC, exitAt DESC)` 追加 (本セッションで本番デプロイ済)
+- **品質ゲート**: 5 並列 review (code-reviewer / comment-analyzer / pr-test-analyzer / silent-failure-hunter / type-design-analyzer) + Codex セカンドオピニオン全消化
+
+#### 初回 Phase A 測定結果 (莞爾会テナント `8vexhzpc`)
+
+| 期間 | force_exited | time_limit | ケース E (sessionVideoCompleted=false) | ケース B (sessionVideoCompleted=true) |
+|---|---|---|---|---|
+| 過去 30 日 (4/19〜5/20) | 27 | 26 | **14** | 12 |
+| **3h 延長後 4 日間 (5/16〜5/20)** | 2 | 2 | **0** ✅ | 2 |
+
+→ 3h 延長 (PR #407) は意図どおり機能、新規発生はゼロ。ケース E の 14 件は全て 5/15 以前 (2h 時代) に発生。
+
+---
+
+### 🟢 PR #440 マージ: ケース E' 救済実装 (永続動画完了フラグ尊重)
+
+- マージコミット: `d4f3f94` (squash)
+- ファイル: 3 (lesson-session.ts + integration test + ADR-027)
+- 差分: +355 / -9
+- CI: 全 PASS (Lint / Build / Type Check / Test / E2E)
+- Deploy to Cloud Run: success (3m57s)
+
+#### 修正の核心
+
+| 項目 | 旧 | 新 |
 |---|---|---|
-| To 宛先 | `tenants/{tenantId}.ownerEmail` (テナント管理者) | `users/{userId}.email` (受講者本人) |
-| CC 宛先 | (なし) | `tenants/{tenantId}.ownerEmail` (未設定なら CC ヘッダ省略) |
-| UI/宛先整合 | ❌ UI は受講者単体だが宛先は管理者 | ✅ 整合 |
-| ownerEmail 未設定挙動 | ❌ 400 で送信不可 | ✅ CC 省略で送信成功 |
-| user.email 未設定挙動 | (チェックなし) | ✅ 400 `user_email_not_configured` |
-| ヘッダインジェクション防御 | To のみ | ✅ To/CC 両方 |
-| 本文呼びかけ | 「{userName} さん」 | 「{userName} 様」+ CC 設定時のみ注記 |
-| 監査ログ | `ownerEmailHash` のみ | dual-write: `recipientToHash` / `recipientCcHash` + 旧 `ownerEmailHash` 維持 |
+| `forceExitSession` reset skip 条件 | `session.sessionVideoCompleted=true` のみ | `sessionVideoCompleted=true` **OR** 現 video の永続 `isComplete=true` |
+| ケース E semantics | `time_limit` + `sessionVideoCompleted=false` で**無条件**全リセット | 永続 `isComplete=false` 限定で全リセット |
+| 新ケース E' | (存在せず) | `time_limit` / `pause_timeout` + `sessionVideoCompleted=false` + 永続 `isComplete=true` → reset skip |
+| 救済対象 reason | (該当なし) | `time_limit` / `pause_timeout` のみ。`max_attempts_failed` はケース F として全リセット維持 |
+| 動画差し替え検知 | (該当なし) | `getVideoByLessonId(session.lessonId).id === session.videoId` で旧 video 誤救済防止 |
+| 例外フォールバック | (該当なし) | safe-by-default: catch → `return true` (skip reset 側)。データ保護優先で PR 趣旨と整合 |
 
 #### 主要変更ファイル
-- `packages/shared-types/src/progress-pdf.ts`: エラーコード `user_email_not_configured` / `invalid_owner_email` 追加
-- `services/api/src/services/gmail-draft.ts`: `cc?: string` 引数、MIME `Cc:` 行、CRLF/サロゲート assert を CC にも適用
-- `services/api/src/routes/super/progress-pdf-draft.ts`: `validateRecipientEmail` (5 拒否理由 + 形式チェック) + To/CC ロジック改修
-- `services/api/src/services/progress-pdf-mail-template.ts`: 「{userName} 様」呼びかけ + ownerEmail 有時のみ CC 注記 (虚偽記載防止)
-- `services/api/src/services/pdf-draft-audit.ts`: dual-write (`recipientToHash` / `recipientCcHash` 追加、`ownerEmailHash` 残置)
-- `web/app/super/progress/[tenantId]/[userId]/print/page.tsx`: 宛先 (To) / CC 表示、disable 条件を `userEmail.trim()` 空に変更
-- `docs/adr/ADR-034-phase2-gmail-draft.md`: §2 図 / §5 宛先 / §7 監査ログ / §8 エラー改訂 + 改訂履歴セクション追加
+- `services/api/src/services/lesson-session.ts`: `hasPersistentVideoCompletion` ヘルパー新設 + reset skip 条件拡張 + observability log (`eventType=persistent_completion_skip_video_*`)
+- `services/api/src/__tests__/integration/lesson-session.test.ts`: 9 ケース追加 (AC1-3, AC6-11)
+- `docs/adr/ADR-027-lesson-session-attendance.md`: 改訂履歴 + 新ケース E' 定義表 + 旧 2026-05-20 table を historical reference 化
 
-#### Acceptance Criteria (15 件、全 PASS)
+#### 品質ゲート (5 段階全通過)
+1. ✅ `/impl-plan` で計画 + 承認
+2. ✅ `/codex` セカンドオピニオン (impl-plan 段階) — CRITICAL 2 件: `max_attempts_failed` reset skip 除外 / 動画差し替え検知
+3. ✅ TDD (Red → Green、9 ケース全て期待どおり)
+4. ✅ `/review-pr` 5 並列レビュー (実装後) — CRITICAL 4 件: Option B (safe-by-default) / ADR 整理 / 例外テスト / case label 整合
+5. ✅ CI 全通過 + 番号単位明示認可によるマージ
 
-| # | 内容 | 検証 |
+#### 受講者体験への変化 (デプロイ済)
+- 動画完了経験者 → 再受験のため動画再視聴中に時間切れになっても、学習データ保護される
+- 初回視聴中の time_limit → 引き続き全リセット (規律装置維持)
+- 「★重要な注意★」セクション (動画再視聴時の注意) が**社内チャット文面から削除可能**になった
+
+---
+
+### 📝 社内チャット文面ドラフト作成
+
+セッション内で本田様向けに 2 バージョン作成:
+
+1. **v1 (PR #440 マージ前)**: 3h 延長効果のみ。「★重要な注意★」セクション (動画再視聴時の警告) 残置
+2. **v2 (PR #440 マージ後)**: ケース E' 救済反映済。「★重要な注意★」削除、ケース 2 に「再視聴で時間切れになっても完了済みデータは保護」追記、問い合わせ対応に「動画完了済みで再視聴中時間切れ」のケース追加
+
+→ **次セッション**: 本田様判断で社内展開タイミング・宛先・最終調整を決定 (decision-maker 領分)
+
+---
+
+## 設計判断の整理
+
+### なぜ「いつでも再受験」設計変更を不採用としたか
+
+ユーザー提案「動画完了済みなら時間制限なしで再受験可能にすべき」を実コード検証した結果、本番 `maxAttempts=0` 配下では既に以下のケースで再受験可能 (元 ADR-027 2026-05-20 entry 参照):
+
+| ケース | 条件 | 再受験可否 |
 |---|---|---|
-| AC-1 | To=user.email (trim 後) が MIME に入る | 統合 + gmail-draft 単体 |
-| AC-2 | ownerEmail 設定済なら CC: に入る | 統合 + gmail-draft 単体 |
-| AC-3 | ownerEmail null/空文字なら CC 省略で送信成功 | 統合 (3 ケース) |
-| AC-4 | user.email 未設定/空白なら BE 400 + FE disabled | 統合 + FE component |
-| AC-5 | CC への CRLF インジェクション拒否 | gmail-draft 単体 |
-| AC-6 | 監査ログに recipientToHash / recipientCcHash 記録 | audit + 統合 |
-| AC-7 | 既存 Phase 2 元 AC 退行なし | 既存テスト 47 件 PASS 維持 |
-| AC-8 | FE 画面に「宛先 (To) / CC」表示 | FE component |
-| AC-9 | mail-template の「{userName} 様」+ ownerEmail 時のみ CC 注記 | mail-template 単体 |
-| AC-10 | user.email が trim 後空 / CRLF / カンマ / 制御文字含みなら 400 | 統合 (5 ケース) |
-| AC-11 | ownerEmail null/空でも本文 CC 注記省略 (虚偽記載防止) | mail-template + 統合 |
-| AC-12 | ownerEmail が CRLF/カンマ/制御文字なら 400 invalid_owner_email | 統合 (3 ケース) |
-| AC-13 | 旧スキーマ idempotency ログでも 200 を返す | 統合 |
-| AC-14 | raw email は保存されずハッシュのみ | audit |
-| AC-15 | FE は userEmail trim 空で disabled、ownerEmail 未設定では disabled にしない | FE component |
+| A | 不合格 + セッション内 (time_limit 未到達) | ✅ 即時再受験 |
+| B | 動画完了 + time_limit | ✅ sessionVideoCompleted=true で reset skip → 新セッションで再受験 |
+| C | ブラウザ閉じ (abandoned) | ✅ リセットなし、新セッションで再受験 |
+| D | セッション未作成 (動画再生せず直接テスト) | ✅ activeSession=null で制約スキップ |
+| E | 動画再生中 time_limit | ❌ 全リセット → 動画から見直し (= 規律装置) |
+| F | 受験上限到達 (本番は maxAttempts=0 で発火せず) | ❌ 全リセット |
 
-#### 品質ゲート実績 (5 段階)
+→ ユーザー判断: 「ケース E/F のリセットは学習規律として正当な挙動。ルールを破ってまで対応するのは本末転倒」。**ルールは維持、ただし救済すべきエッジケースは別個に対応** という方針確立。
 
-| 段階 | 結果 |
-|---|---|
-| Codex plan review (impl-plan 段階) | Important 7 件反映 + 追加 AC 6 件採用 → 計 15 AC |
-| `/simplify` (3 並列 agent: reuse / quality / efficiency) | Critical 0 件、Important 6 件反映 |
-| `/safe-refactor` | MEDIUM 1 件容認 (バリデーション失敗時の Firestore 監査ログ非書込 → 既存方針との整合性) |
-| Evaluator 分離プロトコル (別 context Claude) | AC 15/15 PASS、Important 3 件反映 |
-| Codex code review (実装後) | Critical 0 件 / High 2 件 / Medium 4 件 — **全て Phase 2 元実装 (PR #358) 継承課題で本 PR スコープ外**、follow-up Issue 3 件として起票 |
+### 救済対象としたエッジケース (ケース E')
 
-### 🟠 Follow-up Issue 起票 3 件 (Codex code review で検出された Phase 2 元実装継承課題)
+- **シナリオ**: 過去にレッスンを完了済みのユーザー (永続 `video_analytics.isComplete=true`) が再受験のため動画を再視聴 → そのセッション内で動画を完了させずに 3h 超過
+- **旧挙動**: `sessionVideoCompleted=false` → 全リセット → `video_analytics.isComplete=true` 永続フラグも消える → 動画初見状態に戻る (「既に学習を終えた人を罰する」挙動)
+- **新挙動 (PR #440)**: 永続 `isComplete=true` を尊重して reset skip。**規律装置は初回視聴中のみ機能**するよう精緻化
 
-#### #435 [P1 enhancement] idempotency 非アトミック + 判定強化 umbrella (H1 + M1 + M2)
-- 現状 `get → Gmail draft 作成 → set` の 3 段階で、同一 requestId の並行リクエストが両方 `exists=false` を見て二重作成可能
-- 解決策案: `pending` を `create()` で先取り or Firestore transaction でロック
-- 追加: idempotency 判定が status + draftId のみで、userId / 宛先 hash を見ない
-- 追加: idempotency 確認失敗時のフォールスルーで Firestore 障害時に重複 draft
+### Option B (safe-by-default) を採用した理由
 
-#### #436 [P1 enhancement/security] Gmail draft の accessToken owner 検証 (H2)
-- 現状、accessToken の Google アカウント所有者と superAdmin.email の一致を BE で検証していない
-- API 直叩きで別 Google アカウントの token を渡すと、その mailbox に draft 作成可能 → 監査ログ信頼性低下
-- 解決策案: `oauth2.tokeninfo` で token owner email 取得 → superAdmin.email と一致しない場合 403
-
-#### #437 [P2 enhancement/security] Gmail API エラーメッセージ PII フィルタ (M4)
-- Gmail API の raw `message` が logger.error + HTTP レスポンスに流れる
-- response.data.error.message に宛先 / MIME 断片 / アカウント情報が含まれる可能性 → PII 漏洩リスク
-- 解決策案: GmailDraftError を internal/public message に分離
-
-### 📐 ADR-034 改訂内容
-- Status: **Proposed → Accepted** (PR #358 で実装済、本セッションで案 B 改訂)
-- 改訂履歴セクション追加 (2026-05-19 改訂、Issue #433)
-- §2 アーキテクチャ図: To/CC 二段化
-- §5 宛先決定: 案 B 採用理由マトリクス + バリデーションルール (5 拒否理由) 追記
-- §7 監査ログスキーマ: dual-write 戦略 (recipientToHash / recipientCcHash / 旧 ownerEmailHash) 明文化
-- §8 エラー分類テーブル: 新 2 エラーコード + 旧 owner_email_not_set (deprecated) 注記
+silent-failure-hunter の CRITICAL 指摘:
+- 旧案: `catch → return false` (リセット側) は本 PR 趣旨と矛盾 (transient Firestore エラーで永続データ破壊)
+- 新案 (採用): `catch → return true` (skip reset 側) でデータ保護優先
+- 副作用: 初回視聴中ユーザーの false positive 救済が起こり得るが、`cleanupInProgressAttempts` は走るため in_progress attempt は終端化、次回新セッションで動画完了させれば規律装置の元の挙動に戻る
+- 監視: `errorType=persistent_completion_check_failed` で Cloud Logging で観測可能 (alerting 設定は follow-up)
 
 ---
 
 ## Issue Net 変化
 
-- **Close 数**: **1 件** (#433)
-- **起票数**: **4 件** (#433 / #435 / #436 / #437)
-- **Net**: **+3 件**
+- **Close 数**: **0 件**
+- **起票数**: **0 件**
+- **Net**: **0**
 
-| Open Issue (Session 36 末、9 件) | ラベル | 状態 |
+| Open Issue (Session 37 末時点、Session 36 から変化なし) | ラベル | 再開条件 |
 |---|---|---|
-| #437 | enhancement, P2 | active (本セッション起票、Gmail PII フィルタ) |
-| #436 | enhancement, P1 | active (本セッション起票、accessToken owner 検証) |
-| #435 | enhancement, P1 | active (本セッション起票、idempotency umbrella) |
-| #425 | enhancement, P2 | active (Session 34 起票、Firestore transient リトライ共通ユーティリティ) |
-| #424 | bug, P2 | active (Session 34 起票、PATCH session 再確認の abandoned 未対応) |
+| #437 | enhancement, P2 | decision-maker 判断 |
+| #436 | enhancement, P1 | decision-maker 判断 |
+| #435 | enhancement, P1 | decision-maker 判断 |
+| #425 | enhancement, P2 | decision-maker 判断 |
+| #424 | bug, P2 | decision-maker 判断 |
 | #405 | enhancement, P2, postponed | M365/Outlook/Proofpoint/Mimecast テナント追加 or 添付名問い合わせ |
-| #276 | enhancement, P2, postponed | Phase 3 GCIP 完了 (#272 / 再評価期限 2026-10-24) |
+| #276 | enhancement, P2, postponed | Phase 3 GCIP 完了 |
 | #275 | enhancement, P2, postponed | Phase 3 GCIP 完了 |
 | #274 | enhancement, P2, postponed | Phase 3 GCIP 完了 |
 
-**Net +3 の理由言語化**: 本 PR #434 は宛先ロジック改訂 1 件で #433 を close したが、Codex code review (実装後) で **Phase 2 元実装 (PR #358) からの脆弱性 3 件** が新規可視化された:
-- idempotency 非アトミック (PII 重複 + Gmail quota 消費リスク)
-- accessToken owner 不一致 (監査ログ信頼性)
-- Gmail エラーメッセージ PII 漏洩
+triage 基準 (CLAUDE.md「GitHub Issues」セクション) 該当なし。本セッションの設計議論 + ケース E' 救済実装は **コード変更 PR #439 / #440 で完全解消 + ADR-027 改訂で記録済** のため Issue 起票不要と判断。レビューエージェントの IMPORTANT 提案 (silent-failure-hunter 2: alerting 設定、4: video-events.ts caller の error 整形不整合) は rating 5-6 相当 + 既存問題 / 別 PR スコープのため、必要時に都度 Issue 化する方針。
 
-いずれも本 PR スコープ外 (宛先ロジックは Critical/High なし、5 段階品質ゲートで検証済)。CLAUDE.md triage 基準 #4 (rating ≥ 7 / confidence ≥ 80) を確実に満たすため起票。**過剰起票ではなく、隠れていた脆弱性を可視化した価値と引き換えの Net 逆行**。decision-maker による着手優先度判断材料が増えた状態。
+**Net 0 の理由言語化**: 設計議論 → 実装で即解消パターン。`feedback_issue_triage.md` の趣旨どおり、closeable な作業を Issue 化して net を膨らませる無駄を避けた。次の Issue 着手は #424 / #425 / #435 / #436 / #437 のいずれかを本田様判断で選択。
 
 ---
 
@@ -162,77 +185,47 @@ gh issue list --state open --limit 15
 
 | 変更内容 | 該当スキル | 状態 |
 |---|---|---|
-| 型・共有ロジック変更 | `/impact-analysis` | ✅ type-check 全 4 workspace PASS で integration 担保 (shared-types ProgressPdfDraftErrorCode 追加は FE/BE 両方で型強制) |
-| 新規 API / コレクション追加 | `/check-api-impact` | ⏭️ 対象外 (既存 endpoint `/progress-pdf-draft` の挙動変更のみ、新規 endpoint なし) |
-| データフロー追加 | `/trace-dataflow` | ⏭️ 対象外 (既存 `ProgressPdfData` の `user.email` を新規利用、データソースは Phase 1 から再利用) |
-| statusField 状態遷移管理 | 状態遷移図 | ⏭️ 対象外 (status は draft 1 状態) |
-| Partial Update テスト | undefined 検出 | ⏭️ 対象外 (監査ログは新規 set のみ、Partial Update なし) |
+| 型・共有ロジックの変更 | `/impact-analysis` | ⏭️ スキップ (RawSession/AggregatedSummary は新規 read-only script のみ、影響範囲なし。`hasPersistentVideoCompletion` は新規 private function) |
+| 新規 API / コレクション | `/new-resource` | ⏭️ スキップ |
+| データフロー追加 | `/trace-dataflow` | ⏭️ スキップ |
+| API 境界の変更 | `/check-api-impact` | ⏭️ スキップ (API レスポンス形式 / エンドポイント変更なし、内部関数の semantics 拡張のみ) |
+
+`forceExitSession` は内部関数 → API 契約には影響しない。Firestore composite index は additive で既存 query に影響なし。
 
 ---
 
 ## ハーネス的考察 (本セッション特有)
 
-### 5 段階品質ゲートの実効性
+### Generator-Evaluator 分離の効果実証
 
-本セッションで初めて **5 段階品質ゲート (Codex plan / simplify / safe-refactor / Evaluator / Codex code review)** を 1 PR で全実施。各段階の付加価値は重複しなかった:
+設計判断 (案 A 採用) と実装の各段階で独立した評価を入れたことで、CRITICAL バグを 2 回検出:
 
-| 段階 | 役割 | 本 PR での実効指摘 |
-|---|---|---|
-| Codex plan review | 計画段階の設計レビュー | Important 7 件 + 追加 AC 6 件 (実装前のスコープ拡張) |
-| /simplify (3 並列) | reuse / quality / efficiency の 3 観点同時 | hashEmail 重複削減、3 段ネスト解消、reason 露出削除など 6 件 |
-| /safe-refactor | 型安全性 / エラー処理 | MEDIUM 1 件 (既存方針整合のため容認) |
-| Evaluator (別 context) | AC 検証 + 第三者視点 | AC 15/15 PASS、validatedToEmail null 初期化など 3 件 |
-| Codex code review (実装後) | 別モデル視点でセキュリティ・後方互換 | High 2 / Medium 4 全て本 PR スコープ外の Phase 2 元実装継承課題 → follow-up Issue 化 |
+1. **impl-plan 段階の Codex セカンドオピニオン**: `max_attempts_failed` の reset skip 除外 + 動画差し替え検知の 2 件
+2. **実装後の `/review-pr` 5 並列レビュー (silent-failure-hunter)**: Option B (safe-by-default) の必要性 + 例外パステスト追加
 
-特に **Codex code review が「実装後の別モデル視点」として Phase 2 元実装の脆弱性 3 件を可視化** したのは収穫。Claude 系の 4 段階レビュー (simplify / safe-refactor / Evaluator / Codex plan) では捕捉できなかった「実装スコープ外の関連既存課題」を補完する役割を果たした。
+→ いずれも初回案では見落としていた問題を構造的に検出。`rules/quality-gate.md` の Evaluator 分離プロトコルの真価が出た。
 
-### case B 採用判断の構造 (UI/宛先整合の発見)
+### 「過剰な対応はしない」フィードバックの実践
 
-ユーザーから「個人ごとの送付先が手動」との 1 段階目フィードバック → 私が「実は実装済」と返答 → ユーザーが画像で「個人ごとの Gmail 確認した」と再確認 → 私が「UI 単位は受講者なのに宛先は管理者で不整合」を指摘 → ユーザーが「最適解な予感」で案 B を提示 → 採用確定。
+本セッションでユーザーから「過剰な対応はしない」「シンプルに必要なときにファクトチェックできれば良い」フィードバックを複数回受け取り、以下を撤回:
+- Playwright 実ブラウザ確認 (既存テスト + コード読みで十分と判断)
+- 「業務側報告書」作成 (送付先が明確でなく、AI が発明したタスク)
+- 「ハンドオフへの数字記録のみ」「分離測定の追加実行」等の選択肢膨らませ
 
-この対話パターンは「**現場の表面要望を技術設計の整合性まで掘り下げる Socratic 進行**」として記録すべきと判断。`/brainstorm` skill の本来の用途と一致。
+→ `feedback_cost_benefit_before_action.md` 「できる ≠ やるべき」の趣旨実践。executor として「作業を発明しない」姿勢を強化。
 
-### Follow-up Issue 3 件起票判断 (CLAUDE.md GitHub Issues #5 / triage #4)
+### 例外時の挙動設計 (safe-by-default vs throw)
 
-本 PR の Codex code review で Phase 2 元実装 (PR #358) の脆弱性 3 件を可視化したが、これらは本 PR スコープ外。以下の選択肢を比較:
+silent-failure-hunter の指摘で「保守的に false (リセット側)」は実際には destructive (PR 趣旨と矛盾) と判明。Option A (throw propagation) / B (return true) / C (現状 + alert) の 3 案を提示し、decision-maker 判断で Option B 採用。
 
-1. ❌ 本 PR で全て fix → スコープ拡大、レビューやり直し、merge 遅延
-2. ✅ 別 Issue で起票 → 1 PR 1 目的、追跡性確保、decision-maker が優先度判断
-3. ❌ Issue 化せず TODO コメントだけ → 隠れて忘れられるリスク
-
-→ 案 2 採用。Codex review rating ≥ 7 / confidence ≥ 80 で triage 基準 #4 該当のため、ユーザー明示認可を得て起票。Net +3 は handoff KPI 逆行だが、隠れていた脆弱性を可視化した価値と引き換え。
-
----
-
-## 残タスク (次セッションへ)
-
-### 即実施推奨
-- 福の種様への返信送付状況確認 + 返信受領時の追加切り分け (本田さん領分、Session 35 から継続)
-- PR #434 実装の本番動作確認 (decision-maker 領分、Cloud Run デプロイ済)
-  - スーパー管理者ログイン → `/super/progress/[tenantId]/[userId]/print` → Gmail 下書き作成 → To/CC の自動入力確認
-
-### Active Issue (本セッション起票、優先度判断要)
-- #435 [P1] idempotency 非アトミック + 判定強化 umbrella (本番障害リスク中)
-- #436 [P1] accessToken owner 検証 (監査信頼性 + API 直叩き抜け穴)
-- #437 [P2] Gmail API エラーメッセージ PII フィルタ (PII 漏洩リスク中)
-
-### Active Issue (Session 34 起票、未着手)
-- #424 PATCH /quiz-attempts セッション再確認の abandoned 未対応 (bug, P2)
-- #425 Firestore transient エラー用リトライ共通ユーティリティ (enhancement, P2)
-
-### Postponed Issue (着手不可、明示指示なき限り保留)
-- #276 / #275 / #274: Phase 3 GCIP 完了が再開条件 (再評価期限 2026-10-24)
-- #405: Phase 2 filename strict MTA risk
+→ AI が「保守的」と呼ぶ default が実は破壊的なケースがあることを認識。**「保守的」の方向は目的と整合しているかを問う**ことが重要。
 
 ---
 
 ## 関連リンク
 
-- PR #434: https://github.com/system-279/lms-279/pull/434 (受講者進捗 PDF Gmail draft 宛先案 B 改訂)
-- Issue #433 (closed): https://github.com/system-279/lms-279/issues/433
-- Issue #435 (active): https://github.com/system-279/lms-279/issues/435 (idempotency umbrella)
-- Issue #436 (active): https://github.com/system-279/lms-279/issues/436 (accessToken owner 検証)
-- Issue #437 (active): https://github.com/system-279/lms-279/issues/437 (Gmail PII フィルタ)
-- ADR-034 (Accepted): docs/adr/ADR-034-phase2-gmail-draft.md
-- Cloud Run Deploy run: https://github.com/system-279/lms-279/actions/runs/26100557179
-- Session 35 handoff (archived): docs/handoff/archive/2026-05-19-session-35.md
+- PR #439 (Phase A workflow + ADR 判断記録): https://github.com/system-279/lms-279/pull/439
+- PR #440 (ケース E' 救済実装): https://github.com/system-279/lms-279/pull/440
+- ADR-027 改訂履歴: `docs/adr/ADR-027-lesson-session-attendance.md`
+- Phase A workflow: `.github/workflows/audit-session-force-exits.yml`
+- Session 36 archive: `docs/handoff/archive/2026-05-19-session-36.md`
