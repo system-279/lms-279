@@ -7,6 +7,7 @@ import type { DataSource } from "../datasource/interface.js";
 import type { LessonSession, Quiz, QuizAttempt, SessionExitReason } from "../types/entities.js";
 import { parsePositiveDurationMs } from "../utils/env-config.js";
 import { logger } from "../utils/logger.js";
+import { withTransientRetry } from "../utils/with-transient-retry.js";
 import { updateCourseProgress } from "./progress.js";
 
 // セッション制限時間（ミリ秒、正の整数）。env var SESSION_DURATION_MS で上書き可、デフォルト 2 時間、本番運用は 3 時間（10800000）。
@@ -109,7 +110,11 @@ async function cleanupInProgressAttempts(
 ): Promise<void> {
   let quiz: Quiz | null;
   try {
-    quiz = await ds.getQuizByLessonId(lessonId);
+    // Issue #425: transient Firestore エラー (UNAVAILABLE / DEADLINE_EXCEEDED 等) に対する
+    // 共通リトライ。permanent エラーは即 throw、transient は exponential backoff で最大 3 回試行。
+    quiz = await withTransientRetry(() => ds.getQuizByLessonId(lessonId), {
+      context: { operation: "cleanupInProgressAttempts.getQuizByLessonId", userId, lessonId },
+    });
   } catch (err) {
     logger.error("cleanupInProgressAttempts: failed to load quiz", {
       errorType: "cleanup_in_progress_attempts_quiz_load_failed",
@@ -132,7 +137,18 @@ async function cleanupInProgressAttempts(
 
   let attempts: QuizAttempt[];
   try {
-    attempts = await ds.getQuizAttempts({ quizId: quiz.id, userId });
+    // Issue #425: transient retry (上記 getQuizByLessonId と同じ方針)
+    attempts = await withTransientRetry(
+      () => ds.getQuizAttempts({ quizId: quiz!.id, userId }),
+      {
+        context: {
+          operation: "cleanupInProgressAttempts.getQuizAttempts",
+          userId,
+          lessonId,
+          quizId: quiz.id,
+        },
+      },
+    );
   } catch (err) {
     logger.error("cleanupInProgressAttempts: failed to load attempts", {
       errorType: "cleanup_in_progress_attempts_load_failed",
@@ -152,7 +168,19 @@ async function cleanupInProgressAttempts(
   for (const attempt of attempts) {
     if (attempt.status !== "in_progress") continue;
     try {
-      const result = await ds.transitionQuizAttemptToTimedOut(attempt.id);
+      // Issue #425: 個別 attempt の transition も transient retry。
+      // 部分救済優先 (1 件失敗でも全停止せず continue)。
+      const result = await withTransientRetry(
+        () => ds.transitionQuizAttemptToTimedOut(attempt.id),
+        {
+          context: {
+            operation: "cleanupInProgressAttempts.transitionQuizAttemptToTimedOut",
+            userId,
+            lessonId,
+            attemptId: attempt.id,
+          },
+        },
+      );
       if (result.transitioned) {
         cleaned++;
       } else {
