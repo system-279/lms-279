@@ -15,9 +15,7 @@
  * @returns true なら配信処理を実行、false なら何もしない (200 で即終了)
  */
 
-import type { DispatchSettings } from "@lms-279/shared-types";
-
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+import { JST_OFFSET_MS, type DispatchSettings } from "@lms-279/shared-types";
 
 export function shouldRunNow(settings: DispatchSettings, now: Date): boolean {
   // kill switch (AC-7)

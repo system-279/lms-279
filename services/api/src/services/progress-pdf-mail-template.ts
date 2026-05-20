@@ -7,9 +7,7 @@
  * JST 表示で統一する（ADR-029 タイムゾーン基準）。
  */
 
-import type { Pace, ProgressPdfData } from "@lms-279/shared-types";
-
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+import { JST_OFFSET_MS, type Pace, type ProgressPdfData } from "@lms-279/shared-types";
 
 export interface MailTemplateInput {
   data: ProgressPdfData;
