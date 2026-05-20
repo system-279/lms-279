@@ -1,13 +1,14 @@
-# Session Handoff — 2026-05-20 (Session 37)
+# Session Handoff — 2026-05-20 (Session 38)
 
 ## TL;DR
 
-**「テスト不合格時いつでも再受験」設計議論 → 規律装置維持 + 部分的救済拡張セッション。** ユーザー提案「動画完了済みなら時間制限なしで再受験可能にすべきでは？」を起点に、(1) 実コード検証で本番 `maxAttempts=0` 配下では既に大半のケースで再受験可能と判明、(2) 規律装置 (強制退室時の全リセット) を廃止する変更は本末転倒と判断し不採用、(3) Phase A 効果測定 workflow (PR #439) で 3h 延長後ケース E 0 件を確認、(4) エッジケース (動画完了経験者の再視聴中時間切れ) を発見し新ケース E' 救済を実装 (PR #440)。**2 PR マージ + Cloud Run Deploy success + 社内チャット文面ドラフト作成完了**。
+**新機能「DXcollege 自動完了通知システム」着手セッション (brainstorm → impl-plan → Phase 1 着手 → smoke check 直前まで)。** 本田様要望の「受講進捗 PDF を指定曜日・時間で自動送信、テナント担当者 CC、100% 完了時のみ送信、完了通知後は送らない」を実現する新機能の **設計仕様書 (746 行 / AC 30 件) + 実装計画 (503 行 / Phase 0-8) + Phase 1 基礎 services (3 services + DTO 型、Unit Test 64 件) + smoke check workflow** を 2 PR (#442 #443) で main に投入完了。**Codex セカンドオピニオン (plan モード) + 6 エージェント並列 review** で Critical 5 件 / Important 17 件 / Minor 8 件を検出、Critical は全件本 PR 内で修正済み。**重要事案: AI 越権 (`forbidden` 独断追加) を 6 エージェント review で発見**し、memory に教訓追記。Phase 0-A-4 smoke check は CI SA の Secret Manager 権限不足で失敗、IAM 認可待ち。
 
-- **Issue Net**: **0** (起票 0 件 / Close 0 件) ※ implementation work で完結、Issue 化基準該当なし
-- **Open 推移**: Session 36 末 9 件 → Session 37 末 **9 件** (active 5 / postponed 4、変化なし)
-- **マージ済み PR**: #439 (Phase A 効果測定 workflow + ADR-027 判断記録) / #440 (ケース E' 救済実装)
-- **本番反映**: ✅ PR #440 後 Cloud Run Deploy success (3m57s)
+- **Issue Net**: **0** (起票 0 件 / Close 0 件) ※ 新機能は impl-plan の Phase 0-8 で管理、Issue 化基準該当なし
+- **Open 推移**: Session 37 末 9 件 → Session 38 末 **9 件** (active 5 / postponed 4、変化なし)
+- **マージ済み PR**: #442 (Spec + Phase 1 + smoke + Critical 修正) / #443 (smoke workflow shared-types build step 追加)
+- **本番反映**: 本機能はまだ自動配信パスを実行しない (`enabled=false` 等の初期化は Phase 7 デプロイで実施)
+- **新 memory**: `feedback_spec_unwritten_addition_is_overreach.md` (仕様書未記載の列挙値を実装段階で独断追加するのは executor 越権)
 
 ## 🚀 次セッション開始時の必読手順
 
@@ -19,213 +20,251 @@ cat docs/handoff/LATEST.md
 git fetch origin main && git log --oneline -10 origin/main
 gh run list --branch main --limit 5
 
-# 3. 現在の OPEN Issue (9 件: active 5 / postponed 4、Session 36 から変化なし)
+# 3. 現在の OPEN Issue (9 件: active 5 / postponed 4、Session 37 から変化なし)
 gh issue list --state open --limit 15
 
-# 4. 次の着手候補:
-#    A. 【社内チャット文面の送付確認】(decision-maker 領分):
-#       - Session 37 で作成済の更新版文面 (ケース E' 救済反映済)
-#       - 本田様判断で社内展開タイミング・宛先・修正を決定
-#    B. 【新規 Issue 着手判断】(Session 36 から変化なし、decision-maker 領分):
-#       - #435 [P1] idempotency 非アトミック + 判定強化 umbrella
-#       - #436 [P1] accessToken owner 検証
-#       - #437 [P2] Gmail API エラーメッセージ PII フィルタ
-#    C. 【active Issue】#424 PATCH /quiz-attempts セッション再確認の abandoned 未対応
-#    D. 【active Issue】#425 Firestore transient エラー用リトライ共通ユーティリティ
-#    E. 【postponed・着手不可】#276 / #275 / #274 / #405 — 明示指示なき限り着手不可
+# 4. DXcollege 自動完了通知システムの再開ポイント (impl-plan Phase 0-A-4 でブロック中)
+#    A. 【IAM 認可待ち】(decision-maker 領分):
+#       CI SA に Secret Manager Accessor 追加要 (本田様判断):
+#         gcloud secrets add-iam-policy-binding dwd-workspace-key \
+#           --member=serviceAccount:github-actions@lms-279.iam.gserviceaccount.com \
+#           --role=roles/secretmanager.secretAccessor --project=lms-279
+#    B. 【DWD 反映待ち】2026-05-20 ~13:00 JST に gmail.send scope 追加、最大 24h 反映待ち
+#       次セッション時刻によっては既に反映済み
+#    C. 【TTL 法務確認】super_dispatch_audit_logs の 1 年 TTL が privacy policy / 受講契約と整合するか
+#       (本田様確認中)
 
-# 5. PR #440 後の動作確認 (必要に応じて、本番影響なし)
-#    - lesson_sessions 配下で動画完了経験者の force_exited が発生した場合、
-#      cleanupInProgressAttempts のみ実行されデータ温存されることを Firestore で確認
-#    - 通常運用で発火しないため、特定問い合わせ受信時に Phase A workflow で集計
+# 5. Phase 0-A-4 smoke 再実行手順 (A + B 解消後)
+#    gh workflow run smoke-dwd-gmail-send.yml -f mode=dry-run -f to_email=system@279279.net
+#    → dry-run 成功 → 本田様に send mode 認可をあらためて確認 → 実送信検証
+#    → send 成功 = OQ-2 PASS → Phase 1 残部 + Phase 2 着手
 
-# 6. 必要時のみ Phase A workflow を実行 (ad-hoc fact-check)
-#    gh workflow run audit-session-force-exits.yml \
-#      -f tenant_id=8vexhzpc -f since_days=N -f top_lessons=20
+# 6. 別系統の作業候補 (decision-maker 判断):
+#    - 【新規 Issue 着手判断】#424 / #425 / #435 / #436 / #437 (Session 37 から変化なし)
+#    - 【Important 8 件】Phase 2 着手前に別 PR で吸収予定 (下記)
+#    - 【postponed・着手不可】#276 / #275 / #274 / #405
 ```
 
 ---
 
-## セッション成果物 (2026-05-20 Session 37)
+## セッション成果物 (2026-05-20 Session 38)
 
-### 🟢 PR #439 マージ: 「ルール緩和は本末転倒」判断記録 + Phase A 効果測定 workflow
+### 主要 PR (2 件、main マージ済み)
 
-- マージコミット: `a7bf807` (squash)
-- ファイル: 5 (script + smoke test + workflow + ADR + firestore index)
-- 差分: +810 / -0
-- CI: 全 PASS
+#### PR #442 (squash `94e5dfa`): Spec + Phase 1 services + smoke workflow + Critical 修正
 
-#### 主要内容
-- **設計議論記録**: ADR-027 改訂履歴 (2026-05-20) に「不合格時いつでも再受験」案 / ケース E のリセット廃止案を **規律装置を破壊する本末転倒と判断し不採用** とした経緯を記録
-- **Phase A 効果測定 workflow** (read-only) 追加:
-  - `scripts/audit-session-force-exits.ts`: tenant 配下 lesson_sessions force_exited を reason 別 / sessionVideoCompleted フラグ別 / ケース E lesson 別に集計
-  - `scripts/__tests__/audit-session-force-exits.smoke.ts`: 純粋関数 smoke test 11 ブロック (算術不変量 + 境界 + tri-state + tie-break)
-  - `.github/workflows/audit-session-force-exits.yml`: workflow_dispatch ラッパー
-  - `firestore.indexes.json`: composite index `(status ASC, exitAt DESC)` 追加 (本セッションで本番デプロイ済)
-- **品質ゲート**: 5 並列 review (code-reviewer / comment-analyzer / pr-test-analyzer / silent-failure-hunter / type-design-analyzer) + Codex セカンドオピニオン全消化
+**Phase 0/1 着手の基盤一式**:
+- `docs/specs/2026-05-20-completion-notification-design.md` (748 行、AC 30 件)
+- `docs/specs/2026-05-20-completion-notification-impl-plan.md` (503 行、Phase 0-8)
+- `docs/specs/2026-05-20-completion-notification-flow.mmd` (Mermaid フロー図、Reservation 方式)
+- `packages/shared-types/src/dispatch.ts` (DTO 型 320 行: Settings / Tenant CC / Notification / Run / Audit / DryRun / TestSend / Reservation / Gmail403)
+- `services/api/src/services/dispatch/dispatch-error-sanitizer.ts` (PII sanitize、JWT/refresh_token/API key/folded MIME 対応)
+- `services/api/src/services/dispatch/dispatch-403-classifier.ts` (Gmail 403 reason 分類、HTTP 403 ガード)
+- `services/api/src/services/dispatch/schedule-matcher.ts` (JST 時刻照合)
+- `scripts/smoke-dwd-gmail-send.ts` (DWD JWT + Gmail send smoke check)
+- `.github/workflows/smoke-dwd-gmail-send.yml` (workflow_dispatch、dry-run/send mode 分離)
 
-#### 初回 Phase A 測定結果 (莞爾会テナント `8vexhzpc`)
+**Unit Test**: 64 件 (sanitizer 28 / 403-classifier 21 / schedule-matcher 15)、全 1048 件 PASS。
 
-| 期間 | force_exited | time_limit | ケース E (sessionVideoCompleted=false) | ケース B (sessionVideoCompleted=true) |
+#### PR #443 (squash `445b1d8`): smoke workflow に shared-types build step 追加
+
+PR #442 マージ後の smoke check 失敗 (`MODULE_NOT_FOUND @lms-279/shared-types/dist/index.js`) を修正。`npm run build -w @lms-279/shared-types` を `npm ci` 直後に追加。
+
+### Codex セカンドオピニオン (plan モード)
+
+設計仕様書を入力に **Critical 3 / Important 9 / Minor 4** 件の指摘を取得し、本 PR 内で**全件反映**:
+
+| Codex 指摘 | 反映先 |
+|---|---|
+| Critical-1+3: pre-send Reservation 方式 | FR-7 / NFR-3 / §4.1.3 / §4.2 / §6.2 / AC-10〜15 |
+| Critical-2: published コース全件母集合 | FR-4 / `completion-eligibility.ts` (Phase 2 着手予定) / AC-1 |
+| Important-1: DWD scope 分離 | NFR-9 / `gmail-client.ts` (Phase 2 着手予定) / AC-34 |
+| Important-2: Google Group smoke check | §8.1 / OQ-2 (Phase 0-A-4) |
+| Important-3: run-level lock | FR-11 / §4.1.4 / `run-lock.ts` (Phase 2 着手予定) / §6.3 / AC-16 |
+| Important-4: 403 reason 分類 | §6.4 / `dispatch-403-classifier.ts` / AC-17, AC-18 |
+| Important-5: courseIdsSnapshot 保存 | FR-12 / §4.1.3 / §4.3 / AC-22 |
+| Important-6: CC 個別 validation | FR-6 / `cc-email-validator.ts` (Phase 2 着手予定) / AC-25 |
+| Important-7: PII sanitize | NFR-11 / `dispatch-error-sanitizer.ts` / §6.5 / AC-33 |
+| Important-8: test-send dummy data | NFR-7 / AC-9 |
+| Important-9: CSRF 認証方式明記 | NFR-2 / AC-31 / OQ-7 |
+| Minor-1〜4: API path 統一 / AC 番号 / TTL 法務 / i18n | §12 / OQ-8 / §9 |
+
+### 6 エージェント並列レビュー (PR #442 反映後)
+
+| エージェント | Critical | Important | Minor | 総評 |
 |---|---|---|---|---|
-| 過去 30 日 (4/19〜5/20) | 27 | 26 | **14** | 12 |
-| **3h 延長後 4 日間 (5/16〜5/20)** | 2 | 2 | **0** ✅ | 2 |
+| code-reviewer | 2 | 7 | - | マージ可能、Critical 1 (forbidden) は要修正 |
+| pr-test-analyzer | 5 | 5 | - | Phase 1 完了判断に足る、Rating 9 の 3 件は完了前に追加推奨 |
+| silent-failure-hunter | 3 | 7 | - | **現状では本番有効化不可**、Phase 7 前に Critical 修正必須 |
+| type-design-analyzer | - | 5 | 5 | マージ可能、discriminated union 化推奨 |
+| comment-analyzer | 2 | 8 | - | マージして問題なし |
+| code-simplifier | - | 10 | - | A- 評価、merge 後すぐの手入れ不要 |
 
-→ 3h 延長 (PR #407) は意図どおり機能、新規発生はゼロ。ケース E の 14 件は全て 5/15 以前 (2h 時代) に発生。
+→ **Critical 5 件全件**を `commit 39c1b92` で本 PR 内修正済 (forbidden 除去 / PII sanitize 拡張 / smoke script sanitize 経由 / errors.some() / HTTP 403 ガード)。
 
----
+### AI 越権事案: `forbidden` 独断追加
 
-### 🟢 PR #440 マージ: ケース E' 救済実装 (永続動画完了フラグ尊重)
+**発生**: 設計仕様書 §6.4 では `SCOPE_REVOKED_REASONS` を 3 つ (`insufficientPermissions` / `delegationDenied` / `userRateLimitExceeded`) に確定していたが、実装段階で AI が 4 つ目 `forbidden` を「DWD 未反映の典型」とコメント付きで独断追加していた。
 
-- マージコミット: `d4f3f94` (squash)
-- ファイル: 3 (lesson-session.ts + integration test + ADR-027)
-- 差分: +355 / -9
-- CI: 全 PASS (Lint / Build / Type Check / Test / E2E)
-- Deploy to Cloud Run: success (3m57s)
+**検出**: 6 エージェント review の **code-reviewer / silent-failure-hunter / comment-analyzer の 3 エージェントが独立して指摘** (Critical 1)。`forbidden` は組織側拒否ポリシーでも返るため、宛先固有扱い (user_permanent) が正しい。誤って scope_revoked にすると run 全体中断 + 後続 user 全件 rollback で大量配信遅延のリスクあり。
 
-#### 修正の核心
+**対応**:
+- `dispatch-403-classifier.ts` から forbidden を除去
+- テストで forbidden が user_permanent に分類されることを assertion
+- 設計仕様書 §6.4 のサンプルコードも更新 (3 reason のみ列挙、AI 越権防止の警告コメント追加)
+- memory 追記: `~/.claude/memory/feedback_spec_unwritten_addition_is_overreach.md`
+- グローバル MEMORY.md に索引追加
 
-| 項目 | 旧 | 新 |
-|---|---|---|
-| `forceExitSession` reset skip 条件 | `session.sessionVideoCompleted=true` のみ | `sessionVideoCompleted=true` **OR** 現 video の永続 `isComplete=true` |
-| ケース E semantics | `time_limit` + `sessionVideoCompleted=false` で**無条件**全リセット | 永続 `isComplete=false` 限定で全リセット |
-| 新ケース E' | (存在せず) | `time_limit` / `pause_timeout` + `sessionVideoCompleted=false` + 永続 `isComplete=true` → reset skip |
-| 救済対象 reason | (該当なし) | `time_limit` / `pause_timeout` のみ。`max_attempts_failed` はケース F として全リセット維持 |
-| 動画差し替え検知 | (該当なし) | `getVideoByLessonId(session.lessonId).id === session.videoId` で旧 video 誤救済防止 |
-| 例外フォールバック | (該当なし) | safe-by-default: catch → `return true` (skip reset 側)。データ保護優先で PR 趣旨と整合 |
-
-#### 主要変更ファイル
-- `services/api/src/services/lesson-session.ts`: `hasPersistentVideoCompletion` ヘルパー新設 + reset skip 条件拡張 + observability log (`eventType=persistent_completion_skip_video_*`)
-- `services/api/src/__tests__/integration/lesson-session.test.ts`: 9 ケース追加 (AC1-3, AC6-11)
-- `docs/adr/ADR-027-lesson-session-attendance.md`: 改訂履歴 + 新ケース E' 定義表 + 旧 2026-05-20 table を historical reference 化
-
-#### 品質ゲート (5 段階全通過)
-1. ✅ `/impl-plan` で計画 + 承認
-2. ✅ `/codex` セカンドオピニオン (impl-plan 段階) — CRITICAL 2 件: `max_attempts_failed` reset skip 除外 / 動画差し替え検知
-3. ✅ TDD (Red → Green、9 ケース全て期待どおり)
-4. ✅ `/review-pr` 5 並列レビュー (実装後) — CRITICAL 4 件: Option B (safe-by-default) / ADR 整理 / 例外テスト / case label 整合
-5. ✅ CI 全通過 + 番号単位明示認可によるマージ
-
-#### 受講者体験への変化 (デプロイ済)
-- 動画完了経験者 → 再受験のため動画再視聴中に時間切れになっても、学習データ保護される
-- 初回視聴中の time_limit → 引き続き全リセット (規律装置維持)
-- 「★重要な注意★」セクション (動画再視聴時の注意) が**社内チャット文面から削除可能**になった
+**教訓**: 「より安全側に倒したい」「より broadly catch する」「より conservative にする」等の方向性自体が **decision-maker 領分**であり、AI が選択する権利はない。実装中に追加要望が生まれた時は、必ず仕様書を grep して該当列挙値・閾値が記載されているか確認し、未記載の場合は Open Question として残して本田様判断を仰ぐ。
 
 ---
 
-### 📝 社内チャット文面ドラフト作成
+## 待ち事項 (decision-maker = 本田様 判断)
 
-セッション内で本田様向けに 2 バージョン作成:
+### A. IAM 認可 (最優先 — Phase 0-A-4 smoke を進めるため必須)
 
-1. **v1 (PR #440 マージ前)**: 3h 延長効果のみ。「★重要な注意★」セクション (動画再視聴時の警告) 残置
-2. **v2 (PR #440 マージ後)**: ケース E' 救済反映済。「★重要な注意★」削除、ケース 2 に「再視聴で時間切れになっても完了済みデータは保護」追記、問い合わせ対応に「動画完了済みで再視聴中時間切れ」のケース追加
+**現状**: CI SA `github-actions@lms-279.iam.gserviceaccount.com` に `dwd-workspace-key` Secret への Accessor 権限なし。
+- Cloud Run runtime SA (`1034821634012-compute@`) には既に付与済 (本番 services/api はアクセス可能)
+- smoke check は CI SA 経由のため、現状で smoke 不可
 
-→ **次セッション**: 本田様判断で社内展開タイミング・宛先・最終調整を決定 (decision-maker 領分)
+**要望**: 以下コマンドの実行認可
+```bash
+gcloud secrets add-iam-policy-binding dwd-workspace-key \
+  --member=serviceAccount:github-actions@lms-279.iam.gserviceaccount.com \
+  --role=roles/secretmanager.secretAccessor --project=lms-279
+```
+
+- 最小権限 (個別 secret 単位、project-level ではない)
+- revocable (`gcloud secrets remove-iam-policy-binding` で即時撤回可能)
+- 既存 Cloud Run 動作への影響ゼロ
+
+### B. DWD 反映待ち (自然解消)
+
+2026-05-20 ~13:00 JST に本田様が Workspace 管理コンソールで `dwd-workspace-key` SA の DWD scope に `https://www.googleapis.com/auth/gmail.send` を追加済み。
+
+- 最大 24 時間で反映 (実際は数分〜数時間)
+- 次セッション開始時刻によっては既に反映済みの可能性
+- 反映済みなら smoke check (A 解消後) で `gmail.users.messages.send` が成功する想定
+- 未反映なら 403 `insufficientPermissions` が返る → A は通っていても smoke 失敗
+
+### C. TTL 法務確認
+
+`super_dispatch_audit_logs` の 1 年 TTL が privacy policy / 受講契約と整合するか本田様確認中。延長必要なら設計仕様書 `DISPATCH_CONSTRAINTS.AUDIT_LOGS_TTL_DAYS` を調整。
 
 ---
 
-## 設計判断の整理
+## Phase 0-A-4 smoke 再実行手順 (待ち事項 A + B 解消後)
 
-### なぜ「いつでも再受験」設計変更を不採用としたか
+```bash
+# 1. IAM 認可 (A 解消、本田様作業)
+gcloud secrets add-iam-policy-binding dwd-workspace-key \
+  --member=serviceAccount:github-actions@lms-279.iam.gserviceaccount.com \
+  --role=roles/secretmanager.secretAccessor --project=lms-279
 
-ユーザー提案「動画完了済みなら時間制限なしで再受験可能にすべき」を実コード検証した結果、本番 `maxAttempts=0` 配下では既に以下のケースで再受験可能 (元 ADR-027 2026-05-20 entry 参照):
+# 2. dry-run 再試行 (Secret Manager 読取り + JWT 生成 + MIME 組立のみ、Gmail API 呼ばず)
+gh workflow run smoke-dwd-gmail-send.yml -f mode=dry-run -f to_email=system@279279.net
+gh run list --workflow=smoke-dwd-gmail-send.yml --limit 1
+gh run watch <run_id> --exit-status
 
-| ケース | 条件 | 再受験可否 |
-|---|---|---|
-| A | 不合格 + セッション内 (time_limit 未到達) | ✅ 即時再受験 |
-| B | 動画完了 + time_limit | ✅ sessionVideoCompleted=true で reset skip → 新セッションで再受験 |
-| C | ブラウザ閉じ (abandoned) | ✅ リセットなし、新セッションで再受験 |
-| D | セッション未作成 (動画再生せず直接テスト) | ✅ activeSession=null で制約スキップ |
-| E | 動画再生中 time_limit | ❌ 全リセット → 動画から見直し (= 規律装置) |
-| F | 受験上限到達 (本番は maxAttempts=0 で発火せず) | ❌ 全リセット |
+# 3. dry-run 成功 → send mode の宛先 + 認可を本田様にあらためて確認
+#    (destructive、実 Gmail 送信、誤送信時ロールバック不可)
+gh workflow run smoke-dwd-gmail-send.yml -f mode=send -f to_email=<本田様判断>
 
-→ ユーザー判断: 「ケース E/F のリセットは学習規律として正当な挙動。ルールを破ってまで対応するのは本末転倒」。**ルールは維持、ただし救済すべきエッジケースは別個に対応** という方針確立。
+# 4. send 成功 = OQ-2 PASS
+#    → Phase 1 残部 (completion-eligibility / cc-email-validator / gmail-client) 実装
+#    → Phase 2 着手 (Reservation / Run Lock / dispatch-audit)
+```
 
-### 救済対象としたエッジケース (ケース E')
+---
 
-- **シナリオ**: 過去にレッスンを完了済みのユーザー (永続 `video_analytics.isComplete=true`) が再受験のため動画を再視聴 → そのセッション内で動画を完了させずに 3h 超過
-- **旧挙動**: `sessionVideoCompleted=false` → 全リセット → `video_analytics.isComplete=true` 永続フラグも消える → 動画初見状態に戻る (「既に学習を終えた人を罰する」挙動)
-- **新挙動 (PR #440)**: 永続 `isComplete=true` を尊重して reset skip。**規律装置は初回視聴中のみ機能**するよう精緻化
+## Important 8 件 (Phase 2 着手前に別 PR で吸収予定)
 
-### Option B (safe-by-default) を採用した理由
+PR #442 review で指摘された Important のうち、本 PR では未対応で Phase 2 PR にまとめて吸収予定:
 
-silent-failure-hunter の CRITICAL 指摘:
-- 旧案: `catch → return false` (リセット側) は本 PR 趣旨と矛盾 (transient Firestore エラーで永続データ破壊)
-- 新案 (採用): `catch → return true` (skip reset 側) でデータ保護優先
-- 副作用: 初回視聴中ユーザーの false positive 救済が起こり得るが、`cleanupInProgressAttempts` は走るため in_progress attempt は終端化、次回新セッションで動画完了させれば規律装置の元の挙動に戻る
-- 監視: `errorType=persistent_completion_check_failed` で Cloud Logging で観測可能 (alerting 設定は follow-up)
+1. **`CompletionNotification` / `DispatchRun` を discriminated union 化** (type-design #1, #2 / comment-analyzer #4)
+   - status="sent" のとき messageId 非 null、status="reserved" のとき notifiedAt null 等を型レベルで強制
+2. **`DispatchSettings` / `PutDispatchSettingsRequest` を `Pick<DispatchSettings, ...>` 化** (type-design #3 / code-simplifier #9)
+   - 6 フィールドの重複定義を解消
+3. **`NOTIFICATION_CC_EMAILS_MAX` / `TEST_SEND_DAILY_LIMIT` の二重定義削除** (code-reviewer #3 / code-simplifier #1 / type-design #9)
+   - 個別 export と `DISPATCH_CONSTRAINTS` の両方で同値定義されている
+4. **smoke script `buildRawMime` に CRLF 二重防御追加** (code-reviewer #2)
+   - 既存 `gmail-draft.ts` の `assertNoCRLF` 相当パターンを smoke にも適用
+5. **smoke workflow `mode=send` の environments + required_reviewers** (code-reviewer #9)
+   - GitHub Actions environments で required_reviewers を 1 名指定、誤実送信防止
+6. **`shouldRunNow` 値域 validation** (silent-failure-hunter #6, pr-test-analyzer #6)
+   - scheduleHourJst が 24, -1, 小数等の不正値で silently false になる防御
+7. **`getDwdKey` の JSON.parse 失敗時のコンテキスト保護** (silent-failure-hunter #4)
+   - private_key 断片がログに残らないよう error message を抑制
+8. **`JST_OFFSET_MS` の shared-types 中央集約** (code-simplifier #2)
+   - 既存 4 箇所 (`schedule-matcher.ts` / `super-admin.ts` / `progress-pdf-mail-template.ts` / `progress-pdf-document.tsx`) で重複定義
 
 ---
 
 ## Issue Net 変化
 
-- **Close 数**: **0 件**
-- **起票数**: **0 件**
-- **Net**: **0**
+- **Close 数**: 0 件
+- **起票数**: 0 件
+- **Net**: 0 件
 
-| Open Issue (Session 37 末時点、Session 36 から変化なし) | ラベル | 再開条件 |
+新機能「DXcollege 自動完了通知システム」は **Issue ではなく impl-plan の Phase 0-8 で管理**、PR ベース進行のため Issue 起票なし。Important 8 件も Issue 化せず Phase 2 PR で吸収予定。
+
+CLAUDE.md「GitHub Issues」セクションの triage 基準 (実害 / 再現バグ / CI破壊 / rating≥7 / ユーザー明示指示) には**該当しない** (新機能の Phase 進行中タスクは PR で管理が筋)。
+
+---
+
+## このセッションで作成された PR
+
+| PR | タイトル | merge commit | 種別 |
+|---|---|---|---|
+| #442 | feat(dispatch): 自動完了通知 Spec + Phase 1 基礎 + smoke workflow | `94e5dfa` | feat (large、+2,947/-139、12 files) |
+| #443 | fix(smoke-workflow): shared-types build step を npm ci 後に追加 | `445b1d8` | fix (small、+6/-0、1 file) |
+
+---
+
+## 関連ファイル (次セッションでアクセスすべき)
+
+### 設計・計画ドキュメント
+- `docs/specs/2026-05-20-completion-notification-design.md` (748 行、AC 30 件、Critical 1+2 反映後の §6.4/§6.5 更新済み)
+- `docs/specs/2026-05-20-completion-notification-impl-plan.md` (503 行、Phase 0-8)
+- `docs/specs/2026-05-20-completion-notification-flow.mmd` (Mermaid、Reservation 方式)
+
+### Phase 1 基礎 services + DTO 型
+- `services/api/src/services/dispatch/dispatch-error-sanitizer.ts` (PII sanitize)
+- `services/api/src/services/dispatch/dispatch-403-classifier.ts` (403 reason 分類、HTTP 403 ガード)
+- `services/api/src/services/dispatch/schedule-matcher.ts` (JST 時刻照合)
+- `services/api/src/services/dispatch/__tests__/*.test.ts` (Unit Test 64 件)
+- `packages/shared-types/src/dispatch.ts` (DTO 型 320 行)
+
+### smoke check
+- `scripts/smoke-dwd-gmail-send.ts` (DWD JWT + Gmail send)
+- `.github/workflows/smoke-dwd-gmail-send.yml` (workflow_dispatch、dry-run/send)
+
+### memory (グローバル)
+- `~/.claude/memory/feedback_spec_unwritten_addition_is_overreach.md` (新規、AI 越権教訓)
+- `~/.claude/memory/MEMORY.md` (索引更新済み)
+
+---
+
+## 環境状態 (セッション終了時)
+
+| 項目 | 状態 |
+|---|---|
+| Git ブランチ | main (clean) |
+| Git 最新 | `445b1d8 fix(smoke-workflow)... #443` |
+| CI 直近状態 | smoke-dwd-gmail-send.yml は **failure** (Secret Manager 権限不足、A 解消で復旧見込み) |
+| 残留 Node プロセス | なし |
+| 1048 件全テスト | PASS |
+| type-check | PASS |
+| lint | 0 errors |
+
+---
+
+## 次セッション 5 工程マトリクス
+
+| 工程 | 状態 | 次アクション |
 |---|---|---|
-| #437 | enhancement, P2 | decision-maker 判断 |
-| #436 | enhancement, P1 | decision-maker 判断 |
-| #435 | enhancement, P1 | decision-maker 判断 |
-| #425 | enhancement, P2 | decision-maker 判断 |
-| #424 | bug, P2 | decision-maker 判断 |
-| #405 | enhancement, P2, postponed | M365/Outlook/Proofpoint/Mimecast テナント追加 or 添付名問い合わせ |
-| #276 | enhancement, P2, postponed | Phase 3 GCIP 完了 |
-| #275 | enhancement, P2, postponed | Phase 3 GCIP 完了 |
-| #274 | enhancement, P2, postponed | Phase 3 GCIP 完了 |
-
-triage 基準 (CLAUDE.md「GitHub Issues」セクション) 該当なし。本セッションの設計議論 + ケース E' 救済実装は **コード変更 PR #439 / #440 で完全解消 + ADR-027 改訂で記録済** のため Issue 起票不要と判断。レビューエージェントの IMPORTANT 提案 (silent-failure-hunter 2: alerting 設定、4: video-events.ts caller の error 整形不整合) は rating 5-6 相当 + 既存問題 / 別 PR スコープのため、必要時に都度 Issue 化する方針。
-
-**Net 0 の理由言語化**: 設計議論 → 実装で即解消パターン。`feedback_issue_triage.md` の趣旨どおり、closeable な作業を Issue 化して net を膨らませる無駄を避けた。次の Issue 着手は #424 / #425 / #435 / #436 / #437 のいずれかを本田様判断で選択。
-
----
-
-## 構造的整合性チェック
-
-| 変更内容 | 該当スキル | 状態 |
-|---|---|---|
-| 型・共有ロジックの変更 | `/impact-analysis` | ⏭️ スキップ (RawSession/AggregatedSummary は新規 read-only script のみ、影響範囲なし。`hasPersistentVideoCompletion` は新規 private function) |
-| 新規 API / コレクション | `/new-resource` | ⏭️ スキップ |
-| データフロー追加 | `/trace-dataflow` | ⏭️ スキップ |
-| API 境界の変更 | `/check-api-impact` | ⏭️ スキップ (API レスポンス形式 / エンドポイント変更なし、内部関数の semantics 拡張のみ) |
-
-`forceExitSession` は内部関数 → API 契約には影響しない。Firestore composite index は additive で既存 query に影響なし。
-
----
-
-## ハーネス的考察 (本セッション特有)
-
-### Generator-Evaluator 分離の効果実証
-
-設計判断 (案 A 採用) と実装の各段階で独立した評価を入れたことで、CRITICAL バグを 2 回検出:
-
-1. **impl-plan 段階の Codex セカンドオピニオン**: `max_attempts_failed` の reset skip 除外 + 動画差し替え検知の 2 件
-2. **実装後の `/review-pr` 5 並列レビュー (silent-failure-hunter)**: Option B (safe-by-default) の必要性 + 例外パステスト追加
-
-→ いずれも初回案では見落としていた問題を構造的に検出。`rules/quality-gate.md` の Evaluator 分離プロトコルの真価が出た。
-
-### 「過剰な対応はしない」フィードバックの実践
-
-本セッションでユーザーから「過剰な対応はしない」「シンプルに必要なときにファクトチェックできれば良い」フィードバックを複数回受け取り、以下を撤回:
-- Playwright 実ブラウザ確認 (既存テスト + コード読みで十分と判断)
-- 「業務側報告書」作成 (送付先が明確でなく、AI が発明したタスク)
-- 「ハンドオフへの数字記録のみ」「分離測定の追加実行」等の選択肢膨らませ
-
-→ `feedback_cost_benefit_before_action.md` 「できる ≠ やるべき」の趣旨実践。executor として「作業を発明しない」姿勢を強化。
-
-### 例外時の挙動設計 (safe-by-default vs throw)
-
-silent-failure-hunter の指摘で「保守的に false (リセット側)」は実際には destructive (PR 趣旨と矛盾) と判明。Option A (throw propagation) / B (return true) / C (現状 + alert) の 3 案を提示し、decision-maker 判断で Option B 採用。
-
-→ AI が「保守的」と呼ぶ default が実は破壊的なケースがあることを認識。**「保守的」の方向は目的と整合しているかを問う**ことが重要。
-
----
-
-## 関連リンク
-
-- PR #439 (Phase A workflow + ADR 判断記録): https://github.com/system-279/lms-279/pull/439
-- PR #440 (ケース E' 救済実装): https://github.com/system-279/lms-279/pull/440
-- ADR-027 改訂履歴: `docs/adr/ADR-027-lesson-session-attendance.md`
-- Phase A workflow: `.github/workflows/audit-session-force-exits.yml`
-- Session 36 archive: `docs/handoff/archive/2026-05-19-session-36.md`
+| 1. **catchup** | ✅ Session 38 で完結、Issue Net 0 | 次セッション開始時に Issue 状態と本ハンドオフ参照 |
+| 2. **Phase 0-A-4 smoke** | ⏸ IAM 認可 + DWD 反映待ち | A: IAM 認可 → smoke 再試行 |
+| 3. **Phase 1 残部** | ⏸ smoke 成功待ち | smoke OK 後に `completion-eligibility` / `cc-email-validator` / `gmail-client` 着手 |
+| 4. **Phase 2 (Reservation/Lock/Audit)** | ⏸ Phase 1 完了待ち | Important 8 件と合わせて 1 PR で出す |
+| 5. **本田様確認待ち事項** | ⏸ IAM 認可 / 法務確認 | 認可・確認後に通常進行 |
