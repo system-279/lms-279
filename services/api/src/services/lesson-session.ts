@@ -257,7 +257,7 @@ export async function forceExitSession(
 }
 
 /**
- * 現在 lesson の video に対する永続完了状態を確認する（ケース E 救済判定）。
+ * 現在 lesson の video に対する永続完了状態を確認する（ケース E' 救済判定）。
  *
  * 救済対象 reason は time_limit / pause_timeout のみ。
  * max_attempts_failed は受験規律破りのため永続フラグを尊重しない（ADR-027 ケース F）。
@@ -265,11 +265,18 @@ export async function forceExitSession(
  * 動画差し替え検知: getVideoByLessonId で取得した現在 video の id が
  * session.videoId と一致する場合のみ永続完了を尊重する。
  * セッション開始後にレッスンの動画が差し替えられた場合は false を返し、
- * 既存挙動（全リセット）にフォールバックする。
+ * 既存挙動（全リセット）にフォールバックする（observability 確保のため warn ログ出力）。
  *
- * getVideoAnalytics / getVideoByLessonId の例外は呼び出し元に propagate せず
- * 保守的に false（リセット側）にフォールバックする。データ品質側で気付ける
- * よう logger.error で記録する。
+ * 例外時のフォールバック方針（safe-by-default）:
+ *   getVideoAnalytics / getVideoByLessonId の例外時は true を返す（skip reset 側）。
+ *   理由: 本 PR の目的は完了済みデータの保護。fetch 失敗時に false → 全リセットに
+ *   倒すと、永続 isComplete=true の真値を持つユーザーのデータも transient エラーで
+ *   破壊される（PR 趣旨と矛盾）。Firestore 不健全時はデータ保護を優先する。
+ *   副作用として初回視聴中ユーザーの false positive 救済が起こり得るが、
+ *   cleanupInProgressAttempts は走るため in_progress attempt は終端化され、
+ *   次回新セッションで動画完了させれば規律装置の元の挙動に戻る。
+ *   logger.error は errorType=persistent_completion_check_failed で記録するため、
+ *   発火頻度の監視は Cloud Logging のフィルタで実施する（alerting 設定は follow-up）。
  */
 async function hasPersistentVideoCompletion(
   ds: DataSource,
@@ -281,8 +288,27 @@ async function hasPersistentVideoCompletion(
   }
   try {
     const currentVideo = await ds.getVideoByLessonId(session.lessonId);
-    if (!currentVideo || currentVideo.id !== session.videoId) {
-      // 動画が削除されたか差し替えられた → 旧 video の永続完了は尊重しない
+    if (!currentVideo) {
+      // 動画が削除済（lesson から video が外された）。旧 video の永続完了は尊重しない。
+      logger.warn("hasPersistentVideoCompletion: lesson video missing, routing to reset", {
+        eventType: "persistent_completion_skip_video_missing",
+        sessionId: session.id,
+        userId: session.userId,
+        lessonId: session.lessonId,
+        sessionVideoId: session.videoId,
+      });
+      return false;
+    }
+    if (currentVideo.id !== session.videoId) {
+      // セッション開始後に動画差し替え。observability のため info ログを残す。
+      logger.info("hasPersistentVideoCompletion: video swapped after session start, routing to reset", {
+        eventType: "persistent_completion_skip_video_swapped",
+        sessionId: session.id,
+        userId: session.userId,
+        lessonId: session.lessonId,
+        sessionVideoId: session.videoId,
+        currentVideoId: currentVideo.id,
+      });
       return false;
     }
     const analytics = await ds.getVideoAnalytics(session.userId, session.videoId);
@@ -296,8 +322,8 @@ async function hasPersistentVideoCompletion(
       videoId: session.videoId,
       error: err instanceof Error ? err : new Error(String(err)),
     });
-    // 保守的に false にフォールバック（リセット側）
-    return false;
+    // safe-by-default: skip reset 側にフォールバック（データ保護優先、本 PR 趣旨と整合）
+    return true;
   }
 }
 

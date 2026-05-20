@@ -357,15 +357,15 @@ describe("lesson-session service", () => {
     });
 
     // ============================================================
-    // ADR-027 改訂履歴 2026-05-21: 永続完了フラグ尊重（ケース E 救済拡張）
+    // ADR-027 改訂履歴 2026-05-21: 永続完了フラグ尊重（ケース E' 新設）
     //   過去にレッスンを完了済み (video_analytics.isComplete=true) のユーザーが
     //   新セッションで動画再生 → time_limit / pause_timeout に陥った場合も
-    //   全リセットを skip する。max_attempts_failed は除外（ケース F semantics 維持）。
+    //   全リセットを skip する（新ケース E'）。max_attempts_failed は除外（ケース F semantics 維持）。
     // ============================================================
 
     // AC1: video_analytics.isComplete=true（永続） + sessionVideoCompleted=false + time_limit
-    //      → 全リセット skip、in_progress attempt のみ cleanup
-    it("preserves data when persistent video_analytics.isComplete=true even if sessionVideoCompleted=false (case E rescue)", async () => {
+    //      → 全リセット skip、in_progress attempt のみ cleanup（ケース E'）
+    it("preserves data when persistent video_analytics.isComplete=true even if sessionVideoCompleted=false (case E')", async () => {
       const { lesson, video, attempt } = await setupLessonWithInProgressAttempt("user1");
       // 過去の動画完了状態を永続化
       await ds.upsertVideoAnalytics("user1", video.id, {
@@ -510,6 +510,84 @@ describe("lesson-session service", () => {
       expect(analytics!.isComplete).toBe(true);
       const cleaned = await ds.getQuizAttemptById(attempt.id);
       expect(cleaned!.status).toBe("timed_out");
+    });
+
+    // AC9: getVideoByLessonId 例外時 → safe-by-default で skip reset 側にフォールバック
+    //      （データ保護を優先、PR 趣旨と整合）
+    it("falls back to skip reset (safe-by-default) when getVideoByLessonId throws", async () => {
+      const { lesson, video, attempt } = await setupLessonWithInProgressAttempt("user1");
+      await ds.upsertVideoAnalytics("user1", video.id, {
+        coverageRatio: 0.98,
+        isComplete: true,
+        watchedRanges: [{ start: 0, end: 294 }],
+        totalWatchTimeSec: 294,
+        seekCount: 0,
+        suspiciousFlags: [],
+      });
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+
+      const original = ds.getVideoByLessonId.bind(ds);
+      ds.getVideoByLessonId = async () => { throw new Error("simulated firestore error"); };
+      try {
+        const result = await forceExitSession(ds, session.id, "time_limit");
+        // forceExitSession 自体は例外を throw せず、session は force_exited 状態になる
+        expect(result.status).toBe("force_exited");
+      } finally {
+        ds.getVideoByLessonId = original;
+      }
+
+      // データ保護 (safe-by-default) のため video_analytics は残る
+      const analytics = await ds.getVideoAnalytics("user1", video.id);
+      expect(analytics).not.toBeNull();
+      expect(analytics!.isComplete).toBe(true);
+      // in_progress attempt は cleanup で timed_out 化される
+      const cleaned = await ds.getQuizAttemptById(attempt.id);
+      expect(cleaned).not.toBeNull();
+      expect(cleaned!.status).toBe("timed_out");
+    });
+
+    // AC10: getVideoAnalytics 例外時 → 同じく safe-by-default で skip reset
+    it("falls back to skip reset (safe-by-default) when getVideoAnalytics throws", async () => {
+      const { lesson, video, attempt } = await setupLessonWithInProgressAttempt("user1");
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+
+      const original = ds.getVideoAnalytics.bind(ds);
+      ds.getVideoAnalytics = async () => { throw new Error("simulated firestore timeout"); };
+      try {
+        const result = await forceExitSession(ds, session.id, "time_limit");
+        expect(result.status).toBe("force_exited");
+      } finally {
+        ds.getVideoAnalytics = original;
+      }
+
+      // データ保護 (safe-by-default) のため quiz_attempts は cleanup のみ（削除されない）
+      const cleaned = await ds.getQuizAttemptById(attempt.id);
+      expect(cleaned).not.toBeNull();
+      expect(cleaned!.status).toBe("timed_out");
+    });
+
+    // AC11: video が削除済（lesson から外された）+ persistent isComplete=true
+    //       → currentVideo=null なので永続フラグ無視、既存挙動（全リセット）
+    it("ignores persistent completion when lesson video has been deleted (no replacement)", async () => {
+      const { lesson, video: oldVideo, attempt } = await setupLessonWithInProgressAttempt("user1");
+      await ds.upsertVideoAnalytics("user1", oldVideo.id, {
+        coverageRatio: 0.98,
+        isComplete: true,
+        watchedRanges: [{ start: 0, end: 294 }],
+        totalWatchTimeSec: 294,
+        seekCount: 0,
+        suspiciousFlags: [],
+      });
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, oldVideo.id, "token-1");
+
+      // 動画を削除（lesson は残るが video レコードがなくなる、差し替えなし）
+      await ds.deleteVideo(oldVideo.id);
+
+      await forceExitSession(ds, session.id, "time_limit");
+
+      // currentVideo=null → 永続フラグ無視 → 全リセット
+      const cleaned = await ds.getQuizAttemptById(attempt.id);
+      expect(cleaned).toBeNull();
     });
   });
 

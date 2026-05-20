@@ -4,7 +4,15 @@
 承認済み（2026-05-16 改訂: セッション上限を環境変数化）
 
 ## 改訂履歴
-- **2026-05-21**: ケース E の救済を拡張。`forceExitSession` のリセット skip 条件に **「現在 lesson の video に対する永続 `video_analytics.isComplete=true`」** を追加（`services/api/src/services/lesson-session.ts` の `hasPersistentVideoCompletion`）。これにより、過去にレッスンを完了済みのユーザーが再受験時に動画を再視聴して時間切れ／一時停止超過に陥っても、既存学習データ（`video_analytics` / `video_events` / `quiz_attempts` / `user_progress`）は保護される。救済対象 reason は `time_limit` / `pause_timeout` のみで、`max_attempts_failed` は受験規律破りのため永続フラグに関わらず全リセット維持（ケース F semantics）。動画差し替え検知として `getVideoByLessonId(session.lessonId)` で取得した現在 video の id が `session.videoId` と一致する場合のみ永続完了を尊重（旧 video の `isComplete` で誤救済しない）。`getVideoAnalytics` / `getVideoByLessonId` の例外は保守的に false（リセット側）にフォールバック。**規律装置の本質（初回視聴完遂の担保）は不変**で、初回視聴中（永続 `isComplete=false`）の time_limit は引き続き全リセット。
+- **2026-05-21**: **動機**: PR #407 の 3h 延長後の Phase A 測定（`audit-session-force-exits.yml`）でケース E 発火は 0 件だが、再視聴中の完了経験者が `time_limit` / `pause_timeout` に該当する将来エッジケースを根本対応する。2026-05-20 で却下した「E のリセット廃止」とは異なり、本変更は初回視聴中の E は全リセット維持し、**再視聴中の永続完了経験者のみ救済する部分的拡張（新ケース E' を追加）**である。
+
+  **変更内容**: `forceExitSession` のリセット skip 条件に **「現在 lesson の video に対する永続 `video_analytics.isComplete=true`」** を追加（`hasPersistentVideoCompletion` ヘルパー、`services/api/src/services/lesson-session.ts`）。これにより、過去にレッスンを完了済みのユーザーが再受験時に動画を再視聴して時間切れ／一時停止超過に陥っても、既存学習データ（`video_analytics` / `video_events` / `quiz_attempts` / `user_progress`）は保護される。救済対象 reason は `time_limit` / `pause_timeout` のみで、`max_attempts_failed` は受験規律破りのため永続フラグに関わらず全リセット維持（ケース F semantics）。
+
+  **動画差し替え検知**: `getVideoByLessonId(session.lessonId)` で取得した現在 video の id が `session.videoId` と一致する場合のみ永続完了を尊重（旧 video の `isComplete` で誤救済しない）。video 削除 / 差し替え時は `logger.warn` / `logger.info` で観測可能化（`eventType=persistent_completion_skip_video_*`）。
+
+  **例外フォールバック方針（safe-by-default）**: `getVideoAnalytics` / `getVideoByLessonId` の例外時は **true（skip reset 側）にフォールバック**。理由: 本変更の目的は完了済みデータの保護。fetch 失敗時に false → 全リセットに倒すと PR 趣旨と矛盾（transient Firestore エラーで永続データ破壊）。副作用として初回視聴中ユーザーの false positive 救済が起こり得るが、`cleanupInProgressAttempts` は走るため in_progress attempt は終端化され、次回新セッションで動画完了させれば規律装置の元の挙動に戻る。発火頻度は Cloud Logging の `errorType=persistent_completion_check_failed` で監視（alerting 設定は follow-up）。
+
+  **規律装置の本質（初回視聴完遂の担保）は不変**で、初回視聴中（永続 `isComplete=false`）の time_limit は引き続き全リセット。
 
   ### ケース定義表（2026-05-21 改訂）
 
@@ -20,16 +28,18 @@
 
 - **2026-05-20**: 現場声「テスト不合格時にいつでも再受験できる方が望ましいのではないか」を起点に再設計を検討。実コード検証で **`maxAttempts=0`（本番テナント `8vexhzpc` の全 quiz 設定。Codex review PR #407 body 参照）配下では既にケース A〜D で何度でも再受験可能** と判明。再受験不可はケース E と F のみ。E/F のリセット廃止 / 動画ゲート（ADR-019）撤廃 / 「いつでも再受験」設計変更は **規律装置（強制退室時の全リセット）を破壊する本末転倒** と判断し、いずれも不採用。3h 延長（PR #407）は対症療法として暫定維持、**恒久対応は業務側のコンテンツ設計**（レッスン単位で「動画長 + テスト所要時間 < `SESSION_DURATION_MS`」を満たす分割）で対応する。効果測定として `scripts/audit-session-force-exits.ts` + `.github/workflows/audit-session-force-exits.yml`（read-only）を追加し、ケース E の発生数を継続観察する。
 
-  ### ケース A〜F 定義（2026-05-20 時点）
+  ### ケース A〜F 定義（2026-05-20 時点、historical reference）
 
-  | ID | 条件（reason, sessionVideoCompleted, maxAttempts） | 挙動 | 再受験可否 | コード参照 |
+  > **NOTE**: 本表は 2026-05-20 時点の semantics（記録目的）。**現時点の authoritative なケース定義は 2026-05-21 entry の表を参照**。本表の case E は無条件全リセットとして記載されているが、2026-05-21 改訂で `isComplete=false` 限定に変更され、新ケース E'（再視聴中の完了経験者救済）が追加されている。コード参照の行番号は edit で rot しているため、現在のコード位置は symbol 参照（`forceExitSession` / `hasPersistentVideoCompletion`）から探すこと。
+
+  | ID | 条件（reason, sessionVideoCompleted, maxAttempts） | 挙動 | 再受験可否 | コード参照（rot 済、symbol 参照を推奨） |
   |---|---|---|---|---|
-  | A | 不合格 + セッション内（time_limit 未到達）+ maxAttempts 未到達 | セッション継続 | ✅ 即時再受験 | `services/api/src/routes/shared/quiz-attempts.ts:374-397`（合格/上限到達 どちらでもない fall-through） |
-  | B | `reason=time_limit` + `sessionVideoCompleted=true` | `forceExitSession` でリセット skip、in_progress attempt のみ `timed_out` 化 | ✅ 新セッションでテスト再受験 | `services/api/src/services/lesson-session.ts:230-232`（PR #134 + Issue #422） |
-  | C | `reason=browser_close`（abandoned） | リセットせず、in_progress attempt のみ `timed_out` 化 | ✅ 新セッションで再受験 | `services/api/src/services/lesson-session.ts:247-273`（Issue #422） |
-  | D | セッション未作成（後方互換） | `activeSession=null` でセッション制約スキップ | ✅ 受講期間内なら受験可 | `services/api/src/routes/shared/quiz-attempts.ts:292-308`（コメント明示） |
-  | E | `reason=time_limit` + `sessionVideoCompleted=false` | `resetLessonDataForUser` で全リセット（video_analytics / video_events / quiz_attempts / user_progress） | ❌ 動画から見直し | `services/api/src/services/lesson-session.ts:233-237` |
-  | F | `reason=max_attempts_failed`（`maxAttempts > 0 && attemptNumber >= maxAttempts`） | 同上、全リセット | ❌ 動画から見直し（本番 maxAttempts=0 では発火しない） | `services/api/src/routes/shared/quiz-attempts.ts:390-397` |
+  | A | 不合格 + セッション内（time_limit 未到達）+ maxAttempts 未到達 | セッション継続 | ✅ 即時再受験 | `quiz-attempts.ts` の合格/上限到達 fall-through |
+  | B | `reason=time_limit` + `sessionVideoCompleted=true` | `forceExitSession` でリセット skip、in_progress attempt のみ `timed_out` 化 | ✅ 新セッションでテスト再受験 | `lesson-session.ts#forceExitSession`（PR #134 + Issue #422） |
+  | C | `reason=browser_close`（abandoned） | リセットせず、in_progress attempt のみ `timed_out` 化 | ✅ 新セッションで再受験 | `lesson-session.ts#abandonSession`（Issue #422） |
+  | D | セッション未作成（後方互換） | `activeSession=null` でセッション制約スキップ | ✅ 受講期間内なら受験可 | `quiz-attempts.ts` PATCH ハンドラ（コメント明示） |
+  | E | `reason=time_limit` + `sessionVideoCompleted=false` | `resetLessonDataForUser` で全リセット（**2026-05-21 改訂で永続 `isComplete=false` 限定に変更**） | ❌ 動画から見直し | `lesson-session.ts#forceExitSession` reset 分岐 |
+  | F | `reason=max_attempts_failed`（`maxAttempts > 0 && attemptNumber >= maxAttempts`） | 同上、全リセット | ❌ 動画から見直し（本番 maxAttempts=0 では発火しない） | `quiz-attempts.ts` の max_attempts_failed 分岐 |
 
   ### 規律装置の根拠
 
