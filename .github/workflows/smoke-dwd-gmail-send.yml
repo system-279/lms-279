@@ -1,0 +1,102 @@
+name: Smoke DWD Gmail Send
+
+# Phase 0-A-4 (OQ-2) Group エイリアス DWD smoke check workflow。
+#
+# 目的:
+#   dxcollege@279279.net (Google Group エイリアス) が DWD subject として
+#   gmail.users.messages.send で使えるかを実機検証する。
+#
+# 動作モード:
+#   - dry-run (既定): DWD 認証 + JWT + MIME 組立まで実行、Gmail API は呼ばない
+#   - send: 実送信、宛先に Gmail を届ける (destructive、要明示認可)
+#
+# 安全機構:
+#   - dry-run 既定 (mode=send で実送信)
+#   - to_email 必須 (誤入力防止、smoke 用の test 宛先を明示指定)
+#   - 本文/件名は固定の smoke 文言 (PII を含まない)
+#   - 添付なし
+#   - workflow_dispatch 入力はすべて env 経由で渡し run: 内で直接補間しない
+#     (https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/)
+#
+# 関連:
+#   - 設計仕様書: docs/specs/2026-05-20-completion-notification-design.md OQ-2
+#   - 実装計画: docs/specs/2026-05-20-completion-notification-impl-plan.md Phase 0-A-4
+#   - スクリプト: scripts/smoke-dwd-gmail-send.ts
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '動作モード (dry-run=Gmail API 呼ばず / send=実送信)'
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - send
+        default: dry-run
+      to_email:
+        description: '送信先 email (必須)。dry-run でも検証用に必要'
+        required: true
+        type: string
+      sender:
+        description: '送信元 email (なりすまし subject、既定 dxcollege@279279.net)'
+        required: false
+        default: 'dxcollege@279279.net'
+        type: string
+      subject:
+        description: 'メール件名 (既定 [smoke] DXcollege 自動完了通知 DWD smoke check)'
+        required: false
+        default: '[smoke] DXcollege 自動完了通知 DWD smoke check'
+        type: string
+
+jobs:
+  smoke:
+    name: Smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FIREBASE_PROJECT_ID: lms-279
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
+
+      - name: Run smoke script
+        env:
+          GOOGLE_CLOUD_PROJECT: lms-279
+          MODE: ${{ inputs.mode }}
+          TO_EMAIL: ${{ inputs.to_email }}
+          SENDER: ${{ inputs.sender }}
+          SUBJECT: ${{ inputs.subject }}
+        run: |
+          set -euo pipefail
+          FLAGS=("--to=$TO_EMAIL")
+          if [ -n "$SENDER" ]; then FLAGS+=("--sender=$SENDER"); fi
+          if [ -n "$SUBJECT" ]; then FLAGS+=("--subject=$SUBJECT"); fi
+          if [ "$MODE" = "send" ]; then
+            FLAGS+=("--send")
+            echo "::warning::Running in SEND mode — an email WILL be delivered to $TO_EMAIL"
+          else
+            FLAGS+=("--dry-run")
+          fi
+          echo "Mode: $MODE"
+          echo "Sender: $SENDER"
+          echo "Recipient: $TO_EMAIL"
+          echo "---"
+          npx tsx scripts/smoke-dwd-gmail-send.ts "${FLAGS[@]}"
