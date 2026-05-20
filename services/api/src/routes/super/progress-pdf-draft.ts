@@ -50,7 +50,12 @@ import {
   verifyAccessTokenOwner,
   type MimeAttachment,
 } from "../../services/gmail-draft.js";
-import { hashEmail, recordPdfDraftLog } from "../../services/pdf-draft-audit.js";
+import {
+  acquirePendingPdfDraftLog,
+  finalizePdfDraftLog,
+  hashEmail,
+  recordPdfDraftLog,
+} from "../../services/pdf-draft-audit.js";
 import { logger } from "../../utils/logger.js";
 import { classifyFirestoreError, TRANSIENT_RETRY_MESSAGE_JA } from "../../utils/grpc-errors.js";
 
@@ -203,60 +208,19 @@ router.post(
     // Evaluator HIGH-2/MEDIUM 対応: db は 1 回だけ取得して使い回す
     const db = getFirestore();
 
-    // Evaluator MEDIUM-2 対応: idempotency 重複ガード
-    // 同一 requestId で既に success ログがあれば、Gmail draft 再作成せず既存結果を返す。
-    // 確認失敗時は新規作成にフォールバック (idempotency check のためにメイン処理を止めない)。
+    // Issue #435 + Codex review High 1/2/3: 旧の手動 idempotency check
+    // (`docRef.get()` → status 判定 → 認可境界チェック) は撤去。すべての判定を
+    // `acquirePendingPdfDraftLog` の Firestore transaction 内に集約することで、
+    //   - 別 actor / 別 user の success ログを横取りする race 経路 (Codex High 1)
+    //   - `recordPdfDraftLog().set()` との書き込みモデル混在 (Codex High 90)
+    //   - failed 既存 doc の上書き再試行不可 (Codex High 95)
+    // を解消する。
     //
-    // Codex review (Issue #436): 認可境界として `requestId` 単独では不足。
-    // 別 super admin / 別 userId の既存 success ログを拾える余地があるため、
-    // `createdByUid` + `userId` 一致 (旧スキーマで `createdByUid` 不在なら許容) を追加で確認する。
-    try {
-      const existingLog = await db
-        .collection("tenants")
-        .doc(tenantId)
-        .collection("pdf_draft_logs")
-        .doc(parsed.requestId)
-        .get();
-      if (existingLog.exists) {
-        const data = existingLog.data();
-        if (data && data.status === "success" && typeof data.draftId === "string") {
-          // 認可境界: 別 actor / 別 受講者 の既存 draft を横取りできないよう照合
-          // (旧スキーマで `createdByUid` 不在ならスキップして後方互換維持)
-          const ownerMatches =
-            typeof data.createdByUid !== "string" || data.createdByUid === createdByUid;
-          const userMatches = typeof data.userId !== "string" || data.userId === userId;
-          if (ownerMatches && userMatches) {
-            const existingDraftId = data.draftId;
-            const response: ProgressPdfDraftResponse = {
-              draftId: existingDraftId,
-              draftUrl: buildGmailDraftUrl(existingDraftId),
-            };
-            res.status(200).json(response);
-            return;
-          }
-          // 不一致 → 別 actor が同じ requestId で先取った可能性、再利用拒否
-          logger.warn("Idempotency log exists but actor/userId mismatch — rejecting reuse", {
-            tenantId,
-            requestId: parsed.requestId,
-            // PII を残さないため hash で記録
-            currentActorHash: hashEmail(createdByUid),
-            currentUserId: userId,
-          });
-          res.status(409).json({
-            error: "invalid_request_id",
-            message: "requestId is already used by a different actor or user",
-          });
-          return;
-        }
-        // status=failed の場合は再試行を許容するためフォールスルー
-      }
-    } catch (err) {
-      logger.warn("Failed to check idempotency for pdf_draft_logs (continuing with new draft)", {
-        tenantId,
-        requestId: parsed.requestId,
-        errorMessage: err instanceof Error ? err.message : String(err),
-      });
-    }
+    // acquire は token verify 成功後 (PDF 生成も完了後) に呼び出す。pending を取得した時点で
+    // Gmail draft 作成へ進み、その成功/失敗を finalize で記録する。
+    //
+    // AC-3 (idempotency check 失敗 → 503): acquire transaction 内で throw された場合に対応する
+    // catch ブロックで 503 を返す (route 下方の acquire try/catch を参照)。
 
     // Issue #436: access token の発行元 Google アカウント email を取得し、
     // Firebase Auth (superAdmin.email) と一致するか検証する。
@@ -560,6 +524,97 @@ router.post(
       return;
     }
 
+    // Issue #435 (AC-1 / AC-5): Gmail draft 作成の直前に pending ログを **アトミックに** 先取りする。
+    // `acquirePendingPdfDraftLog` は Firestore transaction で以下を行う:
+    //   - doc 不存在 → tx.create(pending) で先取り → acquired=true
+    //   - 既存 status=pending → in_flight (並行 2 件目)
+    //   - 既存 status=success → already_success (PR #449 で弾かれているはずだが防御層)
+    //   - 既存 status=failed → tx.set(pending) で上書きして再試行を許容 → acquired=true
+    // この時点で tokenOwnerEmail は確定済 (Issue #436 検証成功)、validatedToEmail も確定済。
+    //
+    // AC-3: Firestore 障害は throw → 503 で停止 (Gmail API 呼ばない)。
+    if (!tokenOwnerEmail) {
+      // 型ガード: ここまで来たら token owner 検証で必ず設定されているが、防御
+      logger.error("Internal invariant: tokenOwnerEmail is null after verifyAccessTokenOwner", {
+        tenantId,
+        requestId: parsed.requestId,
+      });
+      res.status(500).json({
+        error: "pdf_generation_failed",
+        message: "Internal state error",
+      });
+      return;
+    }
+
+    // Codex review High 1/3: acquire transaction で
+    //   - success 既存の認可境界 (createdByUid + userId) チェック
+    //   - failed 既存の上書き再試行 (旧 docRef.create() では不可だった)
+    // を一括処理する。
+    let pendingAcquired = false;
+    try {
+      const acquireResult = await acquirePendingPdfDraftLog(db, {
+        requestId: parsed.requestId,
+        tenantId,
+        createdByUid,
+        createdByEmail,
+        userId,
+        toEmail: validatedToEmail,
+        ownerEmail: validatedCcEmail,
+        tokenOwnerEmail,
+        sections: parsed.sections,
+      });
+      switch (acquireResult.kind) {
+        case "acquired":
+          pendingAcquired = true;
+          break;
+        case "in_flight":
+          // 並行リクエストが先に pending を取った → 409 in_flight
+          logger.warn("Concurrent pdf draft request — pending already in flight", {
+            tenantId,
+            requestId: parsed.requestId,
+          });
+          res.status(409).json({
+            error: "invalid_request_id",
+            message: "A draft for this requestId is already in flight",
+          });
+          return;
+        case "existing_success": {
+          // 既存 success doc + 認可境界一致 → 200 既存 draftId
+          const existingDraftId = acquireResult.draftId;
+          res.status(200).json({
+            draftId: existingDraftId,
+            draftUrl: buildGmailDraftUrl(existingDraftId),
+          });
+          return;
+        }
+        case "collision":
+          // 別 actor / 別 user の既存 success → 横取り拒否 (Codex High 1 対応、PR #449 と同等)
+          logger.warn("Idempotency collision: existing success doc belongs to different actor/user", {
+            tenantId,
+            requestId: parsed.requestId,
+            currentActorHash: hashEmail(createdByUid),
+            currentUserId: userId,
+          });
+          res.status(409).json({
+            error: "invalid_request_id",
+            message: "requestId is already used by a different actor or user",
+          });
+          return;
+      }
+    } catch (err) {
+      logger.error("Failed to acquire pending pdf_draft_logs — refusing to proceed", {
+        errorType: "pdf_draft_acquire_failed",
+        error: err instanceof Error ? err : new Error(String(err)),
+        tenantId,
+        requestId: parsed.requestId,
+      });
+      res.status(503).json({
+        error: "gmail_api_transient",
+        message: TRANSIENT_RETRY_MESSAGE_JA,
+      });
+      return;
+    }
+
     // Gmail API draft 作成 (db は handler 先頭で取得済み)
     try {
       const draftResult = await createGmailDraft({
@@ -572,24 +627,17 @@ router.post(
         attachment,
       });
 
-      // 成功監査ログ
-      await recordPdfDraftLog(db, {
+      // Issue #435 AC-5: pending → success に状態遷移を記録
+      await finalizePdfDraftLog(db, {
         requestId: parsed.requestId,
         tenantId,
-        createdByUid,
-        createdByEmail,
-        userId,
-        toEmail: validatedToEmail,
-        ownerEmail: validatedCcEmail,
-        tokenOwnerEmail,
         draftId: draftResult.draftId,
         status: "success",
         errorCode: null,
-        sections: parsed.sections,
         pdfSizeBytes: attachmentBytes,
       }).catch((err: unknown) => {
         // 監査ログ失敗はレスポンスをブロックしない。logger.error は service 側で出力済み
-        logger.warn("Audit log write failed but draft was created successfully", {
+        logger.warn("Audit finalize failed but draft was created successfully", {
           tenantId,
           requestId: parsed.requestId,
           draftId: draftResult.draftId,
@@ -607,33 +655,27 @@ router.post(
       const errorCode: ProgressPdfDraftErrorCode = gmailErr?.errorCode ?? "gmail_api_error";
       const httpStatus = gmailErr?.httpStatus ?? 502;
 
-      // 失敗監査ログ
-      await recordPdfDraftLog(db, {
-        requestId: parsed.requestId,
-        tenantId,
-        createdByUid,
-        createdByEmail,
-        userId,
-        toEmail: validatedToEmail,
-        ownerEmail: validatedCcEmail,
-        tokenOwnerEmail,
-        draftId: null,
-        status: "failed",
-        errorCode,
-        sections: parsed.sections,
-        pdfSizeBytes: attachmentBytes,
-      }).catch((auditErr: unknown) => {
-        // 監査ログ失敗はレスポンスをブロックしないが、サイレント化せず警告ログを残す
-        // (Gmail API 失敗 + 監査ログ失敗の二重失敗を可視化)
-        logger.warn("Failed to record failed pdf_draft_logs entry (Gmail also failed)", {
-          errorType: "pdf_draft_audit_write_failed_after_gmail_fail",
-          tenantId,
+      // Issue #435 AC-5: pending → failed に状態遷移を記録 (acquire 済みの場合のみ)
+      // acquire 失敗時は既に上で 503 で return しているので、ここに来るのは acquire 成功後
+      if (pendingAcquired) {
+        await finalizePdfDraftLog(db, {
           requestId: parsed.requestId,
-          primaryErrorCode: errorCode,
-          primaryHttpStatus: httpStatus,
-          errorMessage: auditErr instanceof Error ? auditErr.message : String(auditErr),
+          tenantId,
+          draftId: null,
+          status: "failed",
+          errorCode,
+          pdfSizeBytes: attachmentBytes,
+        }).catch((auditErr: unknown) => {
+          logger.warn("Failed to finalize pdf_draft_logs entry after Gmail failure", {
+            errorType: "pdf_draft_audit_finalize_failed_after_gmail_fail",
+            tenantId,
+            requestId: parsed.requestId,
+            primaryErrorCode: errorCode,
+            primaryHttpStatus: httpStatus,
+            errorMessage: auditErr instanceof Error ? auditErr.message : String(auditErr),
+          });
         });
-      });
+      }
 
       // SECURITY (I2 / ADR-034): GmailDraftError は raw GaxiosError 参照を持たない
       // 設計 (gmail-draft.ts §GmailDraftError) のため、ここでは分類済みの

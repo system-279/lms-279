@@ -11,7 +11,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { hashEmail, recordPdfDraftLog, __internal } from "../pdf-draft-audit.js";
+import {
+  acquirePendingPdfDraftLog,
+  finalizePdfDraftLog,
+  hashEmail,
+  recordPdfDraftLog,
+  __internal,
+} from "../pdf-draft-audit.js";
 
 const ALL_SECTIONS = {
   profile: true,
@@ -300,6 +306,245 @@ describe("recordPdfDraftLog", () => {
         status: "success",
         errorCode: null,
         sections: ALL_SECTIONS,
+        pdfSizeBytes: 1024,
+      }),
+    ).rejects.toThrow("firestore unavailable");
+  });
+});
+
+// Issue #435 + Codex review High 1/3: transaction ベースの pending 取得と認可境界判定の単体テスト
+describe("acquirePendingPdfDraftLog (Issue #435, transaction)", () => {
+  // transaction 内の tx.get / tx.create / tx.set を mock
+  let txGetMock: ReturnType<typeof vi.fn>;
+  let txCreateMock: ReturnType<typeof vi.fn>;
+  let txSetMock: ReturnType<typeof vi.fn>;
+  let runTransactionMock: ReturnType<typeof vi.fn>;
+  let docMock: ReturnType<typeof vi.fn>;
+  let collectionMock: ReturnType<typeof vi.fn>;
+  let dbMock: { collection: typeof collectionMock; runTransaction: typeof runTransactionMock };
+
+  beforeEach(() => {
+    txGetMock = vi.fn();
+    txCreateMock = vi.fn();
+    txSetMock = vi.fn();
+    docMock = vi.fn(() => ({ collection: collectionMock }));
+    collectionMock = vi.fn(() => ({ doc: docMock }));
+    // runTransaction は callback を実行する。tx 内 API を mock 経由で呼び出す
+    runTransactionMock = vi.fn(async (cb) => {
+      const tx = { get: txGetMock, create: txCreateMock, set: txSetMock };
+      return await cb(tx);
+    });
+    dbMock = { collection: collectionMock, runTransaction: runTransactionMock };
+  });
+
+  const baseInput = {
+    requestId: "req-acquire",
+    tenantId: "tenant-1",
+    createdByUid: "uid-super",
+    createdByEmail: "super@example.com",
+    userId: "user-1",
+    toEmail: "student@example.com",
+    ownerEmail: "owner@example.com",
+    tokenOwnerEmail: "super@example.com",
+    sections: ALL_SECTIONS,
+  };
+
+  it("AC-1: doc 不存在 → tx.create(pending) で書き込み kind=acquired", async () => {
+    txGetMock.mockResolvedValueOnce({ exists: false, data: () => undefined });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await acquirePendingPdfDraftLog(dbMock as any, baseInput);
+
+    expect(result).toEqual({ kind: "acquired" });
+    expect(txCreateMock).toHaveBeenCalledTimes(1);
+    expect(txSetMock).not.toHaveBeenCalled();
+    const createArg = txCreateMock.mock.calls[0][1];
+    expect(createArg.status).toBe("pending");
+    expect(createArg.draftId).toBe(null);
+    expect(createArg.createdByUid).toBe("uid-super");
+    expect(createArg.recipientToHash).toBe(hashEmail("student@example.com"));
+    expect(createArg.tokenOwnerHash).toBe(hashEmail("super@example.com"));
+    // PII 最小化 (raw email は保存されない)
+    expect(JSON.stringify(createArg)).not.toContain("super@example.com");
+    expect(JSON.stringify(createArg)).not.toContain("student@example.com");
+  });
+
+  it("AC-1: 既存 status=pending → 書き込みせず kind=in_flight (並行 2 件目をブロック)", async () => {
+    txGetMock.mockResolvedValueOnce({
+      exists: true,
+      data: () => ({ status: "pending", draftId: null }),
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await acquirePendingPdfDraftLog(dbMock as any, baseInput);
+
+    expect(result.kind).toBe("in_flight");
+    expect(txCreateMock).not.toHaveBeenCalled();
+    expect(txSetMock).not.toHaveBeenCalled();
+  });
+
+  it("Codex High 1: 既存 status=success + 認可境界 一致 → kind=existing_success (200 既存 draftId)", async () => {
+    txGetMock.mockResolvedValueOnce({
+      exists: true,
+      data: () => ({
+        status: "success",
+        draftId: "draft-existing",
+        createdByUid: "uid-super", // 一致
+        userId: "user-1", // 一致
+      }),
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await acquirePendingPdfDraftLog(dbMock as any, baseInput);
+
+    expect(result).toEqual({ kind: "existing_success", draftId: "draft-existing" });
+    expect(txCreateMock).not.toHaveBeenCalled();
+    expect(txSetMock).not.toHaveBeenCalled();
+  });
+
+  it("Codex High 1: 既存 status=success + createdByUid 不一致 → kind=collision (別 actor の draft 横取り防止)", async () => {
+    txGetMock.mockResolvedValueOnce({
+      exists: true,
+      data: () => ({
+        status: "success",
+        draftId: "victim-draft",
+        createdByUid: "uid-other-admin",
+        userId: "user-1",
+      }),
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await acquirePendingPdfDraftLog(dbMock as any, baseInput);
+
+    expect(result.kind).toBe("collision");
+    expect(txCreateMock).not.toHaveBeenCalled();
+    expect(txSetMock).not.toHaveBeenCalled();
+  });
+
+  it("Codex High 1: 既存 status=success + userId 不一致 → kind=collision", async () => {
+    txGetMock.mockResolvedValueOnce({
+      exists: true,
+      data: () => ({
+        status: "success",
+        draftId: "victim-draft",
+        createdByUid: "uid-super",
+        userId: "user-other", // 不一致
+      }),
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await acquirePendingPdfDraftLog(dbMock as any, baseInput);
+
+    expect(result.kind).toBe("collision");
+  });
+
+  it("AC-4 (Codex High 1): 旧スキーマ (createdByUid 不在) は後方互換で kind=existing_success", async () => {
+    txGetMock.mockResolvedValueOnce({
+      exists: true,
+      data: () => ({
+        status: "success",
+        draftId: "legacy-draft",
+        // createdByUid / userId フィールド不在 = 旧スキーマ
+      }),
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await acquirePendingPdfDraftLog(dbMock as any, baseInput);
+
+    expect(result).toEqual({ kind: "existing_success", draftId: "legacy-draft" });
+  });
+
+  it("Codex High 95: 既存 status=failed → tx.set(pending) で上書き再試行 → kind=acquired", async () => {
+    txGetMock.mockResolvedValueOnce({
+      exists: true,
+      data: () => ({ status: "failed", errorCode: "gmail_quota_exceeded" }),
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await acquirePendingPdfDraftLog(dbMock as any, baseInput);
+
+    expect(result).toEqual({ kind: "acquired" });
+    // failed doc を pending に上書き
+    expect(txSetMock).toHaveBeenCalledTimes(1);
+    expect(txCreateMock).not.toHaveBeenCalled();
+    const setArg = txSetMock.mock.calls[0][1];
+    expect(setArg.status).toBe("pending");
+  });
+
+  it("AC-3: transaction が throw → 呼び出し側に throw (route 層で 503)", async () => {
+    runTransactionMock.mockRejectedValueOnce(new Error("DEADLINE_EXCEEDED"));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect(acquirePendingPdfDraftLog(dbMock as any, baseInput)).rejects.toThrow(
+      "DEADLINE_EXCEEDED",
+    );
+  });
+});
+
+describe("finalizePdfDraftLog (Issue #435)", () => {
+  let setMock: ReturnType<typeof vi.fn>;
+  let docMock: ReturnType<typeof vi.fn>;
+  let collectionMock: ReturnType<typeof vi.fn>;
+  let dbMock: { collection: typeof collectionMock };
+
+  beforeEach(() => {
+    setMock = vi.fn().mockResolvedValue(undefined);
+    docMock = vi.fn(() => ({ set: setMock, collection: collectionMock }));
+    collectionMock = vi.fn(() => ({ doc: docMock }));
+    dbMock = { collection: collectionMock };
+  });
+
+  it("AC-5: pending → success に draftId/status/errorCode/pdfSizeBytes/finalizedAt をマージ更新する", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await finalizePdfDraftLog(dbMock as any, {
+      requestId: "req-final",
+      tenantId: "tenant-1",
+      draftId: "draft-1",
+      status: "success",
+      errorCode: null,
+      pdfSizeBytes: 102400,
+    });
+
+    expect(setMock).toHaveBeenCalledTimes(1);
+    const [docArg, opts] = setMock.mock.calls[0];
+    expect(opts).toEqual({ merge: true });
+    expect(docArg.draftId).toBe("draft-1");
+    expect(docArg.status).toBe("success");
+    expect(docArg.errorCode).toBe(null);
+    expect(docArg.pdfSizeBytes).toBe(102400);
+    expect(typeof docArg.finalizedAt).toBe("string");
+    // pending 段階で書き込んだ他フィールド (createdByUid 等) を merge: true で保持
+    expect(docArg).not.toHaveProperty("createdByUid");
+  });
+
+  it("AC-5: pending → failed の場合は errorCode が記録される", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await finalizePdfDraftLog(dbMock as any, {
+      requestId: "req-fail-final",
+      tenantId: "tenant-1",
+      draftId: null,
+      status: "failed",
+      errorCode: "gmail_quota_exceeded",
+      pdfSizeBytes: 5120,
+    });
+
+    const docArg = setMock.mock.calls[0][0];
+    expect(docArg.status).toBe("failed");
+    expect(docArg.errorCode).toBe("gmail_quota_exceeded");
+    expect(docArg.draftId).toBe(null);
+  });
+
+  it("Firestore 書き込み失敗は throw する", async () => {
+    setMock.mockRejectedValueOnce(new Error("firestore unavailable"));
+
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      finalizePdfDraftLog(dbMock as any, {
+        requestId: "req-err",
+        tenantId: "tenant-1",
+        draftId: "draft-1",
+        status: "success",
+        errorCode: null,
         pdfSizeBytes: 1024,
       }),
     ).rejects.toThrow("firestore unavailable");
