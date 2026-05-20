@@ -8,11 +8,12 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Document, Font, Page, StyleSheet, Text, View } from "@react-pdf/renderer";
-import type {
-  Pace,
-  ProgressPdfCourseRecord,
-  ProgressPdfData,
-  ProgressPdfSections,
+import {
+  JST_OFFSET_MS,
+  type Pace,
+  type ProgressPdfCourseRecord,
+  type ProgressPdfData,
+  type ProgressPdfSections,
 } from "@lms-279/shared-types";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -84,7 +85,7 @@ function formatDate(iso: string | null): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   // JST 日付表示
-  const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  const jst = new Date(d.getTime() + JST_OFFSET_MS);
   const y = jst.getUTCFullYear();
   const m = String(jst.getUTCMonth() + 1).padStart(2, "0");
   const day = String(jst.getUTCDate()).padStart(2, "0");
@@ -95,7 +96,7 @@ function formatDateTime(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  const jst = new Date(d.getTime() + JST_OFFSET_MS);
   const y = jst.getUTCFullYear();
   const m = String(jst.getUTCMonth() + 1).padStart(2, "0");
   const day = String(jst.getUTCDate()).padStart(2, "0");

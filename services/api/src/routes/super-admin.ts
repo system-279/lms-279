@@ -13,7 +13,7 @@
 import { Router, Request, Response } from "express";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
-import type { SuperAttendanceResponse, SuperStudentProgressResponse, TenantEnrollmentSettingResponse } from "@lms-279/shared-types";
+import { JST_OFFSET_MS, type SuperAttendanceResponse, type SuperStudentProgressResponse, type TenantEnrollmentSettingResponse } from "@lms-279/shared-types";
 import {
   superAdminAuthMiddleware,
   getAllSuperAdmins,
@@ -979,8 +979,7 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
   let sessionsQuery = db.collection(`${basePath}/lesson_sessions`)
     .orderBy("entryAt", "desc") as FirebaseFirestore.Query;
 
-  // 日付フィルタ: JST基準（UTC+9）でUTC境界に変換
-  const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+  // 日付フィルタ: JST基準（UTC+9）でUTC境界に変換 (JST_OFFSET_MS は shared-types から import)
   const fromStr = typeof from === "string" ? from : undefined;
   const toStr = typeof to === "string" ? to : undefined;
   if (fromStr) {

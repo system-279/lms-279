@@ -27,10 +27,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useSuperAdminFetch } from "@/lib/super-api";
-import type {
-  SuperStudentProgressResponse,
-  SuperCourseRecord,
-  SuperLessonRecord,
+import {
+  JST_OFFSET_MS,
+  type SuperStudentProgressResponse,
+  type SuperCourseRecord,
+  type SuperLessonRecord,
 } from "@lms-279/shared-types";
 
 type Tenant = { id: string; name: string };
@@ -140,7 +141,7 @@ export default function StudentProgressPage() {
   const toJstDateAndTime = (iso: string | null): { date: string; time: string } => {
     if (!iso) return { date: "", time: "" };
     const d = new Date(iso);
-    const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+    const jst = new Date(d.getTime() + JST_OFFSET_MS);
     return {
       date: jst.toISOString().slice(0, 10),
       time: jst.toISOString().slice(11, 16),
