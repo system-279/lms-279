@@ -345,15 +345,24 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
   });
 
   // レースコンディション対策: 採点後、進捗書き込み前にセッション状態を再確認
-  // forceExitSessionが並行実行されていた場合、セッションはforce_exitedになり
-  // レッスンデータもリセット済み。この場合、進捗書き込みをスキップする。
+  //
+  // Issue #424 (Codex M2): `status !== "active"` を競合扱いに拡張。
+  // 旧実装は `force_exited` のみを見ており、abandonSession と PATCH 提出が並行した場合に
+  // `abandoned` セッションへの進捗更新が走ってしまうデータ整合性問題があった。
+  // 後方互換: `force_exited` は既存 error code を維持、それ以外 (`abandoned` / `completed` 等) は
+  // 新 error code `session_no_longer_active` で区別 (FE 側で動線分岐可能)。
   if (activeSession) {
     try {
       const currentSession = await ds.getLessonSession(activeSession.id);
-      if (!currentSession || currentSession.status === "force_exited") {
+      if (!currentSession || currentSession.status !== "active") {
+        const sessionStatus = currentSession?.status ?? "not_found";
+        const isForceExited = sessionStatus === "force_exited";
         res.status(409).json({
-          error: "session_force_exited",
-          message: "セッションが強制終了されたため、進捗には反映されません。再受講が必要です。",
+          error: isForceExited ? "session_force_exited" : "session_no_longer_active",
+          message: isForceExited
+            ? "セッションが強制終了されたため、進捗には反映されません。再受講が必要です。"
+            : "セッションが終了しているため、進捗には反映されません。再受講が必要です。",
+          sessionStatus,
           attempt: {
             id: updated!.id,
             status: updated!.status,
