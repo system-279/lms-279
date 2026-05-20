@@ -10,3 +10,4 @@ export type * from "./quiz.js";
 export type * from "./tenant.js";
 export type * from "./progress-pdf.js";
 export * from "./filename.js";
+export * from "./dispatch.js";
