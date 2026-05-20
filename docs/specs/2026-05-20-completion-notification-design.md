@@ -3,7 +3,8 @@
 | 項目 | 値 |
 |---|---|
 | 起票日 | 2026-05-20 |
-| 改訂日 | 2026-05-20 (Codex セカンドオピニオン反映) |
+| 改訂日 | 2026-05-21 (ADR-037 OQ-2 RESOLVED 反映、SendAs 案 X 採用) / 2026-05-20 (Codex セカンドオピニオン反映) |
+| 関連 ADR (追加) | ADR-037 (送信元 impersonation: SendAs) |
 | 起票者 | 本田様 (要件) / system-279 (設計) |
 | 関連 ADR | ADR-026 (DWD) / ADR-029 (JST) / ADR-034 (Phase 2 Gmail 下書き) |
 | 関連 PR | #434 (Phase 2 Gmail 下書き、Manual flow、本機能と独立) |
@@ -20,7 +21,8 @@
 
 現場 (本田様) より以下 4 つの追加要件:
 
-1. 送信元を `dxcollege@279279.net` (Google Group エイリアス) に固定
+1. 送信元 `From:` ヘッダを `dxcollege@279279.net` (Google Group エイリアス) に固定
+   - 当初は DWD `subject=dxcollege@279279.net` で impersonation する設計だったが、OQ-2 smoke (2026-05-21) で Group エイリアスへの DWD impersonation 不可と確定。**ADR-037 採用案 X (SendAs) に移行**: DWD subject = 実ユーザー mailbox (`system@279279.net`)、Gmail SendAs で From を `dxcollege@279279.net` に偽装する
 2. 指定曜日・時刻で**自動送信**
 3. テナントごとの担当者 CC を**複数件**指定可能に
 4. **全コース 100% 完了** した受講者のみ、**1 度だけ** 完了通知メールを自動送信
@@ -50,7 +52,7 @@
 | FR-2 | API は `super_dispatch_settings/global` の `enabled` / `scheduleDaysOfWeek` / `scheduleHourJst` と JST 現在時刻を照合し、一致時のみ配信処理を実行 |
 | FR-3 | 全テナントを直列、テナント内 user を並列度 8 で走査 |
 | **FR-4 (改訂)** | **published コース全件**を母集合とし、各 courseId に対して `course_progress.isCompleted=true` かつ `totalLessons` が現行 `lessonOrder.length` と一致することを 100% 完了条件とする。`course_progress` doc が存在しない course は未着手扱い (Codex Critical-2) |
-| FR-5 | DWD なりすまし送信 (`subject=dxcollege@279279.net`, 専用 scope `gmail.send`) で `gmail.users.messages.send` |
+| **FR-5 (改訂)** | DWD なりすまし送信 (`subject=DXCOLLEGE_DISPATCH_SUBJECT` env、Gmail mailbox を持つ実ユーザー、初期値 `system@279279.net`)、専用 scope `gmail.send`、From ヘッダは `DXCOLLEGE_SENDER_EMAIL` (`dxcollege@279279.net`) を SendAs 経由で偽装する (ADR-037 案 X) |
 | FR-6 | `To` = 受講者本人、`Cc` = `ownerEmail` + `tenants/{tenantId}.notificationCcEmails` (各 email を個別 validate、重複排除) |
 | **FR-7 (改訂)** | **送信前に Firestore transaction で `completion_notifications/{userId}` を `reserved` 状態で create**。取得できた worker のみ Gmail 送信。送信成功後に `sent` に更新 (Codex Critical-1+3) |
 | FR-8 | スーパー管理者が `/super/dispatch-settings` で設定編集、配信履歴閲覧、ドライラン、テスト送信を実行可能 |
@@ -111,7 +113,8 @@
 │  ⑫ super_dispatch_audit_logs 書込 (PII sanitize 済) │
 │  ⑬ super_dispatch_runs を completed に更新          │
 └─────────────────────────────────────────────────────┘
-                    │ DWD JWT (subject=dxcollege@279279.net、scope=gmail.send のみ)
+                    │ DWD JWT (subject=DXCOLLEGE_DISPATCH_SUBJECT 実 mailbox、scope=gmail.send)
+                    │ MIME From=DXCOLLEGE_SENDER_EMAIL (SendAs 経由)
                     ▼
 ┌─────────────────────────────────────────────────────┐
 │        Gmail API                                    │
@@ -360,7 +363,7 @@ web/app/super/dispatch-settings/
 | ファイル | 変更内容 |
 |---|---|
 | `services/api/src/services/google-auth.ts` | **変更なし** (共通 `SCOPES` を汚染しない) |
-| `services/api/src/services/gmail-client.ts` (新規) | `getGmailClientForSender(senderEmail)`: 専用 JWT、scope=`gmail.send` のみ、cache key=`(subject, scope)` |
+| `services/api/src/services/gmail-client.ts` (新規) | `getGmailClientForSender(subjectEmail, fromEmail)`: 専用 JWT (`subject=subjectEmail` 実 mailbox)、scope=`gmail.send` のみ、cache key=`(subject, scope)`。`fromEmail` は MIME From ヘッダ用、SendAs 検証は呼び出し側で実施 (ADR-037 案 X) |
 | `packages/shared-types/src/index.ts` | dispatch types のエクスポート追加 |
 | (firestore.rules) | (現状未確認、必要に応じて新規 collection の rules 追加) |
 
@@ -647,7 +650,7 @@ UI からの直接削除ボタンは提供しない (誤操作リスク回避、
 
 - **AC-1**: published コース全件母集合に対して、`course_progress.isCompleted=true` かつ `totalLessons === lessonOrder.length` の全件達成かつ未通知の受講者のみが Gmail に送信される (Critical-2 反映)
 - **AC-2**: 既通知 (Reserved / Sent / FailedPermanent / ManualReviewRequired) の受講者には二度と Gmail 送信されない (idempotency)
-- **AC-3**: 送信元 `From:` ヘッダが `dxcollege@279279.net`
+- **AC-3**: 送信元 `From:` ヘッダが `DXCOLLEGE_SENDER_EMAIL` (初期値 `dxcollege@279279.net`) に一致。DWD subject は `DXCOLLEGE_DISPATCH_SUBJECT` (初期値 `system@279279.net`) を実 mailbox として用い、SendAs 経由で From を偽装する (ADR-037)
 - **AC-4**: `To:` = 受講者本人、`Cc:` = `ownerEmail` + 個別 validate 済 `notificationCcEmails` 配列 (重複排除)
 - **AC-5**: 完了通知本文に `completionMessageBody` 設定値 + `signatureName` 設定値が含まれる
 - **AC-6**: スケジュール曜日・時刻が現在 JST と一致しない時は何もしない
@@ -696,27 +699,45 @@ UI からの直接削除ボタンは提供しない (誤操作リスク回避、
 
 | 作業 | 担当 | 内容 |
 |---|---|---|
-| **DWD scope 拡張** | **本田様** | Google Workspace 管理コンソールで `dwd-workspace-key` SA の DWD 認可に `https://www.googleapis.com/auth/gmail.send` を追加 |
-| **Gmail Group エイリアス送信の smoke check (新規)** | エンジニア | `dxcollege@279279.net` が Google Group の場合、DWD subject として使えるか実機検証。使えない場合は SendAs 設定 or 実ユーザー化 (Codex Important-2) |
+| **DWD scope 拡張** | **本田様** | ✅ 完了 (2026-05-20)。Google Workspace 管理コンソールで `dwd-workspace-key` SA の DWD 認可に `https://www.googleapis.com/auth/gmail.send` を追加 |
+| **Gmail Group エイリアス smoke check** | エンジニア | ✅ 完了 (2026-05-21)。`dxcollege@279279.net` Group エイリアスへの DWD impersonation は不可と確定。**ADR-037 案 X (SendAs) を採用**して OQ-2 解決 |
+| **SendAs 設定 (新規、本田様作業)** | **本田様** | `system@279279.net` の Gmail 設定 → アカウント → 「他のメールアドレスを追加」→ `dxcollege@279279.net` を SendAs 登録 (ADR-037 §実装方針 4) |
+| **SendAs 実機 send smoke (新規)** | エンジニア | SendAs 設定完了後、`mode=send` で smoke を実行し From ヘッダが `dxcollege@279279.net` で配送されるか実機確認 |
 | Gmail API 有効化 | エンジニア | `gcloud services enable gmail.googleapis.com` |
 | Cloud Scheduler API 有効化 | エンジニア | `gcloud services enable cloudscheduler.googleapis.com` |
 | Cloud Scheduler SA 作成 | エンジニア | `dxcollege-scheduler@lms-279.iam.gserviceaccount.com` を作成、Cloud Run invoker 権限付与 |
-| Cloud Run env 設定 | エンジニア | `DXCOLLEGE_SENDER_EMAIL=dxcollege@279279.net` を Cloud Run env に追加 |
+| **Cloud Run env 設定 (改訂)** | エンジニア | `DXCOLLEGE_SENDER_EMAIL=dxcollege@279279.net` (MIME From) + **`DXCOLLEGE_DISPATCH_SUBJECT=system@279279.net` (DWD subject、ADR-037)** を追加 |
 | Cloud Scheduler job 作成 | エンジニア | cron `0 * * * *` + `time-zone Asia/Tokyo` + OIDC token + audience 設定 |
 | Firestore TTL Policy 設定 | エンジニア | `super_dispatch_audit_logs.ttlExpireAt` + `super_dispatch_runs.ttlExpireAt` フィールドに TTL Policy |
 | Firestore index | エンジニア | `super_dispatch_audit_logs` のフィルタ用 composite index、`super_dispatch_runs.status + leaseExpiresAt` の index |
 
 ### 8.2 Workspace 側準備 (本田様作業詳細)
 
-DWD scope 拡張手順:
+#### 8.2.1 DWD scope 拡張手順 ✅ 完了 (2026-05-20)
 
 1. Google Workspace 管理コンソール (admin.google.com) にログイン
 2. セキュリティ → アクセスとデータ管理 → API の制御 → ドメイン全体の委任を管理
-3. 既存の `dwd-workspace-key` SA のクライアント ID を選択
+3. 既存の `dwd-workspace-key` SA のクライアント ID (`118098709021350891398`) を選択
 4. スコープ追加: `https://www.googleapis.com/auth/gmail.send`
 5. 保存
 
-→ 反映に最大 24 時間かかる場合がある。実装前に作業完了 → smoke check (§8.1 の Group エイリアス検証) を通過してから実装着手。
+#### 8.2.2 SendAs 設定手順 (新規、ADR-037 案 X)
+
+`system@279279.net` の Gmail で `dxcollege@279279.net` を SendAs エイリアスとして登録する:
+
+1. https://mail.google.com に `system@279279.net` でログイン
+2. 設定 (歯車) → 「すべての設定を表示」→ 「アカウントとインポート」タブ
+3. 「他のメール アドレスを追加」をクリック
+4. 入力:
+   - 名前: `DXcollege運営スタッフ`
+   - メールアドレス: `dxcollege@279279.net`
+   - エイリアスとして扱う: チェック ON
+5. 「次のステップ」→ Workspace 内部送信なので SMTP 認証は不要、そのまま完了
+6. 確認: 「メール送信時のデフォルトの返信アドレス」を `dxcollege@279279.net` に設定 (任意、本機能では MIME From で直接指定するため必須ではない)
+
+#### 8.2.3 反映確認
+
+SendAs 設定は即時反映。設計仕様書 §8.1 の **「SendAs 実機 send smoke」** で `mode=send` smoke を実行し、受信側で From ヘッダが `dxcollege@279279.net` で表示されるか確認する。失敗時は ADR-037 §「再評価条件」に従い案 Y (実 User 化) への移行を検討。
 
 ---
 
@@ -741,14 +762,15 @@ DWD scope 拡張手順:
 | ID | 質問 | 解決手段 |
 |---|---|---|
 | **OQ-1** | Gmail API が `lms-279` プロジェクトで有効化済みか | `gcloud services list --enabled --project=lms-279 \| grep gmail` |
-| **OQ-2 (強化)** | **`dxcollege@279279.net` が Google Group の場合、DWD subject として `gmail.users.messages.send` が成功するか** (Codex Important-2) | **実装着手前に必ず実機 smoke**。失敗時は SendAs 設定 or 実ユーザー mailbox 化を本田様判断 |
-| **OQ-3** | DWD scope 追加 (gmail.send) の Workspace 管理コンソール作業は本田様が実施可能な権限を持つか | 本田様確認 |
+| **OQ-2** | ~~`dxcollege@279279.net` が Google Group の場合、DWD subject として `gmail.users.messages.send` が成功するか~~ | ✅ **RESOLVED (2026-05-21)**: smoke check 3 回 (run #26166362814 / #26186034548 / #26186218233) で Group エイリアスへの DWD impersonation 不可と確定。**ADR-037 案 X (SendAs) を採用**。新たに「SendAs 実機 send smoke」を OQ-X として後続 |
+| **OQ-3** | DWD scope 追加 (gmail.send) の Workspace 管理コンソール作業は本田様が実施可能な権限を持つか | ✅ **RESOLVED (2026-05-20)**: 本田様が Workspace 管理コンソールで `gmail.send` scope を追加完了、smoke 3 回目で動作確認済 |
 | **OQ-4** | Cloud Run 実行制限 300 秒で全テナント全 user の走査が完了するか | 現状 2 テナント × user 数で実測 |
 | **OQ-5** | 既存 `tenants/{tenantId}` ドキュメントへのフィールド追加は backfill 不要か | Firestore は欠損フィールドを `undefined` 扱い、`sanitizeForUpdate` で対応 |
 | **OQ-6** | Cloud Scheduler の OIDC token audience は Cloud Run service URL でよいか | `services/api` の URL を使用 |
 | **OQ-7 (新規)** | **既存 super-admin auth middleware の認証方式は Firebase Bearer Token か (cookie 不使用か)** (Codex Important-9) | 実装着手前に既存コード確認、Bearer なら CSRF 対策不要を AC-31 で明示済 |
 | **OQ-8 (新規)** | **`super_dispatch_audit_logs` の 1 年 TTL が法務・契約上の保持期間と一致するか** (Codex Minor) | privacy policy / 受講契約と照合、必要に応じて TTL 調整 |
 | **OQ-9 (新規)** | **Reservation の lease 期限 10 分が現実の Gmail send 所要時間と適合するか** | 実装後に実測、必要に応じて調整 |
+| **OQ-X (新規、2026-05-21)** | **SendAs 設定後に Gmail API `users.messages.send` が `From: dxcollege@279279.net` を受理して配送するか** (ADR-037 §Open Questions) | 本田様が `system@279279.net` の Gmail で `dxcollege@279279.net` を SendAs 登録 → smoke `mode=send` で実機検証。失敗時は ADR-037 §「再評価条件」に従い案 Y 移行 |
 
 ---
 
@@ -782,7 +804,7 @@ DWD scope 拡張手順:
 | Critical-1+3: Reservation 方式 | ✅ FR-7 / NFR-3 / §4.1.3 / §4.2 / §6.2 / AC-10〜15 |
 | Critical-2: published コース全件母集合 | ✅ FR-4 / `completion-eligibility.ts` / AC-1 |
 | Important-1: DWD scope 分離 | ✅ NFR-9 / `gmail-client.ts` / AC-34 |
-| Important-2: Google Group smoke check | ✅ §8.1 / OQ-2 強化 |
+| Important-2: Google Group smoke check | ✅ §8.1 / OQ-2 RESOLVED 2026-05-21 (ADR-037 案 X 採用) |
 | Important-3: run-level lock | ✅ FR-11 / §4.1.4 / `run-lock.ts` / §6.3 / AC-16 |
 | Important-4: 403 reason 分類 | ✅ §6.4 / `dispatch-403-classifier.ts` / AC-17, AC-18 |
 | Important-5: courseIdsSnapshot 保存 | ✅ FR-12 / §4.1.3 / §4.3 / AC-22 |
