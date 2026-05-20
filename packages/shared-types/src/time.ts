@@ -1,10 +1,11 @@
 /**
  * 時刻関連の共通定数。
  *
- * ADR-029 (タイムゾーン基準) に基づき、JST は固定 UTC+9 (DST なし) として扱う。
- * 過去複数箇所で `9 * 60 * 60 * 1000` を再定義していたため shared-types に集約する
- * (Phase 1 PR #442 review Important #8)。
+ * JST は固定 UTC+9 / DST なし (時刻系の客観的事実)。
+ * 受講期限の JST 表示など、システム内の時刻計算で利用する (ADR-029 参照)。
+ *
+ * 将来マルチテナント TZ 化 (ADR-029 §今後の対応) の際は削除候補。
  */
 
-/** JST と UTC のオフセット (ミリ秒)。ADR-029 により固定 UTC+9 / DST なし。 */
-export const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+/** JST と UTC のオフセット (ミリ秒)。9 時間 × 60 分 × 60 秒 × 1000 ms = 32_400_000。 */
+export const JST_OFFSET_MS = 32_400_000 as const;

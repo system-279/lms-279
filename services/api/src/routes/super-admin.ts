@@ -979,7 +979,7 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
   let sessionsQuery = db.collection(`${basePath}/lesson_sessions`)
     .orderBy("entryAt", "desc") as FirebaseFirestore.Query;
 
-  // 日付フィルタ: JST基準（UTC+9）でUTC境界に変換 (JST_OFFSET_MS は shared-types から import)
+  // 日付フィルタ: JST基準（UTC+9）でUTC境界に変換
   const fromStr = typeof from === "string" ? from : undefined;
   const toStr = typeof to === "string" ? to : undefined;
   if (fromStr) {
