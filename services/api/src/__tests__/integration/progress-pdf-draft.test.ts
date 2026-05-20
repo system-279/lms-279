@@ -107,6 +107,7 @@ vi.mock("../../datasource/factory.js", () => ({
 import { InMemoryDataSource } from "../../datasource/in-memory.js";
 import { progressPdfDraftRouter } from "../../routes/super/progress-pdf-draft.js";
 import { GmailDraftError } from "../../services/gmail-draft.js";
+import { logger } from "../../utils/logger.js";
 
 const ALL_ON = { profile: true, deadline: true, summary: true, lessons: true, quiz: true, pace: true, video: true };
 const FAKE_PDF = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(1024, 0x20)]);
@@ -519,6 +520,82 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(res.status).toBe(401);
       expect(res.body.message).not.toContain("secret@victim.com");
       expect(res.body.message).toBe("Access token is invalid or expired");
+    });
+
+    // Codex review (Issue #437 follow-up Low 82): logger payload にも raw message が
+    // 入らないことを直接 assert する。回帰防止 (将来 route の catch を触った際に
+    // `errorMessage: gmailErr.message` が戻っても検出可能にする)。
+    it("AC-2 (Issue #437): logger.error payload に Gmail API raw message (PII) が含まれない", async () => {
+      const { user } = await seedTenant(ds);
+      const piiEmail = "leak-target@example.com";
+      mocks.createGmailDraftMock.mockRejectedValueOnce(
+        new GmailDraftError(
+          `Cannot send to ${piiEmail}: MIME header rejected`,
+          "gmail_api_error",
+          502,
+        ),
+      );
+      const loggerErrorSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+
+      try {
+        await request
+          .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+          .send({ requestId: "req-logger-pii", sections: ALL_ON, accessToken: "t" });
+
+        // Gmail draft creation failed の logger.error 呼び出しがあること
+        expect(loggerErrorSpy).toHaveBeenCalled();
+        // すべての logger.error 呼び出しの payload を文字列化して PII を検査
+        for (const call of loggerErrorSpy.mock.calls) {
+          const payloadStr = JSON.stringify(call);
+          expect(payloadStr).not.toContain(piiEmail);
+          expect(payloadStr).not.toContain("leak-target");
+        }
+        // 一方で errorCode + httpStatus は記録されている (運用追跡が機能している)
+        const gmailDraftFailedCall = loggerErrorSpy.mock.calls.find(
+          (c) => typeof c[0] === "string" && c[0].includes("Gmail draft creation failed"),
+        );
+        expect(gmailDraftFailedCall).toBeDefined();
+        if (gmailDraftFailedCall) {
+          const payload = gmailDraftFailedCall[1] as Record<string, unknown>;
+          expect(payload.errorCode).toBe("gmail_api_error");
+          expect(payload.httpStatus).toBe(502);
+        }
+      } finally {
+        loggerErrorSpy.mockRestore();
+      }
+    });
+
+    it("AC-2 (Issue #437): logger.warn payload (tokeninfo failure 経路) にも raw message が含まれない", async () => {
+      const { user } = await seedTenant(ds);
+      const piiEmail = "tokeninfo-leak@example.com";
+      mocks.verifyAccessTokenOwnerMock.mockRejectedValueOnce(
+        new GmailDraftError(
+          `Token bound to ${piiEmail} has been revoked`,
+          "invalid_access_token",
+          401,
+        ),
+      );
+      const loggerWarnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+
+      try {
+        await request
+          .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+          .send({ requestId: "req-tokeninfo-logger-pii", sections: ALL_ON, accessToken: "t" });
+
+        // tokeninfo failure 経路の logger.warn 呼び出しがあること
+        const tokeninfoCall = loggerWarnSpy.mock.calls.find(
+          (c) => typeof c[0] === "string" && c[0].includes("verify access token"),
+        );
+        expect(tokeninfoCall).toBeDefined();
+        // 全 logger.warn 呼び出しに PII が含まれないこと
+        for (const call of loggerWarnSpy.mock.calls) {
+          const payloadStr = JSON.stringify(call);
+          expect(payloadStr).not.toContain(piiEmail);
+          expect(payloadStr).not.toContain("tokeninfo-leak");
+        }
+      } finally {
+        loggerWarnSpy.mockRestore();
+      }
     });
   });
 
