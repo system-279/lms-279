@@ -115,19 +115,21 @@ Phase 1 (基礎 services、並列実装可能 7 ファイル)
 
 | Task | 担当 | 依存 |
 |---|---|---|
-| OQ-3 解決: 本田様が Workspace 管理コンソール権限を持つか確認 | エンジニア + 本田様 | なし |
-| OQ-3 実施: `dwd-workspace-key` SA に `gmail.send` scope 追加 | **本田様** | OQ-3 解決 |
-| DWD 反映待ち (最大 24h) | - | OQ-3 実施 |
-| **OQ-2 解決**: `dxcollege@279279.net` で実機 smoke (`gmail.users.messages.send` を `subject=dxcollege@279279.net`、`To=エンジニア自身`、`scope=gmail.send` のみで実行) | エンジニア | DWD 反映完了 |
-| smoke 失敗時の判断: SendAs 設定 or 実ユーザー mailbox 化 | 本田様 | smoke 結果 |
-| OQ-7 解決: 既存 super-admin auth が Firebase Bearer か確認 (`services/api/src/middleware/super-admin.ts` 等を grep) | エンジニア | なし |
-| OQ-8 解決: `super_dispatch_audit_logs` 1 年 TTL の法務確認 | 本田様 | なし |
-| Gmail API / Cloud Scheduler API 有効化確認 | エンジニア | なし |
+| OQ-3 解決: 本田様が Workspace 管理コンソール権限を持つか確認 | エンジニア + 本田様 | なし | ✅ 完了 (2026-05-20) |
+| OQ-3 実施: `dwd-workspace-key` SA に `gmail.send` scope 追加 | **本田様** | OQ-3 解決 | ✅ 完了 (2026-05-20) |
+| **OQ-2 解決**: smoke 3 回 (run #26166362814 / #26186034548 / #26186218233) で Group エイリアス impersonation 不可と確定 | エンジニア | DWD scope 追加完了 | ✅ 完了 (2026-05-21)、ADR-037 採用 |
+| **OQ-2 代替案決定**: 案 X (SendAs 設定) | 本田様 | OQ-2 smoke 失敗 | ✅ 完了 (2026-05-21) |
+| **OQ-X 新規**: SendAs 設定 → 実機 send smoke | 本田様 + エンジニア | OQ-2 代替案決定 | ⏸️ 本田様 SendAs 設定待ち |
+| OQ-7 解決: 既存 super-admin auth が Firebase Bearer か確認 | エンジニア | なし | ✅ 完了 |
+| OQ-8 解決: `super_dispatch_audit_logs` 1 年 TTL の法務確認 | 本田様 | なし | ⏸️ 本田様判断待ち |
+| Gmail API / Cloud Scheduler API 有効化確認 | エンジニア | なし | (実施タイミングは Phase 7 以降) |
 
-**Phase 0 完了条件**:
-- OQ-2/3/7/8 全て解決
-- Group エイリアス smoke 成功 (or 代替判断完了)
-- DWD scope 反映確認
+**Phase 0 完了条件 (改訂、ADR-037 反映)**:
+- OQ-3 (DWD scope 追加): ✅
+- OQ-2 (Group エイリアス smoke): ✅ resolved (ADR-037 案 X 採用)
+- OQ-X (SendAs 実機 send smoke): ⏸️ 本田様 SendAs 設定待ち
+- OQ-7 (super-admin auth 認証方式): ✅
+- OQ-8 (TTL 法務確認): ⏸️ 本田様判断待ち
 
 ### Phase 1: 基礎 services
 
@@ -224,11 +226,11 @@ Phase 1 (基礎 services、並列実装可能 7 ファイル)
 | Task | 内容 |
 |---|---|
 | Cloud Scheduler job 作成 | `gcloud scheduler jobs create http` で `0 * * * *` + `time-zone=Asia/Tokyo` + OIDC token |
-| Cloud Run env 追加 | `DXCOLLEGE_SENDER_EMAIL=dxcollege@279279.net` |
+| Cloud Run env 追加 (改訂) | `DXCOLLEGE_SENDER_EMAIL=dxcollege@279279.net` (MIME From) + `DXCOLLEGE_DISPATCH_SUBJECT=system@279279.net` (DWD subject、ADR-037 案 X) |
 | Firestore TTL Policy | `super_dispatch_audit_logs.ttlExpireAt` + `super_dispatch_runs.ttlExpireAt` |
 | Firestore composite index | `super_dispatch_audit_logs` のフィルタ用、`super_dispatch_runs.status + leaseExpiresAt` |
 | Cloud Scheduler SA 作成 + 権限付与 | `dxcollege-scheduler@lms-279.iam.gserviceaccount.com` に Cloud Run invoker |
-| ADR-035 起票 | `docs/adr/ADR-035-auto-completion-notification.md` |
+| ADR 起票 | ✅ ADR-037 (sender impersonation) 既に起票済 (2026-05-21)。Phase 7 では追加 ADR 必要に応じて起票 |
 | deploy.yml 更新 | 必要に応じて (env 追加分) |
 
 ### Phase 8: Smoke check + Cutover
@@ -480,7 +482,8 @@ enabled = true に切替 (UI から)
 
 | リスク | 確率 | 影響 | 対策 |
 |---|---|---|---|
-| Google Group エイリアスが DWD subject として使えない | 中 | 高 | Phase 0 で smoke 必須、失敗時は SendAs/実ユーザー化を判断 |
+| ~~Google Group エイリアスが DWD subject として使えない~~ | ~~中~~ | ~~高~~ | ✅ **顕在化 (2026-05-21)**、ADR-037 案 X (SendAs) を採用して回避。後続リスクは「SendAs send mode smoke で From ヘッダ偽装が認められるか (OQ-X)」に置き換わる |
+| SendAs 経由送信で Gmail API が From ヘッダを書き換える / spam 判定で拒否 | 低 | 中 | OQ-X smoke (`mode=send`) で実機確認、失敗時は ADR-037 案 Y (実 User 化) を再評価 |
 | Cloud Run 300 秒で全 user 処理が完了しない (将来テナント増) | 低 (現状 2 テナント) | 中 | Phase 4 Integration Test で実測、超過時は resumable run を将来課題に |
 | Reservation transaction が高頻度競合する | 低 | 低 | 並列度 8 + 単一 worker 想定なら問題なし、超過時は lease 短縮 |
 | 受講者の Gmail が受信拒否設定 | 低 | 低 | Gmail API 403 宛先固有として failed_permanent 記録、本田様判断 |
