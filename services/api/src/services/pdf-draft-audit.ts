@@ -47,6 +47,34 @@ export interface PdfDraftAuditLog {
   pdfSizeBytes: number | null;
 }
 
+/**
+ * Issue #435: acquirePendingPdfDraftLog 用の pending 段階ログ。
+ *
+ * Gmail draft 作成前の認可境界フィールドのみを記録する。
+ * - draftId / status / errorCode / pdfSizeBytes は確定後 (finalizePdfDraftLog) に追記。
+ *
+ * 並行リクエスト防止のため、Firestore `create()` (precondition: not exists) で書き込む。
+ */
+export interface PendingPdfDraftLogInput {
+  requestId: string;
+  tenantId: string;
+  createdByUid: string;
+  createdByEmail: string;
+  userId: string;
+  toEmail: string;
+  ownerEmail: string | null;
+  tokenOwnerEmail: string;
+  sections: ProgressPdfSections;
+}
+
+export type AcquirePendingResult =
+  | { acquired: true }
+  | {
+      acquired: false;
+      /** 既存 doc の中身 (Firestore raw data)。route 層で status を見て分岐する。 */
+      existing: FirebaseFirestore.DocumentData;
+    };
+
 /** メールアドレスを sha256 でハッシュ化 (PII 最小化) */
 export function hashEmail(email: string): string {
   return createHash("sha256")
@@ -108,6 +136,136 @@ export async function recordPdfDraftLog(
       tenantId: log.tenantId,
       requestId: log.requestId,
       status: log.status,
+    });
+    throw err;
+  }
+}
+
+/**
+ * Issue #435 (AC-1 / AC-5): pending 段階のログを Firestore に **アトミックに** 先取りする。
+ *
+ * 並行 2 リクエストが同じ requestId で Gmail draft を二重作成するのを防ぐ。
+ * `create()` (precondition: not exists) を使い、ALREADY_EXISTS なら既存 doc を返す。
+ *
+ * @returns
+ *   - `{ acquired: true }`: pending 取得成功、Gmail API を呼び出してよい
+ *   - `{ acquired: false, existing }`: 既存 doc あり (status を見て分岐: success → 200 / pending → 409 / failed → 再試行)
+ * @throws Firestore の (ALREADY_EXISTS 以外の) 障害は throw。route 層は 503 で返す。
+ */
+export async function acquirePendingPdfDraftLog(
+  db: Firestore,
+  input: PendingPdfDraftLogInput,
+): Promise<AcquirePendingResult> {
+  const now = new Date();
+  const ttlAt = Timestamp.fromMillis(now.getTime() + TTL_DAYS * 86400 * 1000);
+
+  const ccHash = input.ownerEmail ? hashEmail(input.ownerEmail) : null;
+  const document = {
+    createdAt: now.toISOString(),
+    createdByUid: input.createdByUid,
+    createdByEmailHash: hashEmail(input.createdByEmail),
+    userId: input.userId,
+    ownerEmailHash: ccHash,
+    recipientCcHash: ccHash,
+    recipientToHash: hashEmail(input.toEmail),
+    tokenOwnerHash: hashEmail(input.tokenOwnerEmail),
+    draftId: null,
+    status: "pending" as const,
+    errorCode: null,
+    sections: input.sections,
+    pdfSizeBytes: null,
+    ttlAt,
+  };
+
+  const docRef = db
+    .collection("tenants")
+    .doc(input.tenantId)
+    .collection("pdf_draft_logs")
+    .doc(input.requestId);
+
+  try {
+    await docRef.create(document);
+    return { acquired: true };
+  } catch (err) {
+    // ALREADY_EXISTS (gRPC code 6) → 既存 doc を取得して呼び出し側に返す
+    const code = (err as { code?: number | string })?.code;
+    if (code === 6 || code === "6" || code === "ALREADY_EXISTS") {
+      try {
+        const snapshot = await docRef.get();
+        if (snapshot.exists) {
+          return { acquired: false, existing: snapshot.data() ?? {} };
+        }
+      } catch (getErr) {
+        logger.error("Failed to read existing pdf_draft_logs after ALREADY_EXISTS", {
+          errorType: "pdf_draft_audit_read_after_create_conflict_failed",
+          error: getErr instanceof Error ? getErr : new Error(String(getErr)),
+          tenantId: input.tenantId,
+          requestId: input.requestId,
+        });
+        throw getErr;
+      }
+      // create が ALREADY_EXISTS なのに get で exists=false (TOCTOU 競合の極端ケース) → throw
+      logger.error("pdf_draft_logs ALREADY_EXISTS but doc not found on subsequent read", {
+        tenantId: input.tenantId,
+        requestId: input.requestId,
+      });
+      throw err;
+    }
+    logger.error("Failed to acquire pending pdf_draft_logs", {
+      errorType: "pdf_draft_audit_acquire_pending_failed",
+      error: err instanceof Error ? err : new Error(String(err)),
+      tenantId: input.tenantId,
+      requestId: input.requestId,
+    });
+    throw err;
+  }
+}
+
+/**
+ * Issue #435 (AC-5): pending → success/failed の状態遷移を記録する。
+ *
+ * `acquirePendingPdfDraftLog` で先取りしたドキュメントに `draftId` / `status` /
+ * `errorCode` / `pdfSizeBytes` を追記する。`set({ merge: true })` で他フィールドを保持。
+ *
+ * 既存の `recordPdfDraftLog` と異なり、pending 取得済みドキュメントへの追記専用。
+ * 監査ログ書き込み失敗は throw する (呼び出し側でレスポンスへの影響を判断)。
+ */
+export async function finalizePdfDraftLog(
+  db: Firestore,
+  params: {
+    requestId: string;
+    tenantId: string;
+    draftId: string | null;
+    status: "success" | "failed";
+    errorCode: string | null;
+    pdfSizeBytes: number | null;
+  },
+): Promise<void> {
+  const docRef = db
+    .collection("tenants")
+    .doc(params.tenantId)
+    .collection("pdf_draft_logs")
+    .doc(params.requestId);
+
+  try {
+    await docRef.set(
+      {
+        draftId: params.draftId,
+        status: params.status,
+        errorCode: params.errorCode,
+        pdfSizeBytes: params.pdfSizeBytes,
+        // 状態遷移時刻 (運用追跡用)
+        finalizedAt: new Date().toISOString(),
+      },
+      { merge: true },
+    );
+  } catch (err) {
+    logger.error("Failed to finalize pdf_draft_logs", {
+      errorType: "pdf_draft_audit_finalize_failed",
+      error: err instanceof Error ? err : new Error(String(err)),
+      tenantId: params.tenantId,
+      requestId: params.requestId,
+      status: params.status,
     });
     throw err;
   }

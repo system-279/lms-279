@@ -33,6 +33,9 @@ const mocks = vi.hoisted(() => ({
   verifyAccessTokenOwnerMock: vi.fn(),
   renderToBufferMock: vi.fn(),
   recordPdfDraftLogMock: vi.fn(),
+  // Issue #435: pending acquire + finalize の 2 段階監査ログ書き込み
+  acquirePendingPdfDraftLogMock: vi.fn(),
+  finalizePdfDraftLogMock: vi.fn(),
   tenantDocGetMock: vi.fn(),
   // idempotency check 用 (pdf_draft_logs/{requestId}.get())
   idempotencyDocGetMock: vi.fn(),
@@ -85,6 +88,9 @@ vi.mock("../../services/pdf-draft-audit.js", async () => {
   return {
     ...actual,
     recordPdfDraftLog: mocks.recordPdfDraftLogMock,
+    // Issue #435: acquire + finalize
+    acquirePendingPdfDraftLog: mocks.acquirePendingPdfDraftLogMock,
+    finalizePdfDraftLog: mocks.finalizePdfDraftLogMock,
   };
 });
 
@@ -169,6 +175,9 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       email: mocks.superAdminEmail.trim().toLowerCase(),
       verified: true,
     });
+    // Issue #435: acquire はデフォルトで成功 (新規 pending 取得)
+    mocks.acquirePendingPdfDraftLogMock.mockResolvedValue({ acquired: true });
+    mocks.finalizePdfDraftLogMock.mockResolvedValue(undefined);
 
     app = buildApp();
     request = supertest(app);
@@ -337,14 +346,15 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(filename).not.toMatch(/_{3,}/);
     });
 
-    it("AC-6/AC-8: 成功時 監査ログに status=success + toEmail/ownerEmail + PII 最小化", async () => {
+    it("AC-6/AC-8: 成功時 監査ログに status=success + toEmail/ownerEmail + PII 最小化 (Issue #435: pending → success の 2 段階)", async () => {
       const { user } = await seedTenant(ds);
 
       await request
         .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
         .send({ requestId: "req-success", sections: ALL_ON, accessToken: "t" });
 
-      expect(mocks.recordPdfDraftLogMock).toHaveBeenCalledWith(
+      // Issue #435 (AC-5): pending 段階で createdByUid/userId/toEmail/ownerEmail/tokenOwnerEmail/sections を記録
+      expect(mocks.acquirePendingPdfDraftLogMock).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
           requestId: "req-success",
@@ -352,13 +362,21 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
           createdByUid: mocks.superAdminUid,
           createdByEmail: mocks.superAdminEmail,
           userId: user.id,
-          // 案 B 新規: To=受講者本人、CC=管理者を両方記録
           toEmail: "student@example.com",
           ownerEmail: "owner@example.com",
+          tokenOwnerEmail: mocks.superAdminEmail.toLowerCase(),
+          sections: ALL_ON,
+        }),
+      );
+      // finalize 段階で draftId/status/errorCode/pdfSizeBytes を記録
+      expect(mocks.finalizePdfDraftLogMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          requestId: "req-success",
+          tenantId: "tenant-1",
           draftId: "r-12345",
           status: "success",
           errorCode: null,
-          sections: ALL_ON,
           pdfSizeBytes: FAKE_PDF.length,
         }),
       );
@@ -366,7 +384,7 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
   });
 
   describe("Gmail API エラー → 失敗監査ログ + エラーレスポンス", () => {
-    it("AC-5: scope 不足 → 403 gmail_scope_required + 失敗ログ", async () => {
+    it("AC-5: scope 不足 → 403 gmail_scope_required + 失敗ログ (Issue #435: pending → failed の 2 段階)", async () => {
       const { user } = await seedTenant(ds);
       mocks.createGmailDraftMock.mockRejectedValueOnce(
         new GmailDraftError("scope insufficient", "gmail_scope_required", 403),
@@ -379,8 +397,8 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(res.status).toBe(403);
       expect(res.body.error).toBe("gmail_scope_required");
 
-      // AC-12: 失敗時の監査ログ
-      expect(mocks.recordPdfDraftLogMock).toHaveBeenCalledWith(
+      // AC-12 + Issue #435 AC-5: 失敗時の監査ログ (pending → failed)
+      expect(mocks.finalizePdfDraftLogMock).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
           requestId: "req-scope",
@@ -404,7 +422,7 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
 
       expect(res.status).toBe(429);
       expect(res.body.error).toBe("gmail_quota_exceeded");
-      expect(mocks.recordPdfDraftLogMock).toHaveBeenCalledWith(
+      expect(mocks.finalizePdfDraftLogMock).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ status: "failed", errorCode: "gmail_quota_exceeded" }),
       );
@@ -499,7 +517,10 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(mocks.createGmailDraftMock).toHaveBeenCalledTimes(1);
     });
 
-    it("idempotency check が throw しても新規作成にフォールスルー", async () => {
+    // Issue #435 AC-3: idempotency check が throw した場合は 503 で停止する (新規 Gmail 呼び出しなし)。
+    // 旧実装はフォールスルーで新規作成を続行していたが、副作用 (Gmail draft 作成) のある操作で
+    // idempotency store が見えない状態は危険なため、停止に変更。
+    it("AC-3 (Issue #435): idempotency check が throw → 503 gmail_api_transient + Gmail API 呼ばれない", async () => {
       const { user } = await seedTenant(ds);
       mocks.idempotencyDocGetMock.mockRejectedValueOnce(new Error("firestore unavailable"));
 
@@ -507,8 +528,10 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
         .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
         .send({ requestId: "req-check-err", sections: ALL_ON, accessToken: "t" });
 
-      expect(res.status).toBe(201);
-      expect(mocks.createGmailDraftMock).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(503);
+      expect(res.body.error).toBe("gmail_api_transient");
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+      expect(mocks.acquirePendingPdfDraftLogMock).not.toHaveBeenCalled();
     });
   });
 
@@ -780,13 +803,20 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
         });
 
       expect(res.status).toBe(201);
-      // AC-3: 成功監査ログに tokenOwnerEmail が記録される
-      expect(mocks.recordPdfDraftLogMock).toHaveBeenCalledWith(
+      // AC-3 + Issue #435: pending 段階で tokenOwnerEmail が記録される
+      expect(mocks.acquirePendingPdfDraftLogMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          requestId: "req-owner-ok",
+          tokenOwnerEmail: mocks.superAdminEmail.toLowerCase(),
+        }),
+      );
+      // finalize で status=success
+      expect(mocks.finalizePdfDraftLogMock).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
           requestId: "req-owner-ok",
           status: "success",
-          tokenOwnerEmail: mocks.superAdminEmail.toLowerCase(),
         }),
       );
     });
@@ -1045,6 +1075,117 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
 
       expect(res.status).toBe(200);
       expect(res.body.draftId).toBe("match-draft");
+    });
+  });
+
+  // Issue #435: idempotency アトミック化 + 状態遷移ログ
+  describe("Issue #435: pending → success/failed の状態遷移とアトミック acquire", () => {
+    it("AC-1: acquire が in_flight を返す (並行 pending) → 409 invalid_request_id + Gmail API 呼ばれない", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.acquirePendingPdfDraftLogMock.mockResolvedValueOnce({
+        acquired: false,
+        existing: { status: "pending" },
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-in-flight", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("invalid_request_id");
+      // Gmail draft も finalize も呼ばれない (in_flight な既存 pending を尊重)
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+      expect(mocks.finalizePdfDraftLogMock).not.toHaveBeenCalled();
+    });
+
+    it("AC-3: acquire が throw (Firestore 障害) → 503 gmail_api_transient + Gmail API 呼ばれない", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.acquirePendingPdfDraftLogMock.mockRejectedValueOnce(new Error("firestore unavailable"));
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-acquire-err", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error).toBe("gmail_api_transient");
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+      expect(mocks.finalizePdfDraftLogMock).not.toHaveBeenCalled();
+    });
+
+    it("AC-5: 成功経路は acquire (pending) → Gmail API → finalize (success) の順序で呼ばれる", async () => {
+      const { user } = await seedTenant(ds);
+
+      await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-order", sections: ALL_ON, accessToken: "t" });
+
+      // 呼び出し順序の確認
+      const acquireCallOrder = mocks.acquirePendingPdfDraftLogMock.mock.invocationCallOrder[0];
+      const gmailCallOrder = mocks.createGmailDraftMock.mock.invocationCallOrder[0];
+      const finalizeCallOrder = mocks.finalizePdfDraftLogMock.mock.invocationCallOrder[0];
+
+      expect(acquireCallOrder).toBeLessThan(gmailCallOrder);
+      expect(gmailCallOrder).toBeLessThan(finalizeCallOrder);
+    });
+
+    it("AC-5: Gmail API 失敗時は acquire (pending) → Gmail (fail) → finalize (failed) の順序で呼ばれる", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.createGmailDraftMock.mockRejectedValueOnce(
+        new GmailDraftError("scope insufficient", "gmail_scope_required", 403),
+      );
+
+      await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-fail-order", sections: ALL_ON, accessToken: "t" });
+
+      expect(mocks.acquirePendingPdfDraftLogMock).toHaveBeenCalledTimes(1);
+      expect(mocks.createGmailDraftMock).toHaveBeenCalledTimes(1);
+      expect(mocks.finalizePdfDraftLogMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          status: "failed",
+          errorCode: "gmail_scope_required",
+        }),
+      );
+    });
+
+    it("AC-5: pending 監査ログには tokenOwnerEmail と認可境界フィールド (createdByUid + userId + sections) が含まれる", async () => {
+      const { user } = await seedTenant(ds);
+
+      await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-pending-fields", sections: ALL_ON, accessToken: "t" });
+
+      expect(mocks.acquirePendingPdfDraftLogMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          requestId: "req-pending-fields",
+          tenantId: "tenant-1",
+          createdByUid: mocks.superAdminUid,
+          createdByEmail: mocks.superAdminEmail,
+          userId: user.id,
+          toEmail: "student@example.com",
+          ownerEmail: "owner@example.com",
+          tokenOwnerEmail: mocks.superAdminEmail.toLowerCase(),
+          sections: ALL_ON,
+        }),
+      );
+    });
+
+    it("acquire が already_success (PR #449 手動 idempotency check をすり抜けた防御層) → 200 既存 draftId", async () => {
+      const { user } = await seedTenant(ds);
+      mocks.acquirePendingPdfDraftLogMock.mockResolvedValueOnce({
+        acquired: false,
+        existing: { status: "success", draftId: "fallback-success" },
+      });
+
+      const res = await request
+        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
+        .send({ requestId: "req-fallback", sections: ALL_ON, accessToken: "t" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.draftId).toBe("fallback-success");
+      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
     });
   });
 });

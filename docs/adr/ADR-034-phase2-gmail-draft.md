@@ -7,6 +7,16 @@
 
 ## 改訂履歴
 
+- **2026-05-21 (Issue #435)**: idempotency アトミック化 + 状態遷移ログ。Codex review (Issue #434 由来 High 1 / Medium 1+2) 対応。
+  - §7 監査ログスキーマ: `status` を `"pending" | "success" | "failed"` に拡張。`finalizedAt` (状態遷移時刻) を追加。
+  - §3 idempotency 構造を全面再設計:
+    1. 旧手動 `docRef.get()` による early-return は維持 (success ログの早期 200 返却)
+    2. Gmail draft 作成の直前に `acquirePendingPdfDraftLog` (Firestore `docRef.create()` で precondition: not exists) で pending 段階を **アトミックに先取り**
+    3. ALREADY_EXISTS の場合は既存 doc の status で分岐: `pending` → 409 `invalid_request_id` (in_flight) / `success` → 200 (防御層) / `failed` → 上書き再試行
+    4. Gmail draft 成功 → `finalizePdfDraftLog` で `pending → success` に merge update
+    5. Gmail draft 失敗 → `finalizePdfDraftLog` で `pending → failed` に merge update
+  - §8 エラー分類: idempotency check 失敗 (Firestore 障害) は **503 `gmail_api_transient`** で停止 (旧実装はフォールスルーで新規作成を続行していた、AC-3 対応)。
+  - 並行 2 リクエストで Gmail draft が 1 件のみ作成される (AC-1)、`requestId` 再利用 + 別 userId は 409 (AC-2、PR #449 で対応済み)、旧スキーマ互換維持 (AC-4)。
 - **2026-05-21 (Issue #436)**: access token owner 検証を追加。Codex review (Medium 2 件) 反映済み。
   - §3 OAuth フロー: BE は Gmail API 呼び出し前に `oauth2.tokeninfo` で access token の発行元 Google アカウント email を取得し、Firebase Auth (`superAdmin.email`) と一致するか検証する。不一致なら **403 `access_token_owner_mismatch`** + Gmail API 呼ばない。`verified_email !== true` (Google が email 所有を確認していない) も **401 `invalid_access_token`** で拒否する (Codex Medium 68 対応)。
   - §3 idempotency 認可境界: 既存 success ログを 200 で返す際に、`createdByUid` + `userId` が現在 actor と一致する場合のみ返す。不一致なら **409 `invalid_request_id`** (別 super admin / 別 受講者 の既存 draft 横取り防止、Codex Medium 82 対応)。旧スキーマ (`createdByUid` 不在) は後方互換で従来通り許容。
@@ -187,11 +197,14 @@ function validateRecipientEmail(input: unknown):
   tokenOwnerHash: string | null;
 
   draftId: string | null;       // Gmail draft ID (成功時)
-  status: "success" | "failed";
+  // Issue #435: pending → success/failed の状態遷移を表現
+  status: "pending" | "success" | "failed";
   errorCode: string | null;
   sections: ProgressPdfSections;
   pdfSizeBytes: number | null;
   ttlAt: Timestamp;             // 90 日後 (Firestore TTL ポリシー)
+  // Issue #435: pending → success/failed 遷移時刻 (運用追跡用)
+  finalizedAt?: string;         // ISO 8601 (finalize 呼び出し時に追記)
 }
 ```
 
@@ -221,7 +234,7 @@ function validateRecipientEmail(input: unknown):
 | 401 | `invalid_access_token` | access token 期限切れ / `tokeninfo` で 401 / `verified_email !== true` (Issue #436) | reauthenticateWithPopup で再取得 |
 | 403 | `gmail_scope_required` | access token に gmail.compose scope なし | reauthenticateWithPopup で再同意 |
 | 403 | `access_token_owner_mismatch` | access token の owner email が `superAdmin.email` と不一致 (Issue #436) | エラーメッセージ表示 (API 直叩きでないと通常経路で出ない) |
-| 409 | `invalid_request_id` | idempotency collision: 既存 success ログの `createdByUid`/`userId` が現在 actor と不一致 (Issue #436) | エラーメッセージ表示 (API 直叩きでないと通常経路で出ない) |
+| 409 | `invalid_request_id` | idempotency collision: 既存 success ログの `createdByUid`/`userId` が現在 actor と不一致 (Issue #436) / 既存 `pending` ログあり (Issue #435 並行リクエスト) | エラーメッセージ表示 (API 直叩きでないと通常経路で出ない) |
 | 404 | `tenant_not_found` / `user_not_in_tenant` | 越境/不存在 | エラーメッセージ表示 (Phase 1 と整合) |
 | 413 | `pdf_too_large_for_gmail` | PDF > 5MB | エラーメッセージ表示 |
 | 429 | `gmail_quota_exceeded` | Gmail API quota 超過 | 「しばらく待ってから再試行」メッセージ |
