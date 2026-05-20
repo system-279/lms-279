@@ -31,6 +31,15 @@ export interface PdfDraftAuditLog {
   toEmail: string | null;
   /** テナント管理者 email (旧 To / 新 CC)。未設定なら null。 */
   ownerEmail: string | null;
+  /**
+   * Issue #436: access token の発行元 Google アカウント email。
+   * - 一致 / 不一致 / 取得不能のいずれでも、tokeninfo で取得できた値があれば記録する。
+   * - tokeninfo 失敗時 (取得不能) は null。
+   * - 監査追跡のためであり、書き込み時点で createdByEmail との一致は保証しない
+   *   (一致しなければ route 層が 403 を返し、本ログは status=failed で書き込まれる)。
+   * - 後方互換のため optional。未指定なら null として扱う。
+   */
+  tokenOwnerEmail?: string | null;
   draftId: string | null;
   status: "success" | "failed";
   errorCode: string | null;
@@ -74,6 +83,9 @@ export async function recordPdfDraftLog(
     ownerEmailHash: ccHash,
     recipientCcHash: ccHash,
     recipientToHash: log.toEmail ? hashEmail(log.toEmail) : null,
+    // Issue #436: access token の発行元 Google アカウント email を sha256 で記録。
+    // tokeninfo 失敗時 / 未指定は null。
+    tokenOwnerHash: log.tokenOwnerEmail ? hashEmail(log.tokenOwnerEmail) : null,
     draftId: log.draftId,
     status: log.status,
     errorCode: log.errorCode,

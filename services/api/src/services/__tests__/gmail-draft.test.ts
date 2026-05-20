@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const draftsCreateMock = vi.hoisted(() => vi.fn());
 const oauth2SetCredentialsMock = vi.hoisted(() => vi.fn());
+const tokeninfoMock = vi.hoisted(() => vi.fn());
 
 vi.mock("googleapis", () => {
   class MockOAuth2 {
@@ -28,6 +29,9 @@ vi.mock("googleapis", () => {
           },
         },
       })),
+      oauth2: vi.fn(() => ({
+        tokeninfo: tokeninfoMock,
+      })),
     },
   };
 });
@@ -37,6 +41,7 @@ const {
   classifyGmailError,
   buildGmailDraftUrl,
   createGmailDraft,
+  verifyAccessTokenOwner,
   GmailDraftError,
   TRANSIENT_NETWORK_CODES,
   __internal,
@@ -727,5 +732,94 @@ describe("createGmailDraft (googleapis mocked)", () => {
     expect(decoded).toContain("Content-Type: multipart/mixed");
     expect(decoded).toContain("Content-Type: application/pdf");
     expect(decoded).toContain('filename="progress.pdf"');
+  });
+});
+
+// Issue #436: access token の発行元 Google アカウント email を取得する関数。
+// Gmail API 呼び出しと同じエラー分類 (classifyGmailError) を共有する。
+describe("verifyAccessTokenOwner (Issue #436)", () => {
+  beforeEach(() => {
+    tokeninfoMock.mockReset();
+    oauth2SetCredentialsMock.mockReset();
+  });
+
+  it("成功時: trim + lowercase した email と verified フラグを返す", async () => {
+    tokeninfoMock.mockResolvedValueOnce({
+      data: { email: "  User@Example.COM  ", verified_email: true },
+    });
+
+    const result = await verifyAccessTokenOwner("ya29.token");
+
+    expect(result).toEqual({ email: "user@example.com", verified: true });
+    expect(oauth2SetCredentialsMock).toHaveBeenCalledWith({ access_token: "ya29.token" });
+    expect(tokeninfoMock).toHaveBeenCalledWith({ access_token: "ya29.token" });
+  });
+
+  it("verified_email が undefined のときは verified=false", async () => {
+    tokeninfoMock.mockResolvedValueOnce({
+      data: { email: "u@example.com" },
+    });
+
+    const result = await verifyAccessTokenOwner("ya29.token");
+    expect(result.verified).toBe(false);
+  });
+
+  it("accessToken 空文字 → invalid_access_token (400) を throw + tokeninfo 呼ばれない", async () => {
+    await expect(verifyAccessTokenOwner("")).rejects.toMatchObject({
+      errorCode: "invalid_access_token",
+      httpStatus: 400,
+    });
+    expect(tokeninfoMock).not.toHaveBeenCalled();
+  });
+
+  it("tokeninfo が email 無し → invalid_access_token (401)", async () => {
+    tokeninfoMock.mockResolvedValueOnce({ data: {} });
+
+    await expect(verifyAccessTokenOwner("ya29.token")).rejects.toMatchObject({
+      errorCode: "invalid_access_token",
+      httpStatus: 401,
+    });
+  });
+
+  it("401 (token 無効/期限切れ) → invalid_access_token (401) に分類", async () => {
+    tokeninfoMock.mockRejectedValueOnce({
+      response: { status: 401, data: { error: { message: "invalid token" } } },
+    });
+
+    await expect(verifyAccessTokenOwner("ya29.token")).rejects.toMatchObject({
+      errorCode: "invalid_access_token",
+      httpStatus: 401,
+    });
+  });
+
+  it("503 (transient) → gmail_api_transient (503) に分類", async () => {
+    tokeninfoMock.mockRejectedValueOnce({
+      response: { status: 503, data: { error: { message: "service unavailable" } } },
+    });
+
+    await expect(verifyAccessTokenOwner("ya29.token")).rejects.toMatchObject({
+      errorCode: "gmail_api_transient",
+      httpStatus: 503,
+    });
+  });
+
+  it("network ECONNRESET → gmail_api_transient (503)", async () => {
+    tokeninfoMock.mockRejectedValueOnce({ code: "ECONNRESET", message: "reset" });
+
+    await expect(verifyAccessTokenOwner("ya29.token")).rejects.toMatchObject({
+      errorCode: "gmail_api_transient",
+      httpStatus: 503,
+    });
+  });
+
+  it("5xx → gmail_api_error (502)", async () => {
+    tokeninfoMock.mockRejectedValueOnce({
+      response: { status: 500, data: { error: { message: "internal" } } },
+    });
+
+    await expect(verifyAccessTokenOwner("ya29.token")).rejects.toMatchObject({
+      errorCode: "gmail_api_error",
+      httpStatus: 502,
+    });
   });
 });

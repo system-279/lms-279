@@ -375,6 +375,53 @@ export function buildGmailDraftUrl(draftId: string): string {
   return `https://mail.google.com/mail/u/0/?ogbl#drafts/${draftId}`;
 }
 
+export interface VerifyAccessTokenOwnerResult {
+  /** access token を発行した Google アカウントの email (小文字正規化済) */
+  email: string;
+  /** Google 側で確認済みの email かどうか (verified_email クレーム) */
+  verified: boolean;
+}
+
+// SECURITY (Issue #436 / ADR-034): access token の発行元 Google アカウントが
+// superAdmin の Firebase Auth email と一致するかを検証するため、Gmail API 呼び出し前に
+// `oauth2.tokeninfo` で owner email を取得する。
+// - 成功時: { email (lowercased), verified } を返す
+// - 401 (token 無効): invalid_access_token を throw (Gmail API 呼び出しと同じ扱い)
+// - その他 / network 障害: classifyGmailError 経由で gmail_api_transient / gmail_api_error 等に分類
+export async function verifyAccessTokenOwner(
+  accessToken: string,
+): Promise<VerifyAccessTokenOwnerResult> {
+  if (!accessToken) {
+    throw new GmailDraftError(
+      "accessToken is required",
+      "invalid_access_token",
+      400,
+    );
+  }
+
+  const oauth2Client = new google.auth.OAuth2();
+  oauth2Client.setCredentials({ access_token: accessToken });
+  const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
+
+  try {
+    const response = await oauth2.tokeninfo({ access_token: accessToken });
+    const email = response.data.email;
+    if (!email || typeof email !== "string") {
+      throw new GmailDraftError(
+        "tokeninfo returned no email",
+        "invalid_access_token",
+        401,
+      );
+    }
+    return {
+      email: email.trim().toLowerCase(),
+      verified: response.data.verified_email === true,
+    };
+  } catch (err) {
+    throw classifyGmailError(err);
+  }
+}
+
 /**
  * Gmail API `users.drafts.create` で下書きを作成する。
  *

@@ -47,9 +47,10 @@ import {
   buildGmailDraftUrl,
   createGmailDraft,
   GmailDraftError,
+  verifyAccessTokenOwner,
   type MimeAttachment,
 } from "../../services/gmail-draft.js";
-import { recordPdfDraftLog } from "../../services/pdf-draft-audit.js";
+import { hashEmail, recordPdfDraftLog } from "../../services/pdf-draft-audit.js";
 import { logger } from "../../utils/logger.js";
 import { classifyFirestoreError, TRANSIENT_RETRY_MESSAGE_JA } from "../../utils/grpc-errors.js";
 
@@ -233,6 +234,99 @@ router.post(
       });
     }
 
+    // Issue #436: access token の発行元 Google アカウント email を取得し、
+    // Firebase Auth (superAdmin.email) と一致するか検証する。
+    // - 一致 → 続行
+    // - 不一致 → 403 access_token_owner_mismatch + 失敗監査ログ + Gmail API 呼ばない
+    // - tokeninfo 失敗 (transient/401 等) → 該当 httpStatus + 失敗監査ログ + Gmail API 呼ばない
+    // 監査用に取得した owner email は tokenOwnerEmail として後続の recordPdfDraftLog に渡す。
+    let tokenOwnerEmail: string | null = null;
+    try {
+      const ownerResult = await verifyAccessTokenOwner(parsed.accessToken);
+      tokenOwnerEmail = ownerResult.email;
+      const expected = createdByEmail.trim().toLowerCase();
+      if (tokenOwnerEmail !== expected) {
+        // 不一致: Gmail API 呼ばずに 403 を返す + 失敗監査ログ
+        logger.warn("Access token owner does not match super admin email", {
+          tenantId,
+          userId,
+          requestId: parsed.requestId,
+          // PII を出さないため hash で記録
+          tokenOwnerHash: hashEmail(tokenOwnerEmail),
+          expectedHash: hashEmail(expected),
+        });
+        await recordPdfDraftLog(db, {
+          requestId: parsed.requestId,
+          tenantId,
+          createdByUid,
+          createdByEmail,
+          userId,
+          toEmail: null,
+          ownerEmail: null,
+          tokenOwnerEmail,
+          draftId: null,
+          status: "failed",
+          errorCode: "access_token_owner_mismatch",
+          sections: parsed.sections,
+          pdfSizeBytes: null,
+        }).catch((auditErr: unknown) => {
+          logger.warn("Failed to record access_token_owner_mismatch audit log", {
+            errorType: "pdf_draft_audit_write_failed_403_owner_mismatch",
+            tenantId,
+            requestId: parsed.requestId,
+            errorMessage: auditErr instanceof Error ? auditErr.message : String(auditErr),
+          });
+        });
+        res.status(403).json({
+          error: "access_token_owner_mismatch",
+          message:
+            "Access token owner does not match authenticated super admin email",
+        });
+        return;
+      }
+    } catch (err) {
+      const gmailErr = err instanceof GmailDraftError ? err : null;
+      const errorCode: ProgressPdfDraftErrorCode = gmailErr?.errorCode ?? "gmail_api_error";
+      const httpStatus = gmailErr?.httpStatus ?? 502;
+      logger.warn("Failed to verify access token owner (Gmail API call skipped)", {
+        tenantId,
+        userId,
+        requestId: parsed.requestId,
+        errorCode,
+        httpStatus,
+        errorMessage: gmailErr?.message ?? (err instanceof Error ? err.message : "unknown error"),
+      });
+      await recordPdfDraftLog(db, {
+        requestId: parsed.requestId,
+        tenantId,
+        createdByUid,
+        createdByEmail,
+        userId,
+        toEmail: null,
+        ownerEmail: null,
+        tokenOwnerEmail: null,
+        draftId: null,
+        status: "failed",
+        errorCode,
+        sections: parsed.sections,
+        pdfSizeBytes: null,
+      }).catch((auditErr: unknown) => {
+        logger.warn("Failed to record tokeninfo failure audit log", {
+          errorType: "pdf_draft_audit_write_failed_tokeninfo",
+          tenantId,
+          requestId: parsed.requestId,
+          primaryErrorCode: errorCode,
+          primaryHttpStatus: httpStatus,
+          errorMessage: auditErr instanceof Error ? auditErr.message : String(auditErr),
+        });
+      });
+      res.status(httpStatus).json({
+        error: errorCode,
+        message: gmailErr?.message ?? "Failed to verify access token",
+      });
+      return;
+    }
+
     // tenant doc + DataSource 取得 (Phase 1 と同じ)
     let tenant: TenantInfo;
     // PdfDraftAuditLog.toEmail (string | null) と整合させる。catch 経路で未代入のまま
@@ -334,6 +428,7 @@ router.post(
           userId,
           toEmail: validatedToEmail,
           ownerEmail: validatedCcEmail,
+          tokenOwnerEmail,
           draftId: null,
           status: "failed",
           errorCode: "pdf_too_large_for_gmail",
@@ -424,6 +519,7 @@ router.post(
         userId,
         toEmail: validatedToEmail,
         ownerEmail: validatedCcEmail,
+        tokenOwnerEmail,
         draftId: draftResult.draftId,
         status: "success",
         errorCode: null,
@@ -458,6 +554,7 @@ router.post(
         userId,
         toEmail: validatedToEmail,
         ownerEmail: validatedCcEmail,
+        tokenOwnerEmail,
         draftId: null,
         status: "failed",
         errorCode,
