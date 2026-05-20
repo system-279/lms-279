@@ -1,0 +1,68 @@
+/**
+ * Issue #425: Firestore (および Firebase Admin SDK) の transient エラーに対する
+ * 共通リトライユーティリティ。
+ *
+ * 設計方針:
+ * - transient/permanent の分類は `grpc-errors.ts:classifyFirestoreError` を再利用 (DRY)
+ * - exponential backoff (base * 2^attempt) で待機 (jitter なし、PR scope 内では単純化)
+ * - permanent エラーは即座に throw (retry しない)
+ * - rules/error-handling.md §3 「transient/permanent 分類」原則と整合
+ *
+ * 適用範囲:
+ * - lesson-session.ts cleanupInProgressAttempts (PR #423 follow-up)
+ * - その他 Firestore 呼び出しへの適用は段階的に別 PR で
+ */
+
+import { classifyFirestoreError } from "./grpc-errors.js";
+import { logger } from "./logger.js";
+
+export interface WithTransientRetryOptions {
+  /** 最大試行回数 (初回 + リトライ)。default 3。 */
+  maxAttempts?: number;
+  /** 初回 retry 待機時間 (ms)。default 100。指数的に baseDelayMs * 2^attempt で増加。 */
+  baseDelayMs?: number;
+  /** logger.warn に出す追加コンテキスト (tenantId / userId / operation 名等)。PII を含めない。 */
+  context?: Record<string, unknown>;
+}
+
+/**
+ * fn を実行し、transient エラーで失敗した場合に exponential backoff でリトライする。
+ *
+ * - 成功: そのまま値を返す
+ * - permanent エラー: 即座に throw (retry しない)
+ * - transient エラー: 最大 (maxAttempts - 1) 回 retry し、それでも失敗なら最後のエラーを throw
+ * - retry 毎に logger.warn で記録 (errorType=transient_retry)
+ */
+export async function withTransientRetry<T>(
+  fn: () => Promise<T>,
+  opts: WithTransientRetryOptions = {},
+): Promise<T> {
+  const maxAttempts = opts.maxAttempts ?? 3;
+  const baseDelayMs = opts.baseDelayMs ?? 100;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      const { grpcCode, isTransient } = classifyFirestoreError(err);
+      // permanent エラー or 最終試行 → 即 throw (retry しない)
+      if (!isTransient || attempt === maxAttempts - 1) {
+        throw err;
+      }
+      const delay = baseDelayMs * Math.pow(2, attempt);
+      logger.warn("withTransientRetry: retrying", {
+        errorType: "transient_retry",
+        attempt: attempt + 1,
+        maxAttempts,
+        delay,
+        grpcCode,
+        ...opts.context,
+      });
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  // unreachable (loop は throw か return で必ず抜ける) だが TypeScript 用に明示
+  throw lastError;
+}
