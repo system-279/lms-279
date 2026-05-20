@@ -176,7 +176,7 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       verified: true,
     });
     // Issue #435: acquire はデフォルトで成功 (新規 pending 取得)
-    mocks.acquirePendingPdfDraftLogMock.mockResolvedValue({ acquired: true });
+    mocks.acquirePendingPdfDraftLogMock.mockResolvedValue({ kind: "acquired" });
     mocks.finalizePdfDraftLogMock.mockResolvedValue(undefined);
 
     app = buildApp();
@@ -483,12 +483,12 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
     });
   });
 
-  describe("idempotency (重複ガード)", () => {
-    it("既存 status=success の log があれば 200 + 既存 draftId/draftUrl を返す (createGmailDraft 呼ばれない)", async () => {
+  describe("idempotency (重複ガード) - acquire transaction 経由", () => {
+    it("既存 status=success の log + 認可境界一致 → 200 + 既存 draftId/draftUrl (createGmailDraft 呼ばれない)", async () => {
       const { user } = await seedTenant(ds);
-      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
-        exists: true,
-        data: () => ({ status: "success", draftId: "existing-draft-1" }),
+      mocks.acquirePendingPdfDraftLogMock.mockResolvedValueOnce({
+        kind: "existing_success",
+        draftId: "existing-draft-1",
       });
 
       const res = await request
@@ -499,15 +499,13 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(res.body.draftId).toBe("existing-draft-1");
       expect(res.body.draftUrl).toBe("https://mail.google.com/mail/u/0/?ogbl#drafts/existing-draft-1");
       expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
-      expect(mocks.recordPdfDraftLogMock).not.toHaveBeenCalled();
+      expect(mocks.finalizePdfDraftLogMock).not.toHaveBeenCalled();
     });
 
-    it("既存 status=failed の log があれば新規作成にフォールスルー", async () => {
+    it("既存 status=failed → acquire transaction で pending に上書きして新規 Gmail draft 作成 (201)", async () => {
       const { user } = await seedTenant(ds);
-      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
-        exists: true,
-        data: () => ({ status: "failed", errorCode: "gmail_quota_exceeded" }),
-      });
+      // acquire は内部で failed → pending 上書きを行い acquired を返す
+      mocks.acquirePendingPdfDraftLogMock.mockResolvedValueOnce({ kind: "acquired" });
 
       const res = await request
         .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
@@ -517,12 +515,11 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(mocks.createGmailDraftMock).toHaveBeenCalledTimes(1);
     });
 
-    // Issue #435 AC-3: idempotency check が throw した場合は 503 で停止する (新規 Gmail 呼び出しなし)。
-    // 旧実装はフォールスルーで新規作成を続行していたが、副作用 (Gmail draft 作成) のある操作で
-    // idempotency store が見えない状態は危険なため、停止に変更。
-    it("AC-3 (Issue #435): idempotency check が throw → 503 gmail_api_transient + Gmail API 呼ばれない", async () => {
+    // Issue #435 AC-3: acquire transaction が throw した場合は 503 で停止する。
+    // 旧実装 (手動 idempotency check + フォールスルー) は撤去し、acquire 内に統合した。
+    it("AC-3 (Issue #435): acquire transaction が throw → 503 gmail_api_transient + Gmail API 呼ばれない", async () => {
       const { user } = await seedTenant(ds);
-      mocks.idempotencyDocGetMock.mockRejectedValueOnce(new Error("firestore unavailable"));
+      mocks.acquirePendingPdfDraftLogMock.mockRejectedValueOnce(new Error("firestore unavailable"));
 
       const res = await request
         .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
@@ -531,7 +528,6 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(res.status).toBe(503);
       expect(res.body.error).toBe("gmail_api_transient");
       expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
-      expect(mocks.acquirePendingPdfDraftLogMock).not.toHaveBeenCalled();
     });
   });
 
@@ -707,18 +703,13 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
     });
   });
 
-  describe("idempotency 旧スキーマ互換 (案 B、AC-13)", () => {
-    it("AC-13: 旧スキーマ success ログ (ownerEmailHash のみ、recipient* なし) でも 200 を返す", async () => {
+  describe("idempotency 旧スキーマ互換 (案 B、AC-13、acquire transaction 経由)", () => {
+    it("AC-13: 旧スキーマ success ログ (createdByUid/userId なし) でも acquire transaction で existing_success として 200 を返す", async () => {
       const { user } = await seedTenant(ds);
-      // 旧スキーマ: status + draftId + ownerEmailHash のみ
-      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
-        exists: true,
-        data: () => ({
-          status: "success",
-          draftId: "legacy-draft-001",
-          ownerEmailHash: "abcd1234",
-          // recipientToHash / recipientCcHash 不在 (旧スキーマ)
-        }),
+      // acquire は内部で 旧スキーマ success doc を読み、createdByUid 不在で後方互換扱い → existing_success を返す
+      mocks.acquirePendingPdfDraftLogMock.mockResolvedValueOnce({
+        kind: "existing_success",
+        draftId: "legacy-draft-001",
       });
 
       const res = await request
@@ -919,11 +910,13 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
     });
 
-    it("AC-4: token owner 検証は idempotency check の後に行われる (success 既存ログがあれば検証スキップ)", async () => {
+    // Issue #435 で acquire transaction に統合した結果、acquire は token verify の **後** に呼ばれる。
+    // よって token verify は idempotency hit でも実施される (副作用なし、Gmail API は呼ばれない)。
+    it("AC-4: success 既存ログがあっても acquire transaction で existing_success として 200 を返す", async () => {
       const { user } = await seedTenant(ds);
-      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
-        exists: true,
-        data: () => ({ status: "success", draftId: "existing-1" }),
+      mocks.acquirePendingPdfDraftLogMock.mockResolvedValueOnce({
+        kind: "existing_success",
+        draftId: "existing-1",
       });
 
       const res = await request
@@ -935,9 +928,9 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
         });
 
       expect(res.status).toBe(200);
-      // idempotency hit 時は token 検証も Gmail API もスキップ
-      expect(mocks.verifyAccessTokenOwnerMock).not.toHaveBeenCalled();
+      // existing_success 時は Gmail API も finalize もスキップ
       expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
+      expect(mocks.finalizePdfDraftLogMock).not.toHaveBeenCalled();
     });
 
     // Codex review (Issue #436): verified_email が false の access token は拒否する。
@@ -973,20 +966,20 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
     });
   });
 
-  // Codex review (Issue #436): idempotency hit 時の認可境界。
-  // 旧実装は `requestId` 単独で既存 draftId を返していたため、
-  // 別 super admin / 別 userId の既存 success ログを拾える余地があった。
-  describe("Issue #436: idempotency 認可境界 (Codex review)", () => {
-    it("既存 success ログの createdByUid が現在 actor と異なる → 409 (別 actor の draft 横取り防止)", async () => {
+  // Codex review (Issue #436 → Issue #435 で transaction に統合): idempotency 認可境界。
+  // 認可境界 (createdByUid + userId) 判定は acquire transaction 内に集約された。
+  // route 層は kind: "collision" で 409 / kind: "existing_success" で 200 を返すのみ。
+  describe("Issue #436+#435: idempotency 認可境界 (acquire transaction で判定)", () => {
+    it("acquire が kind=collision を返す (別 actor / 別 userId) → 409 + Gmail API 呼ばれない", async () => {
       const { user } = await seedTenant(ds);
-      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
-        exists: true,
-        data: () => ({
+      mocks.acquirePendingPdfDraftLogMock.mockResolvedValueOnce({
+        kind: "collision",
+        existing: {
           status: "success",
-          draftId: "victim-draft-1",
-          createdByUid: "uid-other-admin", // 別 super admin
-          userId: user.id,
-        }),
+          draftId: "victim-draft",
+          createdByUid: "uid-other-admin",
+          userId: "user-different",
+        },
       });
 
       const res = await request
@@ -1001,68 +994,14 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       expect(res.body.error).toBe("invalid_request_id");
       // 攻撃者は victim の draftId を取得できない
       expect(res.body.draftId).toBeUndefined();
-      // 新規 Gmail API も呼ばれない
       expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
     });
 
-    it("既存 success ログの userId が path userId と異なる → 409 (別 受講者 draft 横取り防止)", async () => {
+    it("acquire が kind=existing_success → 200 で既存 draftId 返却 (認可境界一致 or 旧スキーマ後方互換)", async () => {
       const { user } = await seedTenant(ds);
-      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
-        exists: true,
-        data: () => ({
-          status: "success",
-          draftId: "victim-draft-2",
-          createdByUid: mocks.superAdminUid, // 同じ actor
-          userId: "user-different", // 別 受講者
-        }),
-      });
-
-      const res = await request
-        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
-        .send({
-          requestId: "req-user-collision",
-          sections: ALL_ON,
-          accessToken: "ya29.token",
-        });
-
-      expect(res.status).toBe(409);
-      expect(res.body.error).toBe("invalid_request_id");
-      expect(mocks.createGmailDraftMock).not.toHaveBeenCalled();
-    });
-
-    it("旧スキーマ (createdByUid 不在) は後方互換で 200 を返す", async () => {
-      const { user } = await seedTenant(ds);
-      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
-        exists: true,
-        data: () => ({
-          status: "success",
-          draftId: "legacy-200",
-          // createdByUid / userId フィールド不在 = 旧スキーマ
-        }),
-      });
-
-      const res = await request
-        .post(`/api/v2/super/tenants/tenant-1/users/${user.id}/progress-pdf-draft`)
-        .send({
-          requestId: "req-legacy-compat",
-          sections: ALL_ON,
-          accessToken: "ya29.token",
-        });
-
-      expect(res.status).toBe(200);
-      expect(res.body.draftId).toBe("legacy-200");
-    });
-
-    it("一致時は通常通り 200 で既存 draftId 返却", async () => {
-      const { user } = await seedTenant(ds);
-      mocks.idempotencyDocGetMock.mockResolvedValueOnce({
-        exists: true,
-        data: () => ({
-          status: "success",
-          draftId: "match-draft",
-          createdByUid: mocks.superAdminUid,
-          userId: user.id,
-        }),
+      mocks.acquirePendingPdfDraftLogMock.mockResolvedValueOnce({
+        kind: "existing_success",
+        draftId: "match-draft",
       });
 
       const res = await request
@@ -1080,10 +1019,10 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
 
   // Issue #435: idempotency アトミック化 + 状態遷移ログ
   describe("Issue #435: pending → success/failed の状態遷移とアトミック acquire", () => {
-    it("AC-1: acquire が in_flight を返す (並行 pending) → 409 invalid_request_id + Gmail API 呼ばれない", async () => {
+    it("AC-1: acquire が kind=in_flight を返す (並行 pending) → 409 invalid_request_id + Gmail API 呼ばれない", async () => {
       const { user } = await seedTenant(ds);
       mocks.acquirePendingPdfDraftLogMock.mockResolvedValueOnce({
-        acquired: false,
+        kind: "in_flight",
         existing: { status: "pending" },
       });
 
@@ -1172,11 +1111,11 @@ describe("POST /api/v2/super/tenants/:tenantId/users/:userId/progress-pdf-draft"
       );
     });
 
-    it("acquire が already_success (PR #449 手動 idempotency check をすり抜けた防御層) → 200 既存 draftId", async () => {
+    it("acquire が kind=existing_success → 200 既存 draftId (acquire transaction が単独で idempotency 判定)", async () => {
       const { user } = await seedTenant(ds);
       mocks.acquirePendingPdfDraftLogMock.mockResolvedValueOnce({
-        acquired: false,
-        existing: { status: "success", draftId: "fallback-success" },
+        kind: "existing_success",
+        draftId: "fallback-success",
       });
 
       const res = await request

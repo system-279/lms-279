@@ -208,70 +208,19 @@ router.post(
     // Evaluator HIGH-2/MEDIUM 対応: db は 1 回だけ取得して使い回す
     const db = getFirestore();
 
-    // Evaluator MEDIUM-2 対応: idempotency 重複ガード (success の早期 return)
-    // 同一 requestId で既に success ログがあれば、Gmail draft 再作成せず既存結果を返す。
+    // Issue #435 + Codex review High 1/2/3: 旧の手動 idempotency check
+    // (`docRef.get()` → status 判定 → 認可境界チェック) は撤去。すべての判定を
+    // `acquirePendingPdfDraftLog` の Firestore transaction 内に集約することで、
+    //   - 別 actor / 別 user の success ログを横取りする race 経路 (Codex High 1)
+    //   - `recordPdfDraftLog().set()` との書き込みモデル混在 (Codex High 90)
+    //   - failed 既存 doc の上書き再試行不可 (Codex High 95)
+    // を解消する。
     //
-    // Codex review (Issue #436): 認可境界として `requestId` 単独では不足。
-    // 別 super admin / 別 userId の既存 success ログを拾える余地があるため、
-    // `createdByUid` + `userId` 一致 (旧スキーマで `createdByUid` 不在なら許容) を追加で確認する。
+    // acquire は token verify 成功後 (PDF 生成も完了後) に呼び出す。pending を取得した時点で
+    // Gmail draft 作成へ進み、その成功/失敗を finalize で記録する。
     //
-    // Issue #435 (AC-3): Firestore idempotency 確認失敗時はフォールスルーせず 503 で停止する。
-    // 副作用 (Gmail draft 作成) のある操作なので、idempotency store が見えない状態で
-    // 新規作成に進むのは安全でない (transient リトライポリシーに準拠)。
-    try {
-      const existingLog = await db
-        .collection("tenants")
-        .doc(tenantId)
-        .collection("pdf_draft_logs")
-        .doc(parsed.requestId)
-        .get();
-      if (existingLog.exists) {
-        const data = existingLog.data();
-        if (data && data.status === "success" && typeof data.draftId === "string") {
-          // 認可境界: 別 actor / 別 受講者 の既存 draft を横取りできないよう照合
-          // (旧スキーマで `createdByUid` 不在ならスキップして後方互換維持)
-          const ownerMatches =
-            typeof data.createdByUid !== "string" || data.createdByUid === createdByUid;
-          const userMatches = typeof data.userId !== "string" || data.userId === userId;
-          if (ownerMatches && userMatches) {
-            const existingDraftId = data.draftId;
-            const response: ProgressPdfDraftResponse = {
-              draftId: existingDraftId,
-              draftUrl: buildGmailDraftUrl(existingDraftId),
-            };
-            res.status(200).json(response);
-            return;
-          }
-          // 不一致 → 別 actor が同じ requestId で先取った可能性、再利用拒否
-          logger.warn("Idempotency log exists but actor/userId mismatch — rejecting reuse", {
-            tenantId,
-            requestId: parsed.requestId,
-            // PII を残さないため hash で記録
-            currentActorHash: hashEmail(createdByUid),
-            currentUserId: userId,
-          });
-          res.status(409).json({
-            error: "invalid_request_id",
-            message: "requestId is already used by a different actor or user",
-          });
-          return;
-        }
-        // status=failed / pending の場合は acquire 段階 (後段) で transaction 経由で判定する
-      }
-    } catch (err) {
-      // Issue #435 AC-3: idempotency check 失敗時は 503 で停止 (新規 Gmail 呼び出しは行わない)
-      logger.error("Failed to check idempotency for pdf_draft_logs — refusing to proceed", {
-        errorType: "pdf_draft_idempotency_check_failed",
-        error: err instanceof Error ? err : new Error(String(err)),
-        tenantId,
-        requestId: parsed.requestId,
-      });
-      res.status(503).json({
-        error: "gmail_api_transient",
-        message: TRANSIENT_RETRY_MESSAGE_JA,
-      });
-      return;
-    }
+    // AC-3 (idempotency check 失敗 → 503): acquire transaction 内で throw された場合に対応する
+    // catch ブロックで 503 を返す (route 下方の acquire try/catch を参照)。
 
     // Issue #436: access token の発行元 Google アカウント email を取得し、
     // Firebase Auth (superAdmin.email) と一致するか検証する。
@@ -597,6 +546,10 @@ router.post(
       return;
     }
 
+    // Codex review High 1/3: acquire transaction で
+    //   - success 既存の認可境界 (createdByUid + userId) チェック
+    //   - failed 既存の上書き再試行 (旧 docRef.create() では不可だった)
+    // を一括処理する。
     let pendingAcquired = false;
     try {
       const acquireResult = await acquirePendingPdfDraftLog(db, {
@@ -610,9 +563,11 @@ router.post(
         tokenOwnerEmail,
         sections: parsed.sections,
       });
-      if (!acquireResult.acquired) {
-        const existingStatus = acquireResult.existing.status;
-        if (existingStatus === "pending") {
+      switch (acquireResult.kind) {
+        case "acquired":
+          pendingAcquired = true;
+          break;
+        case "in_flight":
           // 並行リクエストが先に pending を取った → 409 in_flight
           logger.warn("Concurrent pdf draft request — pending already in flight", {
             tenantId,
@@ -623,29 +578,29 @@ router.post(
             message: "A draft for this requestId is already in flight",
           });
           return;
-        }
-        if (existingStatus === "success" && typeof acquireResult.existing.draftId === "string") {
-          // PR #449 の手動 idempotency check で本来弾かれているはずだが、防御
-          const existingDraftId = acquireResult.existing.draftId;
+        case "existing_success": {
+          // 既存 success doc + 認可境界一致 → 200 既存 draftId
+          const existingDraftId = acquireResult.draftId;
           res.status(200).json({
             draftId: existingDraftId,
             draftUrl: buildGmailDraftUrl(existingDraftId),
           });
           return;
         }
-        // 想定外の既存 status → 500
-        logger.error("Unexpected existing pdf_draft_logs status during acquire", {
-          tenantId,
-          requestId: parsed.requestId,
-          existingStatus,
-        });
-        res.status(500).json({
-          error: "pdf_generation_failed",
-          message: "Unexpected idempotency state",
-        });
-        return;
+        case "collision":
+          // 別 actor / 別 user の既存 success → 横取り拒否 (Codex High 1 対応、PR #449 と同等)
+          logger.warn("Idempotency collision: existing success doc belongs to different actor/user", {
+            tenantId,
+            requestId: parsed.requestId,
+            currentActorHash: hashEmail(createdByUid),
+            currentUserId: userId,
+          });
+          res.status(409).json({
+            error: "invalid_request_id",
+            message: "requestId is already used by a different actor or user",
+          });
+          return;
       }
-      pendingAcquired = true;
     } catch (err) {
       logger.error("Failed to acquire pending pdf_draft_logs — refusing to proceed", {
         errorType: "pdf_draft_acquire_failed",

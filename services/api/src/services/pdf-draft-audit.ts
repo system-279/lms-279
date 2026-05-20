@@ -48,12 +48,12 @@ export interface PdfDraftAuditLog {
 }
 
 /**
- * Issue #435: acquirePendingPdfDraftLog 用の pending 段階ログ。
+ * Issue #435: acquirePendingPdfDraftLog 用の pending 段階ログ + 認可境界フィールド。
  *
- * Gmail draft 作成前の認可境界フィールドのみを記録する。
+ * Gmail draft 作成前の認可境界フィールド (createdByUid + userId + tokenOwnerEmail) を含む。
  * - draftId / status / errorCode / pdfSizeBytes は確定後 (finalizePdfDraftLog) に追記。
  *
- * 並行リクエスト防止のため、Firestore `create()` (precondition: not exists) で書き込む。
+ * 並行リクエスト防止のため、Firestore `runTransaction` で読み + 書きをアトミックに行う。
  */
 export interface PendingPdfDraftLogInput {
   requestId: string;
@@ -67,13 +67,18 @@ export interface PendingPdfDraftLogInput {
   sections: ProgressPdfSections;
 }
 
+/**
+ * Issue #435 + Codex review: acquire 結果の判別共用体。
+ * - `acquired`: pending 取得成功 (新規 / failed 上書き) → Gmail API を呼び出してよい
+ * - `in_flight`: 既存 pending あり → 409 invalid_request_id (並行リクエスト中)
+ * - `existing_success`: 既存 success かつ 認可境界 (createdByUid + userId) 一致 → 200 既存 draftId
+ * - `collision`: 既存 success かつ 認可境界 不一致 → 409 invalid_request_id (別 actor / 別 user)
+ */
 export type AcquirePendingResult =
-  | { acquired: true }
-  | {
-      acquired: false;
-      /** 既存 doc の中身 (Firestore raw data)。route 層で status を見て分岐する。 */
-      existing: FirebaseFirestore.DocumentData;
-    };
+  | { kind: "acquired" }
+  | { kind: "in_flight"; existing: FirebaseFirestore.DocumentData }
+  | { kind: "existing_success"; draftId: string }
+  | { kind: "collision"; existing: FirebaseFirestore.DocumentData };
 
 /** メールアドレスを sha256 でハッシュ化 (PII 最小化) */
 export function hashEmail(email: string): string {
@@ -142,15 +147,21 @@ export async function recordPdfDraftLog(
 }
 
 /**
- * Issue #435 (AC-1 / AC-5): pending 段階のログを Firestore に **アトミックに** 先取りする。
+ * Issue #435 (AC-1 / AC-5) + Codex review High 1-3: pending 段階のログを
+ * Firestore `runTransaction` でアトミックに取得 + 認可境界判定する。
  *
- * 並行 2 リクエストが同じ requestId で Gmail draft を二重作成するのを防ぐ。
- * `create()` (precondition: not exists) を使い、ALREADY_EXISTS なら既存 doc を返す。
+ * 1 つの transaction 内で読み + 書き + 状態判定を行うため、並行リクエストの race condition と
+ * recordPdfDraftLog (early-failure set) との merge 不整合の両方を防ぐ。
  *
- * @returns
- *   - `{ acquired: true }`: pending 取得成功、Gmail API を呼び出してよい
- *   - `{ acquired: false, existing }`: 既存 doc あり (status を見て分岐: success → 200 / pending → 409 / failed → 再試行)
- * @throws Firestore の (ALREADY_EXISTS 以外の) 障害は throw。route 層は 503 で返す。
+ * 状態遷移仕様:
+ * - doc 不存在 → tx.create(pending) → `acquired`
+ * - 既存 `status: "pending"` → 並行中、上書きせず `in_flight` を返す (route で 409)
+ * - 既存 `status: "success"`:
+ *   - `createdByUid` + `userId` 一致 (旧スキーマ欠落は許容) → `existing_success` (route で 200)
+ *   - 不一致 → `collision` (route で 409)
+ * - 既存 `status: "failed"` → tx.set(pending) で上書き再試行 → `acquired`
+ *
+ * @throws Firestore 障害は throw。route 層は 503 で返す。
  */
 export async function acquirePendingPdfDraftLog(
   db: Firestore,
@@ -160,7 +171,7 @@ export async function acquirePendingPdfDraftLog(
   const ttlAt = Timestamp.fromMillis(now.getTime() + TTL_DAYS * 86400 * 1000);
 
   const ccHash = input.ownerEmail ? hashEmail(input.ownerEmail) : null;
-  const document = {
+  const pendingDocument = {
     createdAt: now.toISOString(),
     createdByUid: input.createdByUid,
     createdByEmailHash: hashEmail(input.createdByEmail),
@@ -184,34 +195,38 @@ export async function acquirePendingPdfDraftLog(
     .doc(input.requestId);
 
   try {
-    await docRef.create(document);
-    return { acquired: true };
-  } catch (err) {
-    // ALREADY_EXISTS (gRPC code 6) → 既存 doc を取得して呼び出し側に返す
-    const code = (err as { code?: number | string })?.code;
-    if (code === 6 || code === "6" || code === "ALREADY_EXISTS") {
-      try {
-        const snapshot = await docRef.get();
-        if (snapshot.exists) {
-          return { acquired: false, existing: snapshot.data() ?? {} };
-        }
-      } catch (getErr) {
-        logger.error("Failed to read existing pdf_draft_logs after ALREADY_EXISTS", {
-          errorType: "pdf_draft_audit_read_after_create_conflict_failed",
-          error: getErr instanceof Error ? getErr : new Error(String(getErr)),
-          tenantId: input.tenantId,
-          requestId: input.requestId,
-        });
-        throw getErr;
+    return await db.runTransaction(async (tx) => {
+      const snapshot = await tx.get(docRef);
+      if (!snapshot.exists) {
+        tx.create(docRef, pendingDocument);
+        return { kind: "acquired" } satisfies AcquirePendingResult;
       }
-      // create が ALREADY_EXISTS なのに get で exists=false (TOCTOU 競合の極端ケース) → throw
-      logger.error("pdf_draft_logs ALREADY_EXISTS but doc not found on subsequent read", {
-        tenantId: input.tenantId,
-        requestId: input.requestId,
-      });
-      throw err;
-    }
-    logger.error("Failed to acquire pending pdf_draft_logs", {
+      const data = snapshot.data() ?? {};
+      const existingStatus = data.status;
+
+      if (existingStatus === "pending") {
+        return { kind: "in_flight", existing: data } satisfies AcquirePendingResult;
+      }
+
+      if (existingStatus === "success" && typeof data.draftId === "string") {
+        // 認可境界 (PR #449 と同等): 別 actor / 別 user の既存 draft を横取りできないよう照合
+        // 旧スキーマで createdByUid / userId 不在ならスキップして後方互換維持
+        const ownerMatches =
+          typeof data.createdByUid !== "string" || data.createdByUid === input.createdByUid;
+        const userMatches = typeof data.userId !== "string" || data.userId === input.userId;
+        if (ownerMatches && userMatches) {
+          return { kind: "existing_success", draftId: data.draftId } satisfies AcquirePendingResult;
+        }
+        return { kind: "collision", existing: data } satisfies AcquirePendingResult;
+      }
+
+      // existing_status === "failed" (または想定外 status) → pending に上書き再試行
+      // Codex review High 95 対応: failed doc を create() で上書きできない問題を transaction の set() で解決
+      tx.set(docRef, pendingDocument);
+      return { kind: "acquired" } satisfies AcquirePendingResult;
+    });
+  } catch (err) {
+    logger.error("Failed to acquire pending pdf_draft_logs (transaction failed)", {
       errorType: "pdf_draft_audit_acquire_pending_failed",
       error: err instanceof Error ? err : new Error(String(err)),
       tenantId: input.tenantId,

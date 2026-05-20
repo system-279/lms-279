@@ -7,16 +7,21 @@
 
 ## 改訂履歴
 
-- **2026-05-21 (Issue #435)**: idempotency アトミック化 + 状態遷移ログ。Codex review (Issue #434 由来 High 1 / Medium 1+2) 対応。
+- **2026-05-21 (Issue #435)**: idempotency アトミック化 + 状態遷移ログ。Codex review High 1 / 3 を反映 (High 90: `recordPdfDraftLog().set()` 混在 / Medium 86: orphan pending 復旧 / Low 82: failed mock test は本 PR scope 外、follow-up Issue 化)。
   - §7 監査ログスキーマ: `status` を `"pending" | "success" | "failed"` に拡張。`finalizedAt` (状態遷移時刻) を追加。
-  - §3 idempotency 構造を全面再設計:
-    1. 旧手動 `docRef.get()` による early-return は維持 (success ログの早期 200 返却)
-    2. Gmail draft 作成の直前に `acquirePendingPdfDraftLog` (Firestore `docRef.create()` で precondition: not exists) で pending 段階を **アトミックに先取り**
-    3. ALREADY_EXISTS の場合は既存 doc の status で分岐: `pending` → 409 `invalid_request_id` (in_flight) / `success` → 200 (防御層) / `failed` → 上書き再試行
+  - §3 idempotency 構造を全面再設計 (transaction ベース):
+    1. 旧手動 `docRef.get()` による early-return は **撤去** (acquire transaction に統合、二重判定の race を排除)
+    2. Gmail draft 作成の直前に `acquirePendingPdfDraftLog` を呼ぶ。内部実装は **Firestore `runTransaction`** で `tx.get(docRef)` → 状態判定 → `tx.create` / `tx.set` を 1 アトミック単位で実行
+    3. 状態遷移仕様:
+       - `不存在` → `tx.create(pending)` → `kind: "acquired"`
+       - `existing pending` → 並行 2 件目 → `kind: "in_flight"` (route で 409 `invalid_request_id`)
+       - `existing success + createdByUid/userId 一致` (旧スキーマ欠落は許容) → `kind: "existing_success"` (route で 200 既存 draftId)
+       - `existing success + 不一致` → `kind: "collision"` (route で 409 `invalid_request_id`、別 actor の draft 横取り防止)
+       - `existing failed` → `tx.set(pending)` で **上書き再試行** → `kind: "acquired"` (旧 `docRef.create()` では実装不可だった failed リトライを transaction で解決)
     4. Gmail draft 成功 → `finalizePdfDraftLog` で `pending → success` に merge update
     5. Gmail draft 失敗 → `finalizePdfDraftLog` で `pending → failed` に merge update
-  - §8 エラー分類: idempotency check 失敗 (Firestore 障害) は **503 `gmail_api_transient`** で停止 (旧実装はフォールスルーで新規作成を続行していた、AC-3 対応)。
-  - 並行 2 リクエストで Gmail draft が 1 件のみ作成される (AC-1)、`requestId` 再利用 + 別 userId は 409 (AC-2、PR #449 で対応済み)、旧スキーマ互換維持 (AC-4)。
+  - §8 エラー分類: acquire transaction の throw (Firestore 障害) は **503 `gmail_api_transient`** で停止 (旧フォールスルー廃止、AC-3 対応)。
+  - 並行 2 リクエストで Gmail draft が 1 件のみ作成される (AC-1、transaction で原子性保証)、`requestId` 再利用 + 別 userId は 409 (AC-2、acquire transaction で認可境界判定)、旧スキーマ互換維持 (AC-4)、pending → success/failed 状態遷移ログ (AC-5)。
 - **2026-05-21 (Issue #436)**: access token owner 検証を追加。Codex review (Medium 2 件) 反映済み。
   - §3 OAuth フロー: BE は Gmail API 呼び出し前に `oauth2.tokeninfo` で access token の発行元 Google アカウント email を取得し、Firebase Auth (`superAdmin.email`) と一致するか検証する。不一致なら **403 `access_token_owner_mismatch`** + Gmail API 呼ばない。`verified_email !== true` (Google が email 所有を確認していない) も **401 `invalid_access_token`** で拒否する (Codex Medium 68 対応)。
   - §3 idempotency 認可境界: 既存 success ログを 200 で返す際に、`createdByUid` + `userId` が現在 actor と一致する場合のみ返す。不一致なら **409 `invalid_request_id`** (別 super admin / 別 受講者 の既存 draft 横取り防止、Codex Medium 82 対応)。旧スキーマ (`createdByUid` 不在) は後方互換で従来通り許容。
