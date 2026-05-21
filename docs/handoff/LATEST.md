@@ -1,14 +1,14 @@
-# Session Handoff — 2026-05-21 (Session 40)
+# Session Handoff — 2026-05-21 (Session 41)
 
 ## TL;DR
 
-**Phase 2 受講者進捗 PDF Gmail 下書きの follow-up (Codex review I-2/M2 系) 5 件を一気通貫で消化したセッション。** `/catchup` 出力の優先順 (P1 #436/#435 → P2 #437/#425/#424) に従って 5 つの PR を順次作成、各 PR で Codex review を実施し High/Medium 指摘を当該 PR 内で吸収。4 件 (#449/#451/#452/#453) は main にマージ済み、最後の PR #454 (Issue #424) は CI 進行中で本田様の merge 認可待ち。
+**福の種 株式会社様③ の受講生 2 名がログイン不能になる現場バグ (URL 末尾に不可視文字 U+FE0E 混入) を起点に、関連する派生問題を一気通貫で 3 PR で消化したセッション。** 受講者向けリンクの **コピー経路** に潜む silent failure / a11y 後退 / 重複実装を、PR レビュー (Codex MCP + pr-review-toolkit 4 agents) の指摘を当該 PR 内で吸収しながら全消化。3 PR すべて main にマージ済み、現場の受講生 2 名は本日デプロイで元の壊れた URL のままログイン可能 (middleware の自動 308 redirect)。
 
-- **Issue Net**: **-4 件** (Close 4 / 起票 0、Net 進捗有り) — #424 は PR #454 マージ後にクローズ予定
-- **Open 推移**: Session 39 末 9 件 (active 5 / postponed 4) → Session 40 末 **5 件** (active 1: #424 PR #454 進行中 / postponed 4 変化なし)
-- **マージ済み PR**: #449 (#436) / #451 (#435 rebase) / #452 (#437) / #453 (#425)
-- **未マージ PR**: #454 (#424) — Medium 1 件本 PR 内吸収済、merge 認可待ち
-- **新規 follow-up Issue 候補 (本田様判断待ち、PR コメントで提示)**: PR #451 Codex High 90 / Medium 86 / Low 82、PR #454 Codex Medium 88 完全 atomicity / Low 82 video-events / Low 78 sessionStatus FE 経路
+- **Issue Net**: **0 件** — Close 3 件 (#456 #458 #460) / 起票 3 件 (#456 #458 #460)
+- 起票はすべて triage 基準 §1 (実害) / §4 (review agent rating ≥ 7 confidence ≥ 80) を満たした正当起票 (機械的起票ではない)
+- **Open 推移**: Session 40 末 active 0 / postponed 4 → Session 41 末 **active 0 / postponed 4 変化なし**
+- **マージ済み PR**: #457 (#456 closes) / #459 (#458 closes) / #461 (#460 closes)
+- **未マージ PR**: なし
 
 ---
 
@@ -18,134 +18,136 @@
 # 1. 状況復元
 cat docs/handoff/LATEST.md
 
-# 2. main 最新と CI 状況
+# 2. main 最新と CI / Cloud Run デプロイ状況
 git fetch origin main && git log --oneline -10 origin/main
 gh run list --branch main --limit 5
 
-# 3. 現在の OPEN Issue (5 件: active 1 / postponed 4、PR #454 merge で active 0)
+# 3. 現在の OPEN Issue (4 件すべて postponed、明示指示なき限り着手不可)
 gh issue list --state open --limit 15
 
-# 4. PR #454 (Issue #424) の状態確認
-gh pr view 454 --json state,mergeStateStatus,statusCheckRollup
-gh pr checks 454
+# 4. 本セッション派生実装の現場挙動確認 (本田様判断、AI 能動依頼禁止)
+#    - 福の種 株式会社様③ (tenant atali82i) の受講生 2 名のログイン回復
+#    - 管理ダッシュボードの CopyButton 失敗時通知 / <code> 全選択動作
 ```
 
 ---
 
-## セッション成果物 (Session 40)
+## セッション成果物 (Session 41)
 
-### マージ済み PR (4 件)
+### マージ済み PR (3 件)
 
 | # | タイトル | 種別 | 差分 | 関連 Issue |
 |---|---|---|---|---|
-| #449 | feat(security): access token owner 検証で API 直叩き経路の別アカウント mailbox 汚染を防止 | bug/security fix | 8 files / +711/-7 | #436 |
-| #451 | feat(security): idempotency アトミック化 + pending → success/failed 状態遷移ログ [rebased] | bug/security fix | 5 files / +744/-186 | #435 |
-| #452 | feat(security): Gmail API エラーメッセージの PII フィルタ | bug/security fix | 5 files / +276/-10 | #437 |
-| #453 | feat(reliability): Firestore transient エラー用リトライ共通ユーティリティ + cleanupInProgressAttempts 適用 | reliability | 3 files / +344/-3 | #425 |
+| #457 | fix(web): URL path の不可視文字を strip して 308 redirect + CopyButton 二重ガード | bug/security fix | 5 files / +437/-1 | #456 |
+| #459 | feat(web): CopyButton コピー失敗時にユーザー通知 + 手動コピー fallback | feature/a11y | 6 files / +373/-35 | #458 |
+| #461 | refactor(web): register/page.tsx の重複 CopyButton を共通 component に統合 | refactor | 3 files / +79/-32 | #460 |
 
-旧 PR #450 (Issue #435 初版) は PR #449 の `--delete-branch` で base ブランチ消失 → 自動 close。同等の変更を main ベースで作り直して PR #451 に承継。
-
-### 未マージ PR (1 件、merge 認可待ち)
-
-| # | タイトル | 差分 | 状態 |
-|---|---|---|---|
-| #454 | fix(reliability): PATCH /quiz-attempts セッション再確認を abandoned 等も検知 | 6 files / +202/-14 | CI 進行中、Codex Medium 1 本 PR 内吸収済 |
+**累計**: 14 files / +889/-68 / vitest 108 → 161 (+53 件)
 
 ### 主要技術判断
 
-1. **acquirePendingPdfDraftLog を Firestore runTransaction ベースに統一** (Issue #435, PR #451):
-   - 旧 `docRef.create()` (precondition: not exists) では failed 既存 doc の上書き再試行が不可だった (Codex High 95)
-   - transaction で `tx.get` → 状態判定 → `tx.create` / `tx.set` を 1 アトミック単位で実行
-   - 戻り値を判別共用体 `kind: "acquired" | "in_flight" | "existing_success" | "collision"` に変更
-   - 認可境界 (createdByUid + userId) も transaction 内に集約 (Codex High 92)
-   - PR #449 由来の手動 idempotency check は撤去 (二重判定の race を排除)
+1. **Next.js middleware で URL path 内の不可視文字を strip → 308 redirect** (Issue #456, PR #457):
+   - 原因: macOS / iOS の入力履歴経由でクリップボード → メーラー / メモアプリにペースト時に OS/IME が `U+FE0E` 等を付加 (Gemini 解析と一致、ソース側はクリーン grep ゼロヒット)
+   - 設計: `web/middleware.ts` 新規追加。`sanitizeEncodedPathnameForRedirect(pathname)` で **segment 単位 decode → strip → re-encode**
+   - Codex High 指摘で、全体 `decodeURIComponent` だと encoded slash (`%2F`) が真の `/` に化けて別 route redirect となる不可逆変換が起きるため segment 単位処理が必須
+   - 除去対象: VARIATION SELECTORs (U+FE00..U+FE0F / U+E0100..U+E01EF) / TAG chars (U+E0000..U+E007F) / BOM (U+FEFF) / zero-width 系 (U+200B..U+200F, U+202A..U+202E, U+2060..U+206F) / soft hyphen (U+00AD)
+   - 既に共有された壊れた URL を共有先のまま救済 (恒久対応)
 
-2. **GmailDraftError に publicMessage getter を追加** (Issue #437, PR #452):
-   - `message` (Error 標準): 内部診断用、raw Gmail API error 含む可能性 → **logger / HTTP レスポンスへ出さない**
-   - `publicMessage` (新規 getter): 外部公開用、固定文言マップ `GMAIL_ERROR_PUBLIC_MESSAGES` から errorCode で引く → logger / response にそのまま使用可
-   - 既存 constructor シグネチャは維持 (後方互換)
+2. **CopyButton 共通 component 化 + 失敗時ユーザー通知 + 手動コピー fallback** (Issue #458, PR #459):
+   - 旧実装: `console.error` のみで silent failure → 管理者が無反応に気付かず空文字を受講者にチャット送付するリスク
+   - 新実装:
+     - 状態 `idle` / `copied` / `failed` の 3 値 (失敗時「コピー失敗」ボタン + `role="alert"` の inline alert)
+     - `useRef` + `useEffect` で timer race / unmount cleanup 防御
+     - 構造化ログ (`extractErrorName` util で Error / DOMException 共通対応、`isSecureContext` 同梱)
+     - `<code>` 要素は `selectAllInElement` util で onClick 全選択 fallback (writeText 失敗時の救済)
+   - aria-label を idle 時に「リンクをコピー」固定で支援技術に文脈付与
 
-3. **withTransientRetry 共通 util** (Issue #425, PR #453):
-   - 既存 `classifyFirestoreError` (utils/grpc-errors.ts) を再利用 (DRY)
-   - exponential backoff (base * 2^attempt)、default base=100ms / max 3 attempts
-   - logger.warn 失敗時の retry 継続 (rules/error-handling.md §1 「状態復旧 > ログ記録」、Codex Medium 78 対応)
-   - 入力検証 (maxAttempts / baseDelayMs 不正値で TypeError、Codex Low 74 対応)
-
-4. **completeSession に TOCTOU 防御** (Issue #424, PR #454):
-   - `updateLessonSession` 直前に `getLessonSession` で再 status 確認 → 非 active なら skip して null を返す
-   - TOCTOU window を μs オーダーに短縮 (完全な atomicity は DataSource インターフェース拡張が必要、follow-up 候補)
-   - error code: `force_exited` は旧 `session_force_exited` 維持、それ以外は新 `session_no_longer_active` (FE 後方互換)
+3. **register/page.tsx の重複統合 + ariaLabel prop 分離** (Issue #460, PR #461):
+   - `web/app/register/page.tsx` のローカル CopyButton (旧実装、a11y / silent failure 配慮なし) を共通 CopyButton に統合
+   - `label?: string` (default "コピー") + `ariaLabel?: string` を独立 props 化
+   - admin/page.tsx (label 省略) は PR #459 完全互換、register/page.tsx は a11y 改善 + silent failure 解消
 
 ---
 
 ## レビュー対応サマリ
 
-各 PR で `/codex review` (大規模 PR セカンドオピニオン) を実施。
+各 PR で Codex MCP review + pr-review-toolkit agents を実施 (PR #461 のみ medium tier で codex 省略)。3 agents 一致の High 指摘は当該 PR 内で全反映。
 
-| PR | High | Medium | Low | 本 PR 内吸収 | follow-up 候補 |
-|---|---|---|---|---|---|
-| #449 (#436) | 0 | 2 | 1 | Medium 2 (verified_email 拒否 / idempotency 認可境界) | Low 76 (HMAC) |
-| #451 (#435) | 3 | 0 | 1 | High 1/3 (success 認可境界 / failed 上書き) | High 90 (recordPdfDraftLog 混在) / Medium 86 (orphan pending) / Low 82 |
-| #452 (#437) | 0 | 0 | 1 | Low 82 (logger payload 直接 assert) | — |
-| #453 (#425) | 0 | 1 | 3 | Medium 78 (logger throw 耐性) + Low 74 (入力検証) + Low 90 (コメント) | Low 82 (jitter) |
-| #454 (#424) | 0 | 1 | 2 | Medium 88 (TOCTOU 防御 completeSession) | Medium 88 完全 atomicity / Low 82 video-events / Low 78 sessionStatus FE 経路 |
+| PR | Codex | code-reviewer | silent-failure | pr-test | comment-analyzer | 本 PR 内吸収 | defer |
+|---|---|---|---|---|---|---|---|
+| #457 | High 1 / Med 3 / Low 2 | Critical 0 / Important 0 | HIGH 2 / MED 2 | Critical 0 / Important 4 | Improvement 2 | High + Med 全反映 + IG-1/IG-2 反映 / Med 1 別 PR / 4 件 YAGNI | 多言語 slug 将来リスク (運用判明明文化) |
+| #459 | High 0 / Med 3 / Low 2 | Critical 0 / Important 3 | CRITICAL 0 / HIGH 2 / MED 3 | Critical 1 / Important 4 | — | 共通指摘 (timer race / `<code>` a11y + テスト / aria-label / 構造化ログ) 全反映 | register/page.tsx 重複 → #460 (本セッション内で消化) |
+| #461 | (medium tier で省略) | Critical 0 / Important 1 | CRITICAL 0 / HIGH 1 | Critical 0 / Important 4 | — | aria-label 後退指摘 (3 agents 一致) 反映 + ariaLabel prop 分離 + label="" 境界テスト | CopyableCode/SelectableCode 共通化 / LinkDisplay 結合テスト |
 
 ---
 
 ## ADR / ドキュメント更新
 
-- **ADR-034** 改訂履歴に Issue #437 / #436 / #435 を追記:
-  - §3 OAuth フロー: access token owner 検証 + idempotency transaction 構造
-  - §7 監査ログスキーマ: `tokenOwnerHash` + `status: pending|success|failed` + `finalizedAt`
-  - §8 エラー分類: `access_token_owner_mismatch` (403) / `invalid_access_token` (401 unverified) / `invalid_request_id` (409 collision/in_flight) / `publicMessage` 固定文言
+**今セッションでの ADR 作成: なし**
+
+ADR 候補として保留 (本田様判断):
+- **ADR-038 候補: URL path 不可視文字サニタイズの設計判断**
+  - 動機: 現場運用での U+FE0E 混入 (Issue #456) を端緒に新規 middleware 層を導入
+  - 設計判断: segment 単位 decode/encode (encoded slash 保全) + 全体 try/catch (middleware throw による 500 全滅防止) + 除去対象 9 範囲の明文化
+  - トレードオフ: ZWJ (U+200D) 削除で絵文字合字破壊 (URL path 用途なので許容、test で固定)
+  - 既存 ADR との関係: ADR-005 (Firebase Auth) / ADR-007 (マルチテナント Firestore パスベース) と独立 (middleware は path 層の正規化のみ)
+  - 判断: 新規アーキテクチャ層 (middleware) なので ADR 推奨だが、JSDoc + commit message で意図は記録済。本セッションでは ADR 作成見送り → 本田様判断で次セッション以降に検討
 
 ---
 
 ## 待ち事項 (decision-maker = 本田様)
 
-1. **PR #454 マージ認可** (Issue #424、最後の P2)
-2. **follow-up Issue 起票判断** (本田様の番号単位指示が必要、PR コメントに提示済み):
-   - PR #451 由来: High 90 / Medium 86 / Low 82
-   - PR #454 由来: Medium 88 完全 atomicity / Low 82 video-events / Low 78 sessionStatus FE
+1. **ADR-038 候補の作成判断** (URL サニタイズ middleware の設計記録)
+2. **本セッション派生実装の現場挙動確認** (CLAUDE.md `feedback_deploy_proactive_verification.md` 準拠で AI 能動依頼禁止):
+   - 福の種 株式会社様③ の受講生 2 名のログイン回復確認
+   - 管理ダッシュボードの CopyButton 失敗時通知 / `<code>` 全選択 UX 確認
+3. **follow-up Issue 起票判断** (PR レビューで defer 候補):
+   - CopyableCode/SelectableCode 共通化 (admin/register の `<code>` onClick lambda 重複)
+   - LinkDisplay 結合テスト (register/page.tsx)
+   - 多言語 slug 将来リスクの運用方針明文化
 
 ---
 
-## OPEN Issue (Session 40 末)
+## OPEN Issue (Session 41 末)
 
 | # | タイトル | ラベル | 状態 |
 |---|---|---|---|
-| #424 | [Bug] PATCH /quiz-attempts のセッション再確認が force_exited のみで abandoned 未対応 | bug, P2 | PR #454 で対応中 (merge 認可待ち) |
 | #405 | [Phase 2 follow-up] Gmail draft filename の生 Unicode quoted-string が strict MTA 経路で reject/normalize されるリスク | enhancement, P2, postponed | 着手不可 |
 | #276 | [Phase 5] allowed_emails 削除時の即時セッション失効 + 孤児Auth掃除自動化 | enhancement, P2, postponed | 着手不可 |
 | #275 | [Phase 5] allowed_emails 管理画面UX改善 | enhancement, P2, postponed | 着手不可 |
 | #274 | [Phase 5] allowed_emails 運用の可視化・追跡性強化 | enhancement, P2, postponed | 着手不可 |
 
-postponed ラベル付き Issue は明示指示なき限り着手しない (CLAUDE.md MUST)。
+postponed ラベル付き Issue は明示指示なき限り着手しない (CLAUDE.md MUST)。active Issue 0 件。
 
 ---
 
 ## CI / インフラ変更
 
-- `feat/issue-435-rebased` / `feat/issue-437-pii-filter` / `feat/issue-425-transient-retry-util` ローカルブランチは削除済み
-- `feat/issue-424-quiz-abandoned-session` は PR #454 マージで auto-delete (`--delete-branch` 指定予定)
-- インフラ変更なし (revocable 変更含む)、本セッションはすべて application code レベル
+- main へのマージ後に Deploy to Cloud Run 自動実行中 (Session 41 末時点)
+- ローカルブランチ `fix/student-url-invisible-char-456` / `fix/copy-button-feedback-458` / `refactor/copy-button-unify-460` は `--delete-branch` で削除済
+- インフラ変更なし、application code レベル (web ワークスペースのみ)
 
 ---
 
-## 主要参照ファイル
+## 主要参照ファイル (本セッション新規)
 
-- ADR-034: `docs/adr/ADR-034-phase2-gmail-draft.md` (Session 40 で §3 / §7 / §8 を更新)
-- 共通 util 新規: `services/api/src/utils/with-transient-retry.ts`
-- セッション関連の TOCTOU 防御: `services/api/src/services/lesson-session.ts:completeSession`
-- Gmail draft route: `services/api/src/routes/super/progress-pdf-draft.ts`
-- Gmail draft service: `services/api/src/services/gmail-draft.ts`
-- 監査ログ service: `services/api/src/services/pdf-draft-audit.ts`
+- `web/middleware.ts` — Next.js middleware で URL path 不可視文字 strip → 308 redirect
+- `web/lib/sanitize-path.ts` — `stripInvisibleChars` / `hasInvisibleChars` / `sanitizeEncodedPathnameForRedirect`
+- `web/lib/dom-select.ts` — `selectAllInElement` (`<code>` onClick fallback の util)
+- `web/lib/error-utils.ts` — `extractErrorName(unknown)` (Error / DOMException 共通)
+- `web/components/ui/copy-button.tsx` — 共通 CopyButton (失敗時通知 / fallback / a11y / 構造化ログ)
+- `web/app/[tenant]/admin/page.tsx` — 管理ダッシュボードでの新 CopyButton 利用 + `<code>` 選択動線
+- `web/app/register/page.tsx` — 登録完了画面での重複統合
+- 各 `__tests__/*` — vitest 53 件追加 (sanitize-path 27 / middleware 9 / dom-select 4 / copy-button 12 + 既存)
 
 ---
 
 ## Issue Net 変化
-- Close 数: 4 件 (#436, #435, #437, #425)
-- 起票数: 0 件
-- **Net: -4 件** ✅ 進捗あり
-- #424 は PR #454 マージで CLOSED 予定 (本田様 merge 認可待ち)、これが反映されると Net -5 件
-- 新規 Issue 起票は CLAUDE.md triage 基準で控え、follow-up 候補は PR コメントで提示 (本田様判断待ち)
+- Close 数: 3 件 (#456 #458 #460)
+- 起票数: 3 件 (#456 #458 #460)
+- **Net: 0 件**
+- 進捗評価: feedback_issue_triage.md の「Net ≤ 0 は進捗ゼロ扱い」基準に該当するが、起票はすべて以下を満たす正当起票:
+  - #456: 外部現場バグ報告 (受講生 2 名ログイン不能) → triage §1 実害該当
+  - #458: PR #457 silent-failure-hunter HIGH 指摘 + 派生実害 (空 URL 送付リスク) → triage §1 + §4 (rating ≥ 7, confidence ≥ 80)
+  - #460: PR #459 code-reviewer Important 指摘 (信頼度 85) + 同種 silent failure 残置 → triage §4
+- 機械的起票 (review agent の rating 5-6 任意改善) ではなく、外部現場バグ起点で派生問題群を全消化 → 実質進捗あり
