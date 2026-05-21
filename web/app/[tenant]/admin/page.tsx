@@ -3,40 +3,8 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useTenant } from "@/lib/tenant-context";
-import { Button } from "@/components/ui/button";
-import { stripInvisibleChars } from "@/lib/sanitize-path";
-
-/**
- * コピーボタンコンポーネント
- *
- * Issue #456: クリップボードに書き出す前に不可視文字 (variation selector 等) を除去。
- * navigator.clipboard.writeText に渡すテキスト自体は元々クリーンだが、
- * 上流での DOM 加工や retain-on-paste 系拡張に備えた二重ガード。
- */
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(stripInvisibleChars(text));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error("Failed to copy:", err);
-    }
-  };
-
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={handleCopy}
-      className="shrink-0"
-    >
-      {copied ? "コピーしました" : "コピー"}
-    </Button>
-  );
-}
+import { CopyButton } from "@/components/ui/copy-button";
+import { selectAllInElement } from "@/lib/dom-select";
 
 /**
  * テナント対応管理者ダッシュボード
@@ -88,7 +56,12 @@ export default function TenantAdminPage() {
           </svg>
         </div>
         <div className="mt-3 flex items-center gap-2">
-          <code className="flex-1 rounded bg-white/80 border border-blue-200 px-3 py-2 text-sm font-mono truncate">
+          {/* Issue #458: コピーボタン失敗時の fallback 動線 — クリックで URL を全選択し手動コピー可能にする */}
+          <code
+            className="flex-1 rounded bg-white/80 border border-blue-200 px-3 py-2 text-sm font-mono truncate select-all cursor-pointer"
+            onClick={(e) => selectAllInElement(e.currentTarget)}
+            title="クリックで URL を全選択"
+          >
             {studentUrl}
           </code>
           <CopyButton text={studentUrl} />
