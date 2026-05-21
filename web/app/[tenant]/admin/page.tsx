@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useTenant } from "@/lib/tenant-context";
 import { CopyButton } from "@/components/ui/copy-button";
+import { selectAllInElement } from "@/lib/dom-select";
 
 /**
  * テナント対応管理者ダッシュボード
@@ -58,13 +59,7 @@ export default function TenantAdminPage() {
           {/* Issue #458: コピーボタン失敗時の fallback 動線 — クリックで URL を全選択し手動コピー可能にする */}
           <code
             className="flex-1 rounded bg-white/80 border border-blue-200 px-3 py-2 text-sm font-mono truncate select-all cursor-pointer"
-            onClick={(e) => {
-              const range = document.createRange();
-              range.selectNodeContents(e.currentTarget);
-              const sel = window.getSelection();
-              sel?.removeAllRanges();
-              sel?.addRange(range);
-            }}
+            onClick={(e) => selectAllInElement(e.currentTarget)}
             title="クリックで URL を全選択"
           >
             {studentUrl}
