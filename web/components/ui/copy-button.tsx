@@ -11,6 +11,13 @@ interface CopyButtonProps {
   text: string;
   /** idle 時のボタン表示文言。default "コピー"。copied/failed 状態の文言は固定。 */
   label?: string;
+  /**
+   * idle 時の aria-label (支援技術向け文脈付与)。
+   * default: label === "コピー" のとき "リンクをコピー" (PR #459 で導入した a11y 補強)、
+   *          それ以外は label と同じ。
+   * copied/failed 時は visible label と一致 (state 連動)。
+   */
+  ariaLabel?: string;
 }
 
 /**
@@ -20,9 +27,13 @@ interface CopyButtonProps {
  *   - 失敗 4 秒後に idle 復帰 (成功時は 2 秒)
  * PR #459 review: timer race / unmount cleanup / a11y / 構造化ログ対応。
  * Issue #460: register/page.tsx の重複ローカル CopyButton を本 component に統合。
- *   label prop で idle 時の表示を customizable に。
+ *   label prop で idle 時の表示を customizable に + ariaLabel prop で a11y 文脈を独立制御。
  */
-export function CopyButton({ text, label = "コピー" }: CopyButtonProps) {
+export function CopyButton({
+  text,
+  label = "コピー",
+  ariaLabel: ariaLabelProp,
+}: CopyButtonProps) {
   const [state, setState] = useState<CopyState>("idle");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -60,9 +71,11 @@ export function CopyButton({ text, label = "コピー" }: CopyButtonProps) {
         ? "コピー失敗"
         : label;
 
-  // aria-label は state 連動: idle 時は label そのまま (label="コピー" → "コピー" /
-  // label="URL をコピー" → "URL をコピー")。copied/failed は visible label と同じ。
-  const ariaLabel = visibleLabel;
+  // aria-label: idle 時は ariaLabelProp > 「リンクをコピー」(label が default のとき) > label。
+  // copied/failed 時は visible label と一致 (state 変化を支援技術に伝える)。
+  const idleAriaLabel =
+    ariaLabelProp ?? (label === "コピー" ? "リンクをコピー" : label);
+  const ariaLabel = state === "idle" ? idleAriaLabel : visibleLabel;
 
   return (
     <div className="flex flex-col items-end gap-1">
