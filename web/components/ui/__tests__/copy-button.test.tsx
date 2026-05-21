@@ -20,7 +20,7 @@ describe("CopyButton (Issue #458 + PR #459 review)", () => {
     vi.restoreAllMocks();
   });
 
-  it("初期状態は idle で「コピー」と表示、aria-label は「リンクをコピー」", () => {
+  it("初期状態は idle で「コピー」と表示、aria-label は「リンクをコピー」(PR #459 a11y 補強を維持)", () => {
     render(<CopyButton text="https://example.com/atali82i/student" />);
     expect(
       screen.getByRole("button", { name: "リンクをコピー" }),
@@ -152,6 +152,53 @@ describe("CopyButton (Issue #458 + PR #459 review)", () => {
     expect(consoleError).not.toHaveBeenCalledWith(
       expect.stringContaining("unmounted"),
     );
+  });
+
+  it("label prop: 指定した文字列が idle 時の表示と aria-label に反映される (Issue #460)", () => {
+    render(<CopyButton text="x" label="URL をコピー" />);
+    const btn = screen.getByRole("button", { name: "URL をコピー" });
+    expect(btn).toHaveTextContent("URL をコピー");
+  });
+
+  it("label prop 省略時は default 'コピー' で aria-label は「リンクをコピー」(PR #459 互換)", () => {
+    render(<CopyButton text="x" />);
+    expect(
+      screen.getByRole("button", { name: "リンクをコピー" }),
+    ).toHaveTextContent("コピー");
+  });
+
+  it("ariaLabel prop: 明示指定すれば idle 時の aria-label として優先される", () => {
+    render(
+      <CopyButton text="x" label="コピー" ariaLabel="管理者用 URL をコピー" />,
+    );
+    expect(
+      screen.getByRole("button", { name: "管理者用 URL をコピー" }),
+    ).toHaveTextContent("コピー");
+  });
+
+  it("label prop 指定時も copied/failed は固定文言を維持し aria-label も連動", async () => {
+    writeTextMock.mockResolvedValue(undefined);
+    render(<CopyButton text="x" label="URL をコピー" />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    expect(
+      screen.getByRole("button", { name: "コピーしました" }),
+    ).toHaveTextContent("コピーしました");
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    // idle 復帰時に label の aria-label に戻る
+    expect(
+      screen.getByRole("button", { name: "URL をコピー" }),
+    ).toBeInTheDocument();
+  });
+
+  it("label=\"\" (空文字) を渡した場合: 呼出側責任で空表示、aria-label も空文字 (将来の bug 発見用)", () => {
+    render(<CopyButton text="x" label="" />);
+    const btn = screen.getByRole("button");
+    expect(btn).toHaveTextContent("");
+    expect(btn).toHaveAttribute("aria-label", "");
   });
 
   it("複数インスタンスが独立して state を持つ", async () => {
