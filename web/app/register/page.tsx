@@ -15,6 +15,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { CopyButton } from "@/components/ui/copy-button";
+import { selectAllInElement } from "@/lib/dom-select";
 
 type Tenant = {
   id: string;
@@ -26,32 +28,6 @@ type CreateTenantResponse = {
   adminUrl: string;
   studentUrl: string;
 };
-
-// コピー成功時のフィードバック用
-function CopyButton({ text, label }: { text: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error("Failed to copy:", err);
-    }
-  };
-
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={handleCopy}
-      className="shrink-0"
-    >
-      {copied ? "コピーしました" : label}
-    </Button>
-  );
-}
 
 // リンク表示コンポーネント
 function LinkDisplay({
@@ -72,10 +48,15 @@ function LinkDisplay({
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <code className="flex-1 rounded bg-background px-3 py-2 text-sm font-mono border truncate">
+        {/* Issue #458 / #460: コピーボタン失敗時の fallback 動線 — クリックで URL を全選択 */}
+        <code
+          className="flex-1 rounded bg-background px-3 py-2 text-sm font-mono border truncate select-all cursor-pointer"
+          onClick={(e) => selectAllInElement(e.currentTarget)}
+          title="クリックで URL を全選択"
+        >
           {fullUrl}
         </code>
-        <CopyButton text={fullUrl} label="コピー" />
+        <CopyButton text={fullUrl} />
       </div>
     </div>
   );

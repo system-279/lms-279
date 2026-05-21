@@ -20,11 +20,11 @@ describe("CopyButton (Issue #458 + PR #459 review)", () => {
     vi.restoreAllMocks();
   });
 
-  it("初期状態は idle で「コピー」と表示、aria-label は「リンクをコピー」", () => {
+  it("初期状態は idle で「コピー」と表示、aria-label も「コピー」", () => {
     render(<CopyButton text="https://example.com/atali82i/student" />);
-    expect(
-      screen.getByRole("button", { name: "リンクをコピー" }),
-    ).toHaveTextContent("コピー");
+    expect(screen.getByRole("button", { name: "コピー" })).toHaveTextContent(
+      "コピー",
+    );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -152,6 +152,30 @@ describe("CopyButton (Issue #458 + PR #459 review)", () => {
     expect(consoleError).not.toHaveBeenCalledWith(
       expect.stringContaining("unmounted"),
     );
+  });
+
+  it("label prop: 指定した文字列が idle 時の表示と aria-label に反映される (Issue #460)", () => {
+    render(<CopyButton text="x" label="URL をコピー" />);
+    const btn = screen.getByRole("button", { name: "URL をコピー" });
+    expect(btn).toHaveTextContent("URL をコピー");
+  });
+
+  it("label prop 省略時は default 'コピー' が使われる (後方互換)", () => {
+    render(<CopyButton text="x" />);
+    expect(screen.getByRole("button", { name: "コピー" })).toHaveTextContent(
+      "コピー",
+    );
+  });
+
+  it("label prop 指定時も copied/failed は固定文言を維持する", async () => {
+    writeTextMock.mockResolvedValue(undefined);
+    render(<CopyButton text="x" label="URL をコピー" />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    expect(
+      screen.getByRole("button", { name: "コピーしました" }),
+    ).toHaveTextContent("コピーしました");
   });
 
   it("複数インスタンスが独立して state を持つ", async () => {
