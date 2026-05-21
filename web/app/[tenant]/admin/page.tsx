@@ -4,16 +4,21 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useTenant } from "@/lib/tenant-context";
 import { Button } from "@/components/ui/button";
+import { stripInvisibleChars } from "@/lib/sanitize-path";
 
 /**
  * コピーボタンコンポーネント
+ *
+ * Issue #456: クリップボードに書き出す前に不可視文字 (variation selector 等) を除去。
+ * navigator.clipboard.writeText に渡すテキスト自体は元々クリーンだが、
+ * 上流での DOM 加工や retain-on-paste 系拡張に備えた二重ガード。
  */
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(stripInvisibleChars(text));
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
