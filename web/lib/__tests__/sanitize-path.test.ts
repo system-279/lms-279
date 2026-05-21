@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   stripInvisibleChars,
   hasInvisibleChars,
-  sanitizePathForRedirect,
+  sanitizeEncodedPathnameForRedirect,
 } from "../sanitize-path";
 
 describe("stripInvisibleChars", () => {
@@ -82,25 +82,81 @@ describe("hasInvisibleChars", () => {
   });
 });
 
-describe("sanitizePathForRedirect", () => {
-  it("不可視文字を含む path は redirect 対象 + サニタイズ済を返す", () => {
-    expect(sanitizePathForRedirect("/atali82i/student︎")).toEqual({
+describe("sanitizeEncodedPathnameForRedirect", () => {
+  it("末尾 segment に encoded U+FE0E を含む path は redirect 対象", () => {
+    expect(
+      sanitizeEncodedPathnameForRedirect("/atali82i/student%EF%B8%8E"),
+    ).toEqual({
       needsRedirect: true,
       cleaned: "/atali82i/student",
     });
   });
 
-  it("クリーンな path は redirect 不要", () => {
-    expect(sanitizePathForRedirect("/atali82i/student")).toEqual({
+  it("encoded ZWSP (U+200B) を含む segment も redirect", () => {
+    expect(
+      sanitizeEncodedPathnameForRedirect("/atali%E2%80%8B82i/student"),
+    ).toEqual({
+      needsRedirect: true,
+      cleaned: "/atali82i/student",
+    });
+  });
+
+  it("クリーンな path は redirect 不要 (cleaned は original そのまま)", () => {
+    expect(sanitizeEncodedPathnameForRedirect("/atali82i/student")).toEqual({
       needsRedirect: false,
       cleaned: "/atali82i/student",
     });
   });
 
+  it("encoded slash (%2F) は path separator に変えない", () => {
+    expect(
+      sanitizeEncodedPathnameForRedirect("/courses/a%2Fb/student%EF%B8%8E"),
+    ).toEqual({
+      needsRedirect: true,
+      cleaned: "/courses/a%2Fb/student",
+    });
+  });
+
+  it("encoded slash のみの path はクリーン (segment が触られない)", () => {
+    expect(
+      sanitizeEncodedPathnameForRedirect("/courses/a%2Fb"),
+    ).toEqual({
+      needsRedirect: false,
+      cleaned: "/courses/a%2Fb",
+    });
+  });
+
+  it("空 segment (//) を保持する", () => {
+    expect(
+      sanitizeEncodedPathnameForRedirect("/a//student%EF%B8%8E"),
+    ).toEqual({
+      needsRedirect: true,
+      cleaned: "/a//student",
+    });
+  });
+
+  it("不正 percent sequence を含む segment はそのまま、別 segment は救済", () => {
+    expect(
+      sanitizeEncodedPathnameForRedirect("/%E0%A4%A/student%EF%B8%8E"),
+    ).toEqual({
+      needsRedirect: true,
+      cleaned: "/%E0%A4%A/student",
+    });
+  });
+
   it("ルート path はそのまま", () => {
-    expect(sanitizePathForRedirect("/")).toEqual({
+    expect(sanitizeEncodedPathnameForRedirect("/")).toEqual({
       needsRedirect: false,
       cleaned: "/",
+    });
+  });
+
+  it("日本語を含む encoded path はクリーン (除去対象なし)", () => {
+    expect(
+      sanitizeEncodedPathnameForRedirect("/%E5%8F%97%E8%AC%9B%E8%80%85"),
+    ).toEqual({
+      needsRedirect: false,
+      cleaned: "/%E5%8F%97%E8%AC%9B%E8%80%85",
     });
   });
 });
