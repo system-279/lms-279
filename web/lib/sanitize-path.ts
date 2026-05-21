@@ -54,7 +54,17 @@ export function sanitizeEncodedPathnameForRedirect(pathname: string): {
       let decoded: string;
       try {
         decoded = decodeURIComponent(segment);
-      } catch {
+      } catch (err) {
+        // 期待例外: URIError (malformed percent sequence)。部分救済のため original を
+        // 返すが、observability のため warn を残す (Cloud Run logs に severity=WARNING で乗る)。
+        // segment 本体は PII / 攻撃 payload 拡散リスクで出力しない。
+        console.warn(
+          "[sanitize-path] decodeURIComponent failed for segment",
+          {
+            segmentLength: segment.length,
+            errorName: err instanceof Error ? err.name : "unknown",
+          },
+        );
         return segment;
       }
       const stripped = stripInvisibleChars(decoded);

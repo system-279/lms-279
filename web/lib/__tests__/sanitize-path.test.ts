@@ -82,6 +82,72 @@ describe("hasInvisibleChars", () => {
   });
 });
 
+describe("INVISIBLE_CHAR_PATTERN: 範囲端点境界値", () => {
+  it("U+200B (範囲下端) を除去", () => {
+    expect(stripInvisibleChars("a\u{200B}b")).toBe("ab");
+  });
+  it("U+200F (範囲上端) を除去", () => {
+    expect(stripInvisibleChars("a\u{200F}b")).toBe("ab");
+  });
+  it("U+2010 (範囲外 HYPHEN) は保持", () => {
+    expect(stripInvisibleChars("a\u{2010}b")).toBe("a\u{2010}b");
+  });
+  it("U+202A (範囲下端 LRE) を除去", () => {
+    expect(stripInvisibleChars("a\u{202A}b")).toBe("ab");
+  });
+  it("U+202E (範囲上端 RLO) を除去", () => {
+    expect(stripInvisibleChars("a\u{202E}b")).toBe("ab");
+  });
+  it("U+202F (範囲外 NARROW NO-BREAK SPACE) は保持", () => {
+    expect(stripInvisibleChars("a\u{202F}b")).toBe("a\u{202F}b");
+  });
+  it("U+2060 (範囲下端 WJ) を除去", () => {
+    expect(stripInvisibleChars("a\u{2060}b")).toBe("ab");
+  });
+  it("U+2064 (範囲上端) を除去", () => {
+    expect(stripInvisibleChars("a\u{2064}b")).toBe("ab");
+  });
+  it("U+2065 (ギャップ範囲外) は保持", () => {
+    expect(stripInvisibleChars("a\u{2065}b")).toBe("a\u{2065}b");
+  });
+  it("U+2066 (範囲下端 LRI) を除去", () => {
+    expect(stripInvisibleChars("a\u{2066}b")).toBe("ab");
+  });
+  it("U+206F (範囲上端) を除去", () => {
+    expect(stripInvisibleChars("a\u{206F}b")).toBe("ab");
+  });
+  it("U+FE00 (範囲下端 VS-1) を除去", () => {
+    expect(stripInvisibleChars("a\u{FE00}b")).toBe("ab");
+  });
+  it("U+FE10 (範囲外 CJK 句読点) は保持", () => {
+    expect(stripInvisibleChars("a\u{FE10}b")).toBe("a\u{FE10}b");
+  });
+  it("U+E0000 (TAG 範囲下端) を除去", () => {
+    expect(stripInvisibleChars("a\u{E0000}b")).toBe("ab");
+  });
+  it("U+E007F (TAG 範囲上端) を除去", () => {
+    expect(stripInvisibleChars("a\u{E007F}b")).toBe("ab");
+  });
+  it("U+E01EF (VS Supplement 範囲上端) を除去", () => {
+    expect(stripInvisibleChars("a\u{E01EF}b")).toBe("ab");
+  });
+});
+
+describe("除去対象外の保持 (否定テスト)", () => {
+  it("Arabic 文字 (U+0627) は保持", () => {
+    expect(stripInvisibleChars("a\u{0627}b")).toBe("a\u{0627}b");
+  });
+  it("Hebrew 文字 (U+05D0) は保持", () => {
+    expect(stripInvisibleChars("a\u{05D0}b")).toBe("a\u{05D0}b");
+  });
+  it("ASCII 制御文字 (U+0001) は保持 (現状仕様: 範囲外)", () => {
+    expect(stripInvisibleChars("a\u{0001}b")).toBe("a\u{0001}b");
+  });
+  it("ZWJ (U+200D) は除去対象 → 絵文字合字 (👨‍👩) は破壊される (現状仕様、URL path 用なので許容)", () => {
+    expect(stripInvisibleChars("👨\u{200D}👩")).toBe("👨👩");
+  });
+});
+
 describe("sanitizeEncodedPathnameForRedirect", () => {
   it("末尾 segment に encoded U+FE0E を含む path は redirect 対象", () => {
     expect(
