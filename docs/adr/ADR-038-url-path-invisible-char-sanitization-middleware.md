@@ -3,7 +3,7 @@
 - Status: **Accepted**
 - Date: 2026-05-21
 - Deciders: system-279, sanwaminamihonda@gmail.com
-- 関連: Issue #456 (現場バグ起票), PR #457 (実装), ADR-005 (Firebase Auth), ADR-007 (マルチテナント Firestore パスベース), Session 41 ハンドオフ
+- 関連: Issue #456 (現場バグ起票), PR #457 (実装), ADR-005 (Firebase Auth), ADR-007 (マルチテナント Firestore パスベース), ADR-035 (本 ADR がフォーマット踏襲), Session 41 ハンドオフ
 
 ## Context
 
@@ -75,6 +75,8 @@ PR #457 で CopyButton 側でも書き込み前 sanitize を実施 (二重ガー
 | `U+202A..U+202E` | bidi control | RLO 攻撃 (見せかけ URL) |
 | `U+2060..U+2064` | word joiner / invisible operators | URL 内では用途なし |
 | `U+2066..U+206F` | bidi isolates / deprecated formatting | bidi 系の派生 |
+
+> **Note**: `U+2065` は現在 Unicode で Unassigned のため除去対象外 (将来 Unicode が用途を割り当てた時点で本 ADR を改訂)。これが `U+2060..U+2064` と `U+2066..U+206F` を分割している意図。
 | `U+FE00..U+FE0F` | **variation selectors 1-16** | **Issue #456 の U+FE0E**。CJK 異体字 selector の単独混入を除去 |
 | `U+FEFF` | BOM / zero-width no-break space | URL 内では常に不正 |
 | `U+E0000..U+E007F` | TAG characters | stego (steganography) 対策 |
@@ -134,7 +136,7 @@ export function middleware(req: NextRequest) {
 
 - **ADR-005 (Firebase Auth)**: 認証層には影響しない。middleware は path 正規化のみで auth header / cookie に触らない
 - **ADR-007 (マルチテナント Firestore パスベース)**: tenant ID は ASCII 前提なので middleware 通過後の path は変化なし
-- **ADR-010 (エラーレスポンス)**: middleware は redirect (HTTP 308) を返すのみで、エラー JSON は返さない。エラーレスポンス仕様外
+- **ADR-010 (エラーレスポンス)**: middleware は **308 redirect または `NextResponse.next()` のみを返す**。next() 後に後続 route が 4xx を返す場合は ADR-010 のフラット形式 `{ error, message }` が適用される (middleware は通過するだけ)。middleware 自体はエラー JSON を返さないため ADR-010 の責務外
 - **ADR-025 (セキュリティ強化 / Helmet, レート制限, CORS)**: 補完関係。Helmet header は middleware 後段で付与 (Next.js 標準経路に乗る)。レート制限は Cloud Run / API 層で実施されるため middleware では実装しない
 
 ### 検証 / テスト
