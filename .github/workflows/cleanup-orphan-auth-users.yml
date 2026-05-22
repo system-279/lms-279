@@ -1,0 +1,167 @@
+name: Cleanup Orphan Auth Users
+
+# Issue #276 GCIP 独立部分: 孤児 Firebase Auth ユーザー掃除の定期実行 + 通知。
+#
+# 背景:
+#   OAuth 同意画面 External 化（ADR-031 Phase 1）により全世界の Google ユーザーが
+#   Firebase Auth レコードを作成可能。allowed_emails で認可しているため実害はないが、
+#   未所属（孤児）ユーザーが長期蓄積する。scripts/cleanup-orphan-auth-users.ts が
+#   allowed_emails / users いずれにも無いユーザーを安全に検出・削除する。
+#
+# 実行モード:
+#   - schedule（週次）: 常に dry-run。孤児が検出されたら job を失敗させ、GitHub 標準の
+#     スケジュール失敗通知で開発者に知らせる（human-in-loop）。無人での削除は行わない。
+#   - workflow_dispatch（手動）: execute=true で実削除。dry-run 既定。
+#
+# 安全機構（スクリプト側）:
+#   - dry-run 既定（--execute で apply）
+#   - tenants 空 / 取得メール 0 件で中断（全 Auth 誤削除防止）
+#   - min-age（既定 3600 秒）未満は対象外（ログイン直後の誤削除防止）
+#   - disabled はデフォルトスキップ
+#   - 連続失敗閾値で中断 + 削除前バックアップ JSON
+#
+# スコープ外（継続 postponed）:
+#   GCIP Tenant 配下ユーザーの掃除は ADR-031 Phase 3（GCIP 移行本体）完了後に対応。
+#   本スクリプトは getAuth() デフォルトインスタンスのみ対象（Issue #276 コメント参照）。
+#
+# セキュリティ: workflow_dispatch 入力はすべて env 経由で受け、run: 内で直接 ${{ inputs.* }}
+# を補間しない（command injection 対策）。
+# 参考: https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+on:
+  schedule:
+    # 毎週月曜 18:37 UTC（火曜 03:37 JST）。HH:00 を避け遅延を低減。
+    - cron: '37 18 * * 1'
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: '実削除モード（false=dry-run / true=apply）。schedule では常に dry-run。'
+        type: boolean
+        default: false
+      min_age_seconds:
+        description: '削除対象の最小経過秒数（既定 3600、最小 60）'
+        required: false
+        default: '3600'
+        type: string
+      include_disabled:
+        description: 'disabled ユーザーも対象に含める（既定スキップ）'
+        type: boolean
+        default: false
+      fail_streak:
+        description: '連続失敗中断閾値（既定 3、最小 1）'
+        required: false
+        default: '3'
+        type: string
+
+jobs:
+  cleanup:
+    name: Cleanup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FIREBASE_PROJECT_ID: lms-279
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
+
+      - name: Run cleanup script
+        env:
+          GOOGLE_CLOUD_PROJECT: lms-279
+          EVENT_NAME: ${{ github.event_name }}
+          EXECUTE: ${{ inputs.execute }}
+          MIN_AGE_SECONDS: ${{ inputs.min_age_seconds }}
+          INCLUDE_DISABLED: ${{ inputs.include_disabled }}
+          FAIL_STREAK: ${{ inputs.fail_streak }}
+        run: |
+          set -euo pipefail
+          FLAGS=()
+          # schedule では常に dry-run（無人での削除を禁止）。手動実行のみ各フラグを反映。
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$EXECUTE" = "true" ]; then FLAGS+=("--execute"); fi
+            if [ "$INCLUDE_DISABLED" = "true" ]; then FLAGS+=("--include-disabled"); fi
+            if [ -n "$MIN_AGE_SECONDS" ]; then FLAGS+=("--min-age-seconds=$MIN_AGE_SECONDS"); fi
+            if [ -n "$FAIL_STREAK" ]; then FLAGS+=("--fail-streak=$FAIL_STREAK"); fi
+          fi
+          echo "event=$EVENT_NAME flags: ${FLAGS[*]:-(none, scheduled dry-run)}"
+          npx tsx scripts/cleanup-orphan-auth-users.ts "${FLAGS[@]}"
+
+      - name: Upload result & backup artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orphan-cleanup-${{ github.run_id }}
+          path: |
+            orphan-cleanup-result-*.json
+            orphan-cleanup-backup-*.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Summarize & notify on orphans
+        if: always()
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # 1 実行につき結果 JSON は 1 件。glob 配列で取得（SC2012 回避、nullglob で未生成時は空）。
+          shopt -s nullglob
+          result_files=(orphan-cleanup-result-*.json)
+          RESULT_FILE="${result_files[0]:-}"
+          if [ -z "$RESULT_FILE" ]; then
+            {
+              echo "## 孤児 Auth 掃除"
+              echo ""
+              echo "結果 JSON が見つかりません。スクリプトが異常終了した可能性があります"
+              echo "（SAFEGUARD による中断 / 認証エラー / 削除中の連続失敗中断 等）。"
+              echo "Run ステップの実行ログで原因を確認してください。"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # 機械可読サマリから件数を抽出（jq は ubuntu-latest に同梱）
+          MODE=$(jq -r '.mode' "$RESULT_FILE")
+          ORPHANS=$(jq -r '.orphanCount' "$RESULT_FILE")
+          TOTAL=$(jq -r '.totalUsers' "$RESULT_FILE")
+          DELETED=$(jq -r '.deleted' "$RESULT_FILE")
+          FAILED=$(jq -r '.failed' "$RESULT_FILE")
+          {
+            echo "## 孤児 Auth 掃除（mode=$MODE）"
+            echo ""
+            echo "| 指標 | 件数 |"
+            echo "|------|------|"
+            echo "| Auth ユーザー総数 | $TOTAL |"
+            echo "| 孤児候補 | $ORPHANS |"
+            echo "| 削除成功 | $DELETED |"
+            echo "| 削除失敗 | $FAILED |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # schedule（無人 dry-run）で孤児を検出したら job を失敗させ、GitHub 標準の
+          # スケジュール失敗通知で開発者に知らせる（human-in-loop）。
+          # 解消するには workflow_dispatch を execute=true で手動実行する。
+          # ORPHANS が数値でない場合（JSON 破損等）は -gt 比較が set -e でハードエラーに
+          # なるため、数値ガードしてから判定する。
+          if ! [[ "$ORPHANS" =~ ^[0-9]+$ ]]; then
+            echo "::warning::orphanCount が数値ではありません（値=\"$ORPHANS\"）。結果 JSON を確認してください。"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "schedule" ] && [ "$ORPHANS" -gt 0 ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ 孤児 $ORPHANS 件を検出。手動で execute=true 実行による掃除を検討してください。" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::孤児 Auth ユーザー $ORPHANS 件を検出しました（週次 dry-run）。"
+            exit 1
+          fi
