@@ -63,7 +63,11 @@ import { recordAuditLog } from "./dispatch-audit.js";
 import { sanitizeErrorForAudit } from "./dispatch-error-sanitizer.js";
 
 import type { DispatchStorage } from "./dispatch-storage.js";
-import type { TenantDataLoader } from "./tenant-data-loader.js";
+import type {
+  TenantDataLoader,
+  DispatchTenantDataView,
+  TenantCcConfigView,
+} from "./tenant-data-loader.js";
 
 /** デフォルト並列度 (FR-3、§3.3 既存 LESSON_FETCH_CONCURRENCY と同値) */
 const DEFAULT_USER_CONCURRENCY = 8;
@@ -105,8 +109,11 @@ export class RunAbortError extends Error {
   }
 }
 
-/** sha256(email) で PII を最小化 (ADR-034、NFR-1) */
-function sha256(input: string): string {
+/**
+ * sha256(email) で PII を最小化 (ADR-034、NFR-1)。
+ * test からも参照可能にして実装の divergence を防ぐため export (safe-refactor MEDIUM-1)。
+ */
+export function sha256(input: string): string {
   return createHash("sha256").update(input).digest("hex");
 }
 
@@ -235,6 +242,7 @@ export async function runCompletionNotifications(
       sent: metrics.sent,
       skipped: metrics.skipped,
       failed: metrics.failed,
+      manualReviewRequired: metrics.manualReviewRequired,
     });
     await recordAuditLog(storage, {
       runId,
@@ -258,13 +266,18 @@ export async function runCompletionNotifications(
         sent: metrics.sent,
         skipped: metrics.skipped,
         failed: metrics.failed,
+        manualReviewRequired: metrics.manualReviewRequired,
       });
+      // err.cause は raw object (Gmail API error 等、PII / token を含みうる) のため
+      // 明示的に sanitize してから audit log に渡す (safe-refactor HIGH-2 反映)。
+      // recordAuditLog 側でも二重 sanitize されるが冪等なので安全。
+      const sanitizedCauseMessage = sanitizeErrorForAudit(err.cause ?? err.message);
       await recordAuditLog(storage, {
         runId,
         runStartedAt,
         eventType: "run_aborted",
         errorCode: err.reason,
-        errorMessage: err.cause ?? err.message,
+        errorMessage: sanitizedCauseMessage,
         now,
       });
       return {
@@ -282,6 +295,7 @@ export async function runCompletionNotifications(
       sent: metrics.sent,
       skipped: metrics.skipped,
       failed: metrics.failed,
+      manualReviewRequired: metrics.manualReviewRequired,
     });
     throw err;
   }
@@ -302,16 +316,10 @@ interface ProcessUserContext {
   tenantId: string;
   user: { id: string; email: string; name: string | null };
   publishedCourses: Awaited<
-    ReturnType<
-      ReturnType<TenantDataLoader["getTenantDataView"]>["listPublishedCourses"]
-    >
+    ReturnType<DispatchTenantDataView["listPublishedCourses"]>
   >;
-  ccConfig: {
-    completionNotificationEnabled: boolean;
-    ownerEmail: string | null;
-    notificationCcEmails: string[];
-  };
-  dataView: ReturnType<TenantDataLoader["getTenantDataView"]>;
+  ccConfig: TenantCcConfigView;
+  dataView: DispatchTenantDataView;
   settings: DispatchSettings;
   runId: string;
   runStartedAt: string;

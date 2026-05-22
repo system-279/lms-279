@@ -27,7 +27,6 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { createHash } from "node:crypto";
 import { DISPATCH_CONSTRAINTS, type DispatchSettings } from "@lms-279/shared-types";
 
 import { InMemoryDispatchStorage } from "../in-memory-dispatch-storage.js";
@@ -35,6 +34,7 @@ import { InMemoryTenantDataLoader, type InMemoryTenantFixture } from "../tenant-
 import {
   runCompletionNotifications,
   RunAbortError,
+  sha256, // safe-refactor MEDIUM-1: production と同じ sha256 参照を使用
 } from "../run-completion-notifications.js";
 import type { SendCompletionMailResult } from "../gmail-dwd-send.js";
 
@@ -76,10 +76,6 @@ function makeFixture(partial: Partial<InMemoryTenantFixture> = {}): InMemoryTena
     },
     ...partial,
   };
-}
-
-function sha256(input: string): string {
-  return createHash("sha256").update(input).digest("hex");
 }
 
 let storage: InMemoryDispatchStorage;
@@ -364,7 +360,7 @@ describe("Gmail エラー分類 (AC-14, AC-15, AC-17, AC-18)", () => {
     expect(notification?.status).toBe("failed_permanent");
   });
 
-  it("403 scope_revoked (insufficientPermissions) → run 全体 abort", async () => {
+  it("403 scope_revoked (insufficientPermissions) → run 全体 abort (concurrency=1 直列)", async () => {
     // 2 user 用意して 1 user 目で scope_revoked、2 user 目に到達しないことを確認
     loader.setTenant(
       "tenantA",
@@ -396,6 +392,57 @@ describe("Gmail エラー分類 (AC-14, AC-15, AC-17, AC-18)", () => {
     // audit に run_aborted 記録
     const auditLogs = await storage.listAuditLogs({ runId: "run-1", eventType: "run_aborted" });
     expect(auditLogs).toHaveLength(1);
+    // **採用案明示** (evaluator AC-17 指摘反映): user-1 の reservation は
+    // status=reserved のまま残る (rollback しない、lease 期限切れで次回 cron で
+    // manual_review に降格される設計、spec §6.1 改訂方針)
+    const user1 = await storage.getCompletionNotification("tenantA", "user-1");
+    expect(user1?.status).toBe("reserved"); // rollback されないことを明示 assertion
+    // user-2 は scope_revoked 後に到達していないため reservation 不在
+    const user2 = await storage.getCompletionNotification("tenantA", "user-2");
+    expect(user2).toBeNull();
+  });
+
+  it("403 scope_revoked (concurrency=2 並列) → 並列実行中の他 worker の reservation は維持", async () => {
+    // 3 user 用意、concurrency=2 で並列実行、最初の scope_revoked 後の挙動を確認
+    loader.setTenant(
+      "tenantA",
+      makeFixture({
+        users: [
+          { id: "user-1", email: "u1@example.com", name: "U1" },
+          { id: "user-2", email: "u2@example.com", name: "U2" },
+          { id: "user-3", email: "u3@example.com", name: "U3" },
+        ],
+        courseProgresses: new Map([
+          ["user-1", [{ courseId: "c1", isCompleted: true, totalLessons: 3, completedLessons: 3 }]],
+          ["user-2", [{ courseId: "c1", isCompleted: true, totalLessons: 3, completedLessons: 3 }]],
+          ["user-3", [{ courseId: "c1", isCompleted: true, totalLessons: 3, completedLessons: 3 }]],
+        ]),
+      }),
+    );
+    const sendMail = vi.fn().mockRejectedValue({
+      response: {
+        status: 403,
+        data: { error: { errors: [{ reason: "insufficientPermissions" }] } },
+      },
+    });
+    await runCompletionNotifications({
+      runId: "run-1", now: NOW, storage, loader, env: ENV, sendMail,
+      userConcurrency: 2,
+    });
+    const run = await storage.getRun("run-1");
+    expect(run?.status).toBe("aborted");
+    // 並列実行で reservation を取った user の record は残る (rollback しない)
+    // 並列度 2 で 3 user のうち最低 2 件は reservation 試行されるが、
+    // RunAbortError 後の queue.shift も止めないため、全 user が試行される可能性あり。
+    // 重要な不変: rollback されない (= sent 状態の record はない)
+    const u1 = await storage.getCompletionNotification("tenantA", "user-1");
+    const u2 = await storage.getCompletionNotification("tenantA", "user-2");
+    const u3 = await storage.getCompletionNotification("tenantA", "user-3");
+    for (const record of [u1, u2, u3]) {
+      if (record !== null) {
+        expect(record.status).toBe("reserved"); // sent には到達しない
+      }
+    }
   });
 });
 

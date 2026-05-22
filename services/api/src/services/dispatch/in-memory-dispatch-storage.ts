@@ -242,6 +242,7 @@ export class InMemoryDispatchStorage implements DispatchStorage {
       sent: 0,
       skipped: 0,
       failed: 0,
+      manualReviewRequired: 0,
       abortedReason: null,
       ttlExpireAt: input.ttlExpireAt,
     };
@@ -271,6 +272,8 @@ export class InMemoryDispatchStorage implements DispatchStorage {
       sent: input.sent ?? existing.sent,
       skipped: input.skipped ?? existing.skipped,
       failed: input.failed ?? existing.failed,
+      manualReviewRequired:
+        input.manualReviewRequired ?? existing.manualReviewRequired,
       abortedReason,
     });
   }

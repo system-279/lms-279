@@ -27,6 +27,14 @@ import type {
   OidcTokenVerifier,
   VerifiedOidcCaller,
 } from "../../../services/dispatch/oidc-verify.js";
+import type {
+  SendCompletionMailInput,
+  SendCompletionMailResult,
+} from "../../../services/dispatch/gmail-dwd-send.js";
+
+type SendMailFn = (
+  input: SendCompletionMailInput,
+) => Promise<SendCompletionMailResult>;
 
 const AUDIENCE = "https://api.example.com/internal/dispatch";
 const NOW = new Date("2026-05-25T00:00:00.000Z"); // 月曜 JST 09:00
@@ -93,7 +101,7 @@ beforeEach(() => {
 
 function makeApp(opts: {
   verifier: OidcTokenVerifier;
-  sendMail?: ReturnType<typeof vi.fn>;
+  sendMail?: SendMailFn;
 }) {
   const app = express();
   app.use(express.json());
@@ -105,7 +113,7 @@ function makeApp(opts: {
       storage,
       loader,
       env: { subjectEmail: "system@279279.net", fromEmail: "dxcollege@279279.net" },
-      sendMail: opts.sendMail as never,
+      sendMail: opts.sendMail,
       runIdGenerator: () => RUN_ID,
       nowProvider: () => NOW,
     }),
@@ -201,11 +209,10 @@ describe("想定外エラー", () => {
   it("storage 自体が throw (acquireRunLock 障害) → 500", async () => {
     storage.__setSettingsForTest(makeSettings());
     loader.setTenant("tenantA", makeFixture());
-    // acquireRunLock を強制的に throw させる
-    const originalAcquire = storage.acquireRunLock.bind(storage);
-    storage.acquireRunLock = vi.fn(async () => {
-      throw new Error("Firestore unavailable");
-    });
+    // vi.spyOn でテスト終了時の自動 restore を効かせる (safe-refactor MEDIUM-3 反映)
+    const spy = vi
+      .spyOn(storage, "acquireRunLock")
+      .mockRejectedValue(new Error("Firestore unavailable"));
 
     const app = makeApp({
       verifier: makeSuccessVerifier(),
@@ -217,8 +224,6 @@ describe("想定外エラー", () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toBe("dispatch_unexpected_error");
-
-    // cleanup
-    storage.acquireRunLock = originalAcquire;
+    spy.mockRestore();
   });
 });

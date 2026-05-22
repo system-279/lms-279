@@ -97,10 +97,18 @@ export class GoogleOidcTokenVerifier implements OidcTokenVerifier {
     if (!payload) {
       throw new OidcVerifyFailure("invalid_token", "OIDC token has no payload");
     }
-    if (payload.aud !== expectedAudience) {
+    // OIDC 仕様で aud は string | string[]。google-auth-library 内部でも検証されるが
+    // 二重防御として明示的に配列ケースも扱う (safe-refactor HIGH-1 反映)。
+    const audMatch = Array.isArray(payload.aud)
+      ? payload.aud.includes(expectedAudience)
+      : payload.aud === expectedAudience;
+    if (!audMatch) {
+      const audDisplay = Array.isArray(payload.aud)
+        ? `[${payload.aud.join(", ")}]`
+        : String(payload.aud ?? "");
       throw new OidcVerifyFailure(
         "audience_mismatch",
-        `Expected audience '${expectedAudience}' but got '${String(payload.aud ?? "")}'`,
+        `Expected audience '${expectedAudience}' but got '${audDisplay}'`,
       );
     }
     return {

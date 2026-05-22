@@ -386,8 +386,8 @@ web/app/super/dispatch-settings/
 | users.email 無効 | この user スキップ (Reservation せず) | 修正後の次回 cron | audit_logs + Error Reporting (warning) |
 | PDF 生成失敗 / timeout 30s | この user の Reservation を transient_failed として維持 | 次回 cron で再試行可能 (leaseExpiresAt まで) | audit_logs + Error Reporting (warning) |
 | **Gmail 401 (token 失効)** | DWD トークン再取得 → 1 回 retry → ダメなら **run 全体中断** | 次回 cron | Error Reporting (critical) |
-| **Gmail 403 `insufficientPermissions`** | run 全体中断、未処理 user の Reservation も rollback | 次回 cron | **Error Reporting (critical)** (Codex Important-4) |
-| **Gmail 403 `delegation_denied` / sender disabled** | run 全体中断、Reservation rollback | 次回 cron | **Error Reporting (critical)** |
+| **Gmail 403 `insufficientPermissions`** | run 全体中断。**既に reserved 済 user の record は rollback せず lease 期限切れで `manual_review_required` に降格** (2026-05-22 採用案、Phase 4 実装、§後述) | 次回 cron | **Error Reporting (critical)** (Codex Important-4) |
+| **Gmail 403 `delegation_denied` / sender disabled** | 同上 (rollback せず lease 期限切れで降格) | 次回 cron | **Error Reporting (critical)** |
 | Gmail 403 宛先固有 | この user を failed_permanent | 再送しない | audit_logs + Error Reporting (warning) |
 | Gmail 429/503/timeout | Reservation 維持 (transient_failed)、completion_notifications 残置 | 次回 cron で再試行 | audit_logs (transient) |
 | Gmail 400/422 | failed_permanent 記録 | 再送しない | audit_logs + Error Reporting (warning) |
@@ -670,7 +670,7 @@ UI からの直接削除ボタンは提供しない (誤操作リスク回避、
 #### Run Lock / 403 AC (Codex Important-3, Important-4 反映)
 
 - **AC-16**: 同一時刻に複数の cron 起動が来た場合、最初の 1 つだけが lock を取得、他は 409 で即終了
-- **AC-17**: Gmail 403 `insufficientPermissions` / `delegationDenied` / sender disabled は run 全体中断、後続 user の Reservation は rollback、Error Reporting critical
+- **AC-17 (改訂、2026-05-22)**: Gmail 403 `insufficientPermissions` / `delegationDenied` / sender disabled は run 全体中断、Error Reporting critical。**既に reserved 状態の user record は rollback せず**そのまま残し、次回 cron 起動時に lease 期限切れ (10 分後) で `manual_review_required` に降格させる。理由: ① 並列実行中の rollback は別 worker との race を生む ② scope_revoked が transient な設定ミス (e.g., 管理コンソール一時不整合) で復旧した場合、rollback 済の record は次 cron で **再送試行 → 二重送信** 事故を起こす ③ lease 期限切れ降格は manual_review_required (terminal) を経由するため idempotency が保証される。Phase 4 実装 (PR #468、run-completion-notifications.ts) で本案を採用
 - **AC-18**: Gmail 403 宛先固有は user を failed_permanent、run は継続
 
 #### エッジケース AC

@@ -125,6 +125,8 @@ export interface UpdateRunStatusInput {
   sent?: number;
   skipped?: number;
   failed?: number;
+  /** manual_review_required に降格された user 数 (Phase 4 追加) */
+  manualReviewRequired?: number;
   /** aborted 時の理由 (sanitized) */
   abortedReason?: string;
 }
