@@ -21,6 +21,7 @@ export default function SuperAdminLayout({
     { href: "/super/progress", label: "受講状況" },
     { href: "/super/attendance", label: "出席レポート" },
     { href: "/super/enrollments", label: "受講期間管理" },
+    { href: "/super/dispatch-settings", label: "完了通知設定" },
     { href: "/super/settings", label: "設定" },
   ];
 
