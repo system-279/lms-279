@@ -18,6 +18,8 @@ import { superAdminRouter } from "./routes/super-admin.js";
 import { helpRoleRouter } from "./routes/help-role.js";
 import { publicRouter } from "./routes/public.js";
 import { createInternalDispatchRouter } from "./routes/internal/dispatch.js";
+import { createDispatchSuperRouter } from "./routes/super/dispatch-super-router.js";
+import { superAdminAuthMiddleware } from "./middleware/super-admin.js";
 import { buildDispatchFactory } from "./services/dispatch/factory.js";
 import { logger } from "./utils/logger.js";
 import { getFirestore } from "firebase-admin/firestore";
@@ -157,19 +159,22 @@ function isProductionGcpRuntime(): boolean {
   );
 }
 
+// Phase 5: 配信設定 super API は superAdminRouter の後に mount するため factory を hoist。
+let dispatchFactory: ReturnType<typeof buildDispatchFactory> | null = null;
+
 try {
-  const dispatch = buildDispatchFactory();
+  dispatchFactory = buildDispatchFactory();
   app.use(
     "/api/v2/internal",
     createInternalDispatchRouter({
-      expectedAudience: dispatch.expectedAudience,
-      verifier: dispatch.verifier,
-      storage: dispatch.storage,
-      loader: dispatch.loader,
-      env: dispatch.env,
+      expectedAudience: dispatchFactory.expectedAudience,
+      verifier: dispatchFactory.verifier,
+      storage: dispatchFactory.storage,
+      loader: dispatchFactory.loader,
+      env: dispatchFactory.env,
     }),
   );
-  logger.info("Internal dispatch router mounted", { mode: dispatch.mode });
+  logger.info("Internal dispatch router mounted", { mode: dispatchFactory.mode });
 } catch (err) {
   const errorMsg = err instanceof Error ? err.message : String(err);
   if (isProductionGcpRuntime()) {
@@ -188,6 +193,23 @@ try {
 
 // スーパー管理者API
 app.use("/api/v2/super", superAdminRouter);
+
+// スーパー管理者 配信設定 API (Phase 5)。superAdminRouter の後に mount し、
+// dispatch 固有パスは superAdminRouter で未マッチ → fall-through で本ルータが処理する。
+// 明示的に superAdminAuthMiddleware を適用し、auth 依存を self-contained にする
+// (本番 GCP で factory build 失敗時は dispatchFactory=null となり mount をスキップ)。
+if (dispatchFactory) {
+  app.use(
+    "/api/v2/super",
+    superAdminAuthMiddleware,
+    createDispatchSuperRouter({
+      storage: dispatchFactory.storage,
+      loader: dispatchFactory.loader,
+      env: dispatchFactory.env,
+    }),
+  );
+  logger.info("Super dispatch router mounted", { mode: dispatchFactory.mode });
+}
 
 // ヘルプロール判定API（テナントコンテキスト不要）
 app.use("/api/v2/help", helpRoleRouter);

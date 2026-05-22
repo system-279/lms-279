@@ -220,6 +220,140 @@ describe("FirestoreDispatchStorage.getDispatchSettings", () => {
 });
 
 // ============================================================
+// updateDispatchSettings (transaction + 楽観ロック)
+// ============================================================
+
+describe("FirestoreDispatchStorage.updateDispatchSettings", () => {
+  const baseInput = {
+    enabled: true,
+    scheduleDaysOfWeek: [1, 4],
+    scheduleHourJst: 9,
+    signatureName: "DXcollege運営スタッフ",
+    completionMessageBody: "受講お疲れ様でした。",
+    senderEmail: "dxcollege@279279.net",
+    updatedBy: "admin@example.com",
+    updatedAt: NOW_ISO,
+  };
+
+  it("doc 未作成 + expectedVersion=0 で runTransaction 内 set、version=1", async () => {
+    const m = buildMockDb();
+    const storage = new FirestoreDispatchStorage(m.db);
+    const result = await storage.updateDispatchSettings({
+      ...baseInput,
+      expectedVersion: 0,
+    });
+    expect(m.runTransaction).toHaveBeenCalledTimes(1);
+    expect(result.updated).toBe(true);
+    if (!result.updated) throw new Error("unreachable");
+    expect(result.settings.version).toBe(1);
+    // set は settings/global に対して行われ、updatedAt は Timestamp 化される
+    const setCall = m.setCalls.find(
+      (c) => c.path === "super_dispatch_settings/global",
+    );
+    expect(setCall).toBeDefined();
+    expect(setCall?.data.version).toBe(1);
+    expect(setCall?.data.updatedAt).toBeInstanceOf(Timestamp);
+  });
+
+  it("既存 version 一致で version を +1 して set", async () => {
+    const m = buildMockDb();
+    m.seedDoc("super_dispatch_settings/global", {
+      enabled: false,
+      scheduleDaysOfWeek: [],
+      scheduleHourJst: 0,
+      signatureName: "x",
+      completionMessageBody: "y",
+      senderEmail: "dxcollege@279279.net",
+      updatedAt: Timestamp.fromDate(NOW_DATE),
+      updatedBy: "prev@example.com",
+      version: 3,
+    });
+    const storage = new FirestoreDispatchStorage(m.db);
+    const result = await storage.updateDispatchSettings({
+      ...baseInput,
+      expectedVersion: 3,
+    });
+    expect(result.updated).toBe(true);
+    if (!result.updated) throw new Error("unreachable");
+    expect(result.settings.version).toBe(4);
+  });
+
+  it("version 不一致は version_conflict で current を返し set しない", async () => {
+    const m = buildMockDb();
+    m.seedDoc("super_dispatch_settings/global", {
+      enabled: true,
+      scheduleDaysOfWeek: [2],
+      scheduleHourJst: 8,
+      signatureName: "現在スタッフ",
+      completionMessageBody: "現在本文",
+      senderEmail: "dxcollege@279279.net",
+      updatedAt: Timestamp.fromDate(NOW_DATE),
+      updatedBy: "prev@example.com",
+      version: 5,
+    });
+    const storage = new FirestoreDispatchStorage(m.db);
+    const result = await storage.updateDispatchSettings({
+      ...baseInput,
+      expectedVersion: 1, // stale
+    });
+    expect(result.updated).toBe(false);
+    if (result.updated) throw new Error("unreachable");
+    expect(result.reason).toBe("version_conflict");
+    expect(result.current?.version).toBe(5);
+    expect(result.current?.signatureName).toBe("現在スタッフ");
+    expect(m.setCalls).toHaveLength(0);
+  });
+});
+
+// ============================================================
+// listRuns
+// ============================================================
+
+describe("FirestoreDispatchStorage.listRuns", () => {
+  it("super_dispatch_runs を全件取得し DispatchRun に変換する", async () => {
+    const m = buildMockDb();
+    const trig = Timestamp.fromDate(NOW_DATE);
+    const lease = Timestamp.fromDate(new Date("2026-05-22T01:04:40.000Z"));
+    const ttl = Timestamp.fromDate(new Date("2027-05-22T01:00:00.000Z"));
+    m.setNextQueryResult([
+      {
+        exists: true,
+        data: () => ({
+          runId: "run-1",
+          triggeredAt: trig,
+          status: "completed",
+          leaseExpiresAt: lease,
+          processedTenants: 2,
+          sent: 3,
+          skipped: 1,
+          failed: 0,
+          manualReviewRequired: 0,
+          abortedReason: null,
+          ttlExpireAt: ttl,
+        }),
+      },
+    ]);
+    const storage = new FirestoreDispatchStorage(m.db);
+    const runs = await storage.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0].runId).toBe("run-1");
+    expect(runs[0].triggeredAt).toBe(NOW_ISO);
+    expect(runs[0].sent).toBe(3);
+    // collection().get() の全件クエリが呼ばれている
+    expect(m.queryCalls.some((q) => q.collection === "super_dispatch_runs")).toBe(
+      true,
+    );
+  });
+
+  it("run 未登録なら空配列", async () => {
+    const m = buildMockDb();
+    m.setNextQueryResult([]);
+    const storage = new FirestoreDispatchStorage(m.db);
+    expect(await storage.listRuns()).toEqual([]);
+  });
+});
+
+// ============================================================
 // tryReserveCompletionNotification (transaction)
 // ============================================================
 
