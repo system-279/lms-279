@@ -71,6 +71,9 @@ jobs:
       - name: Run tests
         run: npm run test -w @lms-279/api
 
+      - name: Run script smoke tests
+        run: npm run test:scripts
+
   build:
     name: Build
     runs-on: ubuntu-latest
