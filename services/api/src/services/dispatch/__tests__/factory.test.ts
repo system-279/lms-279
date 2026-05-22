@@ -20,7 +20,11 @@ beforeEach(() => {
     if (
       key.startsWith("DXCOLLEGE_") ||
       key === "DISPATCH_OIDC_AUDIENCE" ||
-      key === "DISPATCH_USE_IN_MEMORY"
+      key === "DISPATCH_USE_IN_MEMORY" ||
+      key === "K_SERVICE" ||
+      key === "FUNCTION_TARGET" ||
+      key === "FUNCTION_NAME" ||
+      key === "GAE_SERVICE"
     ) {
       delete process.env[key];
     }
@@ -103,6 +107,44 @@ describe("buildDispatchFactory - DISPATCH_USE_IN_MEMORY=true (env 任意化)", (
   it("verifier は GoogleOidcTokenVerifier (mock 動作確認のため verify メソッド存在のみ確認)", () => {
     const result = buildDispatchFactory();
     expect(typeof result.verifier.verify).toBe("function");
+  });
+});
+
+describe("buildDispatchFactory - 本番 GCP runtime での in-memory 拒否 (silent no-op 防止)", () => {
+  beforeEach(() => {
+    process.env.DISPATCH_USE_IN_MEMORY = "true";
+    // env を mock 設定 (production env が揃ってても in-memory が拒否されることを確認)
+    process.env.DXCOLLEGE_DISPATCH_SUBJECT = "system@279279.net";
+    process.env.DXCOLLEGE_SENDER_EMAIL = "dxcollege@279279.net";
+    process.env.DISPATCH_OIDC_AUDIENCE = "https://api.example.com";
+  });
+
+  it("K_SERVICE (Cloud Run) + DISPATCH_USE_IN_MEMORY=true → throw", () => {
+    process.env.K_SERVICE = "lms-279-api";
+    expect(() => buildDispatchFactory()).toThrow(
+      /DISPATCH_USE_IN_MEMORY=true is forbidden in production GCP runtime/,
+    );
+  });
+
+  it("FUNCTION_TARGET (Cloud Functions) + DISPATCH_USE_IN_MEMORY=true → throw", () => {
+    process.env.FUNCTION_TARGET = "myHandler";
+    expect(() => buildDispatchFactory()).toThrow(/forbidden in production/);
+  });
+
+  it("FUNCTION_NAME (Cloud Functions 1st gen) + DISPATCH_USE_IN_MEMORY=true → throw", () => {
+    process.env.FUNCTION_NAME = "myFunction";
+    expect(() => buildDispatchFactory()).toThrow(/forbidden in production/);
+  });
+
+  it("GAE_SERVICE (App Engine) + DISPATCH_USE_IN_MEMORY=true → throw", () => {
+    process.env.GAE_SERVICE = "default";
+    expect(() => buildDispatchFactory()).toThrow(/forbidden in production/);
+  });
+
+  it("GCP runtime シグナルなし + DISPATCH_USE_IN_MEMORY=true → in-memory モードで成功", () => {
+    // K_SERVICE 等は未設定
+    const result = buildDispatchFactory();
+    expect(result.mode).toBe("in-memory");
   });
 });
 

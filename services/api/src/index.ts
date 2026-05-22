@@ -138,9 +138,25 @@ app.use("/api/v2/public", authLimiter, publicRouter);
 app.use("/api/v2/tenants", authLimiter, tenantsRouter);
 
 // 内部 API: Cloud Scheduler 経由の自動完了通知配信 (Phase 7 wiring)
-// env が揃わない環境 (local dev / 一部 E2E) では mount をスキップする。
-// ただし Cloud Run (K_SERVICE が設定される) では env 欠如を silent skip しない
-// (evaluator HIGH: 本番で Scheduler が 404 を受けても 2xx 期待で気付かないリスク回避)
+//
+// env 解決方針:
+//   - GCP runtime (Cloud Run / Cloud Functions / GAE) では env 欠如 / 初期化失敗を
+//     silent skip しない (本番で Scheduler が 404 を受けても 2xx 期待で気付かない
+//     リスク回避、evaluator HIGH + Codex Important 反映)
+//   - local dev / E2E (GCP runtime シグナルなし) では warn + skip
+//
+// GCP runtime 判定: Cloud Run = K_SERVICE / Cloud Functions = FUNCTION_TARGET or
+//   FUNCTION_NAME / GAE = GAE_SERVICE を網羅 (LMS は現状 Cloud Run のみだが、防御的に
+//   全 GCP runtime を fail loud 対象とする)
+function isProductionGcpRuntime(): boolean {
+  return Boolean(
+    process.env.K_SERVICE ||
+      process.env.FUNCTION_TARGET ||
+      process.env.FUNCTION_NAME ||
+      process.env.GAE_SERVICE,
+  );
+}
+
 try {
   const dispatch = buildDispatchFactory();
   app.use(
@@ -156,10 +172,10 @@ try {
   logger.info("Internal dispatch router mounted", { mode: dispatch.mode });
 } catch (err) {
   const errorMsg = err instanceof Error ? err.message : String(err);
-  if (process.env.K_SERVICE) {
-    // 本番 Cloud Run で env 欠如 = fail loud (silent skip 防止)
+  if (isProductionGcpRuntime()) {
+    // 本番 GCP runtime で env 欠如 = fail loud (silent skip 防止)
     logger.error(
-      "Internal dispatch router failed to mount in Cloud Run — env missing or init failed",
+      "Internal dispatch router failed to mount in production GCP runtime — env missing or init failed",
       { errorType: "dispatch_router_mount_failed_in_production", error: errorMsg },
     );
     throw err;

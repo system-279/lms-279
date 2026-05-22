@@ -74,10 +74,34 @@ const IN_MEMORY_DEFAULTS = {
   expectedAudience: "https://in-memory.example.invalid",
 } as const;
 
+/**
+ * GCP runtime 検出 (Cloud Run / Cloud Functions / GAE)。
+ * 本番 runtime では in-memory モード採用を拒否する (silent no-op 防止、Codex Important 反映)。
+ */
+function isProductionGcpRuntime(): boolean {
+  return Boolean(
+    process.env.K_SERVICE ||
+      process.env.FUNCTION_TARGET ||
+      process.env.FUNCTION_NAME ||
+      process.env.GAE_SERVICE,
+  );
+}
+
 export function buildDispatchFactory(): DispatchFactoryOutput {
   const useInMemory = process.env.DISPATCH_USE_IN_MEMORY === "true";
 
   if (useInMemory) {
+    // 本番 GCP runtime で DISPATCH_USE_IN_MEMORY=true は誤設定の可能性が極めて高い。
+    // in-memory storage は永続化されず、Gmail 実送信もスキップされるため、本番で混入
+    // すると Cloud Scheduler 起動が常に 200 empty response (silent no-op) になる。
+    // Codex Important 反映: 本番 runtime 検出時は throw して fail loud。
+    if (isProductionGcpRuntime()) {
+      throw new Error(
+        "Dispatch factory: DISPATCH_USE_IN_MEMORY=true is forbidden in production GCP runtime " +
+          "(detected K_SERVICE/FUNCTION_TARGET/FUNCTION_NAME/GAE_SERVICE). " +
+          "Unset DISPATCH_USE_IN_MEMORY or run outside Cloud Run/Functions/GAE.",
+      );
+    }
     const subjectEmail =
       process.env.DXCOLLEGE_DISPATCH_SUBJECT?.trim() || IN_MEMORY_DEFAULTS.subjectEmail;
     const fromEmail =
