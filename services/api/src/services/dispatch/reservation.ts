@@ -47,15 +47,16 @@ export async function tryReserveOrSkip(
   input: TryReserveOrSkipInput,
 ): Promise<ReservationOutcome> {
   const { tenantId, userId, runId, now } = input;
-  const nowMs = now.getTime();
-  const leaseExpiresAtMs = nowMs + DISPATCH_CONSTRAINTS.RESERVATION_LEASE_MS;
+  const leaseExpiresAt = new Date(
+    now.getTime() + DISPATCH_CONSTRAINTS.RESERVATION_LEASE_MS,
+  ).toISOString();
 
   return storage.tryReserveCompletionNotification({
     tenantId,
     userId,
     runId,
-    now: new Date(nowMs).toISOString(),
-    leaseExpiresAt: new Date(leaseExpiresAtMs).toISOString(),
+    now: now.toISOString(),
+    leaseExpiresAt,
   });
 }
 

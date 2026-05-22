@@ -33,10 +33,17 @@ import type {
   UpdateRunStatusInput,
 } from "./dispatch-storage.js";
 
-/** completion_notifications の compound key: `${tenantId}/${userId}` */
+/**
+ * completion_notifications の compound key 生成。
+ *
+ * separator に `|` (パイプ) を採用。Firestore doc ID 規約 / 一般的な tenant slug
+ * (英数 + ハイフン) / userId (uuid 系) のいずれにも `|` は出現しないため、
+ * `tenant-a/b` 形式 (evaluator narrative の collision 例) でも安全。
+ */
 type NotificationKey = string;
+const KEY_SEPARATOR = "|";
 function nkey(tenantId: string, userId: string): NotificationKey {
-  return `${tenantId}/${userId}`;
+  return `${tenantId}${KEY_SEPARATOR}${userId}`;
 }
 
 export class InMemoryDispatchStorage implements DispatchStorage {
@@ -231,6 +238,16 @@ export class InMemoryDispatchStorage implements DispatchStorage {
     if (!existing) {
       throw new Error(`updateRunStatus: no run found for ${input.runId}`);
     }
+    // abortedReason: completed/timeout 遷移時は明示的に null クリアする。
+    // aborted 遷移時は input.abortedReason で上書き (省略時のみ既存値保持)。
+    // safe-refactor MEDIUM-3 反映。
+    let abortedReason: string | null;
+    if (input.status === "aborted") {
+      abortedReason = input.abortedReason ?? existing.abortedReason;
+    } else {
+      // completed / timeout / running 等の非 aborted 遷移は abortedReason をクリア
+      abortedReason = input.abortedReason ?? null;
+    }
     this.runs.set(input.runId, {
       ...existing,
       status: input.status,
@@ -238,7 +255,7 @@ export class InMemoryDispatchStorage implements DispatchStorage {
       sent: input.sent ?? existing.sent,
       skipped: input.skipped ?? existing.skipped,
       failed: input.failed ?? existing.failed,
-      abortedReason: input.abortedReason ?? existing.abortedReason,
+      abortedReason,
     });
   }
 

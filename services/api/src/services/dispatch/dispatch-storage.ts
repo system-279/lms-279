@@ -18,14 +18,21 @@
  * 関連 ADR: ADR-028 (テスト戦略), ADR-029 (JST), ADR-034 (PII 最小化)
  */
 
-import type {
-  CompletionNotification,
-  CompletionNotificationStatus,
-  DispatchAuditLog,
-  DispatchRun,
-  DispatchRunStatus,
-  ReservationOutcome,
+import {
+  DISPATCH_CONSTRAINTS,
+  type CompletionNotification,
+  type DispatchAuditLog,
+  type DispatchRun,
+  type DispatchRunStatus,
+  type ReservationOutcome,
 } from "@lms-279/shared-types";
+
+/**
+ * audit log / dispatch run の TTL (ミリ秒、365 日)。
+ * run-lock.ts / dispatch-audit.ts から共通参照される (重複定義回避)。
+ */
+export const DISPATCH_AUDIT_TTL_MS =
+  DISPATCH_CONSTRAINTS.AUDIT_LOGS_TTL_DAYS * 24 * 60 * 60 * 1000;
 
 // ============================================================
 // Reservation (tenants/{tenantId}/completion_notifications/{userId})
@@ -158,6 +165,17 @@ export interface DispatchStorage {
    *
    * 設計仕様書 §6.2 (Reservation 方式)、AC-10/11/12、FR-7 改訂、NFR-3 改訂 対応。
    *
+   * **実装契約 (atomicity 必須)**:
+   *   本操作全体は **atomic transaction** で実行すること。
+   *   - Firestore 実装: `db.runTransaction(...)` で「status 読み取り → 既存 state 判定
+   *     → 降格 update / 新規 create」を 1 transaction 内に包む。read-modify-write の
+   *     間に他 worker の write が割り込まないことを保証する。
+   *   - InMemory 実装: Node.js single-threaded 性質を活かし、本 method 実行中に
+   *     `await` を挟まないことで atomicity を担保する (event loop 上では同期実行)。
+   *   atomicity が破られると、2 並列 worker が `lease_expired_promoted_to_manual_review`
+   *   を同時検出して両方が降格 update を発火し、二重送信 → 二重 sent 確定の事故に
+   *   繋がる (Codex Critical-1+3 の中核)。
+   *
    * 戻り値:
    *   - `reserved: true`: 新規 create 成功または lease 期限切れ降格後の再 create
    *   - `reserved: false` + reason: 既存 state により skip
@@ -172,10 +190,25 @@ export interface DispatchStorage {
     input: ReserveCompletionNotificationInput,
   ): Promise<ReservationOutcome>;
 
-  /** 送信成功時の status=sent 遷移 + sent fields 更新 (FR-12 含む snapshot 保存) */
+  /**
+   * 送信成功時の status=sent 遷移 + sent fields 更新 (FR-12 含む snapshot 保存)。
+   *
+   * 実装契約:
+   *   - 呼び出し時に既存 record が `status=reserved` であることを前提とする
+   *     (caller が `tryReserveCompletionNotification` で reserved=true を取得済)
+   *   - 既存 record の status が "reserved" 以外 (sent / failed_permanent /
+   *     manual_review_required) の場合は throw する。これは caller の状態管理
+   *     不整合を早期検出する意図 (idempotency より一貫性優先)。
+   *   - Firestore 実装で網起こりうる partial-failure retry シナリオ
+   *     (write timeout 後の status 不確実) では、caller 側で再 reserve を試行
+   *     し reservation outcome (already_sent 等) で skip するフローを推奨する。
+   */
   markCompletionNotificationSent(input: MarkSentInput): Promise<void>;
 
-  /** Permanent 失敗時の status=failed_permanent 遷移 + error fields 更新 */
+  /**
+   * Permanent 失敗時の status=failed_permanent 遷移 + error fields 更新。
+   * 状態遷移契約は markCompletionNotificationSent と同様 (reserved → failed_permanent)。
+   */
   markCompletionNotificationFailedPermanent(
     input: MarkFailedPermanentInput,
   ): Promise<void>;
@@ -224,13 +257,3 @@ export interface DispatchStorage {
   }): Promise<DispatchAuditLog[]>;
 }
 
-// ============================================================
-// 内部 helper: status 表現の型 narrowing
-// ============================================================
-
-/**
- * 既存 reservation を skip 対象として扱うべき status 一覧 (lease 評価前)。
- * reservation.ts / DispatchStorage 実装で共通参照する。
- */
-export const TERMINAL_RESERVATION_STATUSES: ReadonlySet<CompletionNotificationStatus> =
-  new Set(["sent", "failed_permanent", "manual_review_required"]);

@@ -20,14 +20,12 @@
  */
 
 import { randomUUID } from "node:crypto";
+import type { DispatchAuditLog } from "@lms-279/shared-types";
 import {
-  DISPATCH_CONSTRAINTS,
-  type DispatchAuditLog,
-} from "@lms-279/shared-types";
-import type { DispatchStorage } from "./dispatch-storage.js";
+  DISPATCH_AUDIT_TTL_MS,
+  type DispatchStorage,
+} from "./dispatch-storage.js";
 import { sanitizeErrorForAudit } from "./dispatch-error-sanitizer.js";
-
-const TTL_MS = DISPATCH_CONSTRAINTS.AUDIT_LOGS_TTL_DAYS * 24 * 60 * 60 * 1000;
 
 export interface RecordAuditLogInput {
   runId: string;
@@ -39,11 +37,14 @@ export interface RecordAuditLogInput {
   /** sanitized error code (PII を含まない短い識別子) */
   errorCode?: string | null;
   /**
-   * error message。raw `unknown` を渡せば本 layer で sanitize する。
-   * すでに sanitize 済の string を渡しても再度 sanitize されるが冪等
-   * (二重 redaction でも plain text は安全に保たれる)。
+   * error message。`null` 指定なら no-op、`string` / `Error` / その他 `unknown` は
+   * すべて `sanitizeErrorForAudit` で string 化 + PII redaction する。
+   *
+   * 二重 sanitize 安全性: caller が既に sanitize 済の string を渡しても、
+   * `[EMAIL]` 等の redaction marker は再 sanitize しても変化しない冪等性を持つ
+   * ため安全。本 layer での sanitize は caller の漏れ防止 (NFR-11 二重防御)。
    */
-  errorMessage?: string | unknown | null;
+  errorMessage?: unknown;
   durationMs?: number | null;
   /** 現在時刻 (テスト時固定可、Date 注入) */
   now: Date;
@@ -65,9 +66,10 @@ export async function recordAuditLog(
   warn: (message: string, meta: Record<string, unknown>) => void = (msg, meta) =>
     console.warn(msg, meta),
 ): Promise<void> {
-  const nowMs = input.now.getTime();
-  const createdAt = new Date(nowMs).toISOString();
-  const ttlExpireAt = new Date(nowMs + TTL_MS).toISOString();
+  const createdAt = input.now.toISOString();
+  const ttlExpireAt = new Date(
+    input.now.getTime() + DISPATCH_AUDIT_TTL_MS,
+  ).toISOString();
   const auditId = (input.auditIdGenerator ?? randomUUID)();
 
   // errorMessage を null/undefined/string/unknown いずれでも安全に正規化

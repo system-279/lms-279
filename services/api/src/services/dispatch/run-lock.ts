@@ -14,17 +14,13 @@
  *   3. acquired=false なら 409 で即時返却 (Cloud Scheduler 重複起動の正常系)
  */
 
-import {
-  DISPATCH_CONSTRAINTS,
-  type DispatchRunStatus,
-} from "@lms-279/shared-types";
+import { DISPATCH_CONSTRAINTS } from "@lms-279/shared-types";
 import type {
   AcquireRunLockOutcome,
   DispatchStorage,
   UpdateRunStatusInput,
 } from "./dispatch-storage.js";
-
-const TTL_MS = DISPATCH_CONSTRAINTS.AUDIT_LOGS_TTL_DAYS * 24 * 60 * 60 * 1000;
+import { DISPATCH_AUDIT_TTL_MS } from "./dispatch-storage.js";
 
 export interface AcquireRunLockOrSkipInput {
   /** 現在時刻 (テスト時固定可、Date 注入) */
@@ -48,11 +44,11 @@ export async function acquireRunLockOrSkip(
   const leaseExpiresAt = new Date(
     nowMs + DISPATCH_CONSTRAINTS.DISPATCH_RUN_LEASE_MS,
   ).toISOString();
-  const ttlExpireAt = new Date(nowMs + TTL_MS).toISOString();
+  const ttlExpireAt = new Date(nowMs + DISPATCH_AUDIT_TTL_MS).toISOString();
 
   return storage.acquireRunLock({
     runId,
-    triggeredAt: new Date(nowMs).toISOString(),
+    triggeredAt: now.toISOString(),
     leaseExpiresAt,
     ttlExpireAt,
   });
@@ -83,7 +79,7 @@ export async function completeRun(
 ): Promise<void> {
   return finalizeRun(storage, {
     runId,
-    status: "completed" as DispatchRunStatus,
+    status: "completed",
     ...metrics,
   });
 }
@@ -102,7 +98,7 @@ export async function abortRun(
 ): Promise<void> {
   return finalizeRun(storage, {
     runId,
-    status: "aborted" as DispatchRunStatus,
+    status: "aborted",
     abortedReason,
     ...metrics,
   });

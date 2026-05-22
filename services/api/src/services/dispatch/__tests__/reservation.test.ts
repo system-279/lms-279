@@ -425,6 +425,67 @@ describe("markFailedPermanent", () => {
   });
 });
 
+describe("2 並列 worker 同時 reservation (evaluator narrative 反映)", () => {
+  it("Promise.all で同 (tenantId, userId) を 2 並列 reserve → 1 件のみ成功", async () => {
+    const [a, b] = await Promise.all([
+      tryReserveOrSkip(storage, {
+        tenantId: TENANT,
+        userId: USER,
+        runId: "run-parallel-a",
+        now: NOW,
+      }),
+      tryReserveOrSkip(storage, {
+        tenantId: TENANT,
+        userId: USER,
+        runId: "run-parallel-b",
+        now: NOW,
+      }),
+    ]);
+    // 1 件のみ reserved=true (atomicity 担保確認)
+    const successes = [a, b].filter((r) => r.reserved).length;
+    expect(successes).toBe(1);
+    const failed = a.reserved ? b : a;
+    expect(failed.reserved).toBe(false);
+    if (!failed.reserved) {
+      expect(failed.reason).toBe("currently_reserved_by_other_run");
+    }
+  });
+
+  it("Promise.all で lease 期限切れ既存 reservation を 2 並列 reserve → 1 件のみ降格成功", async () => {
+    // 既存 reservation を仕込む
+    await tryReserveOrSkip(storage, {
+      tenantId: TENANT,
+      userId: USER,
+      runId: "run-orig",
+      now: NOW,
+    });
+    const expired = new Date(
+      NOW.getTime() + DISPATCH_CONSTRAINTS.RESERVATION_LEASE_MS + 1000,
+    );
+    // 2 並列で期限切れ検出 → 両方が降格しようとする
+    const [a, b] = await Promise.all([
+      tryReserveOrSkip(storage, {
+        tenantId: TENANT,
+        userId: USER,
+        runId: "run-a",
+        now: expired,
+      }),
+      tryReserveOrSkip(storage, {
+        tenantId: TENANT,
+        userId: USER,
+        runId: "run-b",
+        now: expired,
+      }),
+    ]);
+    // atomicity 保証: 1 件目だけが降格、2 件目は降格後の manual_review_required を検出
+    const reasons = [a, b].map((r) => (r.reserved ? "reserved" : r.reason));
+    expect(reasons).toContain("lease_expired_promoted_to_manual_review");
+    expect(reasons).toContain("manual_review_required");
+    const record = await getReservation(storage, TENANT, USER);
+    expect(record?.status).toBe("manual_review_required");
+  });
+});
+
 describe("tenant 分離 / user 分離", () => {
   it("異なる tenantId なら独立した reservation", async () => {
     await tryReserveOrSkip(storage, {
