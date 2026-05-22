@@ -5,7 +5,7 @@
 **DXcollege 自動完了通知システム Phase 7 全体 (7-A code + 7-B code-only + 7-B infra) を 1 セッションで連続完了**。前セッション (Session 43) の残作業だった PR #468 (Phase 4) と PR #470 (Session 43 handoff) を冒頭でマージ後、開発者の「次は Phase 7 を進める」判断に基づき、Firestore I/O 実装 + production wiring + factory + Quality Gate 4 段 (safe-refactor / evaluator / code-review / codex) を実施。続けて deploy.yml への env 追加と firestore.indexes.json への composite index 追加を別 PR で実装、最後に Phase 7-B infra 5 件 (Firestore index / TTL / Cloud Scheduler SA + IAM / secret 登録 + 再 deploy / Cloud Scheduler job) を番号単位明示認可で順次実行。**Phase 7 完了**で残るは Phase 5 (Super admin API + settings 初期化) / Phase 6 (UI) / Phase 8 (cutover) のみ。次回 cron 起動 (22:00 JST) では super_dispatch_settings 未作成のため emptyResponse で kill switch 効果。
 
 - **Issue Net**: **0 件** — Close 0 / 起票 0 (Phase 進捗は impl-plan 管理、Issue 起票対象外。本セッションでも triage 基準該当の課題なし)
-- **マージ済 PR**: **5 件** (#468 Phase 4 / #470 Session 43 handoff / #471 Phase 7-A Firestore impl / #472 Phase 7-B code-only / #473 Session 44 handoff (初版))
+- **マージ済 PR**: **7 件** (#468 Phase 4 / #470 Session 43 handoff / #471 Phase 7-A Firestore impl / #472 Phase 7-B code-only / #473 Session 44 handoff (初版) / #474 Session 44 handoff (Phase 7-B infra 追記) / #475 super admin 戻るリンク fix + UI 改善)
 - **GCP infra 適用**: **5 件** ([1] Firestore composite index / [2] TTL Policy (2 collections) / [3] Cloud Scheduler SA + IAM / [4] DISPATCH_OIDC_AUDIENCE secret 登録 + 再 deploy / [5] Cloud Scheduler job)
 - **CI**: ✅ 全 green (各 PR で Lint / Type Check / Test / Build / Deploy to Cloud Run all SUCCESS。途中 PR #471/472 の deploy が fail loud で失敗していたが、Phase 7-B [4] 完了 (secret 登録) で正常 deploy に復旧)
 - **Open Issue**: active 0 / postponed 4 (#274/275/276/405、Session 43 末から変化なし)
@@ -70,6 +70,19 @@ gh issue list --state open --limit 15
 | 3 | Cloud Scheduler SA `dxcollege-scheduler@lms-279.iam.gserviceaccount.com` + `roles/run.invoker` on api Cloud Run | ✅ 作成済 |
 | 4 | GitHub secret `DISPATCH_OIDC_AUDIENCE=https://api-3zcica5euq-an.a.run.app` + `gh workflow run deploy.yml` で再 deploy | ✅ revision `api-00340-s89` 起動済、env 3 件反映確認 |
 | 5 | Cloud Scheduler job `dxcollege-completion-notifications` (location=asia-northeast1, schedule=`0 * * * *` JST, OIDC token) | ✅ ENABLED、初回起動 22:00 JST 予定 |
+
+### Phase 7 完了後の補足対応 (PR #475)
+
+開発者からの 2 つの質問対応:
+
+**Q1: スケジュールタイミングは設定可能か** → ✅ 設計済み (Phase 5/6 で UI 提供予定)
+- `super_dispatch_settings/global` doc の `scheduleDaysOfWeek: number[]` (0-6) + `scheduleHourJst: number` (0-23) で設定
+- Cloud Scheduler は毎時 0 分固定起動だが、api 側で `shouldRunNow()` 判定し設定変更が即時反映される設計
+
+**Q2: スーパー管理者→テナント管理ページからの戻り UI** → ✅ PR #475 でバグ修正 + UI 改善
+- 既存バナーのリンク先 `/super-admin` が 404 (該当ルート不在) だったため `/super/tenants` に修正
+- ボタン風スタイル (白背景 / 角丸 / ホバー強調) + ARIA label で視認性向上
+- 表示条件: `isSuperAdminAccess === true` (バックエンド `/auth/me` の flag)、全 `/[tenant]/...` ページ上部
 
 ---
 
