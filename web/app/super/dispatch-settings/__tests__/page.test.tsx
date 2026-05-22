@@ -1,0 +1,96 @@
+/**
+ * DispatchSettingsPage (Phase 6 PR-F1) のテスト。
+ * - 初期 GET で値ロード + フォーム表示
+ * - 保存で PUT 呼び出し + 成功表示
+ * - 409 (version 競合) で再 GET + 警告表示 (AC-23)
+ */
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import type { GetDispatchSettingsResponse } from "@lms-279/shared-types";
+import { ApiError } from "@/lib/api";
+import DispatchSettingsPage from "../page";
+
+const superFetchMock = vi.fn();
+vi.mock("@/lib/super-api", () => ({
+  useSuperAdminFetch: () => ({ superFetch: superFetchMock }),
+}));
+
+const baseSettings: GetDispatchSettingsResponse = {
+  enabled: false,
+  scheduleDaysOfWeek: [1, 4],
+  scheduleHourJst: 9,
+  signatureName: "DXcollege運営スタッフ",
+  completionMessageBody: "受講お疲れ様でした。",
+  senderEmail: "dxcollege@279279.net",
+  updatedAt: "2026-05-22T01:00:00.000Z",
+  updatedBy: "admin@example.com",
+  version: 3,
+};
+
+beforeEach(() => {
+  superFetchMock.mockReset();
+});
+
+describe("DispatchSettingsPage", () => {
+  it("初期 GET で設定をロードしフォームを表示する", async () => {
+    superFetchMock.mockResolvedValueOnce(baseSettings);
+    render(<DispatchSettingsPage />);
+    expect(
+      await screen.findByDisplayValue("DXcollege運営スタッフ"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("dxcollege@279279.net")).toBeInTheDocument();
+    expect(screen.getByText("version 3")).toBeInTheDocument();
+  });
+
+  it("保存で version 付き PUT を呼び、成功メッセージを出す", async () => {
+    superFetchMock
+      .mockResolvedValueOnce(baseSettings) // GET
+      .mockResolvedValueOnce({ ...baseSettings, version: 4 }); // PUT
+    render(<DispatchSettingsPage />);
+    await screen.findByDisplayValue("DXcollege運営スタッフ");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    });
+
+    await waitFor(() =>
+      expect(superFetchMock).toHaveBeenCalledWith(
+        "/api/v2/super/dispatch/settings",
+        expect.objectContaining({ method: "PUT" }),
+      ),
+    );
+    const putCall = superFetchMock.mock.calls.find((c) => c[1]?.method === "PUT");
+    expect(JSON.parse(putCall![1].body)).toMatchObject({ version: 3 });
+    expect(await screen.findByText("保存しました。")).toBeInTheDocument();
+    expect(screen.getByText("version 4")).toBeInTheDocument();
+  });
+
+  it("409 で最新値を再 GET し警告を出す (AC-23)", async () => {
+    superFetchMock
+      .mockResolvedValueOnce(baseSettings) // 初回 GET
+      .mockRejectedValueOnce(new ApiError(409, "version_conflict", "conflict")) // PUT
+      .mockResolvedValueOnce({ ...baseSettings, version: 9 }); // 再 GET
+    render(<DispatchSettingsPage />);
+    await screen.findByDisplayValue("DXcollege運営スタッフ");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    });
+
+    expect(
+      await screen.findByText(/最新の値を読み込みました/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("version 9")).toBeInTheDocument();
+  });
+
+  it("GET 失敗時はエラーと再読み込みボタンを出す", async () => {
+    superFetchMock.mockRejectedValueOnce(
+      new ApiError(403, "forbidden", "no perm"),
+    );
+    render(<DispatchSettingsPage />);
+    expect(
+      await screen.findByText("この操作を行う権限がありません。"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "再読み込み" })).toBeInTheDocument();
+  });
+});
