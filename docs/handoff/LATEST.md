@@ -2,11 +2,12 @@
 
 ## TL;DR
 
-**DXcollege 自動完了通知システム Phase 7 のうち Phase 7-A (code 層) と Phase 7-B code-only を 1 セッションで連続実装**。前セッション (Session 43) の残作業だった PR #468 (Phase 4) と PR #470 (Session 43 handoff) を冒頭でマージ後、開発者の「次は Phase 7 (本番デプロイ前提) を進める」判断に基づき、Firestore I/O 実装 + production wiring + factory (FirestoreDispatchStorage / FirestoreTenantDataLoader / 切替 factory) + Quality Gate 4 段 (safe-refactor / evaluator / code-review / codex) を実施。さらに deploy.yml への env 追加と firestore.indexes.json への composite index 追加も別 PR として完成。Phase 7-B 残作業 (gcloud commands 5 件) のみが本番デプロイ前の最終ブロッカー。
+**DXcollege 自動完了通知システム Phase 7 全体 (7-A code + 7-B code-only + 7-B infra) を 1 セッションで連続完了**。前セッション (Session 43) の残作業だった PR #468 (Phase 4) と PR #470 (Session 43 handoff) を冒頭でマージ後、開発者の「次は Phase 7 を進める」判断に基づき、Firestore I/O 実装 + production wiring + factory + Quality Gate 4 段 (safe-refactor / evaluator / code-review / codex) を実施。続けて deploy.yml への env 追加と firestore.indexes.json への composite index 追加を別 PR で実装、最後に Phase 7-B infra 5 件 (Firestore index / TTL / Cloud Scheduler SA + IAM / secret 登録 + 再 deploy / Cloud Scheduler job) を番号単位明示認可で順次実行。**Phase 7 完了**で残るは Phase 5 (Super admin API + settings 初期化) / Phase 6 (UI) / Phase 8 (cutover) のみ。次回 cron 起動 (22:00 JST) では super_dispatch_settings 未作成のため emptyResponse で kill switch 効果。
 
 - **Issue Net**: **0 件** — Close 0 / 起票 0 (Phase 進捗は impl-plan 管理、Issue 起票対象外。本セッションでも triage 基準該当の課題なし)
-- **マージ済 PR**: **4 件** (#468 Phase 4 / #470 Session 43 handoff / #471 Phase 7-A Firestore impl / #472 Phase 7-B code-only)
-- **CI**: ✅ 全 green (各 PR で Lint / Type Check / Test / Build / Deploy to Cloud Run all SUCCESS)
+- **マージ済 PR**: **5 件** (#468 Phase 4 / #470 Session 43 handoff / #471 Phase 7-A Firestore impl / #472 Phase 7-B code-only / #473 Session 44 handoff (初版))
+- **GCP infra 適用**: **5 件** ([1] Firestore composite index / [2] TTL Policy (2 collections) / [3] Cloud Scheduler SA + IAM / [4] DISPATCH_OIDC_AUDIENCE secret 登録 + 再 deploy / [5] Cloud Scheduler job)
+- **CI**: ✅ 全 green (各 PR で Lint / Type Check / Test / Build / Deploy to Cloud Run all SUCCESS。途中 PR #471/472 の deploy が fail loud で失敗していたが、Phase 7-B [4] 完了 (secret 登録) で正常 deploy に復旧)
 - **Open Issue**: active 0 / postponed 4 (#274/275/276/405、Session 43 末から変化なし)
 
 ---
@@ -55,10 +56,20 @@ gh issue list --state open --limit 15
 | 6 | Frontend UI | ⏳ | - |
 | 7-A | Firestore storage impl + production wiring | ✅ | **#471 (本セッション)** |
 | 7-B-code | deploy.yml env + firestore.indexes.json | ✅ | **#472 (本セッション)** |
-| 7-B-infra | gcloud commands (Cloud Scheduler / TTL / IAM / secret / index deploy) | ⏳ **次セッション** | - |
+| 7-B-infra | gcloud commands (5 件、番号単位明示認可で実行) | ✅ **本セッション** | - (gcloud 直接適用) |
 | 8 | Smoke check + Cutover | ⏳ | - |
 
-**Phase 7-A + Phase 7-B code-only 完了**で残るは Phase 7-B infra 5 件と Phase 5 (Super admin API) / Phase 6 (UI) / Phase 8 (cutover) のみ。
+**Phase 7 全体完了**で残るは Phase 5 (Super admin API + settings 初期化) / Phase 6 (Frontend UI) / Phase 8 (cutover) のみ。
+
+### Phase 7-B infra 適用詳細 (本セッションで実行)
+
+| # | 内容 | 結果 |
+|---|---|---|
+| 1 | Firestore composite index `super_dispatch_runs (status + leaseExpiresAt)` | ✅ READY (既存、index ID `CICAgOi39IkK`) |
+| 2 | Firestore TTL Policy `super_dispatch_audit_logs.ttlExpireAt` + `super_dispatch_runs.ttlExpireAt` | ✅ 両 collection で ACTIVE |
+| 3 | Cloud Scheduler SA `dxcollege-scheduler@lms-279.iam.gserviceaccount.com` + `roles/run.invoker` on api Cloud Run | ✅ 作成済 |
+| 4 | GitHub secret `DISPATCH_OIDC_AUDIENCE=https://api-3zcica5euq-an.a.run.app` + `gh workflow run deploy.yml` で再 deploy | ✅ revision `api-00340-s89` 起動済、env 3 件反映確認 |
+| 5 | Cloud Scheduler job `dxcollege-completion-notifications` (location=asia-northeast1, schedule=`0 * * * *` JST, OIDC token) | ✅ ENABLED、初回起動 22:00 JST 予定 |
 
 ---
 
@@ -221,8 +232,16 @@ ADR 候補として保留:
 
 ## 次セッション開始時の最優先 3 つ
 
-1. **Phase 7-B infra 5 件の番号単位明示認可と実行** — 各 gcloud command ごとに認可 → 実行 → 結果確認の 3 ステップ。本番 GCP リソース create を伴うため慎重に進める
-2. **DISPATCH_OIDC_AUDIENCE secret 登録 + 再 deploy** — Cloud Scheduler 設定の前に api Cloud Run の env が反映されていることを確認
-3. **OQ-X smoke (mode=send) 実機検証** — Phase 7-B 完了後に SendAs 経由送信が成立することを実機 Gmail で確認 (送信先 mailbox 認可必要)
+1. **Phase 5 (Super admin API 6 endpoints) 着手判断** — 本番 Cloud Scheduler 稼働中だが super_dispatch_settings 未作成のため kill switch 状態。Phase 5 で settings 初期化 + テナント別 CC 設定 + dry-run / test-send API を追加する必要あり (impl-plan §3 Phase 5、6 endpoints)
+2. **OQ-X smoke (mode=send) 実機検証** — Phase 5 完了後または別途、SendAs 経由送信が実機 Gmail で配送されることを確認 (送信先 mailbox 認可必要、ADR-037 案 X の最終バリデーション)
+3. **Phase 5 spec / OQ-8 (TTL 法務確認)** — TTL Policy 自体は本セッションで設定済 (ACTIVE)。法務確認結果次第で TTL 期間を 1 年から調整する可能性 (現状: ttlExpireAt フィールドの値はアプリ側で createdAt + 365 days を書き込む)
 
-Phase 7 完了後は Phase 5 (Super admin API) → Phase 6 (Frontend UI) → Phase 8 (Cutover) の順で進める想定。
+Phase 7 完了。Phase 8 (cutover) は Phase 5 + 6 完了後、本番 smoke + 本田様承認の手順で進める想定。
+
+### 本番運用上の注意 (Phase 7 完了直後の状態)
+
+- Cloud Scheduler `dxcollege-completion-notifications` が ENABLED で毎時 0 分 JST に起動
+- super_dispatch_settings/global doc 未作成のため `runCompletionNotifications` は `if (!settings) return emptyResponse()` で即座に終了 (kill switch 効果)
+- audit_logs / runs の write は kill switch 経路では発生しない (run lock 取得前に return)
+- Cloud Run / Firestore のコストは scheduler 起動 × 60 (1 時間 / 分) = 24 リクエスト/日のみで負荷軽微
+- Phase 5 で settings doc 初期化時、UI 側で必ず `enabled=false` で初期化することが cutover 安全装置 (impl-plan §6.1 cutover フロー)
