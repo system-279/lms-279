@@ -146,7 +146,7 @@ Phase 1 (基礎 services、並列実装可能 7 ファイル)
 **Phase 1 完了条件**:
 - 各 service の Unit Test カバレッジ ≥ 90%
 - `npm run lint && npm run type-check && npm test -w @lms-279/api` 全 PASS
-- 既存 `progress-pdf-draft.ts` の `validateRecipientEmail` を `cc-email-validator.ts` で再利用 (DRY)
+- 既存 `progress-pdf-draft.ts` の `validateRecipientEmail` と**同等ロジック**を `cc-email-validator.ts` に実装 (`validateSingleEmail`)。**物理コード統合は本 Phase スコープ外**: 設計仕様書 §5.4 で「`progress-pdf-draft.ts` には一切変更を加えない」と確定しているため、`validateRecipientEmail` を `validateSingleEmail` 呼び出しに置き換える統合 PR は別途切る (follow-up Issue)。本完了条件は「再利用 = 同等ロジック実装で誤動作の divergence を防ぐ」の意味、物理 import 統一の意味ではない (2026-05-22 改訂、Evaluator FAIL に対する spec 改訂)
 
 ### Phase 2: Reservation / Run Lock layer
 
