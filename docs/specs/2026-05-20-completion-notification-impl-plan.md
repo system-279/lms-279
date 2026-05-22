@@ -46,7 +46,7 @@
 | **Phase 2** | Reservation / Run Lock layer | 中 | 0.5 日 | Phase 1 |
 | **Phase 3** | Mail template + Gmail DWD send | 中 | 0.5 日 | Phase 1 |
 | **Phase 4** | Internal API + メインロジック (race / lock / 403 シナリオ全網羅) | 大 | 1 日 | Phase 1, 2, 3 |
-| **Phase 5** | Super admin API (6 endpoints) | 大 | 1 日 | Phase 1, 2 (Phase 3, 4 と並列実装可) |
+| **Phase 5** | Super admin API (6 endpoints) ✅ 完了 (PR-E) | 大 | 1 日 | Phase 1, 2 (Phase 3, 4 と並列実装可) |
 | **Phase 6** | Frontend UI (1 page + 7 components + Playwright E2E) | 大 | 1.5 日 | Phase 5 (DTO 確定後) |
 | **Phase 7** | Infrastructure + ADR-037 登録 | 中 | 0.5 日 | Phase 4, 5, 6 完了後 |
 | **Phase 8** | Smoke check + Cutover | 中 | 0.5 日 + 本田様承認 | Phase 7 |
@@ -186,7 +186,15 @@ Phase 1 (基礎 services、並列実装可能 7 ファイル)
 - **Evaluator 分離プロトコル発動** (Phase 完了時に `evaluator` agent で AC 検証 + 独立評価)
 - `~/.claude/rules/error-handling.md` 状態復旧 > ログ記録 > 通知 の原則準拠を確認
 
-### Phase 5: Super admin API
+### Phase 5: Super admin API ✅ 完了 (PR-E)
+
+実装メモ (確定した設計判断):
+- settings GET は doc 未作成時 default (enabled=false / version=0 / signatureName・completionMessageBody は default 値) を返し、初回 PUT (version=0) で create。senderEmail は env DXCOLLEGE_SENDER_EMAIL を GET/PUT レスポンスに overlay (NFR-8、編集不可)。
+- version 不一致時の 409 は `current` (env overlay 済) を併せて返し、UI が追加 GET なしで reload 可能。
+- tenant CC は tenant doc (`tenants/{tenantId}`) を直接 set({merge:true}) で更新 (TenantCcConfigStore で injectable)。AC-24 は入力件数 11 以上で 400、AC-25 は各要素 validateSingleEmail で個別拒否。
+- audit-logs / runs は storage 全件取得 + route で in-memory filter/sort/cursor paginate (小規模 + TTL 365 日、composite index 不要)。存在しない cursor は終端扱い (空ページ + null) で client 再ループを防止。
+- dispatch super router は superAdminRouter の後に mount し、superAdminAuthMiddleware を明示適用 (auth self-contained、頻出 /super パスでの二重 auth を回避)。
+- test-send は To=req.superAdmin.email 強制 + 固定ダミー + CC なし、testSendLimiter で 50/日/email (in-memory store、複数インスタンス間非共有を許容)。
 
 | File | endpoint | 関連 AC |
 |---|---|---|

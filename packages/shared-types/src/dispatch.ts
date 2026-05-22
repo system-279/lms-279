@@ -176,6 +176,20 @@ export interface DispatchRun {
   ttlExpireAt: string;
 }
 
+/** run 履歴取得クエリ (Phase 5 super-admin runs API) */
+export interface GetRunsQuery {
+  /** ページサイズ、default 50、max 200 */
+  limit?: number;
+  /** ページネーション用 cursor (前ページ末尾 run の triggeredAt) */
+  cursor?: string;
+}
+
+export interface GetRunsResponse {
+  /** triggeredAt 降順 (新しい run が先頭) */
+  runs: DispatchRun[];
+  nextCursor: string | null;
+}
+
 // ============================================================
 // 内部 API レスポンス (Cloud Scheduler → Cloud Run)
 // ============================================================

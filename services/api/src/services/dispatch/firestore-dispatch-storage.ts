@@ -51,6 +51,8 @@ import type {
   MarkFailedPermanentInput,
   MarkSentInput,
   ReserveCompletionNotificationInput,
+  UpdateDispatchSettingsInput,
+  UpdateDispatchSettingsOutcome,
   UpdateRunStatusInput,
 } from "./dispatch-storage.js";
 
@@ -249,6 +251,50 @@ export class FirestoreDispatchStorage implements DispatchStorage {
     const snap = (await this.settingsRef().get()) as DocumentSnapshot;
     if (!snap.exists) return null;
     return toDispatchSettings(snap.data() ?? {});
+  }
+
+  async updateDispatchSettings(
+    input: UpdateDispatchSettingsInput,
+  ): Promise<UpdateDispatchSettingsOutcome> {
+    const ref = this.settingsRef();
+    // read version → 一致判定 → write を runTransaction で atomic に保護 (lost update 防止)
+    return this.db.runTransaction(async (tx: Transaction) => {
+      const snap = (await tx.get(ref)) as DocumentSnapshot;
+      const current = snap.exists ? toDispatchSettings(snap.data() ?? {}) : null;
+      const currentVersion = current?.version ?? 0;
+      if (input.expectedVersion !== currentVersion) {
+        return {
+          updated: false as const,
+          reason: "version_conflict" as const,
+          current,
+        };
+      }
+      const nextVersion = currentVersion + 1;
+      // settings/global は本機能専用 doc のため tx.set で全体書き込み (他フィールドなし)
+      tx.set(ref, {
+        enabled: input.enabled,
+        scheduleDaysOfWeek: input.scheduleDaysOfWeek,
+        scheduleHourJst: input.scheduleHourJst,
+        signatureName: input.signatureName,
+        completionMessageBody: input.completionMessageBody,
+        senderEmail: input.senderEmail,
+        updatedAt: isoToTimestamp(input.updatedAt),
+        updatedBy: input.updatedBy,
+        version: nextVersion,
+      });
+      const settings: DispatchSettings = {
+        enabled: input.enabled,
+        scheduleDaysOfWeek: input.scheduleDaysOfWeek,
+        scheduleHourJst: input.scheduleHourJst,
+        signatureName: input.signatureName,
+        completionMessageBody: input.completionMessageBody,
+        senderEmail: input.senderEmail,
+        updatedAt: input.updatedAt,
+        updatedBy: input.updatedBy,
+        version: nextVersion,
+      };
+      return { updated: true as const, settings };
+    });
   }
 
   // =====================================================================
@@ -510,6 +556,14 @@ export class FirestoreDispatchStorage implements DispatchStorage {
     const snap = (await this.runRef(runId).get()) as DocumentSnapshot;
     if (!snap.exists) return null;
     return toDispatchRun(snap.data() ?? {});
+  }
+
+  async listRuns(): Promise<DispatchRun[]> {
+    // 全件取得 (並び替え・paginate は route 層)。小規模 + TTL 365 日でデータ量限定的。
+    const snap = (await this.db.collection(COLL_RUNS).get()) as {
+      docs: DocumentSnapshot[];
+    };
+    return snap.docs.map((doc) => toDispatchRun(doc.data() ?? {}));
   }
 
   // =====================================================================

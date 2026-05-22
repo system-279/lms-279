@@ -31,6 +31,8 @@ import type {
   MarkFailedPermanentInput,
   MarkSentInput,
   ReserveCompletionNotificationInput,
+  UpdateDispatchSettingsInput,
+  UpdateDispatchSettingsOutcome,
   UpdateRunStatusInput,
 } from "./dispatch-storage.js";
 
@@ -72,6 +74,33 @@ export class InMemoryDispatchStorage implements DispatchStorage {
 
   async getDispatchSettings(): Promise<DispatchSettings | null> {
     return this.settings;
+  }
+
+  async updateDispatchSettings(
+    input: UpdateDispatchSettingsInput,
+  ): Promise<UpdateDispatchSettingsOutcome> {
+    // doc 未作成時の現在 version は 0。read-modify-write は await を挟まず atomic。
+    const currentVersion = this.settings?.version ?? 0;
+    if (input.expectedVersion !== currentVersion) {
+      return {
+        updated: false,
+        reason: "version_conflict",
+        current: this.settings,
+      };
+    }
+    const next: DispatchSettings = {
+      enabled: input.enabled,
+      scheduleDaysOfWeek: input.scheduleDaysOfWeek,
+      scheduleHourJst: input.scheduleHourJst,
+      signatureName: input.signatureName,
+      completionMessageBody: input.completionMessageBody,
+      senderEmail: input.senderEmail,
+      updatedAt: input.updatedAt,
+      updatedBy: input.updatedBy,
+      version: currentVersion + 1,
+    };
+    this.settings = next;
+    return { updated: true, settings: next };
   }
 
   // ===================================================================
@@ -280,6 +309,10 @@ export class InMemoryDispatchStorage implements DispatchStorage {
 
   async getRun(runId: string): Promise<DispatchRun | null> {
     return this.runs.get(runId) ?? null;
+  }
+
+  async listRuns(): Promise<DispatchRun[]> {
+    return Array.from(this.runs.values());
   }
 
   // ===================================================================

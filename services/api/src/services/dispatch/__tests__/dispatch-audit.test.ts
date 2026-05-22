@@ -177,9 +177,11 @@ describe("recordAuditLog - best-effort (§6.1)", () => {
       markCompletionNotificationSent: vi.fn(),
       markCompletionNotificationFailedPermanent: vi.fn(),
       getCompletionNotification: vi.fn(),
+      updateDispatchSettings: vi.fn(),
       acquireRunLock: vi.fn(),
       updateRunStatus: vi.fn(),
       getRun: vi.fn(),
+      listRuns: vi.fn(() => Promise.resolve([])),
       appendAuditLog: vi.fn(
         (_input: AppendAuditLogInput): Promise<void> =>
           Promise.reject(new Error("Firestore unavailable")),
@@ -238,9 +240,11 @@ describe("recordAuditLog - best-effort (§6.1)", () => {
       markCompletionNotificationSent: vi.fn(),
       markCompletionNotificationFailedPermanent: vi.fn(),
       getCompletionNotification: vi.fn(),
+      updateDispatchSettings: vi.fn(),
       acquireRunLock: vi.fn(),
       updateRunStatus: vi.fn(),
       getRun: vi.fn(),
+      listRuns: vi.fn(() => Promise.resolve([])),
       appendAuditLog: vi.fn(() =>
         Promise.reject(new Error("Conflict on user secret@x.com")),
       ),

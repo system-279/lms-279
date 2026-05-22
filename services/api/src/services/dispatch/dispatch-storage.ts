@@ -158,6 +158,42 @@ export interface AppendAuditLogInput {
 }
 
 // ============================================================
+// Settings update (super_dispatch_settings/global、Phase 5 super-admin API)
+// ============================================================
+
+/**
+ * 設定更新入力 (楽観的ロック)。
+ *
+ * `senderEmail` は env DXCOLLEGE_SENDER_EMAIL 由来の read-only 値だが、doc 初回 create 時に
+ * 保存しておく (caller が env から渡す)。GET レスポンス層では env 値で上書きする (NFR-8)。
+ * `expectedVersion` は楽観ロック: doc 未作成時は 0 を期待値とする。
+ */
+export interface UpdateDispatchSettingsInput {
+  /** 期待する現在 version。doc 未作成時は 0。不一致で version_conflict */
+  expectedVersion: number;
+  enabled: boolean;
+  scheduleDaysOfWeek: number[];
+  scheduleHourJst: number;
+  signatureName: string;
+  completionMessageBody: string;
+  /** env DXCOLLEGE_SENDER_EMAIL (create 時に保存、編集不可) */
+  senderEmail: string;
+  /** 更新者 email (super admin、raw 保持) */
+  updatedBy: string;
+  /** 更新時刻 ISO 8601 (テスト時固定可) */
+  updatedAt: string;
+}
+
+export type UpdateDispatchSettingsOutcome =
+  | { updated: true; settings: DispatchSettings }
+  | {
+      updated: false;
+      reason: "version_conflict";
+      /** UI reload 用の現在値 (doc 未作成なら null) */
+      current: DispatchSettings | null;
+    };
+
+// ============================================================
 // DispatchStorage interface
 // ============================================================
 
@@ -171,6 +207,21 @@ export interface DispatchStorage {
    * Phase 4 では read-only のみ公開 (write は別 method を Phase 5 で追加)。
    */
   getDispatchSettings(): Promise<DispatchSettings | null>;
+
+  /**
+   * super_dispatch_settings/global の更新 (Phase 5 super-admin PUT)。
+   *
+   * 楽観的ロック (version): `expectedVersion` が現在 version と一致しなければ
+   * `version_conflict` を返す (doc 未作成時の現在 version は 0 とみなす)。一致時は
+   * version を +1 して書き込み、更新後の DispatchSettings を返す。
+   *
+   * 実装契約 (atomicity 必須): read version → 一致判定 → write を atomic に行う
+   * (Firestore: runTransaction、InMemory: await を挟まない同期実行)。並行 PUT で
+   * version チェックをすり抜けた lost update を防ぐ。
+   */
+  updateDispatchSettings(
+    input: UpdateDispatchSettingsInput,
+  ): Promise<UpdateDispatchSettingsOutcome>;
 
   // ----- Reservation -----
   /**
@@ -251,6 +302,13 @@ export interface DispatchStorage {
 
   /** Run 取得 (主にテスト/audit 用) */
   getRun(runId: string): Promise<DispatchRun | null>;
+
+  /**
+   * Run 全件取得 (Phase 5 super-admin runs 一覧 API)。
+   * 並び替え・ページネーションは route 層で行う (小規模 + TTL 365 日でデータ量限定的なため
+   * 全件取得 + in-memory paginate を採用、composite index 不要)。
+   */
+  listRuns(): Promise<DispatchRun[]>;
 
   // ----- Audit log -----
   /**
