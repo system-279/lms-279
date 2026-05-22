@@ -17,6 +17,8 @@ import { tenantsRouter } from "./routes/tenants.js";
 import { superAdminRouter } from "./routes/super-admin.js";
 import { helpRoleRouter } from "./routes/help-role.js";
 import { publicRouter } from "./routes/public.js";
+import { createInternalDispatchRouter } from "./routes/internal/dispatch.js";
+import { buildDispatchFactory } from "./services/dispatch/factory.js";
 import { logger } from "./utils/logger.js";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -134,6 +136,55 @@ app.use("/api/v2/public", authLimiter, publicRouter);
 
 // テナント登録API（認証のみ、テナントコンテキスト不要）
 app.use("/api/v2/tenants", authLimiter, tenantsRouter);
+
+// 内部 API: Cloud Scheduler 経由の自動完了通知配信 (Phase 7 wiring)
+//
+// env 解決方針:
+//   - GCP runtime (Cloud Run / Cloud Functions / GAE) では env 欠如 / 初期化失敗を
+//     silent skip しない (本番で Scheduler が 404 を受けても 2xx 期待で気付かない
+//     リスク回避、evaluator HIGH + Codex Important 反映)
+//   - local dev / E2E (GCP runtime シグナルなし) では warn + skip
+//
+// GCP runtime 判定: Cloud Run = K_SERVICE / Cloud Functions = FUNCTION_TARGET or
+//   FUNCTION_NAME / GAE = GAE_SERVICE を網羅 (LMS は現状 Cloud Run のみだが、防御的に
+//   全 GCP runtime を fail loud 対象とする)
+function isProductionGcpRuntime(): boolean {
+  return Boolean(
+    process.env.K_SERVICE ||
+      process.env.FUNCTION_TARGET ||
+      process.env.FUNCTION_NAME ||
+      process.env.GAE_SERVICE,
+  );
+}
+
+try {
+  const dispatch = buildDispatchFactory();
+  app.use(
+    "/api/v2/internal",
+    createInternalDispatchRouter({
+      expectedAudience: dispatch.expectedAudience,
+      verifier: dispatch.verifier,
+      storage: dispatch.storage,
+      loader: dispatch.loader,
+      env: dispatch.env,
+    }),
+  );
+  logger.info("Internal dispatch router mounted", { mode: dispatch.mode });
+} catch (err) {
+  const errorMsg = err instanceof Error ? err.message : String(err);
+  if (isProductionGcpRuntime()) {
+    // 本番 GCP runtime で env 欠如 = fail loud (silent skip 防止)
+    logger.error(
+      "Internal dispatch router failed to mount in production GCP runtime — env missing or init failed",
+      { errorType: "dispatch_router_mount_failed_in_production", error: errorMsg },
+    );
+    throw err;
+  }
+  // local dev / E2E: warn + skip (dispatch endpoint は本番のみ必要)
+  logger.warn("Internal dispatch router NOT mounted (env missing or init failed)", {
+    error: errorMsg,
+  });
+}
 
 // スーパー管理者API
 app.use("/api/v2/super", superAdminRouter);
