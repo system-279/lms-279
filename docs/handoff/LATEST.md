@@ -1,14 +1,13 @@
-# Session Handoff — 2026-05-22 (Session 43)
+# Session Handoff — 2026-05-22 (Session 44)
 
 ## TL;DR
 
-**DXcollege 自動完了通知システム (4 要件) の Phase 1 残部 + Phase 2/3/4 を 1 セッションで連続実装した一気通貫セッション。** 開発者から「以前にオーダーしていた 4 要件 (DXcollege@279279.net 自動送信 / テナント別 CC / 署名 / 100% 完了時 1 度だけ送信) は解決済か」との問いに対し、設計完了・Phase 1 途中で SendAs 設定待ちブロック状態だったことを報告。SendAs 設定完了の確認後「可能なら AI のみで進めて」「呼称を本田様 → 開発者に統一」との指示に従い、Phase 1 残部 → Phase 3 → Phase 2 → Phase 4 を順次実装。各 Phase で safe-refactor + evaluator + (規模に応じて) code-review の Quality Gate を実施し、指摘事項を都度反映。**Phase 1〜4 完了で AC 全体の end-to-end 検証点に到達**、本番デプロイには Phase 5-8 を残すのみ。
+**DXcollege 自動完了通知システム Phase 7 のうち Phase 7-A (code 層) と Phase 7-B code-only を 1 セッションで連続実装**。前セッション (Session 43) の残作業だった PR #468 (Phase 4) と PR #470 (Session 43 handoff) を冒頭でマージ後、開発者の「次は Phase 7 (本番デプロイ前提) を進める」判断に基づき、Firestore I/O 実装 + production wiring + factory (FirestoreDispatchStorage / FirestoreTenantDataLoader / 切替 factory) + Quality Gate 4 段 (safe-refactor / evaluator / code-review / codex) を実施。さらに deploy.yml への env 追加と firestore.indexes.json への composite index 追加も別 PR として完成。Phase 7-B 残作業 (gcloud commands 5 件) のみが本番デプロイ前の最終ブロッカー。
 
-- **Issue Net**: **0 件** — Close 0 / 起票 0 (Phase 実装は impl-plan の Phase 進捗で管理、Issue 起票対象外。CLAUDE.md triage 基準準拠)
-- **マージ済 PR**: 3 件 (#465 Phase 1 残部 / #466 Phase 3 Mail+Send / #467 Phase 2 Reservation/Lock/Audit)
-- **未マージ PR**: 2 件 (#468 Phase 4 Internal API+メインロジック CI green merge 認可待ち / 本 PR Session 43 handoff)
-- **CI**: ✅ 全 green (各 PR の Lint / Type Check / Test / Build / Deploy to Cloud Run all SUCCESS)
-- **Open Issue**: active 0 / postponed 4 (Session 42 末から変化なし)
+- **Issue Net**: **0 件** — Close 0 / 起票 0 (Phase 進捗は impl-plan 管理、Issue 起票対象外。本セッションでも triage 基準該当の課題なし)
+- **マージ済 PR**: **4 件** (#468 Phase 4 / #470 Session 43 handoff / #471 Phase 7-A Firestore impl / #472 Phase 7-B code-only)
+- **CI**: ✅ 全 green (各 PR で Lint / Type Check / Test / Build / Deploy to Cloud Run all SUCCESS)
+- **Open Issue**: active 0 / postponed 4 (#274/275/276/405、Session 43 末から変化なし)
 
 ---
 
@@ -22,128 +21,132 @@ cat docs/handoff/LATEST.md
 git fetch origin main && git log --oneline -10 origin/main
 gh run list --branch main --limit 5
 
-# 3. 未マージ PR #468 (Phase 4) の merge 認可判断
-#    フォーマット例:
-#    PR #468 — feat(dispatch): Phase 4 (Internal API + メインロジック) (12 files, +2059/-0) をマージしてよい
-gh pr view 468 --json statusCheckRollup,mergeable --jq '{mergeable, checks: [.statusCheckRollup[] | {name, conclusion}]}'
-
-# 4. 現在の OPEN Issue (4 件すべて postponed、明示指示なき限り着手不可)
+# 3. 現在の OPEN Issue (4 件すべて postponed、明示指示なき限り着手不可)
 gh issue list --state open --limit 15
 
-# 5. (PR #468 merge 後の続行候補) Phase 5 (Super admin API 6 endpoints) または Phase 7 (Infra + Firestore impl) のどちらを優先するか開発者判断
+# 4. Phase 7-B 残作業 (gcloud commands 5 件) を進めるか開発者判断
+#    各コマンドは番号単位明示認可必須 (CLAUDE.md 4 原則 §3)
+#    準備: Cloud Scheduler API / Firestore TTL Policy / Cloud Run secret 機能の事前確認
 ```
 
 ---
 
-## セッション成果物 (Session 43)
+## セッション成果物 (Session 44)
 
-### マージ済 PR (3 件)
+### マージ済 PR (4 件)
 
-| # | タイトル | 種別 | 差分 | 関連 |
+| # | タイトル | 種別 | 差分 | merge commit |
 |---|---|---|---|---|
-| #465 | feat(dispatch): Phase 1 残部 services (completion-eligibility / cc-email-validator / gmail-client) + 呼称ルール | feat (large) | 8 files / +1188/-2 | spec §5.2-5.3 改訂 |
-| #466 | feat(dispatch): Phase 3 (Mail template + Gmail DWD send) | feat (large) | 4 files / +1049/-0 | AC-3 / AC-5 / 完了条件 3 件 |
-| #467 | feat(dispatch): Phase 2 (Reservation / Run Lock / Dispatch Audit) | feat (large) | 8 files / +2028/-0 | AC-10〜AC-18 / AC-33 |
-
-### 未マージ PR (2 件)
-
-| # | タイトル | 状態 | 差分 |
-|---|---|---|---|
-| #468 | feat(dispatch): Phase 4 (Internal API + メインロジック) を統合実装 | CI all green、merge 認可待ち | 12 files / +2059/-0 |
-| (本 PR) | docs(handoff): Session 43 ハンドオフ記録 + Session 42 archive | docs only | 2 files |
+| #468 | feat(dispatch): Phase 4 (Internal API + メインロジック) を統合実装 | feat (large) | 14 files / +2028/-16 | b4bf171 |
+| #470 | docs(handoff): Session 43 (2026-05-22) ハンドオフ記録 + Session 42 archive | docs | 2 files / +294/-62 | 39f3f60 |
+| #471 | feat(dispatch): Phase 7-A Firestore storage 実装 + production wiring | feat (large) | 7 files / +2068/-0 | cc5c643 |
+| #472 | feat(dispatch): Phase 7-B code-only (deploy env + firestore index) | feat (small) | 2 files / +19/-1 | 01bd1c4 |
 
 ### Phase 進捗マトリクス
 
-| Phase | 内容 | 状態 | PR |
+| Phase | 内容 | 状態 | 関連 PR |
 |---|---|---|---|
 | 0 | 前提作業 (DWD scope / SendAs 設定) | ✅ | - |
-| 1 | 基礎 services 7 ファイル | ✅ | #442 + **#465** |
-| 2 | Reservation / Run Lock / Audit | ✅ | **#467** |
-| 3 | Mail + Send | ✅ | **#466** |
-| 4 | Internal API + メインロジック | ✅ (merge 待ち) | **#468** |
+| 1 | 基礎 services 7 ファイル | ✅ | #442 + #465 |
+| 2 | Reservation / Run Lock / Audit | ✅ | #467 |
+| 3 | Mail + Send | ✅ | #466 |
+| 4 | Internal API + メインロジック | ✅ | **#468 (本セッションでマージ)** |
 | 5 | Super admin API 6 endpoints | ⏳ | - |
 | 6 | Frontend UI | ⏳ | - |
-| 7 | Infrastructure + Firestore impl + Cloud Scheduler | ⏳ | - |
+| 7-A | Firestore storage impl + production wiring | ✅ | **#471 (本セッション)** |
+| 7-B-code | deploy.yml env + firestore.indexes.json | ✅ | **#472 (本セッション)** |
+| 7-B-infra | gcloud commands (Cloud Scheduler / TTL / IAM / secret / index deploy) | ⏳ **次セッション** | - |
 | 8 | Smoke check + Cutover | ⏳ | - |
 
-**Phase 1〜4 完了で AC-1〜25 / NFR-2/3/11 の end-to-end 検証点に到達**。本番デプロイには Phase 5-8 (Super admin API + UI + Infra + Cutover) を残すのみ。
+**Phase 7-A + Phase 7-B code-only 完了**で残るは Phase 7-B infra 5 件と Phase 5 (Super admin API) / Phase 6 (UI) / Phase 8 (cutover) のみ。
 
 ---
 
-## 重要な技術判断 (Session 43 で確定)
+## 重要な技術判断 (Session 44 で確定)
 
-### 1. AC-17 採用案変更 (spec 改訂、PR #468 に含む)
+### 1. FirestoreDispatchStorage の transaction 保護範囲拡張 (PR #471)
 
-scope_revoked 時の挙動を当初 spec「後続 user reservation を rollback」から「rollback せず lease 期限切れで manual_review_required に降格」に変更。
+設計仕様書 §6.2 は `markCompletionNotificationSent` を plain `update` で記述しているが、evaluator MEDIUM 指摘 (lease 期限切れ降格 → manual_review_required と遅延 markSent の race) に基づき、**markSent / markFailedPermanent も runTransaction で保護**する設計を採用。これにより `manual_review_required` → `sent` の silent overwrite を完全に防止。spec §6.2 とは差分があるが、より安全側の設計判断として確定。
 
-**理由 3 点**:
-1. 並列実行中の rollback は別 worker との race を生む
-2. scope_revoked が transient な設定ミス (管理コンソール一時不整合等) で復旧した場合、rollback 済 record は次 cron で再送試行 → 二重送信事故を起こす
-3. lease 期限切れ降格は `manual_review_required` (terminal) を経由するため idempotency が保証される
+### 2. GCP runtime 検出を K_SERVICE のみから網羅化 (PR #471 + Codex IMPORTANT-1)
 
-### 2. DispatchStorage / TenantDataLoader 抽象 layer 導入
+`isProductionGcpRuntime()` を `K_SERVICE || FUNCTION_TARGET || FUNCTION_NAME || GAE_SERVICE` に拡張。本プロジェクトは現状 Cloud Run のみだが、将来 Cloud Functions / GAE を追加した際の silent skip リスクを排除する防御的設計。
 
-reservation / run-lock / dispatch-audit / メインロジックを **storage 実装非依存** (InMemory / Firestore どちらでも動く設計) に分離。Phase 7 で Firestore 実装を追加し production wiring。
+### 3. DISPATCH_USE_IN_MEMORY=true を本番 GCP runtime で拒否 (PR #471 + Codex IMPORTANT-2)
 
-### 3. gmail-client.ts 配置 (`dispatch/` 配下)
+本番 Cloud Run で誤って `DISPATCH_USE_IN_MEMORY=true` が設定されると、in-memory storage で 200 empty response を返し続け、Cloud Scheduler は成功扱いで通知が永久に届かない (silent no-op)。factory で本番 runtime 検出時に throw する fail loud パターンを採用。
 
-spec §5.2 では `services/gmail-client.ts` だったが、Important-1 (gmail.send scope 他経路汚染防止) を構造的に強化するため `dispatch/gmail-client.ts` に配置。spec を `dispatch/` 配下に改訂 (PR #465)。
+### 4. acquireRunLock の inequality query を Phase 7-B index 配備後に延期 (PR #471)
 
-### 4. DispatchSettings に subjectTemplate 未追加
+設計仕様書 §6.3 は `.where("status", "==", "running").where("leaseExpiresAt", ">", now).limit(1)` を提示するが、composite index (`status + leaseExpiresAt`) が必要。Phase 7-A では single-field where + アプリ側 lease 判定で fallback し、Phase 7-B (index 配備、PR #472) 適用後に最適化する 2 段階配備を確定。
 
-完了通知の件名は固定定数 `DEFAULT_COMPLETION_SUBJECT = "【DXcollege】受講修了のお知らせ"`。spec / DTO に subjectTemplate 未定義のため Phase 1/3 では固定 (AI 4 原則 §1 = spec 未記載の独断追加禁止)。
+### 5. Phase 7-B を code-only / infra で分割 (PR #472 + 別途認可待ち)
 
-### 5. CLAUDE.md 呼称ルール (本田様 → 開発者)
+deploy.yml env 追加 + firestore.indexes.json は PR で管理 (本セッションで PR #472 マージ済)、gcloud commands (Cloud Scheduler / TTL Policy / IAM / secret 登録 / index deploy) は別途番号単位明示認可で実行する 2 段階配備を確定。decision-maker 領分の境界を明確化。
 
-プロダクトオーナー / 意思決定者 / プロジェクト発注者を「開発者」と表記するルールを project CLAUDE.md に追加 (PR #465)。既存ドキュメントの「本田様」表記は編集機会に併せて書き換え (一括置換せず混在許容)。
+### 6. DISPATCH_OIDC_AUDIENCE は secret 経由 conditional (PR #472)
+
+api Cloud Run service URL は環境ごとに異なるため secrets.DISPATCH_OIDC_AUDIENCE で注入。既存 secrets.SUPER_ADMIN_EMAILS と同パターン。未設定時は router mount スキップ → 本番 GCP runtime では fail loud で設定漏れを起動時に検知。
 
 ---
 
-## Quality Gate 履歴 (Session 43、各 PR ごと)
+## Quality Gate 履歴 (Session 44、各 PR ごと)
 
-| PR | safe-refactor | evaluator | code-review | 反映内容 |
-|---|---|---|---|---|
-| #465 (Phase 1 残部) | HIGH 3 / MEDIUM 4 / LOW 4 → 6 件反映 | REQUEST_CHANGES (FAIL DRY + MEDIUM 2) → spec 改訂で整合 | medium 3 件 defensive guard 追加 | 3 commits |
-| #466 (Phase 3) | HIGH 0 / MEDIUM 3 → 全件反映 | APPROVE + narrative 5 件 → 全件反映 | (省略) | 2 commits |
-| #467 (Phase 2) | HIGH 1 / MEDIUM 4 / LOW 3 → 6 件反映 | REQUEST_CHANGES (MEDIUM 1 + テスト欠如) → 2 件反映 | (省略) | 2 commits |
-| #468 (Phase 4) | HIGH 2 / MEDIUM 5 / LOW 3 → 7 件反映 | REQUEST_CHANGES (FAIL AC-17 + 2 主要) → 全件反映 | (省略) | 2 commits |
+| PR | safe-refactor | evaluator | code-review | codex review | 反映内容 |
+|---|---|---|---|---|---|
+| #471 (Phase 7-A) | LOW 2 (cosmetic、残置) | REQUEST_CHANGES (HIGH 1: env silent skip、MEDIUM 1: markSent TOCTOU) → 全反映 | PLAUSIBLE 4 → 3 反映 (acquireRunLock コメント / senderEmail fallback / factory in-memory env 任意化)、1 件 (role hard-code) は別 Issue 候補 | IMPORTANT 2 (K_SERVICE 単独依存 / in-memory モード本番拒否) → 両反映 | 4 commits |
+| #472 (Phase 7-B code-only) | (small tier) | (small tier、適用外) | (small tier、手動 checklist) | (適用外) | 1 commit |
 
 ---
 
 ## 待ち事項 (decision-maker = 開発者)
 
-1. **PR #468 (Phase 4) の merge 認可** (CLAUDE.md 4 原則 §3 番号単位明示):
-   ```
-   PR #468 — feat(dispatch): Phase 4 (Internal API + メインロジック) (12 files, +2059/-0) をマージしてよい
-   ```
+### Phase 7-B infra 5 件 (番号単位明示認可必須、各 destructive 操作)
 
-2. **本 PR (handoff) の merge 認可** — docs only、Session 43 記録のため早期マージ推奨
+1. **Cloud Scheduler job 作成** (`gcloud scheduler jobs create http`)
+   - cron: `0 * * * *`、time-zone: `Asia/Tokyo`
+   - target: api Cloud Run の `/api/v2/internal/dispatch/run-completion-notifications`
+   - OIDC token (Service Account 経由)
+   
+2. **Cloud Scheduler SA 作成 + IAM**
+   - `dxcollege-scheduler@lms-279.iam.gserviceaccount.com` 作成
+   - api Cloud Run の `roles/run.invoker` 権限付与
+   
+3. **DISPATCH_OIDC_AUDIENCE secret 登録**
+   - GitHub Actions secret に api Cloud Run service URL を登録
+   - 再 deploy で env に反映
+   - `gcloud run services describe api` で確認
+   
+4. **Firestore TTL Policy 設定**
+   - `super_dispatch_audit_logs.ttlExpireAt` (1 年)
+   - `super_dispatch_runs.ttlExpireAt` (1 年)
+   - GCP コンソールまたは `gcloud firestore fields ttls update`
+   
+5. **Firestore composite index deploy**
+   - `firebase deploy --only firestore:indexes`
+   - super_dispatch_runs (status + leaseExpiresAt) を本番 Firestore に作成
+   - 数分で build 完了する
 
-3. **Phase 5/6/7 の優先順判断** (PR #468 merge 後):
-   - Phase 5 (Super admin API 6 endpoints) → スーパー管理者向け CRUD backend
-   - Phase 7 (FirestoreDispatchStorage + FirestoreTenantDataLoader + Cloud Scheduler) → 本番デプロイの前提
-   - Phase 6 (Frontend UI) → Phase 5 完了後の最有力
+### その他 (Session 43 末から継続)
 
-4. **OQ-X smoke (mode=send) 実機検証認可**:
-   - SendAs 設定確認済 + 送信先 mailbox 認可が必要
-   - smoke workflow で `system@279279.net` JWT subject + From=`dxcollege@279279.net` の実送信 PoC
-
-5. **follow-up Issue 起票判断** (PR コメントに提示済):
-   - validateRecipientEmail を validateSingleEmail 呼び出しに置き換える物理統合 (§5.4 制約一時解除が必要)
+6. **OQ-X smoke (mode=send) 実機検証認可** — SendAs 設定確認済 + 送信先 mailbox 認可必要 (Phase 7-B 完了後)
+7. **OQ-8 (TTL 法務確認)** — 法務確認後 (Phase 7-B 着手前にあれば望ましい)
+8. **follow-up Issue 起票判断 2 件** (Session 43 引き継ぎ):
+   - validateRecipientEmail を validateSingleEmail 呼び出しに置き換える物理統合
    - DispatchAuditLog["eventType"] に `cc_validation_warning` を追加 (Phase 5 spec 改訂時)
+9. **dependabot PR 8 件** (#395-#402、5/15 から open、まとめて処理判断)
 
 ---
 
 ## CI / インフラ変更
 
 - main へのマージで Deploy to Cloud Run 自動実行 → 各 PR 成功
-- ローカル feature ブランチ 3 件 (#465 / #466 / #467) は `--delete-branch` で削除済
-- `feat/dispatch-phase4-main-logic` (#468) は merge 認可待ちのため保持
-- インフラ変更なし、コードと spec のみ
+- ローカル feature ブランチ 3 件 (#468 / #471 / #472) は `--delete-branch` で削除済
+- インフラ変更なし (Phase 7-B infra は次セッション以降で実施)
 
 ---
 
-## OPEN Issue (Session 43 末)
+## OPEN Issue (Session 44 末)
 
 | # | タイトル | ラベル | 状態 |
 |---|---|---|---|
@@ -152,7 +155,7 @@ spec §5.2 では `services/gmail-client.ts` だったが、Important-1 (gmail.s
 | #275 | [Phase 5] allowed_emails 管理画面UX改善 | enhancement, P2, postponed | 着手不可 |
 | #274 | [Phase 5] allowed_emails 運用の可視化・追跡性強化 | enhancement, P2, postponed | 着手不可 |
 
-postponed ラベル付き Issue は明示指示なき限り着手しない (CLAUDE.md MUST)。active Issue 0 件。
+postponed ラベル付き Issue は明示指示なき限り着手しない (CLAUDE.md MUST)。active Issue 0 件、Session 43 末から変化なし。
 
 ---
 
@@ -162,60 +165,51 @@ postponed ラベル付き Issue は明示指示なき限り着手しない (CLAU
 - **起票数**: 0 件
 - **Net: 0 件**
 
-**進捗評価**: Net = 0 で `feedback_issue_triage.md` の「Net ≤ 0 は進捗ゼロ扱い」基準に該当するが、本セッションは Issue ベースではなく **DXcollege 自動完了通知システムの impl-plan Phase 進捗 (Phase 1-4 完了)** で管理される大規模実装作業。CLAUDE.md「GitHub Issues」セクションの起票基準 (実害/再現バグ/CI破壊/rating≥7/明示指示) に該当する課題なし。review agent の rating 5-6 提案は PR コメント / spec 改訂で扱った。
+**進捗評価**: Net = 0 で `feedback_issue_triage.md` の「Net ≤ 0 は進捗ゼロ扱い」基準に該当するが、本セッションは Issue ベースではなく **DXcollege 自動完了通知システム impl-plan Phase 7 進捗 (Phase 7-A + Phase 7-B code-only 完了)** で管理される impl-plan ベースの実装作業。Session 43 と同じく:
 
-Issue 起票対象外の理由:
-- impl-plan で Phase 進捗が一元管理されている
-- 各 Phase 完了は PR マージで定義される (Issue 不要)
-- review 指摘は PR 内 commit で吸収済または明示的に「見送り / Phase 5 で対応」と PR コメントに記載済
+- impl-plan で Phase 進捗が一元管理されている (Session 43 ハンドオフでも同じ理由を記載済)
+- 各 Phase 完了は PR マージで定義される (本セッションは 4 PR マージで Phase 4 + 7-A + 7-B code-only を確定)
+- review 指摘 (evaluator HIGH 1 + MEDIUM 1 / code-review PLAUSIBLE 4 / codex IMPORTANT 2) はすべて PR 内 commit で吸収済
+- CLAUDE.md「GitHub Issues」セクションの起票基準 (実害/再現バグ/CI破壊/rating≥7/明示指示) に該当する課題なし
 
----
-
-## 累計テスト件数 (Session 43 末、各 PR merge 後の予測)
-
-- **dispatch tests**: 14 ファイル / **271 件** (PR #468 反映後)
-- **API tests 全体**: 83 ファイル / **1318+ 件**
+機械的に Issue 化していない理由: review agent の rating 5-6 や PLAUSIBLE/IMPORTANT は PR 内で全反映済または明示的に「Phase 5 で対応」「Phase 7-B infra で実施」とコメント化したため (feedback_issue_triage.md 準拠)。
 
 ---
 
-## 主要参照ファイル (Session 43 新規 / 改訂、各 PR に含まれる)
+## 累計テスト件数 (Session 44 末)
 
-### 新規 (PR #465 / Phase 1 残部)
-- `services/api/src/services/dispatch/completion-eligibility.ts`
-- `services/api/src/services/dispatch/cc-email-validator.ts`
-- `services/api/src/services/dispatch/gmail-client.ts`
+- **dispatch tests**: 16 ファイル / **313 件** (Session 43 末 271 件 + Phase 7-A の 43 件 + factory GCP runtime 拒否 5 件)
+- **API tests 全体**: **1362+ 件**
 
-### 新規 (PR #466 / Phase 3)
-- `services/api/src/services/dispatch/completion-notification-mail.ts`
-- `services/api/src/services/dispatch/gmail-dwd-send.ts`
+---
 
-### 新規 (PR #467 / Phase 2)
-- `services/api/src/services/dispatch/dispatch-storage.ts`
-- `services/api/src/services/dispatch/in-memory-dispatch-storage.ts`
-- `services/api/src/services/dispatch/reservation.ts`
-- `services/api/src/services/dispatch/run-lock.ts`
-- `services/api/src/services/dispatch/dispatch-audit.ts`
+## 主要参照ファイル (Session 44 新規 / 改訂、各 PR に含まれる)
 
-### 新規 (PR #468 / Phase 4、merge 待ち)
-- `services/api/src/services/dispatch/tenant-data-loader.ts`
-- `services/api/src/services/dispatch/run-completion-notifications.ts` (メインロジック ~360 行)
-- `services/api/src/services/dispatch/oidc-verify.ts`
-- `services/api/src/routes/internal/dispatch.ts`
+### 新規 (PR #471 / Phase 7-A)
+- `services/api/src/services/dispatch/firestore-dispatch-storage.ts` (~570 行)
+- `services/api/src/services/dispatch/firestore-tenant-data-loader.ts` (~120 行)
+- `services/api/src/services/dispatch/factory.ts` (~135 行)
+- `services/api/src/services/dispatch/__tests__/firestore-dispatch-storage.test.ts` (25 件 mock-based)
+- `services/api/src/services/dispatch/__tests__/firestore-tenant-data-loader.test.ts` (9 件 mock-based)
+- `services/api/src/services/dispatch/__tests__/factory.test.ts` (14 件、GCP runtime 拒否 5 件含む)
 
-### 改訂 (各 PR に含む)
-- `docs/specs/2026-05-20-completion-notification-design.md` - §5.2/5.3/6.1 + AC-17 改訂
-- `docs/specs/2026-05-20-completion-notification-impl-plan.md` - Phase 1 完了条件改訂
-- `packages/shared-types/src/dispatch.ts` - DispatchRun に manualReviewRequired 追加
-- `services/api/src/services/google-auth.ts` - GCP_PROJECT_ID / DWD_SECRET_NAME を export
-- `CLAUDE.md` - 呼称ルール「本田様 → 開発者」追加
+### 改訂 (PR #471)
+- `services/api/src/index.ts` - 内部 dispatch router を `/api/v2/internal` にマウント + `isProductionGcpRuntime()` で fail loud
+
+### 改訂 (PR #472 / Phase 7-B code-only)
+- `.github/workflows/deploy.yml` - ENV_VARS に DXCOLLEGE_DISPATCH_SUBJECT / DXCOLLEGE_SENDER_EMAIL 追加、DISPATCH_OIDC_AUDIENCE secret conditional 追加
+- `firestore.indexes.json` - super_dispatch_runs (status + leaseExpiresAt) composite index 追加
 
 ---
 
 ## ADR / ドキュメント更新
 
-**今セッションでの ADR 作成**: なし (ADR-037 は Session 39 で起票済、本セッションでは spec/impl-plan 改訂のみ)
+**今セッションでの ADR 作成**: なし
 
-ADR 候補として保留: なし
+ADR 候補として保留:
+- 「markSent / markFailedPermanent も runTransaction で保護」: spec §6.2 とは差分がある設計判断 (evaluator MEDIUM 反映)。Phase 7-B 完了時に ADR-038 として spec §6.2 改訂 + 採用根拠を明文化する候補
+
+**spec / impl-plan 改訂**: なし (本セッションは impl-plan に従った実装のみ)
 
 ---
 
@@ -227,6 +221,8 @@ ADR 候補として保留: なし
 
 ## 次セッション開始時の最優先 3 つ
 
-1. **PR #468 merge 認可待ち** — 番号単位明示認可フォーマットで認可いただければ即マージ可能
-2. **次の Phase 優先判断** — Phase 5 (Super admin API) / Phase 7 (Firestore impl + Cloud Scheduler) / Phase 6 (UI) のどれを優先するか
-3. **OQ-X smoke 実機検証認可** — Phase 7 の前提 (送信先 mailbox 認可必要、AI 単独完結不可)
+1. **Phase 7-B infra 5 件の番号単位明示認可と実行** — 各 gcloud command ごとに認可 → 実行 → 結果確認の 3 ステップ。本番 GCP リソース create を伴うため慎重に進める
+2. **DISPATCH_OIDC_AUDIENCE secret 登録 + 再 deploy** — Cloud Scheduler 設定の前に api Cloud Run の env が反映されていることを確認
+3. **OQ-X smoke (mode=send) 実機検証** — Phase 7-B 完了後に SendAs 経由送信が成立することを実機 Gmail で確認 (送信先 mailbox 認可必要)
+
+Phase 7 完了後は Phase 5 (Super admin API) → Phase 6 (Frontend UI) → Phase 8 (Cutover) の順で進める想定。
