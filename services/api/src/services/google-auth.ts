@@ -7,8 +7,13 @@ const SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets",
 ];
 
-const GCP_PROJECT_ID = "lms-279";
-const DWD_SECRET_NAME = `projects/${GCP_PROJECT_ID}/secrets/dwd-workspace-key/versions/latest`;
+/**
+ * GCP プロジェクト ID と DWD Secret Manager リソース名。
+ * dispatch / その他の DWD 派生 client (例: services/dispatch/gmail-client.ts) から
+ * 共通参照するため export する。プロジェクト名変更時の更新漏れ防止が目的。
+ */
+export const GCP_PROJECT_ID = "lms-279";
+export const DWD_SECRET_NAME = `projects/${GCP_PROJECT_ID}/secrets/dwd-workspace-key/versions/latest`;
 
 // シングルトンインスタンス
 let authClient: InstanceType<typeof google.auth.JWT> | null = null;

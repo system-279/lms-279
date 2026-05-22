@@ -334,6 +334,7 @@ services/api/src/
       completion-eligibility.ts            # published コース全件母集合判定 (Critical-2)
       completion-notification-mail.ts      # 完了通知メール本文テンプレート
       cc-email-validator.ts                # CC 配列の個別 validation + 重複排除 (Important-6)
+      gmail-client.ts                      # getGmailClientForSender (Important-1)、Phase 1 で dispatch/ 配下に確定 (2026-05-22 改訂)
       gmail-dwd-send.ts                    # DWD なりすまし送信
       dispatch-audit.ts                    # audit_logs 書き込み
       dispatch-error-sanitizer.ts          # sanitizeErrorForAudit (Important-7)
@@ -341,7 +342,6 @@ services/api/src/
       reservation.ts                       # pre-send reservation transaction (Critical-1+3)
       run-lock.ts                          # super_dispatch_runs lock (FR-11)
     oidc-verify.ts                         # OIDC token middleware
-    gmail-client.ts                        # getGmailClientForSender (Important-1)
 
 packages/shared-types/src/
   dispatch.ts                              # 設定・履歴・dry-run の DTO 型
@@ -362,8 +362,8 @@ web/app/super/dispatch-settings/
 
 | ファイル | 変更内容 |
 |---|---|
-| `services/api/src/services/google-auth.ts` | **変更なし** (共通 `SCOPES` を汚染しない) |
-| `services/api/src/services/gmail-client.ts` (新規) | `getGmailClientForSender(subjectEmail, fromEmail)`: 専用 JWT (`subject=subjectEmail` 実 mailbox)、scope=`gmail.send` のみ、cache key=`(subject, scope)`。`fromEmail` は MIME From ヘッダ用、SendAs 検証は呼び出し側で実施 (ADR-037 案 X) |
+| `services/api/src/services/google-auth.ts` | 共通 `SCOPES` は**非変更** (Important-1 維持)。Phase 1 で `GCP_PROJECT_ID` / `DWD_SECRET_NAME` を export 化のみ追加 (2026-05-22)、`dispatch/gmail-client.ts` から DRY で参照させ、プロジェクト名/Secret 名変更時の同期漏れを排除 |
+| `services/api/src/services/dispatch/gmail-client.ts` (新規) | `getGmailClientForSender(subjectEmail, fromEmail)`: 専用 JWT (`subject=subjectEmail` 実 mailbox)、scope=`gmail.send` のみ、cache key=`(subject, scope)`。`fromEmail` は MIME From ヘッダ用、SendAs 検証は呼び出し側で実施 (ADR-037 案 X)。`dispatch/` 配下に配置することで他経路 (Drive/Docs/Sheets 等) からの誤利用を構造的に防止 (Important-1 強化、2026-05-22 改訂) |
 | `packages/shared-types/src/index.ts` | dispatch types のエクスポート追加 |
 | (firestore.rules) | (現状未確認、必要に応じて新規 collection の rules 追加) |
 
