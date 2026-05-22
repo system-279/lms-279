@@ -28,6 +28,7 @@ export function DryRunPanel() {
   const runDryRun = async () => {
     setLoading(true);
     setError(null);
+    setResult(null); // 再実行時に前回結果を消し、失敗時に古い対象が残らないようにする
     try {
       const data = await superFetch<DryRunResponse>(
         "/api/v2/super/dispatch/dry-run",

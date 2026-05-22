@@ -61,6 +61,40 @@ describe("DryRunPanel", () => {
     expect(await screen.findByText("送信対象はありません")).toBeInTheDocument();
   });
 
+  it("再実行が失敗したら前回の結果テーブルを消す", async () => {
+    superFetchMock
+      .mockResolvedValueOnce({
+        wouldNotify: [
+          {
+            tenantId: "t1",
+            userId: "u1",
+            userEmail: "u1@example.com",
+            userName: "User 1",
+            progressSnapshot: {
+              completedLessons: 1,
+              totalLessons: 1,
+              coursesCompleted: 1,
+              coursesTotal: 1,
+            },
+          },
+        ],
+        evaluatedAt: "2026-05-22T01:00:00.000Z",
+      } satisfies DryRunResponse)
+      .mockRejectedValueOnce(new ApiError(500, "internal", "再実行エラー"));
+    render(<DryRunPanel />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "ドライラン実行" }));
+    });
+    expect(await screen.findByText("u1@example.com")).toBeInTheDocument();
+    // 2 回目は失敗
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "ドライラン実行" }));
+    });
+    expect(await screen.findByText("再実行エラー")).toBeInTheDocument();
+    // 前回の対象テーブルは消えている
+    expect(screen.queryByText("u1@example.com")).not.toBeInTheDocument();
+  });
+
   it("エラー時はエラーメッセージ表示", async () => {
     superFetchMock.mockRejectedValueOnce(
       new ApiError(500, "internal", "サーバーエラー"),
