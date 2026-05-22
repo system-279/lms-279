@@ -91,9 +91,19 @@ jobs:
           # PDF object は master lesson prefix (lessons/{masterLessonId}/...) で管理し、
           # tenant 配信は Firestore メタ (pdfGcsPath) のディープコピーで分離する。
           # 2026-05-17 にバケット作成済み + default compute SA に objectAdmin (bucket scope) 付与済み。
-          ENV_VARS="NODE_ENV=production,DEMO_ENABLED=true,AUTH_MODE=firebase,CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net,SESSION_DURATION_MS=10800000,GCS_RESOURCE_BUCKET=lms-279-resources"
+          # DXCOLLEGE_DISPATCH_SUBJECT / DXCOLLEGE_SENDER_EMAIL: Phase 7 DXcollege 自動完了通知用
+          #   (ADR-037 案 X、SendAs alias 送信)。subject = DWD JWT impersonation 対象 (実 mailbox)、
+          #   sender = MIME From ヘッダ用 alias。spec §5/§8.2 で確定済みの固定値。
+          # DISPATCH_OIDC_AUDIENCE: Cloud Scheduler が発行する OIDC token の audience。
+          #   api Cloud Run service URL と一致させる必要があるため secret 経由 (環境ごとに異なる)。
+          #   未設定なら mount スキップ (services/api/src/index.ts の isProductionGcpRuntime で
+          #   fail loud → 設定漏れを起動時に検知)。
+          ENV_VARS="NODE_ENV=production,DEMO_ENABLED=true,AUTH_MODE=firebase,CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net,SESSION_DURATION_MS=10800000,GCS_RESOURCE_BUCKET=lms-279-resources,DXCOLLEGE_DISPATCH_SUBJECT=system@279279.net,DXCOLLEGE_SENDER_EMAIL=dxcollege@279279.net"
           if [ -n "${{ secrets.SUPER_ADMIN_EMAILS }}" ]; then
             ENV_VARS="${ENV_VARS},SUPER_ADMIN_EMAILS=${{ secrets.SUPER_ADMIN_EMAILS }}"
+          fi
+          if [ -n "${{ secrets.DISPATCH_OIDC_AUDIENCE }}" ]; then
+            ENV_VARS="${ENV_VARS},DISPATCH_OIDC_AUDIENCE=${{ secrets.DISPATCH_OIDC_AUDIENCE }}"
           fi
           gcloud run deploy api \
             --image=${{ env.ARTIFACT_REGISTRY }}/api:${{ github.sha }} \
