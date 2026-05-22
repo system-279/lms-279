@@ -162,6 +162,7 @@ describe("acquireRunLockOrSkip - lease 期限切れ後の再取得", () => {
       sent: 5,
       skipped: 0,
       failed: 0,
+      manualReviewRequired: 0,
     });
 
     // lease 内だが completed なので新規 acquire OK
@@ -181,6 +182,7 @@ describe("finalizeRun / completeRun / abortRun", () => {
       sent: 7,
       skipped: 2,
       failed: 1,
+      manualReviewRequired: 0,
     });
 
     const run = await storage.getRun("run-x");
@@ -189,6 +191,7 @@ describe("finalizeRun / completeRun / abortRun", () => {
     expect(run?.sent).toBe(7);
     expect(run?.skipped).toBe(2);
     expect(run?.failed).toBe(1);
+    expect(run?.manualReviewRequired).toBe(0);
     expect(run?.abortedReason).toBeNull();
   });
 
@@ -198,7 +201,7 @@ describe("finalizeRun / completeRun / abortRun", () => {
       storage,
       "run-y",
       "gmail_scope_revoked",
-      { processedTenants: 1, sent: 0, skipped: 0, failed: 0 },
+      { processedTenants: 1, sent: 0, skipped: 0, failed: 0, manualReviewRequired: 2 },
     );
 
     const run = await storage.getRun("run-y");

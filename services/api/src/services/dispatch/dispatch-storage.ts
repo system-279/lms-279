@@ -24,6 +24,7 @@ import {
   type DispatchAuditLog,
   type DispatchRun,
   type DispatchRunStatus,
+  type DispatchSettings,
   type ReservationOutcome,
 } from "@lms-279/shared-types";
 
@@ -124,6 +125,8 @@ export interface UpdateRunStatusInput {
   sent?: number;
   skipped?: number;
   failed?: number;
+  /** manual_review_required に降格された user 数 (Phase 4 追加) */
+  manualReviewRequired?: number;
   /** aborted 時の理由 (sanitized) */
   abortedReason?: string;
 }
@@ -159,6 +162,16 @@ export interface AppendAuditLogInput {
 // ============================================================
 
 export interface DispatchStorage {
+  // ----- Settings -----
+  /**
+   * super_dispatch_settings/global の読み取り。
+   * doc が存在しなければ null を返す (Phase 7 で初期化される想定)。
+   *
+   * Phase 5 super-admin API で settings 編集 (PUT) を追加するが、本 interface は
+   * Phase 4 では read-only のみ公開 (write は別 method を Phase 5 で追加)。
+   */
+  getDispatchSettings(): Promise<DispatchSettings | null>;
+
   // ----- Reservation -----
   /**
    * Pre-send reservation を transactional に取得する。

@@ -164,6 +164,12 @@ export interface DispatchRun {
   sent: number;
   skipped: number;
   failed: number;
+  /**
+   * manual_review_required に降格された user 数 (Phase 4 追加、evaluator 指摘反映)。
+   * `manualReviewRequired` を `RunCompletionNotificationsResponse` と一致させ、
+   * 管理画面で run 履歴を確認した際に件数追跡可能にする。
+   */
+  manualReviewRequired: number;
   /** abort 理由 (403 全体中断等、status=aborted のみ) */
   abortedReason: string | null;
   /** TTL 期限 (ISO 8601)、triggeredAt + 365 days */

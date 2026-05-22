@@ -66,16 +66,19 @@ export async function finalizeRun(
   return storage.updateRunStatus(input);
 }
 
+export interface RunMetricsForFinalize {
+  processedTenants: number;
+  sent: number;
+  skipped: number;
+  failed: number;
+  manualReviewRequired: number;
+}
+
 /** convenience: completed 用ヘルパー (status を明示せず metrics のみ渡す) */
 export async function completeRun(
   storage: DispatchStorage,
   runId: string,
-  metrics: {
-    processedTenants: number;
-    sent: number;
-    skipped: number;
-    failed: number;
-  },
+  metrics: RunMetricsForFinalize,
 ): Promise<void> {
   return finalizeRun(storage, {
     runId,
@@ -89,12 +92,7 @@ export async function abortRun(
   storage: DispatchStorage,
   runId: string,
   abortedReason: string,
-  metrics?: {
-    processedTenants: number;
-    sent: number;
-    skipped: number;
-    failed: number;
-  },
+  metrics?: RunMetricsForFinalize,
 ): Promise<void> {
   return finalizeRun(storage, {
     runId,

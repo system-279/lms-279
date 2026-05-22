@@ -19,6 +19,7 @@ import type {
   DispatchAuditLog,
   DispatchRun,
   DispatchRunStatus,
+  DispatchSettings,
   ReservationOutcome,
 } from "@lms-279/shared-types";
 
@@ -50,12 +51,27 @@ export class InMemoryDispatchStorage implements DispatchStorage {
   private notifications = new Map<NotificationKey, CompletionNotification>();
   private runs = new Map<string, DispatchRun>();
   private auditLogs: DispatchAuditLog[] = [];
+  private settings: DispatchSettings | null = null;
 
   // テスト用クリアメソッド (production には呼ばない)
   __resetForTest(): void {
     this.notifications.clear();
     this.runs.clear();
     this.auditLogs = [];
+    this.settings = null;
+  }
+
+  /** テスト用 settings setter (Phase 5 で PUT API 経由のメソッドに置き換える) */
+  __setSettingsForTest(settings: DispatchSettings | null): void {
+    this.settings = settings;
+  }
+
+  // ===================================================================
+  // Settings
+  // ===================================================================
+
+  async getDispatchSettings(): Promise<DispatchSettings | null> {
+    return this.settings;
   }
 
   // ===================================================================
@@ -226,6 +242,7 @@ export class InMemoryDispatchStorage implements DispatchStorage {
       sent: 0,
       skipped: 0,
       failed: 0,
+      manualReviewRequired: 0,
       abortedReason: null,
       ttlExpireAt: input.ttlExpireAt,
     };
@@ -255,6 +272,8 @@ export class InMemoryDispatchStorage implements DispatchStorage {
       sent: input.sent ?? existing.sent,
       skipped: input.skipped ?? existing.skipped,
       failed: input.failed ?? existing.failed,
+      manualReviewRequired:
+        input.manualReviewRequired ?? existing.manualReviewRequired,
       abortedReason,
     });
   }
