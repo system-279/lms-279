@@ -218,20 +218,22 @@ describe("buildCompletionMime", () => {
   });
 
   describe("CR/LF header injection 防御", () => {
+    // defaults を先に展開し、`partial` で override する形にして同 key 重複指定を回避
+    // (TS2783 "specified more than once" を防ぐ。order matters: spread が後)
+    const mimeDefaults = {
+      fromEmail: "f@x.com",
+      to: "t@x.com",
+      cc: [] as readonly string[],
+      subject: "s",
+      body: "b",
+    };
     it.each([
-      ["fromEmail", { fromEmail: "evil@x.com\r\nBcc: leak@x.com", to: "t@x.com" }],
-      ["to", { fromEmail: "f@x.com", to: "evil@x.com\r\nBcc: leak@x.com" }],
-      ["subject", { fromEmail: "f@x.com", to: "t@x.com", subject: "s\r\nX-Inject: 1" }],
+      ["fromEmail", { fromEmail: "evil@x.com\r\nBcc: leak@x.com" }],
+      ["to", { to: "evil@x.com\r\nBcc: leak@x.com" }],
+      ["subject", { subject: "s\r\nX-Inject: 1" }],
     ])("%s に CR/LF を含めば throw", (_label, partial) => {
       expect(() =>
-        buildCompletionMime({
-          fromEmail: "f@x.com",
-          to: "t@x.com",
-          cc: [],
-          subject: "s",
-          body: "b",
-          ...partial,
-        }),
+        buildCompletionMime({ ...mimeDefaults, ...partial }),
       ).toThrow();
     });
 
