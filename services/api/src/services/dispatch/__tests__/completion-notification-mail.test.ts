@@ -181,6 +181,26 @@ describe("buildCompletionMail", () => {
         }),
       ).not.toThrow();
     });
+
+    it("signatureName に CR/LF を含めば throw (本文注入リスク防御、evaluator narrative)", () => {
+      expect(() =>
+        buildCompletionMail({
+          userName: "山田太郎",
+          completionMessageBody: DEFAULT_BODY,
+          signatureName: "DXcollege運営スタッフ\r\n--\nfake-signature",
+        }),
+      ).toThrow(/signatureName/);
+    });
+
+    it("signatureName に LF のみでも throw", () => {
+      expect(() =>
+        buildCompletionMail({
+          userName: "山田太郎",
+          completionMessageBody: DEFAULT_BODY,
+          signatureName: "line1\nline2",
+        }),
+      ).toThrow(/signatureName/);
+    });
   });
 
   describe("構造 (順序)", () => {

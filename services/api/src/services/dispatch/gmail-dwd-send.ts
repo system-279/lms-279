@@ -75,7 +75,16 @@ export function encodeMimeHeader(value: string): string {
   return `=?UTF-8?B?${base64}?=`;
 }
 
-/** MIME ヘッダ系フィールドの CRLF 注入を library 層で阻止 (二重防御) */
+/**
+ * MIME ヘッダ系フィールドの CRLF 注入を library 層で阻止 (二重防御)。
+ *
+ * 注意: completion-notification-mail.ts の同名関数は **空文字 reject を持たない**
+ * (本関数とは責務範囲が異なる)。本関数は MIME ヘッダ行 (`From:` / `To:` /
+ * `Subject:` / `Cc:`) に直接乗る値を扱うため、空文字は受信側で空ヘッダになり
+ * 配送拒否や受信側 UI 不具合の原因となるため reject する。caller の Phase 4
+ * dispatcher は env から fromEmail / subjectEmail を渡すため空文字発生時は
+ * env 未設定のバグであり、ここで早期検出する。
+ */
 function assertHeaderSafe(value: string, fieldName: string): void {
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`gmail-dwd-send: ${fieldName} must be a non-empty string`);
@@ -126,6 +135,7 @@ export function buildCompletionMime(input: BuildCompletionMimeInput): string {
   const encodedSubject = encodeMimeHeader(subject);
 
   // 添付なしの text/plain メッセージ
+  // 配列要素の `""` は join("\r\n") により空行 (ヘッダとボディ区切り、RFC 2822) になる
   const headerLines: string[] = [
     `From: ${fromEmail}`,
     `To: ${to}`,
@@ -134,7 +144,7 @@ export function buildCompletionMime(input: BuildCompletionMimeInput): string {
     "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=UTF-8",
     "Content-Transfer-Encoding: base64",
-    "",
+    "", // ← ヘッダとボディの区切り空行 (RFC 2822 §2.1)
     Buffer.from(body, "utf-8").toString("base64"),
   ];
   const raw = headerLines.join("\r\n");

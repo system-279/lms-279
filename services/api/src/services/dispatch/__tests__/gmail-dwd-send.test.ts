@@ -161,7 +161,7 @@ describe("buildCompletionMime", () => {
       expect(decoded).toContain(Buffer.from("本文テスト", "utf-8").toString("base64"));
     });
 
-    it("行区切りは CRLF", () => {
+    it("全行区切りが CRLF (LF 単独なし、evaluator narrative 反映で証明力強化)", () => {
       const raw = buildCompletionMime({
         fromEmail: "from@x.com",
         to: "to@x.com",
@@ -170,8 +170,12 @@ describe("buildCompletionMime", () => {
         body: "b",
       });
       const decoded = base64UrlDecode(raw);
-      expect(decoded).toContain("\r\n");
-      expect(decoded).not.toContain("\n\n"); // LF のみは禁
+      // 全 CRLF を取り除いた残り文字列に LF が残らないことで「LF 単独なし」を保証
+      const stripped = decoded.replace(/\r\n/g, "");
+      expect(stripped).not.toMatch(/\n/);
+      expect(stripped).not.toMatch(/\r/);
+      // ヘッダ区切り空行 (\r\n\r\n) の存在も確認
+      expect(decoded).toContain("\r\n\r\n");
     });
   });
 
@@ -284,19 +288,23 @@ describe("buildCompletionMime", () => {
   });
 });
 
+// テスト全体で再利用する base input (重複定義を排除、safe-refactor M-3 反映)
+const BASE_INPUT = {
+  subjectEmail: "system@279279.net",
+  fromEmail: "dxcollege@279279.net",
+  to: "student@example.com",
+  cc: [] as readonly string[],
+  subject: "テスト件名",
+  body: "本文",
+};
+
 describe("sendCompletionMail (retry / success)", () => {
   beforeEach(() => {
     setSecretManagerOk();
   });
 
-  const baseInput = {
-    subjectEmail: "system@279279.net",
-    fromEmail: "dxcollege@279279.net",
-    to: "student@example.com",
-    cc: ["owner@example.com"] as readonly string[],
-    subject: "テスト件名",
-    body: "本文",
-  };
+  // owner CC 入りの retry / success ケース用
+  const baseInput = { ...BASE_INPUT, cc: ["owner@example.com"] as readonly string[] };
 
   it("1 回目で成功 → attempts=1、messageId 返却", async () => {
     gmailSendMock.mockResolvedValueOnce({ data: { id: "msg-001" } });
@@ -350,6 +358,28 @@ describe("sendCompletionMail (retry / success)", () => {
     expect(result.messageId).toBe("msg-econn");
     expect(result.attempts).toBe(2);
   });
+
+  it("503 単独 1 回 → 2 回目成功 (evaluator narrative 反映、独立 retry 確認)", async () => {
+    const sleepMock = vi.fn().mockResolvedValue(undefined);
+    gmailSendMock
+      .mockRejectedValueOnce({ response: { status: 503 } })
+      .mockResolvedValueOnce({ data: { id: "msg-503" } });
+    const result = await sendCompletionMail(baseInput, { sleep: sleepMock });
+    expect(result.messageId).toBe("msg-503");
+    expect(result.attempts).toBe(2);
+    expect(sleepMock).toHaveBeenCalledTimes(1);
+    expect(sleepMock).toHaveBeenCalledWith(500);
+  });
+
+  it("Secret Manager network error は transient 扱いせず caller に伝搬", async () => {
+    accessSecretVersionMock.mockReset();
+    accessSecretVersionMock.mockRejectedValue(
+      Object.assign(new Error("network"), { code: "ECONNRESET" }),
+    );
+    await expect(sendCompletionMail(baseInput)).rejects.toThrow(/network/);
+    // Gmail send 自体は実行されない
+    expect(gmailSendMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("sendCompletionMail (permanent errors → 即時 throw)", () => {
@@ -357,14 +387,8 @@ describe("sendCompletionMail (permanent errors → 即時 throw)", () => {
     setSecretManagerOk();
   });
 
-  const baseInput = {
-    subjectEmail: "system@279279.net",
-    fromEmail: "dxcollege@279279.net",
-    to: "student@example.com",
-    cc: [] as readonly string[],
-    subject: "s",
-    body: "b",
-  };
+  // BASE_INPUT を共有 (safe-refactor M-3 反映、重複排除)
+  const baseInput = { ...BASE_INPUT, subject: "s", body: "b" };
 
   it.each([
     ["401 (token 失効)", 401],

@@ -21,8 +21,6 @@
  *   override 可能にする想定 (本 Phase ではスコープ外、spec 未記載のため独断追加しない)。
  */
 
-import type { CcEmailValidationFailure } from "./cc-email-validator.js";
-
 /**
  * 完了通知メールの既定件名 (テナント・受講者横断で固定)。
  * 将来 settings に持たせるための export。
@@ -36,12 +34,6 @@ export interface BuildCompletionMailInput {
   completionMessageBody: string;
   /** スーパー管理者が設定する署名 (DispatchSettings.signatureName) */
   signatureName: string;
-  /**
-   * 任意の CC validation 警告 (cc-email-validator から伝搬)。
-   * UI / audit_logs 表示には使うが本文には混入しないため、本関数は受領のみで
-   * 出力には影響しない (将来 audit log に同梱する際の引き渡し pass-through)。
-   */
-  ccValidationWarnings?: readonly CcEmailValidationFailure[];
 }
 
 export interface BuiltCompletionMail {
@@ -50,7 +42,16 @@ export interface BuiltCompletionMail {
   body: string;
 }
 
-/** MIME ヘッダ系フィールドへの CRLF 注入を防ぐ defensive guard */
+/**
+ * MIME ヘッダ系フィールドへの CRLF 注入を防ぐ defensive guard。
+ *
+ * 注意: gmail-dwd-send.ts の同名関数は **空文字 reject** も含むが、本関数では
+ * 空文字ガードを意図的に持たない。理由: 本関数の caller (`buildCompletionMail`) は
+ * userName を `normalizeUserName` で trim 後の長さチェックを通してから渡し、
+ * subject は固定定数 `DEFAULT_COMPLETION_SUBJECT` を渡すため、空文字パスは
+ * 本関数到達前に排除されている。空文字を許容しない上位制約があるため、本関数
+ * 自体は CRLF 検出のみに責務を限定する (Single Responsibility)。
+ */
 function assertHeaderSafe(value: string, fieldName: string): void {
   if (/[\r\n]/.test(value)) {
     throw new Error(
@@ -77,6 +78,13 @@ export function buildCompletionMail(
   const normalizedName = normalizeUserName(input.userName);
   if (normalizedName.length > 0) {
     assertHeaderSafe(normalizedName, "userName");
+  }
+  // signatureName は本文中に展開されるため MIME ヘッダ直接注入は発生しないが、
+  // 受信側 (Gmail UI / Outlook) の表示で意図せぬ改行になるとフィッシング偽装等
+  // に流用される懸念があるため、CRLF を含めれば throw する (本文 base64 化前に
+  // 早期検出)。evaluator narrative 反映。
+  if (signatureName.trim().length > 0) {
+    assertHeaderSafe(signatureName, "signatureName");
   }
 
   // 本文組み立て: 宛名 + 設定本文 + 区切り + 署名 (空 signature は許容、行のみ追加しない)
