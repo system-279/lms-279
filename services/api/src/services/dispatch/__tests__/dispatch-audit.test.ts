@@ -172,6 +172,7 @@ describe("recordAuditLog - best-effort (§6.1)", () => {
   /** appendAuditLog が必ず throw する障害 storage */
   function makeFailingStorage(): DispatchStorage {
     return {
+      getDispatchSettings: vi.fn(() => Promise.resolve(null)),
       tryReserveCompletionNotification: vi.fn(),
       markCompletionNotificationSent: vi.fn(),
       markCompletionNotificationFailedPermanent: vi.fn(),
@@ -232,6 +233,7 @@ describe("recordAuditLog - best-effort (§6.1)", () => {
 
   it("warn meta の errorMessage は storage error message を sanitize 済で出す", async () => {
     const storageThatThrowsWithEmail: DispatchStorage = {
+      getDispatchSettings: vi.fn(() => Promise.resolve(null)),
       tryReserveCompletionNotification: vi.fn(),
       markCompletionNotificationSent: vi.fn(),
       markCompletionNotificationFailedPermanent: vi.fn(),
