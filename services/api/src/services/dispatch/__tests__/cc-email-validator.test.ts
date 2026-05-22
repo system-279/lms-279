@@ -238,6 +238,42 @@ describe("validateAndDedupeCcEmails", () => {
       ]);
     });
 
+    it("ccEmails が undefined (Firestore field 欠損) でも TypeError を投げず空配列扱い (code-review #3)", () => {
+      const result = validateAndDedupeCcEmails(
+        // @ts-expect-error: Phase 4 caller の Firestore data().notificationCcEmails undefined シミュレーション
+        undefined,
+        "owner@x.com",
+      );
+      expect(result).toEqual({
+        validCcEmails: ["owner@x.com"],
+        invalidEntries: [],
+      });
+    });
+
+    it("ccEmails が null でも TypeError を投げず空配列扱い", () => {
+      const result = validateAndDedupeCcEmails(
+        // @ts-expect-error: null 注入
+        null,
+        null,
+      );
+      expect(result).toEqual({
+        validCcEmails: [],
+        invalidEntries: [],
+      });
+    });
+
+    it("ccEmails が非配列 (オブジェクト誤注入) でも空配列扱い", () => {
+      const result = validateAndDedupeCcEmails(
+        // @ts-expect-error: 非配列 mistype
+        { 0: "a@x.com" } as unknown,
+        null,
+      );
+      expect(result).toEqual({
+        validCcEmails: [],
+        invalidEntries: [],
+      });
+    });
+
     it("owner が不正 + cc 有効 → cc のみ採用、owner は invalidEntries source=owner", () => {
       const result = validateAndDedupeCcEmails(
         ["cc@x.com"],

@@ -174,6 +174,80 @@ describe("evaluateCompletionEligibility", () => {
     });
   });
 
+  describe("defensive guard (code-review #1 / #2)", () => {
+    it("course.lessonOrder が undefined (Firestore field 欠損) なら malformed_course で skip", () => {
+      const result = evaluateCompletionEligibility(
+        // @ts-expect-error: runtime データに lessonOrder 欠損のシミュレーション
+        [{ id: "c1" }],
+        [progress("c1")],
+      );
+      expect(result).toEqual({
+        eligible: false,
+        reason: "malformed_course",
+        ineligibleCourseId: "c1",
+      });
+    });
+
+    it("course.lessonOrder が null (Firestore explicit null) でも malformed_course で skip", () => {
+      const result = evaluateCompletionEligibility(
+        // @ts-expect-error: null 注入
+        [{ id: "c1", lessonOrder: null }],
+        [progress("c1")],
+      );
+      expect(result.eligible).toBe(false);
+      if (!result.eligible) {
+        expect(result.reason).toBe("malformed_course");
+      }
+    });
+
+    it("course.lessonOrder が文字列 (Firestore mistype) でも malformed_course で skip", () => {
+      const result = evaluateCompletionEligibility(
+        // @ts-expect-error: 文字列誤注入
+        [{ id: "c1", lessonOrder: "l1,l2,l3" }],
+        [progress("c1")],
+      );
+      expect(result.eligible).toBe(false);
+      if (!result.eligible) {
+        expect(result.reason).toBe("malformed_course");
+      }
+    });
+
+    it("progress.completedLessons が null なら malformed_progress で skip", () => {
+      const result = evaluateCompletionEligibility(
+        [course("c1")],
+        // @ts-expect-error: null 注入
+        [{ ...progress("c1"), completedLessons: null }],
+      );
+      expect(result.eligible).toBe(false);
+      if (!result.eligible) {
+        expect(result.reason).toBe("malformed_progress");
+      }
+    });
+
+    it("progress.totalLessons が NaN なら malformed_progress で skip (NaN 伝播防止)", () => {
+      const result = evaluateCompletionEligibility(
+        [course("c1")],
+        [progress("c1", { totalLessons: NaN })],
+      );
+      expect(result.eligible).toBe(false);
+      if (!result.eligible) {
+        expect(result.reason).toBe("malformed_progress");
+      }
+    });
+
+    it("progress.totalLessons が undefined なら malformed_progress で skip", () => {
+      const result = evaluateCompletionEligibility(
+        [course("c1")],
+        // @ts-expect-error: undefined 注入
+        [{ ...progress("c1"), totalLessons: undefined }],
+      );
+      expect(result.eligible).toBe(false);
+      if (!result.eligible) {
+        expect(result.reason).toBe("malformed_progress");
+      }
+    });
+  });
+
   describe("無関係な courseProgresses は無視", () => {
     it("courseProgresses に published 外の course (archived 等) が含まれても無視", () => {
       const result = evaluateCompletionEligibility(

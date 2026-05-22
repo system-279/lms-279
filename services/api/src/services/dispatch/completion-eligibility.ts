@@ -52,7 +52,9 @@ export type EligibilityIneligibleReason =
   | "no_published_courses"
   | "missing_progress"
   | "not_completed"
-  | "lesson_count_mismatch";
+  | "lesson_count_mismatch"
+  | "malformed_course"
+  | "malformed_progress";
 
 export type EligibilityResult =
   | {
@@ -89,11 +91,35 @@ export function evaluateCompletionEligibility(
   let totalLessonsSum = 0;
 
   for (const course of publishedCourses) {
+    // Defensive: TS sig は lessonOrder: string[] required だが、Firestore doc に
+    // field 欠損があると runtime で undefined。silent crash 防止のため fail-closed
+    // (malformed_course で skip、上位は failed_permanent ではなく skip 扱いを期待)。
+    // code-review #1 (HIGH CONFIRMED) 反映。
+    if (!Array.isArray(course.lessonOrder)) {
+      return {
+        eligible: false,
+        reason: "malformed_course",
+        ineligibleCourseId: course.id,
+      };
+    }
     const progress = progressMap.get(course.id);
     if (!progress) {
       return {
         eligible: false,
         reason: "missing_progress",
+        ineligibleCourseId: course.id,
+      };
+    }
+    // Defensive: TS sig は number required だが、Firestore partial write 等で
+    // null / undefined / NaN が混入すると progressSnapshot に NaN 伝播。
+    // code-review #2 (MEDIUM PLAUSIBLE) 反映。
+    if (
+      !Number.isFinite(progress.totalLessons) ||
+      !Number.isFinite(progress.completedLessons)
+    ) {
+      return {
+        eligible: false,
+        reason: "malformed_progress",
         ineligibleCourseId: course.id,
       };
     }

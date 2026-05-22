@@ -85,6 +85,13 @@ export function validateAndDedupeCcEmails(
   /** dedup 用: lower-case email -> true */
   const seen = new Set<string>();
 
+  // Defensive: TS sig は readonly string[] required だが、Phase 4 caller が
+  // Firestore doc から `data().notificationCcEmails` で取得する際に field 欠損で
+  // undefined が渡る可能性がある。`for...of undefined` は TypeError: not iterable
+  // を投げて run 全体を壊すため、ここで空配列扱いに正規化する。
+  // code-review #3 (MEDIUM CONFIRMED) 反映。
+  const safeCcEmails: readonly unknown[] = Array.isArray(ccEmails) ? ccEmails : [];
+
   // owner email を先に処理 (validCcEmails の先頭に配置するため)
   // null / undefined は AC-20 で許容されるため失敗扱いにしない (静かにスキップ)
   if (ownerEmail !== null && ownerEmail !== undefined) {
@@ -102,11 +109,11 @@ export function validateAndDedupeCcEmails(
     }
   }
 
-  for (const raw of ccEmails) {
+  for (const raw of safeCcEmails) {
     const result = validateSingleEmail(raw);
     if (!result.ok) {
       invalidEntries.push({
-        input: raw,
+        input: typeof raw === "string" ? raw : "",
         reason: result.reason,
         source: "cc",
       });
