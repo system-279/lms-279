@@ -23,12 +23,10 @@
 
 import { google, type gmail_v1 } from "googleapis";
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
+import { DWD_SECRET_NAME } from "../google-auth.js";
 
 /** ADR-037 案 X: 専用 client は gmail.send のみを保持する */
 export const DISPATCH_GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.send";
-
-const GCP_PROJECT_ID = "lms-279";
-const DWD_SECRET_NAME = `projects/${GCP_PROJECT_ID}/secrets/dwd-workspace-key/versions/latest`;
 
 interface DwdKey {
   client_email: string;
@@ -44,6 +42,14 @@ interface CachedClient {
 /**
  * cache key: `${subjectEmail}|${scope}` のフラット文字列。
  * 既存 `google-auth.ts` の cache とは別マップで管理する (Important-1)。
+ *
+ * 運用注意 (Secret Manager 鍵ローテーション):
+ *   `cachedDwdKey` は最初の呼び出しで読み取り後プロセス終了までメモリ保持される。
+ *   Secret Manager で `dwd-workspace-key` をローテーションした場合、本プロセスは
+ *   旧鍵を使い続けるため Cloud Run の revision 再デプロイ (= プロセス再起動) が
+ *   必須となる。既存 `google-auth.ts` の `cachedAdminEmail` 経由 cache invalidation
+ *   とは独立しているため、`process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL` 変更による
+ *   間接 invalidation は発生しない。
  */
 const clientCache = new Map<string, CachedClient>();
 let secretManagerClient: SecretManagerServiceClient | null = null;
@@ -81,8 +87,10 @@ function buildCacheKey(subjectEmail: string): string {
  *
  * @param subjectEmail DWD JWT subject (実在 mailbox、`DXCOLLEGE_DISPATCH_SUBJECT` env)
  * @param fromEmail   MIME From ヘッダ用エイリアス (`DXCOLLEGE_SENDER_EMAIL` env、SendAs 登録済)。
- *                    本関数は使用しないが、呼び出し側で MIME 組立時に渡す前提で
- *                    シグネチャに含める (spec FR-5 改訂、ADR-037 §実装方針 4)。
+ *                    本関数内では空文字 validation のみ行い、JWT / cache key には含めない。
+ *                    呼び出し側に「同一の fromEmail で MIME 組立まで完結させる」依存を
+ *                    シグネチャレベルで強制する設計 (spec FR-5 改訂、ADR-037 §実装方針 4)。
+ *                    cache key を (subject, scope) のみに限定する理由は同 spec / Important-1。
  * @returns gmail_v1.Gmail インスタンス (cache hit なら同一参照)
  */
 export async function getGmailClientForSender(
@@ -113,9 +121,10 @@ export async function getGmailClientForSender(
 }
 
 /**
- * cache 状態を返す (デバッグ / テスト用)。
+ * cache 状態を返す (テスト専用)。本番経路では呼ばない。
+ * `__` prefix で意図しない本番利用を構造的に防ぐ。
  */
-export function getCacheStatsForTest(): { size: number; keys: string[] } {
+export function __getCacheStatsForTest(): { size: number; keys: string[] } {
   return {
     size: clientCache.size,
     keys: Array.from(clientCache.keys()),

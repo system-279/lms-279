@@ -95,7 +95,7 @@ export function validateAndDedupeCcEmails(
       validCcEmails.push(ownerResult.value);
     } else {
       invalidEntries.push({
-        input: typeof ownerEmail === "string" ? ownerEmail : "",
+        input: ownerEmail,
         reason: ownerResult.reason,
         source: "owner",
       });
@@ -106,7 +106,7 @@ export function validateAndDedupeCcEmails(
     const result = validateSingleEmail(raw);
     if (!result.ok) {
       invalidEntries.push({
-        input: typeof raw === "string" ? raw : "",
+        input: raw,
         reason: result.reason,
         source: "cc",
       });

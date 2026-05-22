@@ -29,12 +29,20 @@ export type EligibilityCourseProgressInput = Pick<
   "courseId" | "isCompleted" | "totalLessons" | "completedLessons"
 >;
 
+/**
+ * 進捗スナップショット (shared-types `CompletionNotificationProgressSnapshot` と同 shape)。
+ *
+ * 不変条件: `eligible: true` を返した結果に同居する場合、ループ完走したことから
+ * 必ず `coursesCompleted === coursesTotal === publishedCourses.length` が成立する。
+ * Phase 4 で `completion_notifications.progressSnapshot` フィールドに直接格納するため
+ * 同 shape を維持しているが、本関数の戻り値としては「部分完了状態」を表現することはない。
+ */
 export interface EligibilityProgressSnapshot {
   /** 全 published コースの completedLessons 合計 */
   completedLessons: number;
   /** 全 published コースの totalLessons 合計 */
   totalLessons: number;
-  /** 完了済 course 数 (= publishedCourses.length、eligible=true の時のみ意味あり) */
+  /** 完了済 course 数。eligible=true 時は coursesTotal と必ず一致 (上記不変条件) */
   coursesCompleted: number;
   /** 全 published course 数 */
   coursesTotal: number;
@@ -77,8 +85,8 @@ export function evaluateCompletionEligibility(
     progressMap.set(progress.courseId, progress);
   }
 
-  let completedLessonsTotal = 0;
-  let totalLessonsTotal = 0;
+  let completedLessonsSum = 0;
+  let totalLessonsSum = 0;
 
   for (const course of publishedCourses) {
     const progress = progressMap.get(course.id);
@@ -103,8 +111,8 @@ export function evaluateCompletionEligibility(
         ineligibleCourseId: course.id,
       };
     }
-    completedLessonsTotal += progress.completedLessons;
-    totalLessonsTotal += progress.totalLessons;
+    completedLessonsSum += progress.completedLessons;
+    totalLessonsSum += progress.totalLessons;
   }
 
   return {
@@ -112,8 +120,8 @@ export function evaluateCompletionEligibility(
     // 入力 publishedCourses の順序を保持。呼び出し側で sort したい場合は事前 sort する。
     courseIdsSnapshot: publishedCourses.map((c) => c.id),
     progressSnapshot: {
-      completedLessons: completedLessonsTotal,
-      totalLessons: totalLessonsTotal,
+      completedLessons: completedLessonsSum,
+      totalLessons: totalLessonsSum,
       coursesCompleted: publishedCourses.length,
       coursesTotal: publishedCourses.length,
     },

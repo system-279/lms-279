@@ -48,7 +48,7 @@ vi.mock("@google-cloud/secret-manager", () => {
 const {
   getGmailClientForSender,
   DISPATCH_GMAIL_SCOPE,
-  getCacheStatsForTest,
+  __getCacheStatsForTest,
   __resetCacheForTest,
 } = await import("../gmail-client.js");
 
@@ -171,10 +171,10 @@ describe("cache 動作 (cache key = subject + scope)", () => {
     expect(jwtConstructorMock).toHaveBeenCalledTimes(1);
   });
 
-  it("getCacheStatsForTest が cache 状態を返す", async () => {
-    expect(getCacheStatsForTest()).toEqual({ size: 0, keys: [] });
+  it("__getCacheStatsForTest が cache 状態を返す", async () => {
+    expect(__getCacheStatsForTest()).toEqual({ size: 0, keys: [] });
     await getGmailClientForSender("system@279279.net", "dxcollege@279279.net");
-    expect(getCacheStatsForTest()).toEqual({
+    expect(__getCacheStatsForTest()).toEqual({
       size: 1,
       keys: [`system@279279.net|${DISPATCH_GMAIL_SCOPE}`],
     });
