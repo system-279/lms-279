@@ -110,13 +110,19 @@ function TenantLayoutInner({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* スーパー管理者アクセスバナー */}
+      {/* スーパー管理者アクセスバナー (broken link /super-admin → /super/tenants へ修正、開発者要望) */}
       {isSuperAdminAccess && (
-        <div className="bg-red-100 border-b border-red-300 text-red-800 text-center py-2 text-sm">
-          スーパー管理者としてアクセス中 -{" "}
-          <Link href="/super-admin" className="underline font-medium">
-            スーパー管理画面に戻る
-          </Link>
+        <div className="bg-red-100 border-b border-red-300 text-red-800 py-2 text-sm">
+          <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4">
+            <span>スーパー管理者としてアクセス中</span>
+            <Link
+              href="/super/tenants"
+              className="inline-flex items-center gap-1 rounded-md border border-red-400 bg-white px-3 py-1 font-medium text-red-800 hover:bg-red-50 transition"
+              aria-label="スーパー管理者ページに戻る"
+            >
+              ← スーパー管理者ページに戻る
+            </Link>
+          </div>
         </div>
       )}
       {/* デモモードバナー */}
