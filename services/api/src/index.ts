@@ -17,6 +17,8 @@ import { tenantsRouter } from "./routes/tenants.js";
 import { superAdminRouter } from "./routes/super-admin.js";
 import { helpRoleRouter } from "./routes/help-role.js";
 import { publicRouter } from "./routes/public.js";
+import { createInternalDispatchRouter } from "./routes/internal/dispatch.js";
+import { buildDispatchFactory } from "./services/dispatch/factory.js";
 import { logger } from "./utils/logger.js";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -134,6 +136,39 @@ app.use("/api/v2/public", authLimiter, publicRouter);
 
 // テナント登録API（認証のみ、テナントコンテキスト不要）
 app.use("/api/v2/tenants", authLimiter, tenantsRouter);
+
+// 内部 API: Cloud Scheduler 経由の自動完了通知配信 (Phase 7 wiring)
+// env が揃わない環境 (local dev / 一部 E2E) では mount をスキップする。
+// ただし Cloud Run (K_SERVICE が設定される) では env 欠如を silent skip しない
+// (evaluator HIGH: 本番で Scheduler が 404 を受けても 2xx 期待で気付かないリスク回避)
+try {
+  const dispatch = buildDispatchFactory();
+  app.use(
+    "/api/v2/internal",
+    createInternalDispatchRouter({
+      expectedAudience: dispatch.expectedAudience,
+      verifier: dispatch.verifier,
+      storage: dispatch.storage,
+      loader: dispatch.loader,
+      env: dispatch.env,
+    }),
+  );
+  logger.info("Internal dispatch router mounted", { mode: dispatch.mode });
+} catch (err) {
+  const errorMsg = err instanceof Error ? err.message : String(err);
+  if (process.env.K_SERVICE) {
+    // 本番 Cloud Run で env 欠如 = fail loud (silent skip 防止)
+    logger.error(
+      "Internal dispatch router failed to mount in Cloud Run — env missing or init failed",
+      { errorType: "dispatch_router_mount_failed_in_production", error: errorMsg },
+    );
+    throw err;
+  }
+  // local dev / E2E: warn + skip (dispatch endpoint は本番のみ必要)
+  logger.warn("Internal dispatch router NOT mounted (env missing or init failed)", {
+    error: errorMsg,
+  });
+}
 
 // スーパー管理者API
 app.use("/api/v2/super", superAdminRouter);
