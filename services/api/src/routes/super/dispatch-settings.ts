@@ -168,10 +168,16 @@ export function createDispatchSettingsRouter(
       });
 
       if (!outcome.updated) {
+        // current を併せて返し、UI が追加 GET なしで最新値へ reload できるようにする。
+        // senderEmail は env が真実 (NFR-8) のため overlay する。
+        const current: GetDispatchSettingsResponse | null = outcome.current
+          ? { ...outcome.current, senderEmail: deps.senderEmail }
+          : null;
         res.status(409).json({
           error: "version_conflict",
           message:
             "設定が他のユーザーにより更新されています。最新の値を再読み込みしてください。",
+          current,
         });
         return;
       }

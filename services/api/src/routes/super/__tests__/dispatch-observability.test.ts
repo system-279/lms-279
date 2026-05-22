@@ -132,6 +132,17 @@ describe("GET /super/dispatch/audit-logs", () => {
     expect(p2.body.logs.map((l: { auditId: string }) => l.auditId)).toEqual(["a3", "a2"]);
     expect(p2.body.nextCursor).toBe("a2");
   });
+
+  it("存在しない cursor は終端扱い (空ページ + nextCursor=null) で再ループを防ぐ", async () => {
+    await seedAudit(storage, { auditId: "a1", createdAt: "2026-05-21T00:00:00.000Z" });
+    await seedAudit(storage, { auditId: "a2", createdAt: "2026-05-22T00:00:00.000Z" });
+    const res = await request(makeApp(storage, "audit-logs")).get(
+      "/api/v2/super/dispatch/audit-logs?cursor=deleted-or-bogus",
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.logs).toEqual([]);
+    expect(res.body.nextCursor).toBeNull();
+  });
 });
 
 describe("GET /super/dispatch/runs", () => {

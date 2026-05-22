@@ -116,6 +116,8 @@ describe("PUT /super/dispatch/settings", () => {
       .send({ ...validBody, version: 0 }); // stale
     expect(res.status).toBe(409);
     expect(res.body.error).toBe("version_conflict");
+    // current を返し UI reload を可能にする (senderEmail は env overlay)
+    expect(res.body.current).toMatchObject({ version: 1, senderEmail: SENDER });
   });
 
   it("scheduleDaysOfWeek に 7 を含むと 400 invalid_schedule_days", async () => {

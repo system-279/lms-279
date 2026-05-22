@@ -41,8 +41,14 @@ export function paginateByCursor<T>(
   let startIdx = 0;
   if (cursor) {
     const idx = sortedItems.findIndex((it) => keyOf(it) === cursor);
-    // cursor が見つからない場合は防御的に先頭から (古いデータ TTL 削除等)
-    startIdx = idx >= 0 ? idx + 1 : 0;
+    if (idx < 0) {
+      // cursor が見つからない (TTL 削除 / 不正な cursor)。先頭に巻き戻すと
+      // 「page 1 + 新しい nextCursor」を返してしまい、client の
+      // 「nextCursor が null になるまで取得」ループが全件を再走査してしまう。
+      // 終端扱い (空ページ + null) にして再ループ・重複処理を防ぐ。
+      return { page: [], nextCursor: null };
+    }
+    startIdx = idx + 1;
   }
   const page = sortedItems.slice(startIdx, startIdx + limit);
   const hasMore = startIdx + limit < sortedItems.length;
