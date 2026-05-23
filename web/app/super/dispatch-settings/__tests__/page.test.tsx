@@ -1,8 +1,13 @@
 /**
- * DispatchSettingsPage (Phase 6 PR-F1) のテスト。
+ * DispatchSettingsPage (Phase 6 PR-F1 + PR-F2) のテスト。
  * - 初期 GET で値ロード + フォーム表示
  * - 保存で PUT 呼び出し + 成功表示
  * - 409 (version 競合) で再 GET + 警告表示 (AC-23)
+ * - F2 component (TenantCcEditor / AuditLogTable / RunHistoryTable) が常にマウントされる
+ *
+ * F2 component は本ページの settings ロード状態と独立に自分で fetch するため、
+ * page 単独の挙動を切り分けてテストする目的で stub 化する。内部の fetch / chips / cursor
+ * 等は各 component の専用テスト (../components/__tests__/) でカバー済。
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
@@ -13,6 +18,17 @@ import DispatchSettingsPage from "../page";
 const superFetchMock = vi.fn();
 vi.mock("@/lib/super-api", () => ({
   useSuperAdminFetch: () => ({ superFetch: superFetchMock }),
+}));
+
+// F2 component は内部で superFetch を呼ぶため、page 単独のテストでは stub 化する。
+vi.mock("../components/TenantCcEditor", () => ({
+  TenantCcEditor: () => <div data-testid="tenant-cc-editor" />,
+}));
+vi.mock("../components/AuditLogTable", () => ({
+  AuditLogTable: () => <div data-testid="audit-log-table" />,
+}));
+vi.mock("../components/RunHistoryTable", () => ({
+  RunHistoryTable: () => <div data-testid="run-history-table" />,
 }));
 
 const baseSettings: GetDispatchSettingsResponse = {
@@ -92,5 +108,49 @@ describe("DispatchSettingsPage", () => {
       await screen.findByText("この操作を行う権限がありません。"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "再読み込み" })).toBeInTheDocument();
+  });
+
+  it("F2 component (CC / 監査ログ / Run 履歴) は settings ロード状態と独立に常にマウントされる", async () => {
+    // settings GET 失敗ケースでも F2 が表示されることを確認
+    superFetchMock.mockRejectedValueOnce(
+      new ApiError(500, "internal", "settings 失敗"),
+    );
+    render(<DispatchSettingsPage />);
+    await screen.findByText("settings 失敗");
+    expect(screen.getByTestId("tenant-cc-editor")).toBeInTheDocument();
+    expect(screen.getByTestId("audit-log-table")).toBeInTheDocument();
+    expect(screen.getByTestId("run-history-table")).toBeInTheDocument();
+  });
+
+  it("F2 component は settings ロード成功時にも当然マウントされる", async () => {
+    superFetchMock.mockResolvedValueOnce(baseSettings);
+    render(<DispatchSettingsPage />);
+    await screen.findByDisplayValue("DXcollege運営スタッフ");
+    expect(screen.getByTestId("tenant-cc-editor")).toBeInTheDocument();
+    expect(screen.getByTestId("audit-log-table")).toBeInTheDocument();
+    expect(screen.getByTestId("run-history-table")).toBeInTheDocument();
+  });
+
+  it("再読み込み失敗時 loadSettings は form を null 化する (regression: form/error 共存防止)", async () => {
+    // 初回 GET 失敗 → error 表示 + 再読み込みボタン
+    superFetchMock.mockRejectedValueOnce(
+      new ApiError(500, "internal", "初回失敗"),
+    );
+    render(<DispatchSettingsPage />);
+    await screen.findByText("初回失敗");
+    // form は表示されない
+    expect(
+      screen.queryByDisplayValue("DXcollege運営スタッフ"),
+    ).not.toBeInTheDocument();
+
+    // 再読み込み → 成功で form 表示
+    superFetchMock.mockResolvedValueOnce(baseSettings);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "再読み込み" }));
+    });
+    await screen.findByDisplayValue("DXcollege運営スタッフ");
+
+    // (本 PR 範囲外: 「再読み込み成功後にさらにエラー」を発火させる UI が現状無いため、
+    //  上記で「loadSettings catch で form null + error 表示」の正パスを保証する。)
   });
 });

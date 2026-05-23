@@ -1,14 +1,18 @@
 "use client";
 
 /**
- * スーパー管理者: 自動完了通知 配信設定ページ (Phase 6 PR-F1)。
+ * スーパー管理者: 自動完了通知 配信設定ページ (Phase 6 PR-F1 + PR-F2)。
  *
  * - GET /api/v2/super/dispatch/settings で初期値ロード (doc 未作成時は default)
  * - enabled (kill switch) / スケジュール / 署名・本文を編集し PUT で保存 (version 楽観ロック)
  * - 409 (version 競合) は最新値を再取得してフォームへ反映 + 警告 (AC-23)
  * - ドライラン / テスト送信を実行
+ * - テナント別 CC 設定 (PR-F2)
+ * - 監査ログ / run 履歴 (PR-F2)
  *
- * senderEmail は env 由来 (read-only)。テナント別 CC / 監査ログ / run 履歴は PR-F2。
+ * senderEmail は env 由来 (read-only)。F2 component (TenantCcEditor / AuditLogTable /
+ * RunHistoryTable) は本ページの settings ロード状態と独立に自分で fetch するため、
+ * settings ロード失敗時でも他 Section を閲覧できる。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -24,6 +28,9 @@ import { ScheduleEditor } from "./components/ScheduleEditor";
 import { MessageBodyEditor } from "./components/MessageBodyEditor";
 import { DryRunPanel } from "./components/DryRunPanel";
 import { TestSendButton } from "./components/TestSendButton";
+import { TenantCcEditor } from "./components/TenantCcEditor";
+import { AuditLogTable } from "./components/AuditLogTable";
+import { RunHistoryTable } from "./components/RunHistoryTable";
 import { getDispatchErrorMessage } from "./errorMessage";
 
 interface FormState {
@@ -85,12 +92,19 @@ export default function DispatchSettingsPage() {
   const loadSettings = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setSaveError(null); // 前回の保存エラーを持ち越さない
+    setNotice(null);
     try {
       const data = await superFetchRef.current<GetDispatchSettingsResponse>(
         "/api/v2/super/dispatch/settings",
       );
       setForm(toFormState(data));
     } catch (e) {
+      // 早期 return を廃止し条件 render に変更したので、form を null 化しないと
+      // 前回成功時の値が残ったまま error と同時表示される。AC-23 の 409 reload は
+      // 409 を catch する前に loadSettings の try ブロックに入るため、新値を取得して
+      // setForm が成功すれば form は最新値で上書きされる。
+      setForm(null);
       setError(getDispatchErrorMessage(e, "設定の取得に失敗しました"));
     } finally {
       setLoading(false);
@@ -137,23 +151,6 @@ export default function DispatchSettingsPage() {
     }
   };
 
-  if (loading) {
-    return <div className="text-muted-foreground">読み込み中...</div>;
-  }
-  if (error) {
-    return (
-      <div className="space-y-3">
-        <div className="rounded-md bg-destructive/10 p-4 text-destructive text-sm">
-          {error}
-        </div>
-        <Button variant="outline" onClick={loadSettings}>
-          再読み込み
-        </Button>
-      </div>
-    );
-  }
-  if (!form) return null;
-
   return (
     <div className="space-y-4">
       <div>
@@ -163,84 +160,125 @@ export default function DispatchSettingsPage() {
         </p>
       </div>
 
-      <Section
-        title="配信の有効化"
-        description="無効にすると次回 cron 起動時に即座に配信が停止します (kill switch)。"
-      >
-        <label className="flex items-center gap-3 text-sm">
-          <Switch
-            checked={form.enabled}
-            onCheckedChange={(v) => setForm({ ...form, enabled: v })}
-            disabled={saving}
-            aria-label="配信を有効化"
-          />
-          <span>{form.enabled ? "配信 ON" : "配信 OFF"}</span>
-        </label>
-        <p className="text-xs text-muted-foreground">
-          送信元: <span className="font-mono">{form.senderEmail}</span> (環境設定、変更不可)
-        </p>
-      </Section>
-
-      <Section title="配信スケジュール">
-        <ScheduleEditor
-          daysOfWeek={form.scheduleDaysOfWeek}
-          hourJst={form.scheduleHourJst}
-          onChange={(next) =>
-            setForm({
-              ...form,
-              scheduleDaysOfWeek: next.daysOfWeek,
-              scheduleHourJst: next.hourJst,
-            })
-          }
-          disabled={saving}
-        />
-      </Section>
-
-      <Section title="メール署名・本文">
-        <MessageBodyEditor
-          signatureName={form.signatureName}
-          completionMessageBody={form.completionMessageBody}
-          onChange={(next) =>
-            setForm({
-              ...form,
-              signatureName: next.signatureName,
-              completionMessageBody: next.completionMessageBody,
-            })
-          }
-          disabled={saving}
-        />
-      </Section>
-
-      {saveError && (
-        <div className="rounded-md bg-destructive/10 p-3 text-destructive text-sm">
-          {saveError}
-        </div>
+      {/* F1: settings (ロード/エラー時は他 Section と独立に inline 表示) */}
+      {loading && (
+        <div className="text-muted-foreground">読み込み中...</div>
       )}
-      {notice && (
-        <div className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
-          {notice}
+      {error && (
+        <div className="space-y-3">
+          <div className="rounded-md bg-destructive/10 p-4 text-destructive text-sm">
+            {error}
+          </div>
+          <Button variant="outline" onClick={loadSettings}>
+            再読み込み
+          </Button>
         </div>
       )}
 
-      <div className="flex items-center gap-3">
-        <Button onClick={handleSave} disabled={saving}>
-          {saving ? "保存中..." : "保存"}
-        </Button>
-        <span className="text-xs text-muted-foreground">version {form.version}</span>
-      </div>
+      {form && (
+        <>
+          <Section
+            title="配信の有効化"
+            description="無効にすると次回 cron 起動時に即座に配信が停止します (kill switch)。"
+          >
+            <label className="flex items-center gap-3 text-sm">
+              <Switch
+                checked={form.enabled}
+                onCheckedChange={(v) => setForm({ ...form, enabled: v })}
+                disabled={saving}
+                aria-label="配信を有効化"
+              />
+              <span>{form.enabled ? "配信 ON" : "配信 OFF"}</span>
+            </label>
+            <p className="text-xs text-muted-foreground">
+              送信元: <span className="font-mono">{form.senderEmail}</span> (環境設定、変更不可)
+            </p>
+          </Section>
 
+          <Section title="配信スケジュール">
+            <ScheduleEditor
+              daysOfWeek={form.scheduleDaysOfWeek}
+              hourJst={form.scheduleHourJst}
+              onChange={(next) =>
+                setForm({
+                  ...form,
+                  scheduleDaysOfWeek: next.daysOfWeek,
+                  scheduleHourJst: next.hourJst,
+                })
+              }
+              disabled={saving}
+            />
+          </Section>
+
+          <Section title="メール署名・本文">
+            <MessageBodyEditor
+              signatureName={form.signatureName}
+              completionMessageBody={form.completionMessageBody}
+              onChange={(next) =>
+                setForm({
+                  ...form,
+                  signatureName: next.signatureName,
+                  completionMessageBody: next.completionMessageBody,
+                })
+              }
+              disabled={saving}
+            />
+          </Section>
+
+          {saveError && (
+            <div className="rounded-md bg-destructive/10 p-3 text-destructive text-sm">
+              {saveError}
+            </div>
+          )}
+          {notice && (
+            <div className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+              {notice}
+            </div>
+          )}
+
+          <div className="flex items-center gap-3">
+            <Button onClick={handleSave} disabled={saving}>
+              {saving ? "保存中..." : "保存"}
+            </Button>
+            <span className="text-xs text-muted-foreground">version {form.version}</span>
+          </div>
+
+          <Section
+            title="ドライラン"
+            description="次回配信される対象を送信せずに確認します。"
+          >
+            <DryRunPanel />
+          </Section>
+
+          <Section
+            title="テスト送信"
+            description="設定中の送信経路を、自分宛の固定ダミーメールで確認します。"
+          >
+            <TestSendButton />
+          </Section>
+        </>
+      )}
+
+      {/* F2: settings の loading/error と独立に表示。1 つの Section の取得失敗が他に波及しない */}
       <Section
-        title="ドライラン"
-        description="次回配信される対象を送信せずに確認します。"
+        title="テナント別 CC 設定"
+        description="完了通知メールに CC として追加するメールアドレスをテナントごとに設定します (上限 10 件)。"
       >
-        <DryRunPanel />
+        <TenantCcEditor />
       </Section>
 
       <Section
-        title="テスト送信"
-        description="設定中の送信経路を、自分宛の固定ダミーメールで確認します。"
+        title="監査ログ"
+        description="配信に関する各種イベントの履歴 (TTL 365 日)。"
       >
-        <TestSendButton />
+        <AuditLogTable />
+      </Section>
+
+      <Section
+        title="Run 履歴"
+        description="Cloud Scheduler 起動ごとの実行結果 (TTL 365 日)。"
+      >
+        <RunHistoryTable />
       </Section>
     </div>
   );
