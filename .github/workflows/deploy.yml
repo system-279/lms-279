@@ -98,12 +98,23 @@ jobs:
           #   api Cloud Run service URL と一致させる必要があるため secret 経由 (環境ごとに異なる)。
           #   未設定なら mount スキップ (services/api/src/index.ts の isProductionGcpRuntime で
           #   fail loud → 設定漏れを起動時に検知)。
-          ENV_VARS="NODE_ENV=production,DEMO_ENABLED=true,AUTH_MODE=firebase,CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net,SESSION_DURATION_MS=10800000,GCS_RESOURCE_BUCKET=lms-279-resources,DXCOLLEGE_DISPATCH_SUBJECT=system@279279.net,DXCOLLEGE_SENDER_EMAIL=dxcollege@279279.net"
+          # NOTE: gcloud `--set-env-vars` のデフォルト区切り文字はカンマ `,` だが、
+          # CORS_ORIGIN は複数 origin をカンマ区切りで保持する (services/api/src/index.ts
+          # の split(",") を参照) ため env_var 区切りと衝突する。
+          # 解決: gcloud の custom delimiter syntax `^|^...` で env_var 区切りを `|` に変更し、
+          # CORS_ORIGIN 内で `,` を安全に使えるようにする。
+          # `|` は URL / email / プロジェクト名いずれにも通常出現しないため安全。
+          #
+          # CORS_ORIGIN: Cloud Run は同じ web service に対して旧形式
+          # (web-3zcica5euq-an.a.run.app) と新形式 (web-1034821634012.asia-northeast1.run.app)
+          # の 2 種類の URL を並列提供している。どちらの origin からアクセスされても
+          # CORS preflight が通るよう両方を許可する (2026-05-23 Phase 8 cutover で発覚)。
+          ENV_VARS="^|^NODE_ENV=production|DEMO_ENABLED=true|AUTH_MODE=firebase|CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,https://web-1034821634012.asia-northeast1.run.app|GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net|SESSION_DURATION_MS=10800000|GCS_RESOURCE_BUCKET=lms-279-resources|DXCOLLEGE_DISPATCH_SUBJECT=system@279279.net|DXCOLLEGE_SENDER_EMAIL=dxcollege@279279.net"
           if [ -n "${{ secrets.SUPER_ADMIN_EMAILS }}" ]; then
-            ENV_VARS="${ENV_VARS},SUPER_ADMIN_EMAILS=${{ secrets.SUPER_ADMIN_EMAILS }}"
+            ENV_VARS="${ENV_VARS}|SUPER_ADMIN_EMAILS=${{ secrets.SUPER_ADMIN_EMAILS }}"
           fi
           if [ -n "${{ secrets.DISPATCH_OIDC_AUDIENCE }}" ]; then
-            ENV_VARS="${ENV_VARS},DISPATCH_OIDC_AUDIENCE=${{ secrets.DISPATCH_OIDC_AUDIENCE }}"
+            ENV_VARS="${ENV_VARS}|DISPATCH_OIDC_AUDIENCE=${{ secrets.DISPATCH_OIDC_AUDIENCE }}"
           fi
           gcloud run deploy api \
             --image=${{ env.ARTIFACT_REGISTRY }}/api:${{ github.sha }} \
