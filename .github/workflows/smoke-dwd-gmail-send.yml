@@ -1,10 +1,11 @@
 name: Smoke DWD Gmail Send
 
-# Phase 0-A-4 (OQ-2) Group エイリアス DWD smoke check workflow。
+# DXcollege 自動完了通知 SendAs 送信 smoke check workflow (ADR-037 採用後)。
 #
 # 目的:
-#   dxcollege@279279.net (Google Group エイリアス) が DWD subject として
-#   gmail.users.messages.send で使えるかを実機検証する。
+#   ADR-037 案 X (SendAs 採用) の経路で gmail.users.messages.send が成功し、
+#   受信者の From ヘッダが MIME From (dxcollege@279279.net) として表示されるかを
+#   実機検証する。Phase 8 cutover の gating step (Step 0 SendAs 登録完了後に実行)。
 #
 # 動作モード:
 #   - dry-run (既定): DWD 認証 + JWT + MIME 組立まで実行、Gmail API は呼ばない
@@ -19,8 +20,9 @@ name: Smoke DWD Gmail Send
 #     (https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/)
 #
 # 関連:
-#   - 設計仕様書: docs/specs/2026-05-20-completion-notification-design.md OQ-2
-#   - 実装計画: docs/specs/2026-05-20-completion-notification-impl-plan.md Phase 0-A-4
+#   - ADR-037: docs/adr/ADR-037-completion-notification-sender-impersonation.md
+#   - 設計仕様書: docs/specs/2026-05-20-completion-notification-design.md §8.1, OQ-X
+#   - 実装計画: docs/specs/2026-05-20-completion-notification-impl-plan.md Phase 0 / Phase 8
 #   - スクリプト: scripts/smoke-dwd-gmail-send.ts
 
 on:
@@ -38,15 +40,20 @@ on:
         description: '送信先 email (必須)。dry-run でも検証用に必要'
         required: true
         type: string
+      subject_email:
+        description: 'DWD impersonation 対象の実 mailbox (既定 system@279279.net、ADR-037 案 X)'
+        required: false
+        default: 'system@279279.net'
+        type: string
       sender:
-        description: '送信元 email (なりすまし subject、既定 dxcollege@279279.net)'
+        description: 'MIME From ヘッダ (SendAs 経由で偽装される表示用 From、既定 dxcollege@279279.net)'
         required: false
         default: 'dxcollege@279279.net'
         type: string
       subject:
-        description: 'メール件名 (既定 [smoke] DXcollege 自動完了通知 DWD smoke check)'
+        description: 'メール件名 (既定 [smoke] DXcollege 自動完了通知 SendAs smoke check)'
         required: false
-        default: '[smoke] DXcollege 自動完了通知 DWD smoke check'
+        default: '[smoke] DXcollege 自動完了通知 SendAs smoke check'
         type: string
 
 jobs:
@@ -88,11 +95,13 @@ jobs:
           GOOGLE_CLOUD_PROJECT: lms-279
           MODE: ${{ inputs.mode }}
           TO_EMAIL: ${{ inputs.to_email }}
+          SUBJECT_EMAIL: ${{ inputs.subject_email }}
           SENDER: ${{ inputs.sender }}
           SUBJECT: ${{ inputs.subject }}
         run: |
           set -euo pipefail
           FLAGS=("--to=$TO_EMAIL")
+          if [ -n "$SUBJECT_EMAIL" ]; then FLAGS+=("--subject-email=$SUBJECT_EMAIL"); fi
           if [ -n "$SENDER" ]; then FLAGS+=("--sender=$SENDER"); fi
           if [ -n "$SUBJECT" ]; then FLAGS+=("--subject=$SUBJECT"); fi
           if [ "$MODE" = "send" ]; then
@@ -102,7 +111,8 @@ jobs:
             FLAGS+=("--dry-run")
           fi
           echo "Mode: $MODE"
-          echo "Sender: $SENDER"
-          echo "Recipient: $TO_EMAIL"
+          echo "DWD subject: $SUBJECT_EMAIL"
+          echo "MIME From:   $SENDER"
+          echo "Recipient:   $TO_EMAIL"
           echo "---"
           npx tsx scripts/smoke-dwd-gmail-send.ts "${FLAGS[@]}"
