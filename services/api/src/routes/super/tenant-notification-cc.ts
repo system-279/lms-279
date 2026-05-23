@@ -46,6 +46,71 @@ export interface TenantCcConfigStore {
   ): Promise<void>;
 }
 
+/**
+ * env value (カンマ区切り文字列) を `seedTenantIds` 配列に変換する純粋関数。
+ *
+ * 仕様 (汚い入力に対する正規化):
+ *   - undefined / "" → `[]` (env 未設定)
+ *   - 各要素を trim、空文字エントリは除去 ("a,,b" → ["a","b"], " a " → ["a"])
+ *   - 重複は除去せず保持 (constructor 側で重複 seed は冪等、上書きされるだけ)
+ *
+ * index.ts wiring (`InMemoryTenantCcConfigStore` への inject) と本ファイル test の
+ * 両方で共通利用。env パース層の回帰を unit test で押さえる目的で独立 export。
+ */
+export function parseSeedTenantIds(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * test / E2E / local dev 用の InMemory 実装。
+ *
+ * production wiring (`FirestoreTenantCcConfigStore`) は Firestore credential 必須のため、
+ * CI E2E / Firebase emulator 無し dev では使えない。本クラスは `DISPATCH_USE_IN_MEMORY=true`
+ * のとき index.ts wiring で inject される。
+ *
+ * `seedTenantIds` で初期 tenant を登録 (default config: ownerEmail=null /
+ * notificationCcEmails=[] / completionNotificationEnabled=true)。E2E spec で
+ * `/super/tenants/demo/notification-cc-emails` を呼ぶ場合は env
+ * `DISPATCH_IN_MEMORY_SEED_TENANTS=demo` で seed する。
+ */
+export class InMemoryTenantCcConfigStore implements TenantCcConfigStore {
+  private readonly configs = new Map<string, TenantNotificationCcConfig>();
+
+  constructor(options: { seedTenantIds?: string[] } = {}) {
+    for (const tenantId of options.seedTenantIds ?? []) {
+      this.configs.set(tenantId, {
+        ownerEmail: null,
+        notificationCcEmails: [],
+        completionNotificationEnabled: true,
+      });
+    }
+  }
+
+  async getTenantCcConfig(
+    tenantId: string,
+  ): Promise<TenantNotificationCcConfig | null> {
+    return this.configs.get(tenantId) ?? null;
+  }
+
+  async updateTenantCcConfig(
+    tenantId: string,
+    input: {
+      notificationCcEmails: string[];
+      completionNotificationEnabled: boolean;
+    },
+  ): Promise<void> {
+    const prev = this.configs.get(tenantId);
+    this.configs.set(tenantId, {
+      ownerEmail: prev?.ownerEmail ?? null,
+      notificationCcEmails: input.notificationCcEmails,
+      completionNotificationEnabled: input.completionNotificationEnabled,
+    });
+  }
+}
+
 /** production wiring: tenants/{tenantId} doc を直接読み書き */
 export class FirestoreTenantCcConfigStore implements TenantCcConfigStore {
   async getTenantCcConfig(

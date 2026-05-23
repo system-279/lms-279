@@ -12,6 +12,8 @@ import request from "supertest";
 import type { TenantNotificationCcConfig } from "@lms-279/shared-types";
 import {
   createTenantNotificationCcRouter,
+  InMemoryTenantCcConfigStore,
+  parseSeedTenantIds,
   type TenantCcConfigStore,
 } from "../tenant-notification-cc.js";
 
@@ -191,5 +193,98 @@ describe("PUT /super/tenants/:tenantId/notification-cc-emails", () => {
       .send({ notificationCcEmails: [], completionNotificationEnabled: "yes" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("bad_request");
+  });
+});
+
+describe("InMemoryTenantCcConfigStore", () => {
+  it("seedTenantIds で指定したテナントは default config で初期化される", async () => {
+    const store = new InMemoryTenantCcConfigStore({
+      seedTenantIds: ["demo", "tenant-a"],
+    });
+    expect(await store.getTenantCcConfig("demo")).toEqual({
+      ownerEmail: null,
+      notificationCcEmails: [],
+      completionNotificationEnabled: true,
+    });
+    expect(await store.getTenantCcConfig("tenant-a")).toEqual({
+      ownerEmail: null,
+      notificationCcEmails: [],
+      completionNotificationEnabled: true,
+    });
+  });
+
+  it("seed していないテナントは null を返す", async () => {
+    const store = new InMemoryTenantCcConfigStore({ seedTenantIds: ["demo"] });
+    expect(await store.getTenantCcConfig("missing")).toBeNull();
+  });
+
+  it("オプション省略時は空 (どの tenant も null)", async () => {
+    const store = new InMemoryTenantCcConfigStore();
+    expect(await store.getTenantCcConfig("demo")).toBeNull();
+  });
+
+  it("updateTenantCcConfig で notificationCcEmails / enabled が反映される", async () => {
+    const store = new InMemoryTenantCcConfigStore({ seedTenantIds: ["demo"] });
+    await store.updateTenantCcConfig("demo", {
+      notificationCcEmails: ["cc1@example.com", "cc2@example.com"],
+      completionNotificationEnabled: false,
+    });
+    expect(await store.getTenantCcConfig("demo")).toEqual({
+      ownerEmail: null,
+      notificationCcEmails: ["cc1@example.com", "cc2@example.com"],
+      completionNotificationEnabled: false,
+    });
+  });
+
+  it("seed していない tenant への update は新規 config を作る", async () => {
+    const store = new InMemoryTenantCcConfigStore();
+    await store.updateTenantCcConfig("new-tenant", {
+      notificationCcEmails: ["cc@example.com"],
+      completionNotificationEnabled: true,
+    });
+    expect(await store.getTenantCcConfig("new-tenant")).toEqual({
+      ownerEmail: null,
+      notificationCcEmails: ["cc@example.com"],
+      completionNotificationEnabled: true,
+    });
+  });
+});
+
+describe("parseSeedTenantIds (env パース)", () => {
+  it("undefined → 空配列", () => {
+    expect(parseSeedTenantIds(undefined)).toEqual([]);
+  });
+
+  it("空文字 → 空配列", () => {
+    expect(parseSeedTenantIds("")).toEqual([]);
+  });
+
+  it("単一値", () => {
+    expect(parseSeedTenantIds("demo")).toEqual(["demo"]);
+  });
+
+  it("カンマ区切り複数値", () => {
+    expect(parseSeedTenantIds("demo,tenant-a")).toEqual(["demo", "tenant-a"]);
+  });
+
+  it("各要素を trim する", () => {
+    expect(parseSeedTenantIds(" demo , tenant-a ")).toEqual([
+      "demo",
+      "tenant-a",
+    ]);
+  });
+
+  it("空文字エントリ (連続カンマ・末尾カンマ) を除去する", () => {
+    expect(parseSeedTenantIds(",,demo,,tenant-a,")).toEqual([
+      "demo",
+      "tenant-a",
+    ]);
+  });
+
+  it("空白のみのエントリも除去する", () => {
+    expect(parseSeedTenantIds("demo,   ,tenant-a")).toEqual([
+      "demo",
+      "tenant-a",
+    ]);
   });
 });
