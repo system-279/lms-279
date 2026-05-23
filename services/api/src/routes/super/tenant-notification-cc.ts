@@ -47,6 +47,24 @@ export interface TenantCcConfigStore {
 }
 
 /**
+ * env value (カンマ区切り文字列) を `seedTenantIds` 配列に変換する純粋関数。
+ *
+ * 仕様 (汚い入力に対する正規化):
+ *   - undefined / "" → `[]` (env 未設定)
+ *   - 各要素を trim、空文字エントリは除去 ("a,,b" → ["a","b"], " a " → ["a"])
+ *   - 重複は除去せず保持 (constructor 側で重複 seed は冪等、上書きされるだけ)
+ *
+ * index.ts wiring (`InMemoryTenantCcConfigStore` への inject) と本ファイル test の
+ * 両方で共通利用。env パース層の回帰を unit test で押さえる目的で独立 export。
+ */
+export function parseSeedTenantIds(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
  * test / E2E / local dev 用の InMemory 実装。
  *
  * production wiring (`FirestoreTenantCcConfigStore`) は Firestore credential 必須のため、

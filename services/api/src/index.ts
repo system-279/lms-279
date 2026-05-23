@@ -19,7 +19,10 @@ import { helpRoleRouter } from "./routes/help-role.js";
 import { publicRouter } from "./routes/public.js";
 import { createInternalDispatchRouter } from "./routes/internal/dispatch.js";
 import { createDispatchSuperRouter } from "./routes/super/dispatch-super-router.js";
-import { InMemoryTenantCcConfigStore } from "./routes/super/tenant-notification-cc.js";
+import {
+  InMemoryTenantCcConfigStore,
+  parseSeedTenantIds,
+} from "./routes/super/tenant-notification-cc.js";
 import { superAdminAuthMiddleware } from "./middleware/super-admin.js";
 import { buildDispatchFactory } from "./services/dispatch/factory.js";
 import { logger } from "./utils/logger.js";
@@ -204,15 +207,19 @@ if (dispatchFactory) {
   // (FirestoreTenantCcConfigStore は Firestore credential 必須で CI / dev で 500)。
   // seed tenant は env DISPATCH_IN_MEMORY_SEED_TENANTS (カンマ区切り) で指定。
   // 本番 (firestore mode) では undefined を渡し、router default の Firestore wiring を使う。
-  const inMemoryCcStore =
-    dispatchFactory.mode === "in-memory"
-      ? new InMemoryTenantCcConfigStore({
-          seedTenantIds: (process.env.DISPATCH_IN_MEMORY_SEED_TENANTS ?? "")
-            .split(",")
-            .map((s) => s.trim())
-            .filter((s) => s.length > 0),
-        })
-      : undefined;
+  let inMemoryCcStore: InMemoryTenantCcConfigStore | undefined;
+  if (dispatchFactory.mode === "in-memory") {
+    const seedTenantIds = parseSeedTenantIds(
+      process.env.DISPATCH_IN_MEMORY_SEED_TENANTS,
+    );
+    inMemoryCcStore = new InMemoryTenantCcConfigStore({ seedTenantIds });
+    // operator UX: env 未設定 / 誤設定で seedTenantIds が空のまま起動すると
+    // GET /tenants/:id/notification-cc-emails が常に 404 になり原因切り分けが
+    // 遅れるため、採用値を startup log に明示する (review feedback 反映)。
+    logger.info("Super dispatch router: in-memory ccStore seeded", {
+      seedTenantIds,
+    });
+  }
 
   app.use(
     "/api/v2/super",

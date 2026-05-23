@@ -13,6 +13,7 @@ import type { TenantNotificationCcConfig } from "@lms-279/shared-types";
 import {
   createTenantNotificationCcRouter,
   InMemoryTenantCcConfigStore,
+  parseSeedTenantIds,
   type TenantCcConfigStore,
 } from "../tenant-notification-cc.js";
 
@@ -246,5 +247,44 @@ describe("InMemoryTenantCcConfigStore", () => {
       notificationCcEmails: ["cc@example.com"],
       completionNotificationEnabled: true,
     });
+  });
+});
+
+describe("parseSeedTenantIds (env パース)", () => {
+  it("undefined → 空配列", () => {
+    expect(parseSeedTenantIds(undefined)).toEqual([]);
+  });
+
+  it("空文字 → 空配列", () => {
+    expect(parseSeedTenantIds("")).toEqual([]);
+  });
+
+  it("単一値", () => {
+    expect(parseSeedTenantIds("demo")).toEqual(["demo"]);
+  });
+
+  it("カンマ区切り複数値", () => {
+    expect(parseSeedTenantIds("demo,tenant-a")).toEqual(["demo", "tenant-a"]);
+  });
+
+  it("各要素を trim する", () => {
+    expect(parseSeedTenantIds(" demo , tenant-a ")).toEqual([
+      "demo",
+      "tenant-a",
+    ]);
+  });
+
+  it("空文字エントリ (連続カンマ・末尾カンマ) を除去する", () => {
+    expect(parseSeedTenantIds(",,demo,,tenant-a,")).toEqual([
+      "demo",
+      "tenant-a",
+    ]);
+  });
+
+  it("空白のみのエントリも除去する", () => {
+    expect(parseSeedTenantIds("demo,   ,tenant-a")).toEqual([
+      "demo",
+      "tenant-a",
+    ]);
   });
 });
