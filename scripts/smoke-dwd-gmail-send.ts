@@ -39,6 +39,8 @@
  *   - 既存 DWD 基盤: services/api/src/services/google-auth.ts
  */
 
+import { pathToFileURL } from "node:url";
+
 import { google } from "googleapis";
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import { sanitizeErrorForAudit } from "../services/api/src/services/dispatch/dispatch-error-sanitizer.js";
@@ -165,6 +167,7 @@ async function getDwdKey(): Promise<{ client_email: string; private_key: string 
 function buildRawMime(opts: {
   to: string;
   sender: string;
+  subjectEmail: string;
   subject: string;
 }): string {
   // Gmail API messages.send は base64url エンコード済の MIME を期待
@@ -176,11 +179,12 @@ function buildRawMime(opts: {
     'Content-Type: text/plain; charset="UTF-8"',
     "Content-Transfer-Encoding: 7bit",
     "",
-    "This is a DWD smoke test message for DXcollege completion notification system.",
-    "If you received this, the DWD subject = dxcollege@279279.net is working.",
+    "This is a SendAs smoke test for the DXcollege completion notification system (ADR-037).",
+    "If you received this with the From header below, the SendAs send path is working:",
+    `  - DWD subject mailbox (Sent folder owner): ${opts.subjectEmail}`,
+    `  - MIME From (受信者表示、SendAs 経由偽装):  ${opts.sender}`,
     "",
-    "Phase 0-A-4 (OQ-2) smoke check",
-    "Related: docs/specs/2026-05-20-completion-notification-design.md",
+    "Related: docs/adr/ADR-037-completion-notification-sender-impersonation.md",
   ].join("\r\n");
 
   return Buffer.from(body, "utf-8").toString("base64url");
@@ -231,6 +235,7 @@ async function main(): Promise<void> {
   const raw = buildRawMime({
     to: opts.to,
     sender: opts.sender, // MIME From は SendAs で偽装される表示用
+    subjectEmail: opts.subjectEmail,
     subject: opts.subject,
   });
   console.log(`  ✓ MIME size: ${raw.length} bytes (base64url)`);
@@ -262,8 +267,13 @@ async function main(): Promise<void> {
 }
 
 // テスト import 時に main() が走らないようにエントリポイント判定する。
-// `scripts/audit-allowlist-status.ts` の isMainEntry パターン踏襲。
-const isMainEntry = import.meta.url === `file://${process.argv[1]}`;
+// `pathToFileURL` を使うのは、パスに空白 / `#` / 非 ASCII 文字が含まれるとき
+// `import.meta.url` が URL encode されるのに対し、生パス比較では一致しなくなる
+// (CLI 実行時に silent skip) のを防ぐため (codex review 2026-05-23 PR #486 指摘)。
+// `process.argv[1]` が undefined な実行 (node -e 等) では false に倒す。
+const isMainEntry =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMainEntry) main().catch((err) => {
   // PR #442 review Critical 3 対応:
