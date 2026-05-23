@@ -92,12 +92,19 @@ export default function DispatchSettingsPage() {
   const loadSettings = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setSaveError(null); // 前回の保存エラーを持ち越さない
+    setNotice(null);
     try {
       const data = await superFetchRef.current<GetDispatchSettingsResponse>(
         "/api/v2/super/dispatch/settings",
       );
       setForm(toFormState(data));
     } catch (e) {
+      // 早期 return を廃止し条件 render に変更したので、form を null 化しないと
+      // 前回成功時の値が残ったまま error と同時表示される。AC-23 の 409 reload は
+      // 409 を catch する前に loadSettings の try ブロックに入るため、新値を取得して
+      // setForm が成功すれば form は最新値で上書きされる。
+      setForm(null);
       setError(getDispatchErrorMessage(e, "設定の取得に失敗しました"));
     } finally {
       setLoading(false);

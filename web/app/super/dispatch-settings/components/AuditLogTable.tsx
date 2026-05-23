@@ -213,8 +213,15 @@ export function AuditLogTable() {
             aria-label="ユーザー ID"
           />
         </div>
+        {/*
+          datetime-local の値 ("YYYY-MM-DDTHH:mm") は `new Date()` でブラウザ local time
+          として解釈されるため、label を「(JST)」と固定せず「(ローカル時刻)」とする。
+          本プロダクトのユーザーは多くが JST 環境のためほぼ JST 入力になるが、海外出張中
+          等で異なる timezone のブラウザを使う場合は local time として送信される。
+          厳密な JST 強制が必要になった時点で +09:00 suffix の付与等を検討する。
+        */}
         <div className="space-y-1">
-          <label className="text-xs">From (JST)</label>
+          <label className="text-xs">From (ローカル時刻)</label>
           <Input
             type="datetime-local"
             className="w-44"
@@ -224,7 +231,7 @@ export function AuditLogTable() {
           />
         </div>
         <div className="space-y-1">
-          <label className="text-xs">To (JST)</label>
+          <label className="text-xs">To (ローカル時刻)</label>
           <Input
             type="datetime-local"
             className="w-44"

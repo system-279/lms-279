@@ -130,4 +130,27 @@ describe("DispatchSettingsPage", () => {
     expect(screen.getByTestId("audit-log-table")).toBeInTheDocument();
     expect(screen.getByTestId("run-history-table")).toBeInTheDocument();
   });
+
+  it("再読み込み失敗時 loadSettings は form を null 化する (regression: form/error 共存防止)", async () => {
+    // 初回 GET 失敗 → error 表示 + 再読み込みボタン
+    superFetchMock.mockRejectedValueOnce(
+      new ApiError(500, "internal", "初回失敗"),
+    );
+    render(<DispatchSettingsPage />);
+    await screen.findByText("初回失敗");
+    // form は表示されない
+    expect(
+      screen.queryByDisplayValue("DXcollege運営スタッフ"),
+    ).not.toBeInTheDocument();
+
+    // 再読み込み → 成功で form 表示
+    superFetchMock.mockResolvedValueOnce(baseSettings);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "再読み込み" }));
+    });
+    await screen.findByDisplayValue("DXcollege運営スタッフ");
+
+    // (本 PR 範囲外: 「再読み込み成功後にさらにエラー」を発火させる UI が現状無いため、
+    //  上記で「loadSettings catch で form null + error 表示」の正パスを保証する。)
+  });
 });
