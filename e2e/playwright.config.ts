@@ -22,6 +22,9 @@ export default defineConfig({
         AUTH_MODE: "dev",
         PORT: "8080",
         E2E_TEST_ENABLED: "true",
+        // dispatch-settings-api.spec で super-admin emulation を有効化
+        // (X-User-Email: admin@example.com を super として認識させる)
+        SUPER_ADMIN_EMAILS: "admin@example.com",
       },
     },
     {
