@@ -1,0 +1,123 @@
+name: Dispatch Dry Run
+
+# DXcollege 自動完了通知 dry-run admin SDK CLI workflow (Phase 8 Step 5 代替)。
+#
+# 目的:
+#   `/super/dispatch-settings` UI の「ドライラン」ボタン (撤廃予定) を経由せず、
+#   workflow_dispatch + Firestore admin SDK で次回 cron 配信対象 + MIME プレビューを取得する。
+#
+# 安全性:
+#   - 完全 read-only (Gmail 送信なし、Firestore write なし)
+#   - 既存 services/api/src/services/dispatch/{firestore-tenant-data-loader,firestore-dispatch-storage}
+#     を直接利用するため本番 logic と query 構造が完全一致
+#
+# 出力:
+#   - workflow log (stdout): 結果 JSON 全文
+#   - artifact: dispatch-dry-run-result-*.json (30 日保持)
+#   - $GITHUB_STEP_SUMMARY: 対象件数サマリ
+#
+# セキュリティ: workflow_dispatch 入力は本 workflow では受け取らない (固定動作)。
+# 参考: https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+#
+# 関連:
+#   - 設計仕様書: docs/specs/2026-05-20-completion-notification-design.md §8 / AC-8
+#   - playbook: docs/runbook/dxcollege-completion-notification-cutover.md Step 5
+#   - スクリプト: scripts/dispatch-dry-run-cli.ts
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  dry-run:
+    name: Dispatch Dry Run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FIREBASE_PROJECT_ID: lms-279
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared-types
+        # scripts/dispatch-dry-run-cli.ts は @lms-279/shared-types から DispatchSettings を
+        # import するため build 必須 (package.json main が dist/index.js を指す)。
+        run: npm run build -w @lms-279/shared-types
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
+
+      - name: Run dispatch dry-run CLI
+        env:
+          GOOGLE_CLOUD_PROJECT: lms-279
+          DXCOLLEGE_SENDER_EMAIL: dxcollege@279279.net
+        run: |
+          set -euo pipefail
+          npx tsx scripts/dispatch-dry-run-cli.ts
+
+      - name: Upload result artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dispatch-dry-run-${{ github.run_id }}
+          path: dispatch-dry-run-result-*.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Summarize result
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          result_files=(dispatch-dry-run-result-*.json)
+          RESULT_FILE="${result_files[0]:-}"
+          if [ -z "$RESULT_FILE" ]; then
+            {
+              echo "## Dispatch Dry Run"
+              echo ""
+              echo "結果 JSON が見つかりません。スクリプトが異常終了した可能性があります。"
+              echo "Run ステップの実行ログで原因を確認してください。"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          EVALUATED_AT=$(jq -r '.evaluatedAt' "$RESULT_FILE")
+          SETTINGS_LOADED=$(jq -r '.settingsLoaded' "$RESULT_FILE")
+          TENANTS_SCANNED=$(jq -r '.tenantsScanned' "$RESULT_FILE")
+          WOULD_NOTIFY_COUNT=$(jq -r '.wouldNotifyCount' "$RESULT_FILE")
+          ENABLED=$(jq -r '.settingsSnapshot.enabled // "null"' "$RESULT_FILE")
+          DOW=$(jq -rc '.settingsSnapshot.scheduleDaysOfWeek // "null"' "$RESULT_FILE")
+          HOUR=$(jq -r '.settingsSnapshot.scheduleHourJst // "null"' "$RESULT_FILE")
+          {
+            echo "## Dispatch Dry Run"
+            echo ""
+            echo "| 項目 | 値 |"
+            echo "|---|---|"
+            echo "| evaluatedAt | $EVALUATED_AT |"
+            echo "| settingsLoaded | $SETTINGS_LOADED |"
+            echo "| settings.enabled | $ENABLED |"
+            echo "| settings.scheduleDaysOfWeek | $DOW |"
+            echo "| settings.scheduleHourJst | $HOUR |"
+            echo "| tenantsScanned | $TENANTS_SCANNED |"
+            echo "| **wouldNotifyCount** | **$WOULD_NOTIFY_COUNT** |"
+            echo ""
+            if [ "$WOULD_NOTIFY_COUNT" -gt 0 ]; then
+              echo "### 対象一覧 (上位 10 件)"
+              echo ""
+              jq -r '.wouldNotify | .[0:10] | .[] | "- \(.tenantId) / \(.userId) / \(.userEmail) (\(.userName))"' "$RESULT_FILE" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "次回 cron で送信される対象はありません。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
