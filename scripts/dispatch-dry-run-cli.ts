@@ -52,7 +52,10 @@ import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import { FirestoreDispatchStorage } from "../services/api/src/services/dispatch/firestore-dispatch-storage.js";
 import { FirestoreTenantDataLoader } from "../services/api/src/services/dispatch/firestore-tenant-data-loader.js";
 import { evaluateCompletionEligibility } from "../services/api/src/services/dispatch/completion-eligibility.js";
-import { validateSingleEmail } from "../services/api/src/services/dispatch/cc-email-validator.js";
+import {
+  validateAndDedupeCcEmails,
+  validateSingleEmail,
+} from "../services/api/src/services/dispatch/cc-email-validator.js";
 import { buildCompletionMail } from "../services/api/src/services/dispatch/completion-notification-mail.js";
 import { sanitizeErrorForAudit } from "../services/api/src/services/dispatch/dispatch-error-sanitizer.js";
 import type { DispatchSettings } from "@lms-279/shared-types";
@@ -155,14 +158,12 @@ export async function runDryRunCli(db: Firestore): Promise<DryRunResultCli> {
   const storage = new FirestoreDispatchStorage(db);
   const loader = new FirestoreTenantDataLoader(db);
 
-  // ① settings 読み取り (なければ default を使い、preview のみ提供)
-  let settings: DispatchSettings | null = null;
-  try {
-    settings = await storage.getDispatchSettings();
-  } catch (err) {
-    // settings 読み取り失敗は致命ではない (preview なら default で進行)
-    console.error(`WARN: getDispatchSettings failed: ${sanitizeErrorForAudit(err)}`);
-  }
+  // ① settings 読み取り
+  // doc missing (storage.getDispatchSettings が null 返却) は許容: 初期化前の cutover
+  // リハーサル想定で default 文言を埋めて preview を返す。
+  // read/parse error (throw) は cutover 判断材料の整合性に直結するため致命扱いし、
+  // workflow を失敗させる (codex review 2026-05-24 PR #488 Low-1 反映)。
+  const settings: DispatchSettings | null = await storage.getDispatchSettings();
 
   const signature = settings?.signatureName ?? DEFAULT_SIGNATURE;
   const messageBody = settings?.completionMessageBody ?? DEFAULT_BODY;
@@ -223,11 +224,15 @@ export async function runDryRunCli(db: Firestore): Promise<DryRunResultCli> {
         signatureName: signature,
       });
 
-      const ccList: string[] = [];
-      if (ccConfig.ownerEmail) ccList.push(ccConfig.ownerEmail);
-      for (const cc of ccConfig.notificationCcEmails ?? []) {
-        if (cc && !ccList.includes(cc)) ccList.push(cc);
-      }
+      // CC 組立は本番送信側 (run-completion-notifications.ts) と完全同期させるため、
+      // validateAndDedupeCcEmails を使う (trim / 形式検証 / CRLF・カンマ排除 /
+      // case-insensitive dedupe を実施)。codex review (2026-05-24 PR #488 Medium-1) で
+      // 本番ロジック (gmail-dwd-send.ts) との preview ドリフトを指摘されたため反映。
+      const ccResult = validateAndDedupeCcEmails(
+        ccConfig.notificationCcEmails ?? [],
+        ccConfig.ownerEmail,
+      );
+      const ccList = ccResult.validCcEmails;
 
       wouldNotify.push({
         tenantId,
