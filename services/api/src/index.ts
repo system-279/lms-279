@@ -19,6 +19,7 @@ import { helpRoleRouter } from "./routes/help-role.js";
 import { publicRouter } from "./routes/public.js";
 import { createInternalDispatchRouter } from "./routes/internal/dispatch.js";
 import { createDispatchSuperRouter } from "./routes/super/dispatch-super-router.js";
+import { InMemoryTenantCcConfigStore } from "./routes/super/tenant-notification-cc.js";
 import { superAdminAuthMiddleware } from "./middleware/super-admin.js";
 import { buildDispatchFactory } from "./services/dispatch/factory.js";
 import { logger } from "./utils/logger.js";
@@ -199,6 +200,20 @@ app.use("/api/v2/super", superAdminRouter);
 // 明示的に superAdminAuthMiddleware を適用し、auth 依存を self-contained にする
 // (本番 GCP で factory build 失敗時は dispatchFactory=null となり mount をスキップ)。
 if (dispatchFactory) {
+  // in-memory モード時のみ、ccStore も in-memory に差し替える
+  // (FirestoreTenantCcConfigStore は Firestore credential 必須で CI / dev で 500)。
+  // seed tenant は env DISPATCH_IN_MEMORY_SEED_TENANTS (カンマ区切り) で指定。
+  // 本番 (firestore mode) では undefined を渡し、router default の Firestore wiring を使う。
+  const inMemoryCcStore =
+    dispatchFactory.mode === "in-memory"
+      ? new InMemoryTenantCcConfigStore({
+          seedTenantIds: (process.env.DISPATCH_IN_MEMORY_SEED_TENANTS ?? "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0),
+        })
+      : undefined;
+
   app.use(
     "/api/v2/super",
     superAdminAuthMiddleware,
@@ -206,6 +221,7 @@ if (dispatchFactory) {
       storage: dispatchFactory.storage,
       loader: dispatchFactory.loader,
       env: dispatchFactory.env,
+      ccStore: inMemoryCcStore,
     }),
   );
   logger.info("Super dispatch router mounted", { mode: dispatchFactory.mode });

@@ -25,6 +25,15 @@ export default defineConfig({
         // dispatch-settings-api.spec で super-admin emulation を有効化
         // (X-User-Email: admin@example.com を super として認識させる)
         SUPER_ADMIN_EMAILS: "admin@example.com",
+        // dispatch factory を in-memory モードで mount し、CI で Firestore credential 不要にする。
+        // 本番 GCP runtime (K_SERVICE 等) では factory が throw して silent fallback を防ぐ。
+        DISPATCH_USE_IN_MEMORY: "true",
+        // in-memory モード時の env (factory.ts IN_MEMORY_DEFAULTS と整合、実送信は発生しない)
+        DXCOLLEGE_SENDER_EMAIL: "in-memory-from@example.invalid",
+        DXCOLLEGE_DISPATCH_SUBJECT: "in-memory-subject@example.invalid",
+        DISPATCH_OIDC_AUDIENCE: "https://in-memory.example.invalid",
+        // dispatch-settings-api.spec が demo tenant の CC 取得を期待するため seed する
+        DISPATCH_IN_MEMORY_SEED_TENANTS: "demo",
       },
     },
     {
