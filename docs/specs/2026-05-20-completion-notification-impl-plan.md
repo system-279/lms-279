@@ -194,7 +194,7 @@ Phase 1 (基礎 services、並列実装可能 7 ファイル)
 - tenant CC は tenant doc (`tenants/{tenantId}`) を直接 set({merge:true}) で更新 (TenantCcConfigStore で injectable)。AC-24 は入力件数 11 以上で 400、AC-25 は各要素 validateSingleEmail で個別拒否。
 - audit-logs / runs は storage 全件取得 + route で in-memory filter/sort/cursor paginate (小規模 + TTL 365 日、composite index 不要)。存在しない cursor は終端扱い (空ページ + null) で client 再ループを防止。
 - dispatch super router は superAdminRouter の後に mount し、superAdminAuthMiddleware を明示適用 (auth self-contained、頻出 /super パスでの二重 auth を回避)。
-- test-send は To=req.superAdmin.email 強制 + 固定ダミー + CC なし、testSendLimiter で 50/日/email (in-memory store、複数インスタンス間非共有を許容)。
+- ~~test-send~~ (撤廃 2026-05-24 PR-B): testSendLimiter / dispatch-test-send.ts / dispatch-dry-run.ts は削除済み、代替は admin SDK workflow (`dispatch-dry-run.yml` / `smoke-dwd-gmail-send.yml`)
 
 | File | endpoint | 関連 AC |
 |---|---|---|
@@ -202,14 +202,13 @@ Phase 1 (基礎 services、並列実装可能 7 ファイル)
 | `routes/super/dispatch-audit-logs.ts` | GET `/api/v2/super/dispatch/audit-logs` | - |
 | `routes/super/dispatch-runs.ts` | GET `/api/v2/super/dispatch/runs` | - |
 | `routes/super/tenant-notification-cc.ts` | GET/PUT `/api/v2/super/tenants/:tenantId/notification-cc-emails` | AC-24, AC-25 |
-| `routes/super/dispatch-dry-run.ts` | POST `/api/v2/super/dispatch/dry-run` | AC-8 |
-| `routes/super/dispatch-test-send.ts` | POST `/api/v2/super/dispatch/test-send` | AC-9 |
+| ~~`routes/super/dispatch-dry-run.ts`~~ | ~~POST `/api/v2/super/dispatch/dry-run`~~ | 撤廃 (PR-B)、代替: `scripts/dispatch-dry-run-cli.ts` |
+| ~~`routes/super/dispatch-test-send.ts`~~ | ~~POST `/api/v2/super/dispatch/test-send`~~ | 撤廃 (PR-B)、代替: `scripts/smoke-dwd-gmail-send.ts` |
 
 **Phase 5 完了条件**:
 - 各 endpoint で既存 super-admin auth middleware 適用 (AC-31)
-- test-send は固定ダミーデータ + 添付なし + To=superAdmin.email 強制
 - 楽観的ロック (version) で 409 を返す確認
-- レート制限 (test-send 1 日 50 件) の確認
+- (~~test-send 固定ダミー / レート制限 50 件~~ は PR-B で撤廃済み、scope 外)
 
 ### Phase 6: Frontend UI
 
@@ -221,8 +220,8 @@ Phase 1 (基礎 services、並列実装可能 7 ファイル)
 | `web/app/super/dispatch-settings/components/MessageBodyEditor.tsx` | プレビュー付き textarea | Jest |
 | `web/app/super/dispatch-settings/components/AuditLogTable.tsx` | 履歴一覧 (フィルタ) | Jest |
 | `web/app/super/dispatch-settings/components/RunHistoryTable.tsx` | run 履歴 | Jest |
-| `web/app/super/dispatch-settings/components/DryRunPanel.tsx` | ドライラン結果 | Jest |
-| `web/app/super/dispatch-settings/components/TestSendButton.tsx` | テスト送信 | Jest |
+| ~~`DryRunPanel.tsx`~~ | ~~ドライラン結果~~ | 撤廃 (2026-05-24 PR-B)、代替: `dispatch-dry-run.yml` workflow |
+| ~~`TestSendButton.tsx`~~ | ~~テスト送信~~ | 撤廃 (2026-05-24 PR-B)、代替: `smoke-dwd-gmail-send.yml` workflow |
 
 **Phase 6 完了条件**:
 - Playwright E2E で「設定変更 → DB 反映 → audit_logs 記録」を確認
@@ -241,22 +240,24 @@ Phase 1 (基礎 services、並列実装可能 7 ファイル)
 | ADR 起票 | ✅ ADR-037 (sender impersonation) 既に起票済 (2026-05-21)。Phase 7 では追加 ADR 必要に応じて起票 |
 | deploy.yml 更新 | 必要に応じて (env 追加分) |
 
-### Phase 8: Smoke check + Cutover
+### Phase 8: Smoke check + Cutover (2026-05-24 PR-B で UI 撤廃 + AI 代替に改訂)
 
 | Step | 内容 | 担当 |
 |---|---|---|
-| 1 | 本番デプロイ前、`super_dispatch_settings/global.enabled = false` で初期化 | エンジニア |
-| 2 | 本番デプロイ実行 (deploy.yml workflow) | エンジニア |
-| 3 | Cloud Run 起動確認、Cloud Scheduler 1 回起動を待つ (kill switch なので何もしない) | エンジニア |
-| 4 | test-send 実行 → スーパー管理者自身宛にダミーメール受信確認 | エンジニア |
-| 5 | dry-run 実行 → 次回 cron で送信される対象一覧確認 | エンジニア |
-| 6 | 一覧を本田様にレビュー、対象が期待通りか確認 | 本田様 |
-| 7 | 本田様の明示承認 (番号単位の認可、CLAUDE.md 4 原則 §3) | 本田様 |
-| 8 | `enabled = true` に切替 (UI から実施) | エンジニア |
+| 0 | SendAs 登録 (`system@279279.net` Gmail で `dxcollege@279279.net` を SendAs alias) | 開発者 (Workspace UI) |
+| 1 | `super_dispatch_settings/global` 暫定書込 (enabled=false 強制) — `dispatch-settings-write.yml` | AI |
+| 2 | 本番デプロイ (deploy.yml workflow) | AI 認可後 |
+| 3 | Cloud Run 起動確認 + Cloud Scheduler 1 回起動 (kill switch で no-op) | AI |
+| **4a** | SendAs send smoke (`smoke-dwd-gmail-send.yml`、固定 dummy + 開発者宛) | AI trigger / 開発者受信目視 |
+| ~~4b~~ | ~~test-send 実行~~ | 撤廃 (Step 4a で代替) |
+| 5 | dry-run で対象一覧 + MIME プレビュー (`dispatch-dry-run.yml`、admin SDK 経由) | AI |
+| 6 | 対象一覧 + MIME プレビューを開発者にレビュー、期待通りか確認 | 開発者 |
+| 7 | 開発者の明示承認 (番号単位の認可、CLAUDE.md 4 原則 §3) | 開発者 |
+| 8 | `enabled = true` に切替 (Web UI から本番運用フェーズの本格設定 + 切替) | スーパー管理者 (Web UI) |
 | 9 | 次の cron 起動 (最大 60 分以内) で初回本番送信 | (自動) |
-| 10 | 初回送信件数を audit_logs / run_history で確認 | エンジニア |
-| 11 | 受信受講者・テナント担当者からの問い合わせ受付 | 本田様 |
-| 12 | 問題発生時は即時 `enabled = false` で kill switch | エンジニア |
+| 10 | 初回送信件数を audit_logs / run_history で確認 | AI |
+| 11 | 受信受講者・テナント担当者からの問い合わせ受付 | 開発者 |
+| 12 | 問題発生時は即時 `enabled = false` で kill switch (Web UI から) | スーパー管理者 (Web UI) |
 
 ---
 
@@ -362,8 +363,8 @@ Phase 1 (基礎 services、並列実装可能 7 ファイル)
 2. ScheduleEditor で「月木の 09:00」設定 → 保存 → DB 反映確認
 3. TenantCcEditor で `a@example.com` 追加 → chip 表示 → 保存
 4. TenantCcEditor で CRLF 含む文字列を入力 → エラー表示
-5. test-send ボタン押下 → スーパー管理者自身に Gmail 届く (mock 検証)
-6. dry-run ボタン押下 → 一覧表示
+5. ~~test-send ボタン押下~~ (撤廃 2026-05-24 PR-B): smoke-dwd-gmail-send.yml workflow_dispatch で代替
+6. ~~dry-run ボタン押下~~ (撤廃 2026-05-24 PR-B): dispatch-dry-run.yml workflow_dispatch で代替
 7. スーパー管理者以外でアクセス → 401/403
 
 ### 5.3 Quality Gate

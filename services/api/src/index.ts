@@ -226,7 +226,6 @@ if (dispatchFactory) {
     superAdminAuthMiddleware,
     createDispatchSuperRouter({
       storage: dispatchFactory.storage,
-      loader: dispatchFactory.loader,
       env: dispatchFactory.env,
       ccStore: inMemoryCcStore,
     }),

@@ -258,47 +258,11 @@ export interface GetAuditLogsResponse {
 }
 
 // ============================================================
-// Dry-run
-// ============================================================
-
-export interface DryRunTarget {
-  tenantId: string;
-  userId: string;
-  /** 受講者 email (UI 表示用、PII 含むためログには出さない) */
-  userEmail: string;
-  userName: string;
-  progressSnapshot: CompletionNotificationProgressSnapshot;
-}
-
-export interface DryRunResponse {
-  /** 次回 cron で送信される対象一覧 (Gmail 送信も Reservation も実行されない) */
-  wouldNotify: DryRunTarget[];
-  /** 評価時刻 (ISO 8601) */
-  evaluatedAt: string;
-}
-
-// ============================================================
-// Test-send (固定ダミーデータ + 添付なし、スーパー管理者自身宛)
-// ============================================================
-
-export interface TestSendResponse {
-  /** Gmail API messageId */
-  messageId: string;
-  /** 送信先 (スーパー管理者自身の email) */
-  sentTo: string;
-  sentAt: string;
-}
-
-export type TestSendErrorCode =
-  | "rate_limit_exceeded"
-  | "gmail_api_error"
-  | "gmail_api_transient"
-  | "dwd_token_failed"
-  | "unauthorized"
-  | "forbidden";
-
-// test-send 1 日あたりレート制限は DISPATCH_CONSTRAINTS.TEST_SEND_DAILY_LIMIT を参照
-
+// Dry-run / Test-send は 2026-05-24 PR-B で UI 撤廃に伴い削除済み
+//   - dry-run の代替: scripts/dispatch-dry-run-cli.ts + .github/workflows/dispatch-dry-run.yml
+//   - test-send の代替: scripts/smoke-dwd-gmail-send.ts + .github/workflows/smoke-dwd-gmail-send.yml
+//     (SendAs send smoke、固定 dummy + 開発者宛)
+// 関連: 設計仕様書 FR-8 / AC-8 / AC-9 (UI 撤廃に伴い改訂)
 // ============================================================
 // Reservation transaction の結果 (内部 service 用)
 // ============================================================
@@ -332,8 +296,7 @@ export const DISPATCH_CONSTRAINTS = {
   SIGNATURE_NAME_MAX_LENGTH: 100,
   /** completionMessageBody 文字数上限 */
   COMPLETION_MESSAGE_BODY_MAX_LENGTH: 4000,
-  /** test-send 1 日あたり上限 */
-  TEST_SEND_DAILY_LIMIT: 50,
+  // TEST_SEND_DAILY_LIMIT は 2026-05-24 PR-B で test-send UI 撤廃に伴い削除
   /** Reservation lease 期限 (ミリ秒) */
   RESERVATION_LEASE_MS: 10 * 60 * 1000,
   /** Dispatch run lease 期限 (ミリ秒、Cloud Run 300 秒に余裕) */

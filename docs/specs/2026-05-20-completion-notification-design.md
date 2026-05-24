@@ -55,7 +55,7 @@
 | **FR-5 (改訂)** | DWD なりすまし送信 (`subject=DXCOLLEGE_DISPATCH_SUBJECT` env、Gmail mailbox を持つ実ユーザー、初期値 `system@279279.net`)、専用 scope `gmail.send`、From ヘッダは `DXCOLLEGE_SENDER_EMAIL` (`dxcollege@279279.net`) を SendAs 経由で偽装する (ADR-037 案 X) |
 | FR-6 | `To` = 受講者本人、`Cc` = `ownerEmail` + `tenants/{tenantId}.notificationCcEmails` (各 email を個別 validate、重複排除) |
 | **FR-7 (改訂)** | **送信前に Firestore transaction で `completion_notifications/{userId}` を `reserved` 状態で create**。取得できた worker のみ Gmail 送信。送信成功後に `sent` に更新 (Codex Critical-1+3) |
-| FR-8 | スーパー管理者が `/super/dispatch-settings` で設定編集、配信履歴閲覧、ドライラン、テスト送信を実行可能 |
+| **FR-8 (改訂 2026-05-24 PR-B)** | スーパー管理者が `/super/dispatch-settings` で設定編集 / 配信履歴閲覧 / 監査ログ閲覧を実行可能。~~ドライラン / テスト送信~~ は UI から撤廃し admin SDK workflow に移行 (`.github/workflows/dispatch-dry-run.yml` / `.github/workflows/smoke-dwd-gmail-send.yml`、AI 代替経路) |
 | FR-9 | テナントごとの `notificationCcEmails` をスーパー管理者が編集可能 (chips UI、上限 10 件) |
 | FR-10 | kill switch (`enabled: false`) は次回 cron 起動時に即時反映 |
 | **FR-11 (新規)** | **run-level lock**: 同一時刻に Cloud Scheduler 重複起動された場合、`super_dispatch_runs/{runId}` を Firestore transaction で create することで二重実行を防止 (Codex Important-3) |
@@ -71,7 +71,7 @@
 | NFR-4 | audit_logs は Firestore TTL Policy で 1 年自動削除 |
 | NFR-5 | user 1 件あたりの PDF 生成は 30 秒 timeout、超過時は user スキップ |
 | NFR-6 | 設定変更は楽観的ロック (version フィールド)、競合時 409 |
-| NFR-7 | test-send は 1 日 50 件レート制限、**固定ダミーデータ + 添付なし** (本番 PII 複製を防止、Codex Important-8) |
+| ~~NFR-7~~ (撤廃 2026-05-24 PR-B) | ~~test-send は 1 日 50 件レート制限、固定ダミーデータ + 添付なし~~ → UI / API endpoint 撤廃に伴い不要。SendAs 経路検証は `smoke-dwd-gmail-send.yml` (workflow_dispatch 手動 trigger、scope 制限で代替) |
 | NFR-8 | 送信元 email は Cloud Run 環境変数 `DXCOLLEGE_SENDER_EMAIL` で固定 (Secret Manager 不使用、機密性なし) |
 | NFR-9 | DWD SA キーは既存 Secret Manager `dwd-workspace-key` を継承。**`gmail.send` scope は専用 client (`getGmailClientForSender`) に分離し、既存共通 `SCOPES` に追加しない** (Codex Important-1) |
 | NFR-10 | 既存の手動 Gmail 下書き機能 (PR #434) の動作には一切影響を与えない |
@@ -310,8 +310,8 @@ brainstorm Phase 3-1 確定 + Codex Important-5: **案 C (全コース完了で 
 | GET | `/api/v2/super/dispatch/runs` | 過去の run 履歴取得 |
 | GET | `/api/v2/super/tenants/:tenantId/notification-cc-emails` | テナント CC 設定取得 |
 | PUT | `/api/v2/super/tenants/:tenantId/notification-cc-emails` | テナント CC 設定更新 |
-| POST | `/api/v2/super/dispatch/dry-run` | 次回 cron で送信される対象一覧返却 (送信なし) |
-| POST | `/api/v2/super/dispatch/test-send` | スーパー管理者自身宛に**固定ダミーデータ**でテスト送信 (添付なし、1 日 50 件レート制限) |
+| ~~POST~~ | ~~`/api/v2/super/dispatch/dry-run`~~ | 撤廃 (2026-05-24 PR-B)。代替: `scripts/dispatch-dry-run-cli.ts` + `.github/workflows/dispatch-dry-run.yml` |
+| ~~POST~~ | ~~`/api/v2/super/dispatch/test-send`~~ | 撤廃 (2026-05-24 PR-B)。代替: `scripts/smoke-dwd-gmail-send.ts` + `.github/workflows/smoke-dwd-gmail-send.yml` (SendAs 経路検証) |
 
 ### 5.2 モジュール構成 (新規ファイル)
 
@@ -325,8 +325,9 @@ services/api/src/
       dispatch-audit-logs.ts               # GET audit_logs
       dispatch-runs.ts                     # GET runs (NEW)
       tenant-notification-cc.ts            # GET/PUT tenant の CC 設定
-      dispatch-dry-run.ts                  # POST dry-run
-      dispatch-test-send.ts                # POST test-send (固定ダミー)
+      # dispatch-dry-run.ts / dispatch-test-send.ts は 2026-05-24 PR-B で撤廃
+      # 代替: scripts/dispatch-dry-run-cli.ts + .github/workflows/dispatch-dry-run.yml
+      #       scripts/smoke-dwd-gmail-send.ts + .github/workflows/smoke-dwd-gmail-send.yml
   services/
     dispatch/
       run-completion-notifications.ts      # メインロジック (Reservation 方式)
@@ -354,8 +355,8 @@ web/app/super/dispatch-settings/
     MessageBodyEditor.tsx                  # プレビュー付き
     AuditLogTable.tsx
     RunHistoryTable.tsx                    # run 単位の履歴 (NEW)
-    DryRunPanel.tsx
-    TestSendButton.tsx                     # 固定ダミーで送信
+    # DryRunPanel.tsx / TestSendButton.tsx は 2026-05-24 PR-B で撤廃
+    # 代替: admin SDK workflow (dispatch-dry-run.yml / smoke-dwd-gmail-send.yml)
 ```
 
 ### 5.3 既存ファイルへの変更 (Codex Important-1 反映)
@@ -632,15 +633,14 @@ UI からの直接削除ボタンは提供しない (誤操作リスク回避、
 - `run-completion-notifications` 本体: 100% 完了者のみ送信 / 未通知のみ送信 / transient 失敗で reservation 維持 / permanent 失敗で failed_permanent 記録 / 二重実行で idempotent / kill switch / スケジュール不一致 / run lock 重複起動拒否 / lease 期限切れで manual_review_required
 - 各 super-admin API endpoint: 楽観的ロック (409) / 入力 validation / audit_logs 書き込み / レート制限
 - 内部 API: OIDC 認証必須、Cloud Scheduler SA のみ許可
-- test-send: ダミーデータ固定、添付なし、To = superAdmin.email 強制
-- dry-run: 送信せず対象一覧返却、Reservation も書かない
+- ~~test-send~~ (撤廃 2026-05-24 PR-B): 代替は smoke-dwd-gmail-send.yml workflow_dispatch
+- ~~dry-run~~ (撤廃 2026-05-24 PR-B): 代替は dispatch-dry-run.yml workflow_dispatch
 
 #### E2E Tests (Playwright)
 
 - スーパー管理者で `/super/dispatch-settings` アクセス
 - 設定変更 → audit_logs 反映
-- dry-run 実行 → 一覧表示
-- test-send 実行 → mock で確認 (Gmail API は完全 mock、O-1)
+- (~~dry-run 実行 → 一覧表示~~ / ~~test-send 実行~~ は UI 撤廃により対象外、2026-05-24 PR-B)
 
 ### 7.2 Acceptance Criteria
 
@@ -655,8 +655,8 @@ UI からの直接削除ボタンは提供しない (誤操作リスク回避、
 - **AC-5**: 完了通知本文に `completionMessageBody` 設定値 + `signatureName` 設定値が含まれる
 - **AC-6**: スケジュール曜日・時刻が現在 JST と一致しない時は何もしない
 - **AC-7**: `enabled: false` で kill switch (cron 起動時に即時何もしない)
-- **AC-8**: dry-run は 100% 完了対象を返すが Gmail 送信も Reservation も実行しない
-- **AC-9**: test-send はスーパー管理者自身宛に**固定ダミーデータ + 添付なし**で送信、1 日 50 件レート制限 (Important-8 反映)
+- ~~**AC-8**~~ (移行 2026-05-24 PR-B): dry-run は UI から撤廃。代替は `scripts/dispatch-dry-run-cli.ts` + `.github/workflows/dispatch-dry-run.yml` (admin SDK、完全 read-only、Gmail 送信なし / Firestore write なし / Reservation なし)
+- ~~**AC-9**~~ (移行 2026-05-24 PR-B): test-send は UI から撤廃。代替は `scripts/smoke-dwd-gmail-send.ts` + `.github/workflows/smoke-dwd-gmail-send.yml` (固定 dummy + 開発者宛、SendAs 経路検証専用)
 
 #### Reservation / Race AC (Codex Critical-1+3 反映)
 
