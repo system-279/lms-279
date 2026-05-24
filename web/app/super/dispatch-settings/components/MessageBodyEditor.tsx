@@ -66,7 +66,7 @@ export function MessageBodyEditor({
           />
           <div className="flex justify-between text-xs">
             <span className="text-muted-foreground">
-              改行・制御文字は使用できません。
+              改行や特殊な記号は使えません。
             </span>
             <span
               className={
@@ -100,7 +100,7 @@ export function MessageBodyEditor({
           />
           <div className="flex justify-between text-xs">
             <span className="text-muted-foreground">
-              改行 (LF) は使用できます。
+              改行は使えます。
             </span>
             <span
               className={
@@ -126,7 +126,7 @@ export function MessageBodyEditor({
             : ""}
         </div>
         <p className="text-xs text-muted-foreground">
-          冒頭の宛名は受講者名で置き換わります。
+          メール冒頭の「〇〇 様」の部分は、配信時に受講者の氏名に置き換わります。
         </p>
       </div>
     </div>

@@ -47,20 +47,26 @@ type FilterEventType = typeof ALL_EVENT_TYPES | DispatchAuditEventType;
 
 const EVENT_TYPE_OPTIONS: { value: FilterEventType; label: string }[] = [
   { value: ALL_EVENT_TYPES, label: "すべて" },
-  { value: "run_started", label: "Run 開始" },
-  { value: "run_completed", label: "Run 完了" },
-  { value: "run_aborted", label: "Run 中断" },
-  { value: "user_reserved", label: "ユーザー予約" },
-  { value: "user_notified", label: "ユーザー通知済" },
-  { value: "user_skipped", label: "ユーザー skip" },
-  { value: "user_failed_transient", label: "一時失敗" },
-  { value: "user_failed_permanent", label: "永続失敗" },
-  { value: "manual_review_required", label: "手動確認要" },
-  { value: "settings_updated", label: "設定更新" },
+  { value: "run_started", label: "配信開始" },
+  { value: "run_completed", label: "配信完了" },
+  { value: "run_aborted", label: "配信中断" },
+  { value: "user_reserved", label: "送信予約" },
+  { value: "user_notified", label: "送信成功" },
+  { value: "user_skipped", label: "送信スキップ" },
+  { value: "user_failed_transient", label: "送信失敗（一時的）" },
+  { value: "user_failed_permanent", label: "送信失敗（恒久）" },
+  { value: "manual_review_required", label: "要手動確認" },
+  { value: "settings_updated", label: "設定変更" },
   { value: "test_send", label: "テスト送信" },
   { value: "dry_run", label: "ドライラン" },
-  { value: "orphan_send", label: "孤児送信" },
+  { value: "orphan_send", label: "想定外の送信" },
 ];
+
+/** badge 表示用: eventType 値 → 日本語 label に変換（未知の値は値そのまま表示） */
+function eventTypeLabel(eventType: DispatchAuditEventType): string {
+  const opt = EVENT_TYPE_OPTIONS.find((o) => o.value === eventType);
+  return opt ? opt.label : eventType;
+}
 
 interface FilterState {
   eventType: FilterEventType;
@@ -139,7 +145,7 @@ export function AuditLogTable() {
         setNextCursor(data.nextCursor);
       } catch (e) {
         if (requestIdRef.current !== myRequestId) return;
-        setError(getDispatchErrorMessage(e, "監査ログの取得に失敗しました"));
+        setError(getDispatchErrorMessage(e, "操作・配信の記録の取得に失敗しました"));
       } finally {
         if (requestIdRef.current === myRequestId) {
           setLoading(false);
@@ -204,13 +210,13 @@ export function AuditLogTable() {
           />
         </div>
         <div className="space-y-1">
-          <label className="text-xs">ユーザー ID</label>
+          <label className="text-xs">受講者 ID</label>
           <Input
             className="w-32"
             value={filter.userId}
             onChange={(e) => setFilter({ ...filter, userId: e.target.value })}
             placeholder="任意"
-            aria-label="ユーザー ID"
+            aria-label="受講者 ID"
           />
         </div>
         {/*
@@ -242,7 +248,7 @@ export function AuditLogTable() {
         </div>
         {/* disabled にしない: ユーザーが連打しても requestId 方式で古い fetch は破棄される */}
         <Button variant="outline" onClick={handleApply}>
-          適用
+          絞り込む
         </Button>
       </div>
 
@@ -259,17 +265,17 @@ export function AuditLogTable() {
 
       {!error && logs.length === 0 && !loading ? (
         <div className="rounded-md border p-4 text-sm text-muted-foreground text-center">
-          該当する監査ログはありません
+          該当する記録はありません
         </div>
       ) : !error ? (
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>発生時刻</TableHead>
-              <TableHead>イベント</TableHead>
+              <TableHead>発生日時</TableHead>
+              <TableHead>種別</TableHead>
               <TableHead>テナント</TableHead>
-              <TableHead>ユーザー</TableHead>
-              <TableHead>エラー</TableHead>
+              <TableHead>受講者</TableHead>
+              <TableHead>エラー内容</TableHead>
               <TableHead className="text-right">処理時間</TableHead>
             </TableRow>
           </TableHeader>
@@ -280,8 +286,8 @@ export function AuditLogTable() {
                   {formatDateTime(log.createdAt)}
                 </TableCell>
                 <TableCell>
-                  <Badge variant="outline" className="font-mono">
-                    {log.eventType}
+                  <Badge variant="outline">
+                    {eventTypeLabel(log.eventType)}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-xs">{log.tenantId ?? "-"}</TableCell>
@@ -316,7 +322,7 @@ export function AuditLogTable() {
         )}
         {nextCursor && !loading && !error && (
           <Button variant="outline" onClick={handleLoadMore}>
-            次の件を読み込む
+            続きを読み込む
           </Button>
         )}
       </div>

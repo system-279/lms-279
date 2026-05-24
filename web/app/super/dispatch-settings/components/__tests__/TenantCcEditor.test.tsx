@@ -118,7 +118,7 @@ describe("TenantCcForm", () => {
     renderForm();
     expect(await screen.findByText("cc1@example.com")).toBeInTheDocument();
     expect(screen.getByText("cc2@example.com")).toBeInTheDocument();
-    expect(screen.getByText(/オーナー:/)).toHaveTextContent(
+    expect(screen.getByText(/テナント代表メール:/)).toHaveTextContent(
       "owner@example.com",
     );
     expect(screen.getByText("追加 CC (2 / 10)")).toBeInTheDocument();
@@ -200,7 +200,7 @@ describe("TenantCcForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "追加" }));
 
     expect(
-      await screen.findByText("既に登録されているメールアドレスです。"),
+      await screen.findByText("このメールアドレスはすでに登録されています。"),
     ).toBeInTheDocument();
     expect(screen.getByText("追加 CC (2 / 10)")).toBeInTheDocument();
   });

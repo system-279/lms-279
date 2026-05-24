@@ -57,21 +57,21 @@ describe("AuditLogTable", () => {
       nextCursor: null,
     } satisfies GetAuditLogsResponse);
     render(<AuditLogTable />);
-    expect(await screen.findByText("user_notified")).toBeInTheDocument();
-    expect(screen.getByText("run_started")).toBeInTheDocument();
+    expect(await screen.findByText("送信成功")).toBeInTheDocument();
+    expect(screen.getByText("配信開始")).toBeInTheDocument();
     expect(superFetchMock).toHaveBeenCalledWith(
       "/api/v2/super/dispatch/audit-logs",
     );
   });
 
-  it("空応答時は「該当する監査ログはありません」を表示", async () => {
+  it("空応答時は「該当する記録はありません」を表示", async () => {
     superFetchMock.mockResolvedValueOnce({
       logs: [],
       nextCursor: null,
     } satisfies GetAuditLogsResponse);
     render(<AuditLogTable />);
     expect(
-      await screen.findByText("該当する監査ログはありません"),
+      await screen.findByText("該当する記録はありません"),
     ).toBeInTheDocument();
   });
 
@@ -85,7 +85,7 @@ describe("AuditLogTable", () => {
       screen.getByRole("button", { name: "再読み込み" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("該当する監査ログはありません"),
+      screen.queryByText("該当する記録はありません"),
     ).not.toBeInTheDocument();
   });
 
@@ -101,17 +101,17 @@ describe("AuditLogTable", () => {
       } satisfies GetAuditLogsResponse);
 
     render(<AuditLogTable />);
-    await screen.findByText("user_notified");
+    await screen.findByText("送信成功");
 
     fireEvent.change(screen.getByLabelText("テナント ID"), {
       target: { value: "tenant-x" },
     });
-    fireEvent.change(screen.getByLabelText("ユーザー ID"), {
+    fireEvent.change(screen.getByLabelText("受講者 ID"), {
       target: { value: "user-y" },
     });
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "適用" }));
+      fireEvent.click(screen.getByRole("button", { name: "絞り込む" }));
     });
 
     await waitFor(() =>
@@ -123,8 +123,8 @@ describe("AuditLogTable", () => {
     expect(lastUrl).toContain("userId=user-y");
 
     // 結果配列は 2 回目だけになる (1 回目の a1 は消える)
-    expect(await screen.findByText("run_aborted")).toBeInTheDocument();
-    expect(screen.queryByText("user_notified")).not.toBeInTheDocument();
+    expect(await screen.findByText("配信中断")).toBeInTheDocument();
+    expect(screen.queryByText("送信成功")).not.toBeInTheDocument();
   });
 
   it("nextCursor があれば「次の件を読み込む」で append する", async () => {
@@ -139,15 +139,15 @@ describe("AuditLogTable", () => {
       } satisfies GetAuditLogsResponse);
 
     render(<AuditLogTable />);
-    await screen.findByText("user_notified");
+    await screen.findByText("送信成功");
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "次の件を読み込む" }));
+      fireEvent.click(screen.getByRole("button", { name: "続きを読み込む" }));
     });
 
     // append で両方表示される
-    expect(await screen.findByText("settings_updated")).toBeInTheDocument();
-    expect(screen.getByText("user_notified")).toBeInTheDocument();
+    expect(await screen.findByText("設定変更")).toBeInTheDocument();
+    expect(screen.getByText("送信成功")).toBeInTheDocument();
     // 2 回目の URL には cursor=cursor-2 が含まれる
     const lastUrl = superFetchMock.mock.calls.at(-1)![0] as string;
     expect(lastUrl).toContain("cursor=cursor-2");
@@ -160,7 +160,7 @@ describe("AuditLogTable", () => {
       nextCursor: null,
     } satisfies GetAuditLogsResponse);
     render(<AuditLogTable />);
-    await screen.findByText("user_notified");
+    await screen.findByText("送信成功");
 
     // 2 回目 fetch を pending にする (slow fetch を模す)
     let resolveSlow: (v: GetAuditLogsResponse) => void = () => {};
@@ -168,17 +168,17 @@ describe("AuditLogTable", () => {
       resolveSlow = r;
     });
     superFetchMock.mockImplementationOnce(() => slowPromise);
-    fireEvent.click(screen.getByRole("button", { name: "適用" }));
+    fireEvent.click(screen.getByRole("button", { name: "絞り込む" }));
 
     // 3 回目 fetch を即解決 (連打 = ユーザーが filter を変えて再適用したシナリオ)
     superFetchMock.mockResolvedValueOnce({
       logs: [mkLog("newest", { eventType: "settings_updated" })],
       nextCursor: null,
     } satisfies GetAuditLogsResponse);
-    fireEvent.click(screen.getByRole("button", { name: "適用" }));
+    fireEvent.click(screen.getByRole("button", { name: "絞り込む" }));
 
     // 3 回目の結果が最終的に表示される
-    await screen.findByText("settings_updated");
+    await screen.findByText("設定変更");
 
     // 2 回目 fetch (slow) を後着で解決 → 古い requestId なので結果は破棄される
     await act(async () => {
@@ -189,9 +189,9 @@ describe("AuditLogTable", () => {
     });
 
     expect(
-      screen.queryByText("user_failed_permanent"),
+      screen.queryByText("送信失敗（恒久）"),
     ).not.toBeInTheDocument();
-    expect(screen.getByText("settings_updated")).toBeInTheDocument();
+    expect(screen.getByText("設定変更")).toBeInTheDocument();
   });
 
   it("再読み込みボタンで activeFilter (最後に適用したもの) で再取得", async () => {
@@ -210,6 +210,6 @@ describe("AuditLogTable", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "再読み込み" }));
     });
-    expect(await screen.findByText("user_notified")).toBeInTheDocument();
+    expect(await screen.findByText("送信成功")).toBeInTheDocument();
   });
 });

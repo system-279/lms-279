@@ -50,6 +50,22 @@ function statusBadgeClass(status: DispatchRunStatus): string {
   return "";
 }
 
+/** ステータス値 → 日本語 label（未知の値は値そのまま表示） */
+function statusLabel(status: DispatchRunStatus): string {
+  switch (status) {
+    case "running":
+      return "実行中";
+    case "completed":
+      return "正常終了";
+    case "timeout":
+      return "タイムアウト";
+    case "aborted":
+      return "中断";
+    default:
+      return status;
+  }
+}
+
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString("ja-JP");
 }
@@ -85,7 +101,7 @@ export function RunHistoryTable() {
         setNextCursor(data.nextCursor);
       } catch (e) {
         if (requestIdRef.current !== myRequestId) return;
-        setError(getDispatchErrorMessage(e, "Run 履歴の取得に失敗しました"));
+        setError(getDispatchErrorMessage(e, "自動配信の実行履歴の取得に失敗しました"));
       } finally {
         if (requestIdRef.current === myRequestId) {
           setLoading(false);
@@ -123,21 +139,21 @@ export function RunHistoryTable() {
 
       {!error && runs.length === 0 && !loading ? (
         <div className="rounded-md border p-4 text-sm text-muted-foreground text-center">
-          Run 履歴はありません
+          配信実行の履歴はまだありません
         </div>
       ) : !error ? (
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Run ID</TableHead>
-              <TableHead>起動時刻</TableHead>
-              <TableHead>ステータス</TableHead>
-              <TableHead className="text-right">テナント</TableHead>
-              <TableHead className="text-right">送信</TableHead>
-              <TableHead className="text-right">スキップ</TableHead>
-              <TableHead className="text-right">失敗</TableHead>
+              <TableHead>実行 ID</TableHead>
+              <TableHead>実行日時</TableHead>
+              <TableHead>状態</TableHead>
+              <TableHead className="text-right">対象テナント数</TableHead>
+              <TableHead className="text-right">送信数</TableHead>
+              <TableHead className="text-right">スキップ数</TableHead>
+              <TableHead className="text-right">失敗数</TableHead>
               <TableHead className="text-right">要確認</TableHead>
-              <TableHead>中断理由</TableHead>
+              <TableHead>中断・エラーの理由</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -152,7 +168,7 @@ export function RunHistoryTable() {
                     variant={statusBadgeVariant(run.status)}
                     className={statusBadgeClass(run.status)}
                   >
-                    {run.status}
+                    {statusLabel(run.status)}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-right text-xs">
@@ -183,7 +199,7 @@ export function RunHistoryTable() {
         )}
         {nextCursor && !loading && !error && (
           <Button variant="outline" onClick={handleLoadMore}>
-            次の件を読み込む
+            続きを読み込む
           </Button>
         )}
       </div>

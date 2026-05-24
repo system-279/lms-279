@@ -30,7 +30,7 @@ describe("ScheduleEditor", () => {
   it("曜日未選択時は警告を表示", () => {
     render(<ScheduleEditor daysOfWeek={[]} hourJst={0} onChange={vi.fn()} />);
     expect(
-      screen.getByText("曜日が未選択のため配信されません。"),
+      screen.getByText("曜日を 1 つ以上選んでください。未選択のままだと配信されません。"),
     ).toBeInTheDocument();
   });
 });

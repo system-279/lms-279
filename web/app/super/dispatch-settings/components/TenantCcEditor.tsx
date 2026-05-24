@@ -63,7 +63,7 @@ function reasonMessage(reason: ClientValidationReason): string {
     case "format":
       return "メールアドレスの形式が正しくありません。";
     case "duplicate":
-      return "既に登録されているメールアドレスです。";
+      return "このメールアドレスはすでに登録されています。";
   }
 }
 
@@ -151,7 +151,7 @@ export function TenantCcForm({
   const handleAdd = () => {
     setDraftError(null);
     if (emails.length >= MAX_CC) {
-      setDraftError(`CC は最大 ${MAX_CC} 件までです。`);
+      setDraftError(`CC は 1 テナントあたり最大 ${MAX_CC} 件まで登録できます。`);
       return;
     }
     const result = validateClientCcEmail(draft);
@@ -235,8 +235,8 @@ export function TenantCcForm({
       </label>
 
       <p className="text-xs text-muted-foreground">
-        オーナー: <span className="font-mono">{config.ownerEmail ?? "(未設定)"}</span>{" "}
-        (read-only、テナント編集画面で変更)
+        テナント代表メール: <span className="font-mono">{config.ownerEmail ?? "（未設定）"}</span>{" "}
+        （変更は「テナント管理」画面から）
       </p>
 
       <div className="space-y-2">
@@ -244,7 +244,7 @@ export function TenantCcForm({
           追加 CC ({emails.length} / {MAX_CC})
         </label>
         {emails.length === 0 ? (
-          <p className="text-xs text-muted-foreground">追加 CC は未登録です。</p>
+          <p className="text-xs text-muted-foreground">追加の CC は登録されていません。</p>
         ) : (
           <div className="flex flex-wrap gap-1.5" data-testid="cc-chips">
             {emails.map((e) => (
