@@ -26,8 +26,10 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { ScheduleEditor } from "./components/ScheduleEditor";
 import { MessageBodyEditor } from "./components/MessageBodyEditor";
-import { DryRunPanel } from "./components/DryRunPanel";
-import { TestSendButton } from "./components/TestSendButton";
+// 2026-05-24 PR-B: テスト送信 / ドライランボタンの UI は撤廃。
+// 代替の admin SDK workflow:
+//   - dry-run: .github/workflows/dispatch-dry-run.yml
+//   - test-send: .github/workflows/smoke-dwd-gmail-send.yml (SendAs smoke)
 import { TenantCcEditor } from "./components/TenantCcEditor";
 import { AuditLogTable } from "./components/AuditLogTable";
 import { RunHistoryTable } from "./components/RunHistoryTable";
@@ -243,19 +245,6 @@ export default function DispatchSettingsPage() {
             <span className="text-xs text-muted-foreground">version {form.version}</span>
           </div>
 
-          <Section
-            title="ドライラン"
-            description="次回配信される対象を送信せずに確認します。"
-          >
-            <DryRunPanel />
-          </Section>
-
-          <Section
-            title="テスト送信"
-            description="設定中の送信経路を、自分宛の固定ダミーメールで確認します。"
-          >
-            <TestSendButton />
-          </Section>
         </>
       )}
 

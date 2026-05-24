@@ -202,35 +202,34 @@ gh workflow run smoke-dwd-gmail-send.yml \
 - `system@279279.net` の Gmail 受信トレイに smoke メールが届く
 - **From ヘッダが `DXcollege運営スタッフ <dxcollege@279279.net>` で表示される** (SendAs 経由偽装が成立)
 
-### 4b. test-send (super-admin UI)
+### 4b. test-send — 撤廃 (2026-05-24 PR-B)
 
-1. 開発者がブラウザで `/super/dispatch-settings` の「テスト送信」ボタンを押下
-2. 自身宛にダミーデータ (固定テナント / 固定受講者名 / 添付なし) で送信される
+UI の「テスト送信」ボタン + `/api/v2/super/dispatch/test-send` endpoint は撤廃済み。SendAs 経路の検証は Step 4a (`smoke-dwd-gmail-send.yml`) で完了しているため追加の test-send は不要。
 
-#### 期待結果
+設定値 (本文 / 署名 / CC) を反映した完全な MIME プレビューは **Step 5 (dry-run admin SDK)** で取得する。
 
-- 受信したメールの From: `dxcollege@279279.net`
-- 件名・本文・署名が `signatureName=DXcollege運営スタッフ` を含む
-- CC に開発者自身が入る (test-send は CC を実テナント値からコピーしない、固定挙動)
-
-### 失敗時
+### 失敗時 (Step 4a smoke のみ)
 
 | 症状 | 原因候補 | 対処 |
 |---|---|---|
 | smoke 401 unauthorized_client | `--subject-email` が Group エイリアスのまま | `subject_email=system@279279.net` を確認 |
 | smoke 400 invalidArgument / SendAs not configured | Step 0 未完了 | Step 0 を再実行 |
-| test-send は届くが From が `system@279279.net` のまま | SendAs 登録は ON だが「次のステップ」未完了 | Gmail 設定で再確認 |
-| test-send レート制限 (50/day) 到達 | smoke 過剰実行 | 翌日まで待つ |
 
 ---
 
-## Step 5: dry-run で対象一覧取得 (AI 主導)
+## Step 5: dry-run で対象一覧取得 (AI 主導、2026-05-24 PR-B で UI 撤廃 → admin SDK 経由)
 
 ### 手順
 
-1. 開発者がブラウザで `/super/dispatch-settings` の「ドライラン」ボタン押下
-2. UI に対象テナント / 受講者 / 100% 完了コース数のサマリが表示される
-3. AI は表示内容を screenshot or テキストで開発者から共有してもらう
+UI の「ドライラン」ボタンは撤廃済み。AI が `dispatch-dry-run.yml` workflow を起動して対象一覧 + MIME プレビューを取得:
+
+```bash
+gh workflow run dispatch-dry-run.yml --ref main
+```
+
+または GitHub UI で「Dispatch Dry Run」を Run workflow。
+
+AI が完了監視 → `gh run download <run-id>` で artifact (`dispatch-dry-run-result-*.json`) 取得 → JSON を解析して開発者に提示。
 
 ### 期待結果
 

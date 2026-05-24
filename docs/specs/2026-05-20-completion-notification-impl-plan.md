@@ -241,22 +241,24 @@ Phase 1 (基礎 services、並列実装可能 7 ファイル)
 | ADR 起票 | ✅ ADR-037 (sender impersonation) 既に起票済 (2026-05-21)。Phase 7 では追加 ADR 必要に応じて起票 |
 | deploy.yml 更新 | 必要に応じて (env 追加分) |
 
-### Phase 8: Smoke check + Cutover
+### Phase 8: Smoke check + Cutover (2026-05-24 PR-B で UI 撤廃 + AI 代替に改訂)
 
 | Step | 内容 | 担当 |
 |---|---|---|
-| 1 | 本番デプロイ前、`super_dispatch_settings/global.enabled = false` で初期化 | エンジニア |
-| 2 | 本番デプロイ実行 (deploy.yml workflow) | エンジニア |
-| 3 | Cloud Run 起動確認、Cloud Scheduler 1 回起動を待つ (kill switch なので何もしない) | エンジニア |
-| 4 | test-send 実行 → スーパー管理者自身宛にダミーメール受信確認 | エンジニア |
-| 5 | dry-run 実行 → 次回 cron で送信される対象一覧確認 | エンジニア |
-| 6 | 一覧を本田様にレビュー、対象が期待通りか確認 | 本田様 |
-| 7 | 本田様の明示承認 (番号単位の認可、CLAUDE.md 4 原則 §3) | 本田様 |
-| 8 | `enabled = true` に切替 (UI から実施) | エンジニア |
+| 0 | SendAs 登録 (`system@279279.net` Gmail で `dxcollege@279279.net` を SendAs alias) | 開発者 (Workspace UI) |
+| 1 | `super_dispatch_settings/global` 暫定書込 (enabled=false 強制) — `dispatch-settings-write.yml` | AI |
+| 2 | 本番デプロイ (deploy.yml workflow) | AI 認可後 |
+| 3 | Cloud Run 起動確認 + Cloud Scheduler 1 回起動 (kill switch で no-op) | AI |
+| **4a** | SendAs send smoke (`smoke-dwd-gmail-send.yml`、固定 dummy + 開発者宛) | AI trigger / 開発者受信目視 |
+| ~~4b~~ | ~~test-send 実行~~ | 撤廃 (Step 4a で代替) |
+| 5 | dry-run で対象一覧 + MIME プレビュー (`dispatch-dry-run.yml`、admin SDK 経由) | AI |
+| 6 | 対象一覧 + MIME プレビューを開発者にレビュー、期待通りか確認 | 開発者 |
+| 7 | 開発者の明示承認 (番号単位の認可、CLAUDE.md 4 原則 §3) | 開発者 |
+| 8 | `enabled = true` に切替 (Web UI から本番運用フェーズの本格設定 + 切替) | スーパー管理者 (Web UI) |
 | 9 | 次の cron 起動 (最大 60 分以内) で初回本番送信 | (自動) |
-| 10 | 初回送信件数を audit_logs / run_history で確認 | エンジニア |
-| 11 | 受信受講者・テナント担当者からの問い合わせ受付 | 本田様 |
-| 12 | 問題発生時は即時 `enabled = false` で kill switch | エンジニア |
+| 10 | 初回送信件数を audit_logs / run_history で確認 | AI |
+| 11 | 受信受講者・テナント担当者からの問い合わせ受付 | 開発者 |
+| 12 | 問題発生時は即時 `enabled = false` で kill switch (Web UI から) | スーパー管理者 (Web UI) |
 
 ---
 
