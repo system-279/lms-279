@@ -1,0 +1,153 @@
+name: Dispatch Settings Write
+
+# DXcollege 自動完了通知 dispatch-settings 暫定書込 workflow (テスト段階限定)。
+#
+# 目的:
+#   Phase 8 cutover のテスト段階で AI が `super_dispatch_settings/global` doc を
+#   admin SDK 経由で upsert する。`/super/dispatch-settings` UI ボタン (撤廃予定) を
+#   経由せず、本番 ID Token 取得経路を整備せずに Firestore 直書きで設定する。
+#
+# 本 workflow はテスト段階限定:
+#   - 本番運用開始時はスーパー管理者が Web UI から自分の運用方針で設定し直す
+#   - その時点で本 workflow による暫定値は UI 経由で上書きされる
+#   - 撤廃候補は PR-B 以降の整理対象
+#
+# 安全機構:
+#   - enabled は input から受け取らず常に false 強制 (CLI 側、kill switch)
+#   - 既存 dispatch-storage.ts の updateDispatchSettings を使う (本番 logic と楽観的
+#     ロック / version increment / merge 動作を完全同期)
+#   - 入力検証: scheduleDaysOfWeek 各 0-6 / scheduleHourJst 0-23 /
+#     signatureName 1-100 chars / completionMessageBody 1-4000 chars
+#
+# セキュリティ: workflow_dispatch 入力は全て env 経由で run: に渡し、直接 ${{ inputs.* }}
+# を補間しない (command injection 対策)。
+# 参考: https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+#
+# 関連:
+#   - 設計仕様書: docs/specs/2026-05-20-completion-notification-design.md §4.1.1
+#   - playbook: docs/runbook/dxcollege-completion-notification-cutover.md Step 1 (AI 代替)
+#   - スクリプト: scripts/dispatch-settings-write-cli.ts
+
+on:
+  workflow_dispatch:
+    inputs:
+      schedule_days_of_week:
+        description: '配信曜日 (CSV、0=日 1=月 ... 6=土。例: "1" / "1,4")'
+        required: true
+        default: '1'
+        type: string
+      schedule_hour_jst:
+        description: '配信時刻 JST (0-23)。例: 9'
+        required: true
+        default: '9'
+        type: string
+      signature_name:
+        description: '署名 (1-100 chars)。例: DXcollege運営スタッフ'
+        required: true
+        default: 'DXcollege運営スタッフ'
+        type: string
+      completion_message_body:
+        description: '本文 (1-4000 chars)'
+        required: true
+        default: '受講お疲れ様でした。全受講修了致しました。ご質問やご相談がありましたら、本メールにご返信ください。'
+        type: string
+      updated_by:
+        description: '更新者識別 (audit 用、未指定なら ai-test-cli@279279.net)'
+        required: false
+        default: 'ai-test-cli@279279.net'
+        type: string
+
+jobs:
+  write:
+    name: Write Settings
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FIREBASE_PROJECT_ID: lms-279
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared-types
+        run: npm run build -w @lms-279/shared-types
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
+
+      - name: Run dispatch-settings-write CLI
+        env:
+          GOOGLE_CLOUD_PROJECT: lms-279
+          DXCOLLEGE_SENDER_EMAIL: dxcollege@279279.net
+          SCHEDULE_DAYS_OF_WEEK: ${{ inputs.schedule_days_of_week }}
+          SCHEDULE_HOUR_JST: ${{ inputs.schedule_hour_jst }}
+          SIGNATURE_NAME: ${{ inputs.signature_name }}
+          COMPLETION_MESSAGE_BODY: ${{ inputs.completion_message_body }}
+          UPDATED_BY: ${{ inputs.updated_by }}
+        run: |
+          set -euo pipefail
+          npx tsx scripts/dispatch-settings-write-cli.ts \
+            "--schedule-days-of-week=$SCHEDULE_DAYS_OF_WEEK" \
+            "--schedule-hour-jst=$SCHEDULE_HOUR_JST" \
+            "--signature-name=$SIGNATURE_NAME" \
+            "--completion-message-body=$COMPLETION_MESSAGE_BODY" \
+            "--updated-by=$UPDATED_BY"
+
+      - name: Upload result artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dispatch-settings-write-${{ github.run_id }}
+          path: dispatch-settings-write-result-*.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Summarize result
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          result_files=(dispatch-settings-write-result-*.json)
+          RESULT_FILE="${result_files[0]:-}"
+          if [ -z "$RESULT_FILE" ]; then
+            {
+              echo "## Dispatch Settings Write"
+              echo ""
+              echo "結果 JSON が見つかりません。スクリプトが異常終了した可能性があります。"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          OUTCOME=$(jq -r '.outcome' "$RESULT_FILE")
+          PREV=$(jq -r '.previousVersion // "null"' "$RESULT_FILE")
+          NEW=$(jq -r '.newVersion // "null"' "$RESULT_FILE")
+          ENABLED=$(jq -r '.settings.enabled // "null"' "$RESULT_FILE")
+          DOW=$(jq -rc '.settings.scheduleDaysOfWeek // "null"' "$RESULT_FILE")
+          HOUR=$(jq -r '.settings.scheduleHourJst // "null"' "$RESULT_FILE")
+          SIG=$(jq -r '.settings.signatureName // "null"' "$RESULT_FILE")
+          BODY_LEN=$(jq -r '.settings.completionMessageBodyLength // "null"' "$RESULT_FILE")
+          {
+            echo "## Dispatch Settings Write"
+            echo ""
+            echo "| 項目 | 値 |"
+            echo "|---|---|"
+            echo "| outcome | $OUTCOME |"
+            echo "| previousVersion → newVersion | $PREV → $NEW |"
+            echo "| settings.enabled | $ENABLED |"
+            echo "| settings.scheduleDaysOfWeek | $DOW |"
+            echo "| settings.scheduleHourJst | $HOUR |"
+            echo "| settings.signatureName | $SIG |"
+            echo "| settings.completionMessageBodyLength | $BODY_LEN |"
+          } >> "$GITHUB_STEP_SUMMARY"
