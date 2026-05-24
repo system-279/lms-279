@@ -13,7 +13,7 @@ Step 0: 開発者が SendAs 登録 (UI)
 Step 1-3: enabled=false で初期化 → デプロイ確認 → cron no-op 確認 (AI 主導)
         │
         ▼
-Step 4-5: smoke send + test-send + dry-run で配送/対象を検証 (AI 主導、目視は開発者)
+Step 4-5: SendAs send smoke (Step 4a) + dry-run (Step 5、admin SDK workflow) で配送/対象を検証 (AI 主導、目視は開発者)
         │
         ▼
 Step 6-7: 対象一覧レビュー + 番号単位明示認可 (開発者必須)
@@ -46,7 +46,8 @@ Step 11-12: 問い合わせ受付 / kill switch (開発者 + AI)
 | 1 | dispatch-settings 初期化 (enabled=false) | ✅ | - |
 | 2 | 本番デプロイ | ⚠️ 認可後 AI | ✅ 番号認可 |
 | 3 | Cloud Run 起動 + cron no-op 確認 | ✅ | - |
-| 4 | SendAs send smoke + test-send | ✅ trigger / ⚠️ 目視 | ✅ 受信確認 |
+| 4a | SendAs send smoke (固定 dummy、開発者宛) | ✅ trigger | ✅ 受信目視 (From header 確認) |
+| ~~4b~~ | ~~test-send~~ | 撤廃 (2026-05-24 PR-B、Step 4a で代替) | - |
 | 5 | dry-run で対象一覧取得 | ✅ | - |
 | 6 | 対象一覧レビュー | ❌ | ✅ |
 | 7 | 本番有効化の明示認可 | ❌ | ✅ |

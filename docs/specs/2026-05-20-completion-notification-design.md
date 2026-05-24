@@ -310,8 +310,8 @@ brainstorm Phase 3-1 確定 + Codex Important-5: **案 C (全コース完了で 
 | GET | `/api/v2/super/dispatch/runs` | 過去の run 履歴取得 |
 | GET | `/api/v2/super/tenants/:tenantId/notification-cc-emails` | テナント CC 設定取得 |
 | PUT | `/api/v2/super/tenants/:tenantId/notification-cc-emails` | テナント CC 設定更新 |
-| POST | `/api/v2/super/dispatch/dry-run` | 次回 cron で送信される対象一覧返却 (送信なし) |
-| POST | `/api/v2/super/dispatch/test-send` | スーパー管理者自身宛に**固定ダミーデータ**でテスト送信 (添付なし、1 日 50 件レート制限) |
+| ~~POST~~ | ~~`/api/v2/super/dispatch/dry-run`~~ | 撤廃 (2026-05-24 PR-B)。代替: `scripts/dispatch-dry-run-cli.ts` + `.github/workflows/dispatch-dry-run.yml` |
+| ~~POST~~ | ~~`/api/v2/super/dispatch/test-send`~~ | 撤廃 (2026-05-24 PR-B)。代替: `scripts/smoke-dwd-gmail-send.ts` + `.github/workflows/smoke-dwd-gmail-send.yml` (SendAs 経路検証) |
 
 ### 5.2 モジュール構成 (新規ファイル)
 
@@ -325,8 +325,9 @@ services/api/src/
       dispatch-audit-logs.ts               # GET audit_logs
       dispatch-runs.ts                     # GET runs (NEW)
       tenant-notification-cc.ts            # GET/PUT tenant の CC 設定
-      dispatch-dry-run.ts                  # POST dry-run
-      dispatch-test-send.ts                # POST test-send (固定ダミー)
+      # dispatch-dry-run.ts / dispatch-test-send.ts は 2026-05-24 PR-B で撤廃
+      # 代替: scripts/dispatch-dry-run-cli.ts + .github/workflows/dispatch-dry-run.yml
+      #       scripts/smoke-dwd-gmail-send.ts + .github/workflows/smoke-dwd-gmail-send.yml
   services/
     dispatch/
       run-completion-notifications.ts      # メインロジック (Reservation 方式)
@@ -354,8 +355,8 @@ web/app/super/dispatch-settings/
     MessageBodyEditor.tsx                  # プレビュー付き
     AuditLogTable.tsx
     RunHistoryTable.tsx                    # run 単位の履歴 (NEW)
-    DryRunPanel.tsx
-    TestSendButton.tsx                     # 固定ダミーで送信
+    # DryRunPanel.tsx / TestSendButton.tsx は 2026-05-24 PR-B で撤廃
+    # 代替: admin SDK workflow (dispatch-dry-run.yml / smoke-dwd-gmail-send.yml)
 ```
 
 ### 5.3 既存ファイルへの変更 (Codex Important-1 反映)
@@ -632,15 +633,14 @@ UI からの直接削除ボタンは提供しない (誤操作リスク回避、
 - `run-completion-notifications` 本体: 100% 完了者のみ送信 / 未通知のみ送信 / transient 失敗で reservation 維持 / permanent 失敗で failed_permanent 記録 / 二重実行で idempotent / kill switch / スケジュール不一致 / run lock 重複起動拒否 / lease 期限切れで manual_review_required
 - 各 super-admin API endpoint: 楽観的ロック (409) / 入力 validation / audit_logs 書き込み / レート制限
 - 内部 API: OIDC 認証必須、Cloud Scheduler SA のみ許可
-- test-send: ダミーデータ固定、添付なし、To = superAdmin.email 強制
-- dry-run: 送信せず対象一覧返却、Reservation も書かない
+- ~~test-send~~ (撤廃 2026-05-24 PR-B): 代替は smoke-dwd-gmail-send.yml workflow_dispatch
+- ~~dry-run~~ (撤廃 2026-05-24 PR-B): 代替は dispatch-dry-run.yml workflow_dispatch
 
 #### E2E Tests (Playwright)
 
 - スーパー管理者で `/super/dispatch-settings` アクセス
 - 設定変更 → audit_logs 反映
-- dry-run 実行 → 一覧表示
-- test-send 実行 → mock で確認 (Gmail API は完全 mock、O-1)
+- (~~dry-run 実行 → 一覧表示~~ / ~~test-send 実行~~ は UI 撤廃により対象外、2026-05-24 PR-B)
 
 ### 7.2 Acceptance Criteria
 
