@@ -33,6 +33,7 @@ router.get("/auth/me", requireUser, async (req: Request, res: Response) => {
 
   res.json({
     user: req.user,
+    isSuperAdminAccess: req.isSuperAdminAccess ?? false,
     ...(tenantName && { tenantName }),
   });
 });
