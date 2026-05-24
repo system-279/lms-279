@@ -61,6 +61,7 @@ import {
 } from "firebase-admin/app";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 
+import { DISPATCH_CONSTRAINTS } from "@lms-279/shared-types";
 import { FirestoreDispatchStorage } from "../services/api/src/services/dispatch/firestore-dispatch-storage.js";
 import { sanitizeErrorForAudit } from "../services/api/src/services/dispatch/dispatch-error-sanitizer.js";
 
@@ -69,12 +70,43 @@ import { sanitizeErrorForAudit } from "../services/api/src/services/dispatch/dis
 // ============================================================
 
 const DEFAULT_UPDATED_BY = "ai-test-cli@279279.net";
-const SIGNATURE_MAX = 100;
-const BODY_MAX = 4000;
+// 文字数上限は UI endpoint と shared-types を経由して同一定数を使う (codex review
+// 2026-05-24 PR #489 Medium-1: validation 同期化)。
+const SIGNATURE_MAX = DISPATCH_CONSTRAINTS.SIGNATURE_NAME_MAX_LENGTH;
+const BODY_MAX = DISPATCH_CONSTRAINTS.COMPLETION_MESSAGE_BODY_MAX_LENGTH;
 const HOUR_MIN = 0;
 const HOUR_MAX = 23;
 const DAY_MIN = 0;
 const DAY_MAX = 6;
+
+// 厳格な整数 regex (parseInt の silent truncate を防ぐ、codex review Medium-2)。
+const HOUR_REGEX = /^([0-9]|1[0-9]|2[0-3])$/;
+const DAY_REGEX = /^[0-6]$/;
+
+/**
+ * C0 制御文字 (0x00 - 0x1F) を全て拒否する。
+ * UI endpoint `services/api/src/routes/super/dispatch-settings.ts:hasControlChar` と同等。
+ * signatureName 用 (MIME ヘッダ直接挿入を避けるため改行・制御文字いずれも不可)。
+ */
+function hasControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    if (value.charCodeAt(i) < 0x20) return true;
+  }
+  return false;
+}
+
+/**
+ * 本文用の禁止制御文字判定 (CR を含む C0 制御文字、ただし TAB 0x09 / LF 0x0a は許容)。
+ * UI endpoint `services/api/src/routes/super/dispatch-settings.ts:hasForbiddenBodyControlChar`
+ * と同等。本文中の改行は LF のみ許容、CR は MIME 組立時の混乱を防ぐため拒否。
+ */
+function hasForbiddenBodyControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i);
+    if (c < 0x20 && c !== 0x09 && c !== 0x0a) return true;
+  }
+  return false;
+}
 
 // ============================================================
 // 型定義
@@ -152,27 +184,49 @@ export function parseArgs(argv: string[]): CliOptions {
   // --schedule-days-of-week=1,3,5 → [1,3,5]
   const scheduleDaysOfWeek = parseScheduleDaysOfWeek(scheduleDaysOfWeekRaw);
 
-  const scheduleHourJst = Number.parseInt(scheduleHourJstRaw, 10);
-  if (
-    !Number.isFinite(scheduleHourJst) ||
-    scheduleHourJst < HOUR_MIN ||
-    scheduleHourJst > HOUR_MAX
-  ) {
+  // 厳格な整数 regex で raw string を完全一致検証してから Number() (parseInt の
+  // silent truncate 防止、codex review PR #489 Medium-2)。"9.9" や "9abc" が
+  // silently 9 にならないようにする。
+  if (!HOUR_REGEX.test(scheduleHourJstRaw.trim())) {
     throw new CliParseError(
-      `FATAL: --schedule-hour-jst must be integer in [${HOUR_MIN}, ${HOUR_MAX}] (got: ${scheduleHourJstRaw})`,
+      `FATAL: --schedule-hour-jst must match /^([0-9]|1[0-9]|2[0-3])$/ (got: ${scheduleHourJstRaw})`,
       2,
     );
   }
+  const scheduleHourJst = Number(scheduleHourJstRaw.trim());
 
+  // 署名: 1-100 chars + C0 制御文字全拒否 (UI endpoint hasControlChar と同期、
+  // codex review PR #489 Medium-1)。
   if (signatureName.length === 0 || signatureName.length > SIGNATURE_MAX) {
     throw new CliParseError(
       `FATAL: --signature-name length must be in [1, ${SIGNATURE_MAX}] (got: ${signatureName.length})`,
       2,
     );
   }
-  if (completionMessageBody.length === 0 || completionMessageBody.length > BODY_MAX) {
+  if (hasControlChar(signatureName)) {
     throw new CliParseError(
-      `FATAL: --completion-message-body length must be in [1, ${BODY_MAX}] (got: ${completionMessageBody.length})`,
+      "FATAL: --signature-name must not contain control characters (C0, 0x00-0x1F)",
+      2,
+    );
+  }
+
+  // 本文: 1-4000 chars (trim 後空拒否) + 禁止制御文字拒否 (CR を含む C0、TAB/LF は許容、
+  // UI endpoint hasForbiddenBodyControlChar と同期)。
+  if (completionMessageBody.length > BODY_MAX) {
+    throw new CliParseError(
+      `FATAL: --completion-message-body length must be <= ${BODY_MAX} (got: ${completionMessageBody.length})`,
+      2,
+    );
+  }
+  if (completionMessageBody.trim().length === 0) {
+    throw new CliParseError(
+      "FATAL: --completion-message-body must contain at least one non-whitespace character",
+      2,
+    );
+  }
+  if (hasForbiddenBodyControlChar(completionMessageBody)) {
+    throw new CliParseError(
+      "FATAL: --completion-message-body must not contain CR or control characters (except TAB/LF)",
       2,
     );
   }
@@ -208,13 +262,15 @@ export function parseScheduleDaysOfWeek(raw: string): number[] {
   }
   const result: number[] = [];
   for (const part of parts) {
-    const n = Number.parseInt(part, 10);
-    if (!Number.isFinite(n) || n < DAY_MIN || n > DAY_MAX) {
+    // 厳格な整数 regex で raw string を完全一致検証 (codex review PR #489 Medium-2)。
+    // "1.5" や "1abc" が silently 1 にならないようにする (parseInt の truncate 防止)。
+    if (!DAY_REGEX.test(part)) {
       throw new CliParseError(
-        `FATAL: --schedule-days-of-week entries must be integers in [${DAY_MIN}, ${DAY_MAX}] (got: ${part})`,
+        `FATAL: --schedule-days-of-week entries must match /^[0-6]$/ (got: ${part})`,
         2,
       );
     }
+    const n = Number(part);
     if (!result.includes(n)) result.push(n);
   }
   // sorted (deterministic order)
