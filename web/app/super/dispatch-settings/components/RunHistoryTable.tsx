@@ -101,7 +101,7 @@ export function RunHistoryTable() {
         setNextCursor(data.nextCursor);
       } catch (e) {
         if (requestIdRef.current !== myRequestId) return;
-        setError(getDispatchErrorMessage(e, "配信実行履歴の取得に失敗しました"));
+        setError(getDispatchErrorMessage(e, "自動配信の実行履歴の取得に失敗しました"));
       } finally {
         if (requestIdRef.current === myRequestId) {
           setLoading(false);
