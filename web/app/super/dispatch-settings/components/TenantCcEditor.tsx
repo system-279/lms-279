@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/select";
 import { useSuperAdminFetch } from "@/lib/super-api";
 import { getDispatchErrorMessage } from "../errorMessage";
+import { InlineFeedback } from "./InlineFeedback";
 
 const MAX_CC = DISPATCH_CONSTRAINTS.NOTIFICATION_CC_EMAILS_MAX;
 
@@ -310,14 +311,14 @@ export function TenantCcForm({
       </div>
 
       {saveError && (
-        <div className="rounded-md bg-destructive/10 p-3 text-destructive text-sm">
+        <InlineFeedback tone="error" onDismiss={() => setSaveError(null)}>
           {saveError}
-        </div>
+        </InlineFeedback>
       )}
       {notice && (
-        <div className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+        <InlineFeedback tone="success" onDismiss={() => setNotice(null)}>
           {notice}
-        </div>
+        </InlineFeedback>
       )}
       <div>
         <Button onClick={handleSave} disabled={!isDirty || saving}>

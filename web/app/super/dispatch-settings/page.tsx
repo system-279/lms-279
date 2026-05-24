@@ -33,6 +33,7 @@ import { MessageBodyEditor } from "./components/MessageBodyEditor";
 import { TenantCcEditor } from "./components/TenantCcEditor";
 import { AuditLogTable } from "./components/AuditLogTable";
 import { RunHistoryTable } from "./components/RunHistoryTable";
+import { InlineFeedback } from "./components/InlineFeedback";
 import { getDispatchErrorMessage } from "./errorMessage";
 
 interface FormState {
@@ -250,14 +251,14 @@ export default function DispatchSettingsPage() {
           </Section>
 
           {saveError && (
-            <div className="rounded-md bg-destructive/10 p-3 text-destructive text-sm">
+            <InlineFeedback tone="error" onDismiss={() => setSaveError(null)}>
               {saveError}
-            </div>
+            </InlineFeedback>
           )}
           {notice && (
-            <div className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+            <InlineFeedback tone="success" onDismiss={() => setNotice(null)}>
               {notice}
-            </div>
+            </InlineFeedback>
           )}
 
           <div className="flex items-center gap-3">
