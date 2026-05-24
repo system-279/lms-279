@@ -67,7 +67,7 @@ export function ScheduleEditor({
         </div>
         {daysOfWeek.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            曜日が未選択のため配信されません。
+            曜日を 1 つ以上選んでください。未選択のままだと配信されません。
           </p>
         )}
       </div>
@@ -93,7 +93,7 @@ export function ScheduleEditor({
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          選択した曜日のこの時刻台 (毎時 cron) に配信されます。
+          選択した曜日の指定時刻台に自動配信されます（例: 09:00 を選ぶと 09:00〜09:59 の間）。
         </p>
       </div>
     </div>

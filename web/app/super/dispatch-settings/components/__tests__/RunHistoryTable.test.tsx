@@ -57,21 +57,21 @@ describe("RunHistoryTable", () => {
     render(<RunHistoryTable />);
     expect(await screen.findByText("run-1")).toBeInTheDocument();
     expect(screen.getByText("run-2")).toBeInTheDocument();
-    // status badge
-    expect(screen.getByText("completed")).toBeInTheDocument();
-    expect(screen.getByText("aborted")).toBeInTheDocument();
+    // status badge (日本語 label)
+    expect(screen.getByText("正常終了")).toBeInTheDocument();
+    expect(screen.getByText("中断")).toBeInTheDocument();
     // abortedReason
     expect(screen.getByText("scope_revoked")).toBeInTheDocument();
   });
 
-  it("空応答時は「Run 履歴はありません」を表示", async () => {
+  it("空応答時は「配信実行の履歴はまだありません」を表示", async () => {
     superFetchMock.mockResolvedValueOnce({
       runs: [],
       nextCursor: null,
     } satisfies GetRunsResponse);
     render(<RunHistoryTable />);
     expect(
-      await screen.findByText("Run 履歴はありません"),
+      await screen.findByText("配信実行の履歴はまだありません"),
     ).toBeInTheDocument();
   });
 
@@ -85,7 +85,7 @@ describe("RunHistoryTable", () => {
       screen.getByRole("button", { name: "再読み込み" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("Run 履歴はありません"),
+      screen.queryByText("配信実行の履歴はまだありません"),
     ).not.toBeInTheDocument();
   });
 
@@ -104,12 +104,12 @@ describe("RunHistoryTable", () => {
     await screen.findByText("run-1");
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "次の件を読み込む" }));
+      fireEvent.click(screen.getByRole("button", { name: "続きを読み込む" }));
     });
 
     expect(await screen.findByText("run-2")).toBeInTheDocument();
     expect(screen.getByText("run-1")).toBeInTheDocument();
-    expect(screen.getByText("running")).toBeInTheDocument();
+    expect(screen.getByText("実行中")).toBeInTheDocument();
     const lastUrl = superFetchMock.mock.calls.at(-1)![0] as string;
     expect(lastUrl).toContain("cursor=next-cursor");
   });
@@ -149,7 +149,7 @@ describe("RunHistoryTable", () => {
           resolveSlow = r;
         }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "次の件を読み込む" }));
+    fireEvent.click(screen.getByRole("button", { name: "続きを読み込む" }));
 
     // 後着で解決 → 唯一の pending fetch なので requestId 一致で append される
     await act(async () => {
