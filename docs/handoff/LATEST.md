@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-**Phase 8 cutover「Step 8 以降は業務スーパー管理者領分」運用方針確定 + dispatch-settings UI 改善 2 件 (PR #494 / #495)**。Phase 8 Step 6 dry-run の結果から CC 設定の差異を検知 → 開発者 UI 確認で「全テナント要件と一致」確認 → AI が Step 7 認可までは受領したが、最終本番投入 (Step 8 マスタートグル ON) は **業務スーパー管理者がご自身で操作・判断する領分**と明文化。AI / 開発者は本番投入操作を代行しない。並行して dispatch-settings の UX を 2 段階で改善 (テナント管理直リンク化 + 保存/エラー通知の InlineFeedback 刷新)。
+**Phase 8 cutover「Step 8 以降は業務スーパー管理者領分」運用方針確定 + dispatch-settings UI 改善 2 件 (PR #494 / #495) + super admin バナー消失バグ修正 (PR #497)**。Phase 8 Step 6 dry-run の結果から CC 設定の差異を検知 → 開発者 UI 確認で「全テナント要件と一致」確認 → AI が Step 7 認可までは受領したが、最終本番投入 (Step 8 マスタートグル ON) は **業務スーパー管理者がご自身で操作・判断する領分**と明文化。AI / 開発者は本番投入操作を代行しない。並行して dispatch-settings の UX を 2 段階で改善 (テナント管理直リンク化 + 保存/エラー通知の InlineFeedback 刷新)。**Session 50 handoff (PR #496) マージ後、業務スーパー管理者がテナント画面に来たときに「スーパー管理者ページに戻る」赤バナーが表示されない事象を報告 → /auth/me API が isSuperAdminAccess を返していないバグと特定 → 1 行修正 (PR #497) で解消、本番反映後にブラウザで表示確認済**。
 
 | 主要成果 | 結果 |
 |---|---|
@@ -11,10 +11,11 @@
 | **運用方針確定: Step 8 (マスタートグル ON) は業務スーパー管理者領分** | ✅ AI/開発者は代行しない、本人の明示操作が起動条件 |
 | PR #494: テナント代表メール note「テナント管理」を /super/tenants 直リンク化 | ✅ merged + deployed |
 | PR #495: 保存/エラー通知を InlineFeedback (icon + accent + auto-dismiss + a11y) で刷新 | ✅ merged + deployed (`/fd` + `/safe-refactor` + `/code-review low` 通過) |
+| **PR #497: /auth/me に isSuperAdminAccess を含めるバグ修正 (super admin バナー消失)** | ✅ merged + deployed + 本番ブラウザで表示確認済 |
 | 業務スーパー管理者への引き継ぎ材料 | ✅ ヘルプ URL (`/help/super#super-dispatch-settings`) 既整備 (PR #492)、依頼方針は「リンク共有のみ、不明時補足」 |
 
 - **Issue Net**: 0 件 (Close 0 / 起票 0)
-- **マージ済 PR**: 2 件 (#494, #495)
+- **マージ済 PR**: 3 件 (#494, #495, #497) + handoff PR #496 / 本 PR (Session 50 追記)
 - **CI / Deploy**: ✅ 全 PASS
 - **Open Issue**: active 0 / postponed 4 (#274 / #275 / #276 / #405、変化なし)
 - **残留プロセス**: ✅ なし
@@ -42,12 +43,13 @@ gh issue list --state open --limit 15
 
 ---
 
-## マージ済 PR (2 件)
+## マージ済 PR (3 件)
 
 | # | タイトル | 種別 | 差分 | 主目的 |
 |---|---|---|---|---|
 | #494 | feat(dispatch-settings): テナント代表メール note の「テナント管理」を直リンク化 | feat | 1 file, +10/-1 | テナント代表メール変更導線の改善 (Phase 8 Step 6 で 3 テナント分の owner 確認を効率化) |
 | #495 | feat(dispatch-settings): 保存/エラー通知を InlineFeedback (icon + dismiss + auto-fade) で刷新 | feat | 3 files, +83/-8 | 「保存しました」等の inline 通知の視認性 / 一時性 / a11y を改善 (`/fd` skill + Quality Gate 通過) |
+| **#497** | **fix(auth): /auth/me response に isSuperAdminAccess を含める (super admin バナー消失修正)** | **fix** | **1 file, +1/-0** | **業務スーパー管理者がテナント管理画面に遷移したとき、ヘッダー上部に「スーパー管理者としてアクセス中 + ← スーパー管理者ページに戻る」赤バナーが表示されない既知不具合を修正。Session 50 handoff (PR #496) マージ後、開発者からの指摘で発覚** |
 
 ---
 
@@ -66,6 +68,27 @@ gh issue list --state open --limit 15
 - **Step 7 認可は技術ゲート、Step 8 実行は運用判断**: 技術側は「準備完了」を渡し、運用側が「投入タイミング」を決める
 - **引き継ぎ材料は既に整備済**: ヘルプ `/help/super#super-dispatch-settings` (PR #492) + UI 文言平易化 (PR #492) + テナント管理直リンク (PR #494) + 保存通知刷新 (PR #495) で、業務スーパー管理者が UI を理解する材料は揃った
 - **引き継ぎ方法は「リンク共有のみ、不明時補足」**: 長文の依頼文面は作らず、ヘルプ URL のみ共有し、業務スーパー管理者からの反応 (操作で迷った / 文言改善要望 等) を受けて補足説明
+
+### 3. /auth/me バグ修正 (#497)
+
+**背景**: Session 50 handoff (PR #496) マージ後、開発者から「スーパー管理者からテナント管理者画面に遷移した後、ヘッダーに『スーパー管理者画面に戻る』リンクが無い」との報告。
+
+**調査結果**:
+- `web/app/[tenant]/layout.tsx:113-127` に既存実装あり (赤バナー + 「← スーパー管理者ページに戻る」ボタン、`isSuperAdminAccess === true` で表示)
+- API `/auth/me` (`services/api/src/routes/shared/users.ts:34-37`) が **`isSuperAdminAccess` フィールド自体を response に含めていなかった** → Web 側で `data.isSuperAdminAccess ?? false` が常に false → バナー永遠に非表示
+
+**修正**: 1 行追加。
+```diff
+   res.json({
+     user: req.user,
++    isSuperAdminAccess: req.isSuperAdminAccess ?? false,
+     ...(tenantName && { tenantName }),
+   });
+```
+
+**構造的妥当性**: middleware 順序 (`services/api/src/index.ts:239-247`) で `tenantAwareAuthMiddleware` → `usersRouter` のため、`req.isSuperAdminAccess` は handler 到達時点で既に立っている (super admin email の場合)。修正は API response に乗せるだけ。
+
+**動作確認**: マージ + デプロイ後、`system@279279.net` で `web-3zcica5euq-an.a.run.app/atali82i/admin` にアクセス → 期待通り赤バナー + ボタン両方が表示。`/super/tenants` への遷移も機能。
 
 ### 2. dispatch-settings UI 改善 2 件 (#494 / #495)
 
@@ -109,6 +132,15 @@ gh issue list --state open --limit 15
 | CI (Lint / Build / Type Check / Test / Playwright E2E) | ✅ 全 PASS |
 | Deploy to Cloud Run | ✅ success |
 
+### PR #497
+| 工程 | 結果 |
+|---|---|
+| 手動チェックリスト | ✅ (small tier、1 file / +1、`/safe-refactor` `/code-review` 閾値外) |
+| type-check / lint / vitest (1421/1421) | ✅ ローカル PASS (services/api) |
+| CI (Lint / Build / Type Check / Test / Playwright E2E) | ✅ 全 PASS |
+| Deploy to Cloud Run | ✅ success |
+| 本番ブラウザ動作確認 | ✅ 赤バナー + 「← スーパー管理者ページに戻る」ボタン両方が表示確認済 |
+
 ---
 
 ## Issue Net 変化
@@ -120,7 +152,7 @@ gh issue list --state open --limit 15
 - Net: 0 件
 ```
 
-**Net=0 の理由**: 本セッションは PR #494 / #495 の UI 改善 (UX 起因) + Phase 8 cutover 運用方針確定で完結。triage 基準 (実害/再現バグ/CI破壊/rating≥7/明示指示) 該当の新規課題なし。`/code-review` findings は PR 内で fixup commit として反映 (LOW + HIGH 各 1 件)。
+**Net=0 の理由**: 本セッションは PR #494 / #495 の UI 改善 (UX 起因) + Phase 8 cutover 運用方針確定 + PR #497 の発覚バグ修正で完結。triage 基準 (実害/再現バグ/CI破壊/rating≥7/明示指示) 該当の Issue 起票は PR #497 のバグも含めて見送り (本セッション中にユーザー指摘 → 即修正 → 即マージで完結したため、Issue として持つ意味なし)。`/code-review` findings は PR 内で fixup commit として反映 (LOW + HIGH 各 1 件)。
 
 ---
 
@@ -191,3 +223,5 @@ gh issue list --state open --limit 15
 - 前回セッション handoff: `docs/handoff/archive/2026-05-24-session-49.md`
 - ヘルプ source: `web/app/help/_data/super-sections.ts` (section id `super-dispatch-settings`)
 - 新規 component: `web/app/super/dispatch-settings/components/InlineFeedback.tsx`
+- super admin バナー実装 (既存): `web/app/[tenant]/layout.tsx:113-127`
+- super admin バナー API 経路: `services/api/src/middleware/tenant-auth.ts:297-299` (req セット) → `services/api/src/routes/shared/users.ts:36` (response 出力、PR #497 で追加)
