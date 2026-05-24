@@ -17,6 +17,7 @@
  * CC 編集本体 (TenantCcForm) を分離し、テストは TenantCcForm に集中する。
  */
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type {
   GetTenantNotificationCcResponse,
@@ -236,7 +237,15 @@ export function TenantCcForm({
 
       <p className="text-xs text-muted-foreground">
         テナント代表メール: <span className="font-mono">{config.ownerEmail ?? "（未設定）"}</span>{" "}
-        （変更は「テナント管理」画面から）
+        （変更は
+        <Link
+          href="/super/tenants"
+          className="underline underline-offset-2 hover:text-foreground focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2"
+          aria-label="テナント管理画面を開く（代表メールはこの画面から変更）"
+        >
+          「テナント管理」画面
+        </Link>
+        から）
       </p>
 
       <div className="space-y-2">
