@@ -1,22 +1,18 @@
-# Session Handoff — 2026-05-24 (Session 50)
+# Session Handoff — 2026-05-26 (Session 51)
 
 ## TL;DR
 
-**Phase 8 cutover「Step 8 以降は業務スーパー管理者領分」運用方針確定 + dispatch-settings UI 改善 2 件 (PR #494 / #495) + super admin バナー消失バグ修正 (PR #497)**。Phase 8 Step 6 dry-run の結果から CC 設定の差異を検知 → 開発者 UI 確認で「全テナント要件と一致」確認 → AI が Step 7 認可までは受領したが、最終本番投入 (Step 8 マスタートグル ON) は **業務スーパー管理者がご自身で操作・判断する領分**と明文化。AI / 開発者は本番投入操作を代行しない。並行して dispatch-settings の UX を 2 段階で改善 (テナント管理直リンク化 + 保存/エラー通知の InlineFeedback 刷新)。**Session 50 handoff (PR #496) マージ後、業務スーパー管理者がテナント画面に来たときに「スーパー管理者ページに戻る」赤バナーが表示されない事象を報告 → /auth/me API が isSuperAdminAccess を返していないバグと特定 → 1 行修正 (PR #497) で解消、本番反映後にブラウザで表示確認済**。
+**業務スーパー管理者への返信文面ドラフト作成**で完結。Session 50 で本番反映済の `/help/super#super-dispatch-settings` + 設定画面 URL を共有するための文面を、業務スーパー管理者の元々のご質問 4 項目 (① 自動送信 / ② テナント別 CC / ③ 署名 / ④ 100% 完了で 1 度だけ送信) に直接答える形で 2 回反復して完成。**現状値の断言を排除**し、業務スーパー管理者がご自身で画面確認・変更する流れを尊重する設計に。コード変更なし、PR なし。次セッションでは開発者が文面を業務スーパー管理者へ送付 → フィードバック受領を待つフェーズ。
 
 | 主要成果 | 結果 |
 |---|---|
-| Phase 8 Step 5 dry-run 再確認 (既存 run #26348832136 流用) | ✅ 5 名対象 (莞爾会のみ、福の種・TEST は eligible=0) |
-| Phase 8 Step 6 (CC 設定レビュー) | ✅ 全テナントの owner が現場要件 (莞爾会=system / 福の種=t.koni) と一致確認 |
-| **運用方針確定: Step 8 (マスタートグル ON) は業務スーパー管理者領分** | ✅ AI/開発者は代行しない、本人の明示操作が起動条件 |
-| PR #494: テナント代表メール note「テナント管理」を /super/tenants 直リンク化 | ✅ merged + deployed |
-| PR #495: 保存/エラー通知を InlineFeedback (icon + accent + auto-dismiss + a11y) で刷新 | ✅ merged + deployed (`/fd` + `/safe-refactor` + `/code-review low` 通過) |
-| **PR #497: /auth/me に isSuperAdminAccess を含めるバグ修正 (super admin バナー消失)** | ✅ merged + deployed + 本番ブラウザで表示確認済 |
-| 業務スーパー管理者への引き継ぎ材料 | ✅ ヘルプ URL (`/help/super#super-dispatch-settings`) 既整備 (PR #492)、依頼方針は「リンク共有のみ、不明時補足」 |
+| 返信文面ドラフト (初版) | ✅ 4 項目に ✅ 回答 + URL 提示 + マスタートグル警告込み |
+| 返信文面ドラフト (改訂版) | ✅ 「現状値の押し付け」を排除し業務スーパー管理者の変更意図を尊重 |
+| Phase 8 Step 8 (本番有効化) | ⏸️ 業務スーパー管理者へ文面送付 + フィードバック受領待ち |
 
 - **Issue Net**: 0 件 (Close 0 / 起票 0)
-- **マージ済 PR**: 3 件 (#494, #495, #497) + handoff PR #496 / 本 PR (Session 50 追記)
-- **CI / Deploy**: ✅ 全 PASS
+- **マージ済 PR**: 0 件 (本セッション)
+- **CI / Deploy**: ⚠️ **`Cleanup Orphan Auth Users` schedule (run #26418006910、2026-05-25T20:12Z) で failure 検知** — 詳細下記、Issue 化見送りで次セッション確認事項として記録
 - **Open Issue**: active 0 / postponed 4 (#274 / #275 / #276 / #405、変化なし)
 - **残留プロセス**: ✅ なし
 
@@ -28,180 +24,106 @@
 # 1. 状況復元
 cat docs/handoff/LATEST.md
 
-# 2. main 最新と CI
+# 2. main 最新と CI (Cleanup Orphan Auth Users の継続 failure 有無確認)
 git fetch origin main && git log --oneline -10 origin/main
 gh run list --branch main --limit 5
+gh run list --workflow=cleanup-orphan-auth-users.yml --limit 3 2>/dev/null
 
 # 3. OPEN Issue (4 件すべて postponed、明示指示なき限り着手不可)
 gh issue list --state open --limit 15
 
-# 4. 業務スーパー管理者からのフィードバックがあれば、その内容に応じて対応:
-#    - 文言・UI が分かりにくい → UI 改善 PR
-#    - 操作方法が分からない → 補足説明文面ドラフト
-#    - 仕様確認 → docs/specs/2026-05-20-completion-notification-design.md 参照
+# 4. 業務スーパー管理者からフィードバックがあれば、その内容に応じて対応
 ```
 
 ---
 
-## マージ済 PR (3 件)
+## 重要な作業内容 (本セッション)
 
-| # | タイトル | 種別 | 差分 | 主目的 |
-|---|---|---|---|---|
-| #494 | feat(dispatch-settings): テナント代表メール note の「テナント管理」を直リンク化 | feat | 1 file, +10/-1 | テナント代表メール変更導線の改善 (Phase 8 Step 6 で 3 テナント分の owner 確認を効率化) |
-| #495 | feat(dispatch-settings): 保存/エラー通知を InlineFeedback (icon + dismiss + auto-fade) で刷新 | feat | 3 files, +83/-8 | 「保存しました」等の inline 通知の視認性 / 一時性 / a11y を改善 (`/fd` skill + Quality Gate 通過) |
-| **#497** | **fix(auth): /auth/me response に isSuperAdminAccess を含める (super admin バナー消失修正)** | **fix** | **1 file, +1/-0** | **業務スーパー管理者がテナント管理画面に遷移したとき、ヘッダー上部に「スーパー管理者としてアクセス中 + ← スーパー管理者ページに戻る」赤バナーが表示されない既知不具合を修正。Session 50 handoff (PR #496) マージ後、開発者からの指摘で発覚** |
+### 1. 業務スーパー管理者への返信文面ドラフト作成
 
----
+**背景**: Session 50 で `/auth/me` バグ修正 (PR #497) まで完了し、業務スーパー管理者にヘルプ URL を共有する準備が整った。開発者から「業務スーパー管理者の元々のご質問 (4 項目) に対してどう返すか」の文面作成依頼。
 
-## 重要な技術判断 (本セッション)
+**初版**: 4 項目それぞれに `✅` 回答 + 現状値の例示 (莞爾会=system@279279.net、福の種=t.koni@279279.net、毎週月曜 09:00 等) + URL + マスタートグル警告。
 
-### 1. Phase 8 cutover の「Step 8 以降は業務スーパー管理者領分」運用方針確定
+**改訂のきっかけ (重要な学び)**: 開発者から「**ここの設定が間違ってるので、設定がしたいというオーダーがありました。ここで間違ったままの内容をあえて書くのは逆効果**」とフィードバック。
+- 業務スーパー管理者の元々の意図は **設定変更したい / 確認したい**
+- AI が「すでに設定済」と現状値を断言すると、変更意図と矛盾し押し付けがましい
+- そもそも現状値が正しいかどうかは業務スーパー管理者自身が画面で確認すべき領分
 
-**背景**: Step 7 認可 (本番有効化を進めて良いという技術的ゲート通過) を AI が受領した直後、業務スーパー管理者から「本当に客先送信されないですよね？」のご懸念。状況確認で「画面の version 1 表示 = まだマスタートグル切替前」と判断し、AskUserQuestion で意向を確認したところ、以下の方針が明示された:
+**改訂版の方針**:
+- ① 曜日・時刻の現状値「毎週月曜 09:00」を**削除** (本人が指定頂く前提)
+- ② テナント別 CC の具体例 (system@279279.net / t.koni@279279.net) を**削除** → 「ご自身で確認・変更頂けます」に変更
+- ③ 署名「DXcollege運営スタッフ」も「設定済」と断言せず「可能です + 確認・変更可能」
+- ④ 本文「初期値」→「本文の例 ← 設定画面で編集可能」
+- 配信スイッチ警告内の「莞爾会の 5 名」のみ**事実情報として残す** (ON 時に何が起きるかの警告根拠)
 
-> **本番はあくまで、スーパー管理者が確認して、開発者ではないスーパー管理者が操作を理解して使える状態になり、そのスーパー管理者によって明示的に設定するまで本番は実行しません。**
+**ドラフトの出力場所**: 本セッションのチャット内のみ。リポジトリには保存していない (前 Session 50 で開発者判断「リンク共有のみ、不明時補足」=長文ドラフトのリポジトリ保存は不要、と既に確認済のため)。次セッション以降に必要なら再生成可能。
 
-**判断ポイント**:
+### 2. CI failure 検知 (本セッション作業外、事実報告)
 
-- **AI 駆動開発 4 原則 §1 の具体展開**: 本番投入の最終操作は decision-maker (実運用者) 本人の手でのみ実行。AI / 開発者は準備フェーズまで
-- **Step 8 cutover の主体変更**: cutover runbook の Step 8 / Step 12 (kill switch) の担当を「開発者 (Web UI)」→「業務スーパー管理者 (Web UI)」に明示更新 (本 handoff PR で同時反映)
-- **Step 7 認可は技術ゲート、Step 8 実行は運用判断**: 技術側は「準備完了」を渡し、運用側が「投入タイミング」を決める
-- **引き継ぎ材料は既に整備済**: ヘルプ `/help/super#super-dispatch-settings` (PR #492) + UI 文言平易化 (PR #492) + テナント管理直リンク (PR #494) + 保存通知刷新 (PR #495) で、業務スーパー管理者が UI を理解する材料は揃った
-- **引き継ぎ方法は「リンク共有のみ、不明時補足」**: 長文の依頼文面は作らず、ヘルプ URL のみ共有し、業務スーパー管理者からの反応 (操作で迷った / 文言改善要望 等) を受けて補足説明
-
-### 3. /auth/me バグ修正 (#497)
-
-**背景**: Session 50 handoff (PR #496) マージ後、開発者から「スーパー管理者からテナント管理者画面に遷移した後、ヘッダーに『スーパー管理者画面に戻る』リンクが無い」との報告。
-
-**調査結果**:
-- `web/app/[tenant]/layout.tsx:113-127` に既存実装あり (赤バナー + 「← スーパー管理者ページに戻る」ボタン、`isSuperAdminAccess === true` で表示)
-- API `/auth/me` (`services/api/src/routes/shared/users.ts:34-37`) が **`isSuperAdminAccess` フィールド自体を response に含めていなかった** → Web 側で `data.isSuperAdminAccess ?? false` が常に false → バナー永遠に非表示
-
-**修正**: 1 行追加。
-```diff
-   res.json({
-     user: req.user,
-+    isSuperAdminAccess: req.isSuperAdminAccess ?? false,
-     ...(tenantName && { tenantName }),
-   });
-```
-
-**構造的妥当性**: middleware 順序 (`services/api/src/index.ts:239-247`) で `tenantAwareAuthMiddleware` → `usersRouter` のため、`req.isSuperAdminAccess` は handler 到達時点で既に立っている (super admin email の場合)。修正は API response に乗せるだけ。
-
-**動作確認**: マージ + デプロイ後、`system@279279.net` で `web-3zcica5euq-an.a.run.app/atali82i/admin` にアクセス → 期待通り赤バナー + ボタン両方が表示。`/super/tenants` への遷移も機能。
-
-### 2. dispatch-settings UI 改善 2 件 (#494 / #495)
-
-#### PR #494: テナント代表メール note「テナント管理」直リンク化
-
-スーパー管理者が `/super/dispatch-settings` の「テナント別 CC 設定」セクションで「テナント代表メール」を変更したくなった時、ワンクリックで `/super/tenants` 画面へ遷移できる。Phase 8 Step 6 (CC 設定確認) 中の動線改善が直接的な動機。`next/link` + `aria-label` + `focus-visible` で a11y も担保。1 ファイル / +10/-1 / small tier。
-
-#### PR #495: 保存/エラー通知の InlineFeedback 刷新
-
-「保存しました」が薄い緑のべた塗りブロックで横一杯に広がり視認性が低い問題を、`/fd` skill で再設計:
-
-- 専用 component `InlineFeedback` を新設 (sidebar accent + iconified pattern、refined editorial tone)
-- icon (lucide CheckCircle2 / AlertCircle) + 左 4px accent border + `max-w-md` で横拡張抑制
-- success は 5 秒で auto-dismiss、error は明示 dismiss (×ボタン) のみ (誤って読み飛ばし防止)
-- `aria-live=polite/assertive` + `role=status` で screen reader 対応
-- `animate-in fade-in slide-in-from-top-1` (既存 popover/dialog と同じ語彙、依存追加なし)
-- `onDismiss` を `useRef` で安定化し、親 inline arrow 渡しでも auto-dismiss タイマーが re-render で reset されないことを担保 (`/code-review low` で HIGH 1 件検出 → fix)
-- スコープは dispatch-settings 限定 (他画面 `bg-destructive/10` パターンには触れず別 PR スコープ)
-
-3 ファイル / +83/-8 / medium tier (post-pr-review hook で認定)、`/safe-refactor` + `/code-review low` 通過済。
-
----
-
-## Quality Gate 実施結果
-
-### PR #494
-| 工程 | 結果 |
-|---|---|
-| 手動チェックリスト | ✅ (small tier、`/safe-refactor` `/code-review` スコープ外) |
-| type-check / lint / vitest (21/21) | ✅ ローカル PASS |
-| CI (Lint / Build / Type Check / Test / Playwright E2E) | ✅ 全 PASS |
-| Deploy to Cloud Run | ✅ success |
-
-### PR #495
-| 工程 | 結果 |
-|---|---|
-| `/fd` skill による design proposal | ✅ 採用案 (sidebar accent + iconified) |
-| `/safe-refactor` | ✅ LOW 1 件 (変数名 `effective` → `effectiveAutoDismissMs`) 反映 |
-| `/code-review low` | ✅ HIGH 1 件 (`onDismiss` を `useRef` で安定化、auto-dismiss reset バグ予防) 反映 |
-| type-check / lint / vitest (47/47) | ✅ ローカル PASS |
-| CI (Lint / Build / Type Check / Test / Playwright E2E) | ✅ 全 PASS |
-| Deploy to Cloud Run | ✅ success |
-
-### PR #497
-| 工程 | 結果 |
-|---|---|
-| 手動チェックリスト | ✅ (small tier、1 file / +1、`/safe-refactor` `/code-review` 閾値外) |
-| type-check / lint / vitest (1421/1421) | ✅ ローカル PASS (services/api) |
-| CI (Lint / Build / Type Check / Test / Playwright E2E) | ✅ 全 PASS |
-| Deploy to Cloud Run | ✅ success |
-| 本番ブラウザ動作確認 | ✅ 赤バナー + 「← スーパー管理者ページに戻る」ボタン両方が表示確認済 |
+- **対象**: `Cleanup Orphan Auth Users` workflow (scheduled)
+- **Run ID**: #26418006910
+- **発生時刻**: 2026-05-25T20:12:37Z
+- **失敗 step**: 「Summarize & notify on orphans」 (step 8) exit code 1
+- **推定原因**: cleanup script が削除失敗を検知して notification 用に意図的 exit している可能性 (`FAILED=$(jq -r '.failed' "$RESULT_FILE")` 周辺)
+- **triage 判定**: 実害/再現バグ/CI 破壊/rating≥7/明示指示いずれも該当せず → Issue 化見送り
+- **次セッションでの対応**: 翌日以降の scheduled run が継続して failure するか、`gh run list --workflow=cleanup-orphan-auth-users.yml --limit 3` で確認。継続するなら原因調査着手
 
 ---
 
 ## Issue Net 変化
 
 ```
-## Issue Net 変化
 - Close 数: 0 件
 - 起票数: 0 件
 - Net: 0 件
 ```
 
-**Net=0 の理由**: 本セッションは PR #494 / #495 の UI 改善 (UX 起因) + Phase 8 cutover 運用方針確定 + PR #497 の発覚バグ修正で完結。triage 基準 (実害/再現バグ/CI破壊/rating≥7/明示指示) 該当の Issue 起票は PR #497 のバグも含めて見送り (本セッション中にユーザー指摘 → 即修正 → 即マージで完結したため、Issue として持つ意味なし)。`/code-review` findings は PR 内で fixup commit として反映 (LOW + HIGH 各 1 件)。
+**Net=0 の理由**: 本セッションは業務スーパー管理者向け文面ドラフトのみで完結 (コード変更・Issue 化作業なし)。CI failure 1 件検知したが、triage 基準該当せず Issue 化見送り (次セッション確認事項として handoff に記録)。
 
 ---
 
 ## Phase 8 cutover 状態 (current)
 
+Session 50 から変化なし。Step 8 は引き続き業務スーパー管理者領分。
+
 | Step | 内容 | 担当 | 状態 |
 |---|---|---|---|
-| 0-5 | SendAs / 初期化 / smoke / dry-run | AI + 開発者 | ✅ 完了 |
-| 6 | 対象一覧 + CC 設定レビュー | 開発者 | ✅ 本セッションで dry-run 結果確認 + UI で全テナント owner 確認 |
-| 7 | 本番有効化の番号単位明示認可 (技術ゲート) | 開発者 | ✅ 本セッションで受領 |
-| **8** | **enabled = true 切替 (Web UI)** | **業務スーパー管理者 (本人の明示操作)** | **⏸️ 業務スーパー管理者のフィードバック + 本人判断待ち** |
-| 9 | 次の毎週月曜 09:00 JST cron で初回送信 | (自動) | ⏳ Step 8 後 |
-| 10 | audit_logs / run_history で送信件数確認 | AI | ⏳ Step 9 後 |
-| 11 | 受信受講者・テナント担当者からの問い合わせ受付 | 開発者 | ⏳ Step 10 後 |
-| **12** | **問題発生時は即時 enabled=false で kill switch** | **業務スーパー管理者 (Web UI)** | **⏸️ Step 8 後の運用フェーズ** |
+| 0-7 | 準備完了 | AI + 開発者 | ✅ 完了 |
+| **8** | enabled = true 切替 (Web UI) | **業務スーパー管理者** | **⏸️ 文面送付 + フィードバック受領待ち** |
+| 9-12 | 自動 cron / audit / 問い合わせ / kill switch | (各担当) | ⏳ Step 8 後 |
 
 ---
 
 ## 次セッションへの引継ぎ事項
 
-### ⏸️ 業務スーパー管理者のフィードバック待ち
+### ⏸️ 業務スーパー管理者のフィードバック待ち (Session 50 から継続)
 
-開発者がヘルプ URL (`/help/super#super-dispatch-settings`) を業務スーパー管理者へ共有 → 反応を待つフェーズ。
+開発者が本セッションでドラフトした返信文面 + ヘルプ URL を業務スーパー管理者へ送付 → 反応を待つフェーズ。
 
-業務スーパー管理者から反応が来た際、内容に応じて AI で対応:
+反応に応じた AI 対応:
 
 | 反応の種類 | AI の対応 |
 |---|---|
 | 「文言が分かりにくい」「ボタンが分かりにくい」 | UI 改善 PR (PR #492/#494/#495 の延長線) |
 | 「操作方法が分からない」 | 補足説明文面ドラフト + 必要ならヘルプ拡充 PR |
+| 「テナント代表メールを変更したい」 | `/super/tenants` の編集ダイアログでご自身で変更頂く案内 (操作は UI 上で完結) |
 | 「仕様が分からない」 | `docs/specs/2026-05-20-completion-notification-design.md` から要点抽出して回答 |
 | 「これなら自分で操作できる、本番開始する」 | AI からの「実行支援」は不要。業務スーパー管理者が UI でマスタートグル ON → 保存。AI は Step 10 で audit_logs 確認のみ |
 
-### 共有 URL (再掲)
+### ⚠️ CI failure 継続確認
 
+```bash
+gh run list --workflow=cleanup-orphan-auth-users.yml --limit 5
 ```
-ヘルプ: https://web-1034821634012.asia-northeast1.run.app/help/super#super-dispatch-settings
-設定画面: https://web-1034821634012.asia-northeast1.run.app/super/dispatch-settings
-```
+
+- 翌日以降の scheduled run も failure 継続なら、`scripts/cleanup-orphan-auth-users.ts` 周辺の原因調査着手
+- 1 回限りの偶発失敗ならスキップ (triage 基準該当せず)
 
 ### Step 10 (audit_logs / run_history 確認) の AI 経路整備状況 (変化なし)
 
 - **Web UI 経由**: 業務スーパー管理者が「操作・配信の記録」「自動配信の実行履歴」セクションで確認可能 (PR #492 で文言平易化済)
 - **admin SDK workflow 経由**: **未整備**。必要時期になったら `dispatch-audit-fetch.yml` を新規整備可能
-
-### 既存リスク (本セッション未対応、別 PR スコープ)
-
-- **他画面の `bg-destructive/10` インライン error 表示パターン** (web 全体に多数): dispatch-settings 以外の admin/student 画面でも統一して InlineFeedback / AlertBox に揃える価値あり。ただし広範な変更 → 業務スーパー管理者フィードバック待ちの間に着手検討
-- **PR #495 InlineFeedback の単独テスト**: 既存テスト互換は確保したが、`InlineFeedback.test.tsx` 単体テスト (icon 描画 / aria-live / auto-dismiss / onDismiss / useRef 安定化) は未追加。rating 5 程度の任意改善
 
 ### postponed Issue (4 件、すべて変化なし)
 
@@ -214,14 +136,26 @@ gh issue list --state open --limit 15
 
 ---
 
+## 学び (本セッション固有、次回以降にも適用)
+
+### 業務スーパー管理者向け文面で「現状値の断言」を避ける
+
+開発者からのフィードバック「**間違ったままの内容をあえて書くのは逆効果**」より。AI が「すでに X が設定済です」と現状値を文面に書き込むと:
+
+- 業務スーパー管理者の「変更したい」意図と矛盾し押し付けがましい
+- 仮に現状値が正しいかどうかも業務スーパー管理者本人が画面で確認すべき領分 (AI が決めることではない)
+- → 文面では「機能として可能 / 現状はご自身で確認・変更頂けます」と中立表現に留める
+
+この学びは、次回以降の同様文面作成にも適用する。
+
+---
+
 ## 関連リソース
 
-- 設計仕様書: `docs/specs/2026-05-20-completion-notification-design.md` (本セッションは無変更)
-- 実装計画: `docs/specs/2026-05-20-completion-notification-impl-plan.md` (本セッションは無変更)
-- cutover playbook: `docs/runbook/dxcollege-completion-notification-cutover.md` (本 handoff PR で Step 8 / Step 12 / 担当切り分けテーブルを業務スーパー管理者領分に更新)
-- ADR-037: `docs/adr/ADR-037-completion-notification-sender-impersonation.md` (本セッションは無変更)
-- 前回セッション handoff: `docs/handoff/archive/2026-05-24-session-49.md`
+- 前セッション handoff: `docs/handoff/archive/2026-05-24-session-50.md`
+- 設計仕様書: `docs/specs/2026-05-20-completion-notification-design.md`
+- cutover playbook: `docs/runbook/dxcollege-completion-notification-cutover.md`
 - ヘルプ source: `web/app/help/_data/super-sections.ts` (section id `super-dispatch-settings`)
-- 新規 component: `web/app/super/dispatch-settings/components/InlineFeedback.tsx`
-- super admin バナー実装 (既存): `web/app/[tenant]/layout.tsx:113-127`
-- super admin バナー API 経路: `services/api/src/middleware/tenant-auth.ts:297-299` (req セット) → `services/api/src/routes/shared/users.ts:36` (response 出力、PR #497 で追加)
+- 共有 URL (再掲):
+  - ヘルプ: https://web-3zcica5euq-an.a.run.app/help/super#super-dispatch-settings
+  - 設定画面: https://web-3zcica5euq-an.a.run.app/super/dispatch-settings
