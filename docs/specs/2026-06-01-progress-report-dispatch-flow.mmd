@@ -1,0 +1,60 @@
+%% 進捗レポート 定期自動配信 (Phase 3) 処理フロー
+%% 関連: docs/specs/2026-06-01-progress-report-dispatch-design.md / docs/adr/ADR-039
+flowchart TD
+  start([Cloud Scheduler<br/>dxcollege-progress-reports<br/>cron JST]) --> oidc{OIDC verify<br/>token, audience}
+  oidc -- "fail" --> resp401[401 Unauthorized]
+  oidc -- "ok" --> occurrence[occurrenceId 算出<br/>sha256 laneId + ScheduleTime]
+  occurrence --> run[runId 採番 UUID<br/>HTTP attempt 監査用]
+  run --> lock{acquireLaneLock<br/>tx.get + tx.set<br/>laneId=progress}
+  lock -- "contention" --> respLock[200 empty<br/>laneLockContention=true]
+  lock -- "acquired" --> schedule{shouldRunNow<br/>progressReport sub-schedule}
+  schedule -- "not now" --> respSched[200 empty]
+  schedule -- "match" --> tenantLoop[tenant 直列走査]
+  tenantLoop --> tenantFilter{tenant active<br/>+ progressReportEnabled=true}
+  tenantFilter -- "no" --> nextTenant[次 tenant]
+  tenantFilter -- "yes" --> userList[listProgressReportTargetUsers<br/>active + enrollment + 不退会<br/>+ 期限内 + 1%以上]
+  userList --> userParallel[user 並列度 8]
+  userParallel --> eligibility{eligibility 判定<br/>100% 完了?}
+  eligibility -- "yes" --> skipCompleted[skip + audit<br/>user_skipped_completed]
+  eligibility -- "no" --> claim{tryClaimProgressRecipient<br/>doc id occurrenceId__userId}
+  claim -- "既存 sent/failed" --> skipSent[skip]
+  claim -- "既存 pending lease 有効" --> skipPending[skip<br/>他 worker 処理中]
+  claim -- "既存 pending lease 切れ" --> promote[promotePendingToManualReview<br/>status=manual_review_required]
+  promote --> skipPromoted[skip]
+  claim -- "新規 create" --> pending[status=pending<br/>lease 10min<br/>ttlExpireAt=claimedAt+90d]
+  pending --> buildData[buildProgressPdfData<br/>進捗集約]
+  buildData --> renderPdf[ProgressPdfDocument<br/>renderToBuffer]
+  renderPdf --> sizeCheck{PDF size <= 5MB}
+  sizeCheck -- "超過" --> pdfTooLarge[skip + audit<br/>pdf_too_large<br/>専用 counter]
+  sizeCheck -- "ok" --> buildMail[buildMailTemplate<br/>件名・本文]
+  buildMail --> ccValidate[validateAndDedupeCcEmails]
+  ccValidate --> buildMime[buildMessageMime<br/>multipart/mixed<br/>RFC 2231 filename]
+  buildMime --> gmail{Gmail DWD SendAs<br/>From=dxcollege@279279.net}
+  gmail -- "429 retry x3 fail" --> markFailed[markProgressRecipientFailed<br/>status=failed]
+  gmail -- "403 scope_revoked" --> abort[RunAbortError<br/>laneLock abort]
+  gmail -- "400 permanent" --> markFailed
+  gmail -- "受理" --> markSent[markProgressRecipientSent<br/>status=sent<br/>messageId, pdfSizeBytes]
+  markSent --> nextUser[次 user]
+  markFailed --> nextUser
+  pdfTooLarge --> nextUser
+  skipCompleted --> nextUser
+  skipSent --> nextUser
+  skipPending --> nextUser
+  skipPromoted --> nextUser
+  nextUser --> userParallel
+  userParallel -- "tenant 完了" --> nextTenant
+  nextTenant --> tenantLoop
+  tenantLoop -- "全 tenant 完了" --> complete[completeLaneLock<br/>audit progress_report_run_completed]
+  complete --> respOk[200 RunProgressReportsResponse<br/>processed, sent, skipped, failed,<br/>pendingPromotedToManualReview]
+  abort --> abortLock[abortLaneLock]
+  abortLock --> respAbort[200 with abort reason]
+
+  classDef skipNode fill:#fef3c7,stroke:#f59e0b
+  classDef errorNode fill:#fee2e2,stroke:#dc2626
+  classDef successNode fill:#d1fae5,stroke:#059669
+  classDef decisionNode fill:#dbeafe,stroke:#2563eb
+
+  class skipCompleted,skipSent,skipPending,skipPromoted,pdfTooLarge skipNode
+  class resp401,markFailed,abort,abortLock,respAbort errorNode
+  class markSent,complete,respOk successNode
+  class oidc,lock,schedule,tenantFilter,eligibility,claim,sizeCheck,gmail decisionNode
