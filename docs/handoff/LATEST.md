@@ -1,18 +1,21 @@
-# Session Handoff — 2026-06-01 (Session 52)
+# Session Handoff — 2026-06-02 (Session 53)
 
 ## TL;DR
 
-**業務スーパー管理者のフィードバック受領 → Phase 3「進捗レポート 定期自動配信」の実装方針を決定**したセッション。Session 51 で送付した返信文面 (完了通知 4 項目 + ヘルプ/設定 URL) に対し、業務スーパー管理者から返信あり。検証の結果、**質問①に重大な認識ずれ**が判明: 業務スーパー管理者が望むのは「途中経過の進捗レポートを受講者+テナント担当者 CC へ定期自動配信」だが、現状の自動配信レーン (完了通知) は **全コース 100% 完了者のみ・1 度だけ** が対象。この機能は Issue #346 で「Phase 3 候補 (定期自動送信 Cloud Scheduler)」として明示的に先送りされていた項目。**開発者判断で Phase 3 として実装することを決定**。本セッションはコード変更なし (方針決定 + handoff のみ)。次セッションは `/brainstorm` → `/impl-plan` で仕様確定から着手。
+Phase 3「進捗レポート 定期自動配信」の本格着手セッション。**Plan モード 5 フェーズ完走** (Explore → Plan agent → Codex セカンドオピニオン → AskUserQuestion → plan ファイル更新) で 9 件の OQ を全件確定。Codex セカンドオピニオンで **CRITICAL 4 件 / HIGH 5 件** を検出し全て plan に反映 (occurrenceId 分離・pending state machine・transactional lane lock・受講者規模 < 500 名前提・受講中フィルタ厳密化・opt-out 分離・patch semantics・RFC 2231 訂正)。**PR #506 (設計 PR、ADR-039 + 3 spec / 4 files / +706/-0) を merged**。続いて **PR 3a (shared-types DTO 拡張) を WIP commit** (`512eb58` on `feat/phase-3a-shared-types-storage`) として push。セッション中盤に `.envrc` の `gh auth switch ... 2>/dev/null || true` silent fail に起因する push 認証問題 (403) が顕在化、原因 (gh keyring から system-279 token 失効) を切り分けて keyring 再登録で復旧。
 
 | 主要成果 | 結果 |
 |---|---|
-| 業務スーパー管理者フィードバックの検証 | ✅ 完了 (質問①の認識ずれを実装ベースで特定) |
-| Phase 3「進捗レポート 定期自動配信」実装方針 | ✅ 決定 (再利用マップ + 設計の肝 + OQ 整理済) |
-| Phase 8 Step 8 (完了通知 本番有効化) | ⏸️ 業務スーパー管理者が「動作確認したい」+ ①誤解の訂正待ちで保留継続 |
+| Phase 3 Plan モード完走 + 全 OQ 確定 | ✅ 9 件 (配信頻度・PDF 添付・レーン分離・100% 除外・PR 分割・TTL・受講中定義・受講者規模・opt-out) |
+| Codex セカンドオピニオン (Plan stage) | ✅ CRITICAL 4 / HIGH 5 全反映、thread `019e82e8-4228-79c1-a63a-d3c4e7359731` |
+| PR #506 (Phase 3 設計 PR) | ✅ merged (`9d9c69f`)、ADR-039 + 設計仕様書 + 実装計画 (AC-PR-01〜22) + flow.mmd |
+| PR 3a DTO 拡張 WIP commit | ✅ `512eb58` on `feat/phase-3a-shared-types-storage` push 済 (PR 未 open) |
+| push 認証問題 復旧 | ✅ keyring に system-279 再登録、`.envrc` 想定挙動に復帰 (verify 済) |
+| グローバル AI ハンドオフ | ✅ 5 件素材列挙、グローバル側で取捨選択・採用判断完了 |
 
-- **Issue Net**: 0 件 (Close 0 / 起票 0)。Phase 3 の Issue 化は次セッション `/brainstorm` で仕様確定後に判断 (現状は重複送信/PDF添付/レーン分離が OQ のため起票は時期尚早)
-- **マージ済 PR**: 0 件 (本セッション、handoff PR を除く)
-- **CI / Deploy**: 通常 CI ✅ success。`Cleanup Orphan Auth Users` の単発 failure (2026-05-25) は以降再発なし → 監視のみ継続
+- **Issue Net**: 0 件 (Close 0 / 起票 0)
+- **マージ済 PR**: 1 件 (#506、本セッション handoff PR を除く)
+- **CI / Deploy**: 通常 CI ✅。`Cleanup Orphan Auth Users` の単発 failure を **2026-06-01 21:52 UTC に再検知** (Session 52 では「再発なし → 監視のみ継続」だった)
 - **Open Issue**: active 0 / postponed 4 (#274 / #275 / #276 / #405、変化なし)
 - **残留プロセス**: ✅ なし
 
@@ -27,107 +30,102 @@ cat docs/handoff/LATEST.md
 # 2. main 最新と CI
 git fetch origin main && git log --oneline -10 origin/main
 gh run list --branch main --limit 5
-gh run list --workflow=cleanup-orphan-auth-users.yml --limit 3 2>/dev/null
+gh run list --workflow=cleanup-orphan-auth-users.yml --limit 5  # 再発状況確認
 
-# 3. OPEN Issue (4 件すべて postponed、明示指示なき限り着手不可)
+# 3. PR 3a の WIP commit 状態確認
+git fetch origin feat/phase-3a-shared-types-storage
+git log --oneline -3 origin/feat/phase-3a-shared-types-storage
+git diff origin/main origin/feat/phase-3a-shared-types-storage -- packages/shared-types/src/dispatch.ts
+
+# 4. OPEN Issue (4 件すべて postponed、明示指示なき限り着手不可)
 gh issue list --state open --limit 15
 
-# 4. Phase 3 着手: まず /brainstorm で下記 OQ を確定 → /impl-plan
+# 5. PR 3a 残作業着手
+git checkout feat/phase-3a-shared-types-storage
+git pull origin feat/phase-3a-shared-types-storage
 ```
 
-**次セッションの最初の一手**: `/brainstorm`（進捗レポート定期自動配信の仕様確定）。下記「設計の肝＝要確定 OQ」を入力として渡す。
+**次セッションの最初の一手**: PR 3a 残作業 (下記「次セッションへの引継ぎ事項」§1) を継続。完了後に `gh pr create` で PR 3a を open。
 
 ---
 
 ## 重要な作業内容 (本セッション)
 
-### 1. 業務スーパー管理者フィードバックの検証
+### 1. Phase 3 Plan モード完走
 
-**背景**: Session 51 でドラフトした返信文面 (完了通知の 4 項目に ✅ 回答 + ヘルプ/設定 URL + マスタートグル警告) を開発者が業務スーパー管理者へ送付。本セッション冒頭で業務スーパー管理者からの返信を受領。
+Session 52 で決定された Phase 3 実装方針を、Plan モードで詳細化:
 
-**返信の要旨**:
-- 配信トグルが「ON に見える」が OFF か確認したい (添付スクショは「配信 OFF」表示)
-- ①② 設定はできているようだが**動作が確認できない**。手動で「受講状況」→ Gmail 下書きすると進捗レポート (進捗率 20% 等) が出る。「自動になった場合もこの設定になる」認識で大丈夫か
-- ③ 署名の設定が**どこにあるか分からなかった**
-- ④ 100% 完了で 1 度だけ → 感謝
-- **①-④ 動作確認を 1 度させてほしい**
-- ①再確認: 「配信スケジュールで**現状の受講進捗**を日時指定して、受講者+CC でテナント担当者へ自動配信」の認識で大丈夫か
+- **Phase 1 (Explore × 3 並列)**: 完了通知レーン (`run-completion-notifications.ts` 周辺) / 手動進捗レポート (ADR-034、`progress-pdf-*`) / DispatchSettings DTO + UI を網羅調査
+- **Phase 2 (Plan agent)**: 確定済 4 OQ を入力に詳細設計を生成 (主フロー擬似コード・PR 分割・AC 17 項目・リスク・再利用マップ)
+- **Codex セカンドオピニオン (Plan stage)**: thread `019e82e8-4228-79c1-a63a-d3c4e7359731`
+- **追加 OQ 確定** (5 件、AskUserQuestion 3 回): 受講者規模 / 受講中定義 / opt-out 分離方針 / PR 分割粒度 / TTL
 
-**検証結果 (実装ベース、推測排除)**: システムには**別々の 2 機能**が存在する。
+### 2. Codex セカンドオピニオン (CRITICAL 4 / HIGH 5 全反映)
 
-| | A. 完了通知 (Image #2 設定画面) | B. 進捗レポート (Image #4 手動下書き) |
+| 区分 | 内容 | 反映先 |
 |---|---|---|
-| 実体 | `services/api/src/services/dispatch/*` | `services/api/src/routes/super/progress-pdf-draft.ts` 他 |
-| トリガ | **全コース 100% 完了者のみ** | 受講状況画面から**手動で 1 人ずつ下書き生成** |
-| 件名 | 固定「【DXcollege】受講修了のお知らせ」 | 「【テナント名】氏名 さんの受講進捗レポート (日付)」 |
-| 本文 | 設定した完了メッセージ + 署名 (**進捗率なし**) | 進捗率・受講期限・推奨ペース (Image #4) |
-| 送信回数 | 1 人 1 回だけ (再送なし) | 手動で都度 (下書き作成のみ・自動送信しない) |
-| 自動配信 | ✅ あり (曜日・時刻スケジュール) | ❌ なし (完全手動) |
+| CRITICAL-1 | `runId=randomUUID()` では Cloud Scheduler at-least-once retry を冪等化不可 | `occurrenceId = sha256(laneId + X-CloudScheduler-ScheduleTime)` 分離 |
+| CRITICAL-2 | `tx.create()` のみでは crash 後 orphan を扱えない | `pending → sent/failed/manual_review_required` state machine |
+| CRITICAL-3 | run-lock の query→set best-effort race | `super_dispatch_lane_locks/{laneId}` 別 doc + transactional 取得 |
+| CRITICAL-4 | 同期一括 + 280s lease は規模次第で timeout | 受講者最大 < 500 名前提を OQ で確定 (300 名超で Cloud Tasks 移行 Phase 4 OQ) |
+| HIGH-1 | `listNotificationTargetUsers` の `role=student` のみは退会・期限切れ・0% 混入 | 受講中フィルタ厳密化 (`listProgressReportTargetUsers` 新規) |
+| HIGH-2 | `completionNotificationEnabled` 共有は opt-out が表現できない | `tenants/{tid}.progressReportEnabled?: boolean` 別フィールド新規 |
+| HIGH-3 | Gmail API quota より Workspace 送信上限 2,000/day が先に効く | 受講者規模 < 500 名前提で緩和、両 cron 30 分ずらしを Phase 3e 初期実装に格上げ |
+| HIGH-4 | settings 全体上書き PUT で旧 UI が `progressReport` 消す | PUT を patch semantics に変更 (両実装) |
+| HIGH-5 | MIME 添付 filename dual-form は RFC 2231 (HTTP の 5987 ではない) | ADR / spec / コメントで RFC 2231 と記載 |
 
-**各質問への正確な回答**:
-- **①**: 認識ずれ。自動配信されるのは A.完了通知 (100% 完了者のみ)。Image #4 のような途中経過レポートの自動配信は**未実装**。配信 ON にしても莞爾会の 100% 完了者 5 名に修了メールが届くだけで、福の種の小松原さん (20%) のような途中受講者には何も届かない。「自動になったら Image #4 と同じ」も誤り (件名・本文・トリガが別物)。
-- **②**: ✅ 認識通り。完了通知の CC = `validateAndDedupeCcEmails(notificationCcEmails, ownerEmail)` (テナントオーナーメール + 追加 CC)。
-- **③**: 署名機能は**存在**。設定画面「メール署名・本文」セクション内の「署名」入力欄 (`MessageBodyEditor.tsx`、placeholder「DXcollege運営スタッフ」、本文欄の上)。→ 見つけられなかった = **発見性の UX 課題**。
-- **配信トグル**: Image #2 は「配信 OFF」表示・トグル左寄せ = **確実に OFF**。受講者には何も送られていない。「ON に見える」のはトグルの視認性課題。
-- **④**: 正しい (100% 完了で 1 回だけ・重複防止)。
+### 3. PR #506 (Phase 3 設計 PR) merged
 
-### 2. 元要件の突き合わせ (「進捗レポート定期自動配信は元々の要件か」の調査)
+- `docs/adr/ADR-039-phase3-progress-report-dispatch.md` (D-1〜D-8 判断記録)
+- `docs/specs/2026-06-01-progress-report-dispatch-design.md` (設計仕様書)
+- `docs/specs/2026-06-01-progress-report-dispatch-impl-plan.md` (実装計画、AC-PR-01〜22)
+- `docs/specs/2026-06-01-progress-report-dispatch-flow.mmd` (処理フロー図、Mermaid)
+- 4 files, +706/-0、CI 全 5 ジョブ pass、`9d9c69f` で main 反映
 
-開発者の問い合わせを受け、文書を実査:
+### 4. PR 3a の DTO 拡張部分を WIP commit
 
-| 時期 | 文書 | 進捗レポート/自動配信の扱い |
-|---|---|---|
-| 2026-05-13 | ADR-032 | 進捗 PDF を 2 Phase 分割。「将来テナント管理者へ自動送信する**余地を残す**」(確定ではない) |
-| 起票時 | **Issue #346** | Phase 2 = 自動メール送信。ただしトリガは**手動ボタン押下→確認モーダル承認**。末尾に **「スコープ外 (将来 Phase 3 候補): 定期自動送信 (Cloud Scheduler)」と明記** |
-| — | ADR-033 | SMTP relay 自動送信案 → **Rejected** |
-| 2026-05-14 | ADR-034 | 開発者の再確認で「ログイン中アカウントで Gmail メーラーが立ち上がるイメージ」と判明 → Phase 2 を**手動 Gmail 下書き**に再定義 (= Image #4) |
-| 2026-05-20 | 完了通知 spec | 開発者の新規 4 要件。自動配信レーンは要件 #4 で**「全コース 100% 完了者のみ・1 度だけ」**と明確にスコープ |
+ブランチ `feat/phase-3a-shared-types-storage`、commit `512eb58` push 済。
 
-**結論**: 「進捗レポートの定期自動配信」は当初から一貫して**スコープ外 (Issue #346 で明示的に Phase 3 候補として先送り)**。要件に「入っていた」のではなく意図的に外されていた。業務スーパー管理者が質問①で求めているのは、まさにこの Phase 3 項目。
+追加した DTO (`packages/shared-types/src/dispatch.ts`、214 insertions / 5 deletions):
 
-### 3. Phase 3 実装方針の決定 (開発者判断)
+| 区分 | 追加内容 |
+|---|---|
+| 型 | `DispatchLane` (`completion` \| `progress`) |
+| Settings | `ProgressReportSettings` interface、`DispatchSettings.progressReport?` ネスト |
+| Request | `PutDispatchSettingsRequest` に `progressReport` 追加 + patch semantics コメント |
+| ErrorCode | `DispatchSettingsErrorCode` に `invalid_progress_report_schedule_{days,hour}` 追加 |
+| Tenant | `TenantNotificationCcConfig.progressReportEnabled?` + `PutTenantNotificationCcRequest.progressReportEnabled?` |
+| Run lock | `DispatchRun.laneId?` / `occurrenceId?` 追加 (ADR-039 D-2) |
+| Lane lock | `DispatchLaneLock` 新規 (ADR-039 D-4) |
+| Response | `RunProgressReportsResponse` 新規 |
+| Audit | `DispatchAuditEventType` に Phase 3 用 9 種追加 |
+| Recipient | `ProgressReportRecipientStatus` / `ProgressReportRecipient` / `ProgressReportClaimOutcome` 新規 |
+| 定数 | `DISPATCH_CONSTRAINTS` に Phase 3 用 5 値追加 |
 
-**決定**: 業務スーパー管理者のオーダーに対応し、進捗レポート定期自動配信を **Phase 3 として実装する**。
+Type-check 結果:
+- `@lms-279/shared-types`: pass (新規 type 追加のみ)
+- `@lms-279/api`: pass (optional field 追加で既存利用箇所影響なし)
 
----
+### 5. push 認証問題の根本原因切り分け + 復旧
 
-## Phase 3「進捗レポート 定期自動配信」実装方針 (次セッション入力)
+セッション中盤、PR #506 push 時に 403 (`Permission to system-279/lms-279.git denied to sasakisystem0801-source`)。
 
-### 対象者 (開発者確定済み)
-既存の手動進捗レポート (ADR-034 / Image #4) と同一定義:
-- **To** = 受講者本人 / **CC** = テナント担当者 (`ownerEmail` + 追加 CC)
-- **母集合** = 受講中の全受講者 (完了通知 run が走査する `listNotificationTargetUsers()` と同じ。**100% フィルタを外す**)
+**原因**: `.envrc` の `gh auth switch --user system-279 2>/dev/null || true` が **silent fail**。gh CLI keyring から system-279 token が失効しており、switch 失敗 → active のままだった sasakisystem0801-source の token が `gh auth token` で読まれて GH_TOKEN env に流れていた。
 
-### 再利用できる土台 (完了通知レーンからほぼ流用可)
-| 機構 | ファイル | 状態 |
-|---|---|---|
-| Cloud Scheduler → 内部 API (OIDC verify) → run-lock | `routes/internal/dispatch.ts` / `dispatch/run-lock.ts` / `oidc-verify.ts` | ✅ 流用可 |
-| スケジュール判定 (曜日・時刻 JST) | `dispatch/schedule-matcher.ts` | ✅ 流用可 |
-| テナント走査 + 並列度 8 ユーザー走査 | `dispatch/run-completion-notifications.ts` | ✅ 流用可 |
-| CC 組み立て (ownerEmail + 追加 CC、validate+dedup) | `dispatch/cc-email-validator.ts` | ✅ 流用可 |
-| DWD SendAs 送信 (From=dxcollege@279279.net) | `dispatch/gmail-dwd-send.ts` | ✅ 流用可 (※添付対応は追加要、下記) |
-| 監査ログ・実行履歴・PII ハッシュ | `dispatch/dispatch-audit.ts` 他 | ✅ 流用可 |
-| 進捗レポート本文 (進捗率・期限・ペース) テンプレ | `services/progress-pdf-mail-template.ts` | ✅ 既存 |
-| PDF 生成 (ProgressPdfDocument) | `services/progress-pdf-document.tsx` | ✅ 既存 (手動レーン) |
-| 設定 UI (dispatch-settings ページ) | `web/app/super/dispatch-settings/*` | ✅ セクション追加で拡張可 |
+**復旧手順** (本セッション内で完了):
+1. `gh auth login --hostname github.com --git-protocol https --web --scopes repo,workflow` で system-279 を keyring に再登録
+2. `GH_TOKEN= gh auth switch -u system-279` で active 切替
+3. `GH_TOKEN= git push -u origin feat/phase-3a-shared-types-storage` で push 成功
 
-### 設計の肝＝要確定 OQ (次セッション `/brainstorm` で確定。AI が独断仕様化しない＝4 原則 §1)
-1. **【最重要】重複送信ポリシーが完了通知と真逆**: 完了通知 =「1 人 1 回限り (`completion_notifications` reservation で恒久ブロック)」。進捗レポート =「**定期的に毎回送る**」。→ reservation モデルは流用不可。別の冪等設計 (「この run 内で 1 回だけ」= run-lock + run 内重複防止) が必要。
-2. **PDF 添付**: 完了通知は現状**添付なし** (`markSent` の `pdfSizeBytes: null` / `gmail-dwd-send` は「添付なし」)。手動進捗レポートは PDF 添付あり。自動でも添付するなら `gmail-dwd-send` に**添付対応の追加実装が必要**。
-3. **スケジュール分離**: 進捗レポートと完了通知で別スケジュール (曜日・時刻) が要るか、共通でよいか。
-4. **レーン分離**: 別 cron レーンにするか、同一 run で両方処理するか。
-5. **100% 完了者の扱い**: 完了通知 (修了メール) と進捗レポート両方届くと重複感。100% 完了者には進捗レポートをスキップするか (「対象者明確 = 全受講者」のご認識だが、ここだけ要最終確認)。
-6. **DTO 拡張**: `DispatchSettings` (shared-types `dispatch.ts`) に進捗レポート用フィールド (有効化 / スケジュール / 本文 / 添付有無) を追加するか、別 DTO にするか。
+**復旧確認** (`direnv exec . bash -c 'gh auth status | head -5'`):
+- Active account = `system-279 (GH_TOKEN)` ✅
+- GH_TOKEN prefix が system-279 の token に切替済 ✅
 
----
+**次セッション開始時の再検証**: `/catchup` 出力で **GitHub Token User (GH_TOKEN): system-279** と表示されることを確認。前セッションでは `sasakisystem0801-source` 表示だった。
 
-## 業務スーパー管理者への返信で扱う事項 (Phase 3 着手とは別軸、開発者領分)
+### 6. グローバル設定担当 AI へのハンドオフ
 
-Phase 3 実装と並行して、業務スーパー管理者へは以下を伝える必要あり (文面は開発者判断のタイミングで作成):
-- **①の訂正**: 現状の自動配信 (完了通知) は 100% 完了者のみ。途中経過の定期配信は新機能 (Phase 3) として実装着手する旨
-- **③署名の場所案内**: 設定画面「メール署名・本文」セクション内の「署名」欄 (本文欄の上)
-- **配信トグル**: 現在 OFF で間違いない旨 (受講者に何も送られていない)
-- **動作確認の段取り**: 業務スーパー管理者が「①-④ 動作確認を 1 度したい」と要望。完了通知の dry-run / smoke は admin SDK workflow (`dispatch-dry-run.yml` / `smoke-dwd-gmail-send.yml`) に移行済 (FR-8 改訂)。安全な動作確認方法の提示が必要 (要検討)
+本セッション中の知見からグローバル設定担当 AI 向けに 5 件のハンドオフメモを汎用化形式で素材列挙。グローバル AI 側で取捨選択・採用判断が完了し `~/.claude/memory/MEMORY.md` に反映済。プロジェクト内 AI / グローバル設定 AI の領分分離原則を確認 (プロジェクト内 AI はグローバル設定への能動提案を行わず、求められた場合のみ素材列挙に留める)。
 
 ---
 
@@ -139,40 +137,46 @@ Phase 3 実装と並行して、業務スーパー管理者へは以下を伝え
 - Net: 0 件
 ```
 
-**Net=0 の理由**: 本セッションは Phase 3 実装方針の決定 + handoff のみ (コード変更なし)。Phase 3 の Issue 化は、設計の肝 (重複送信/PDF添付/レーン分離) が OQ のまま起票すると粒度が粗くなるため、次セッション `/brainstorm` で仕様確定後に判断する (triage #5 ユーザー明示指示は満たすが、起票タイミングを brainstorm 後に最適化)。
-
----
-
-## Phase 8 cutover 状態 (current)
-
-| Step | 内容 | 担当 | 状態 |
-|---|---|---|---|
-| 0-7 | 準備完了 | AI + 開発者 | ✅ 完了 |
-| **8** | enabled = true 切替 (Web UI) | **業務スーパー管理者** | **⏸️ 保留** (①誤解の訂正 + 動作確認要望への対応待ち) |
-| 9-12 | 自動 cron / audit / 問い合わせ / kill switch | (各担当) | ⏳ Step 8 後 |
-
-**Step 8 保留の理由更新**: Session 51 までは「文面送付 + フィードバック待ち」。本セッションでフィードバック受領 → ①の認識ずれが判明したため、業務スーパー管理者が完了通知の仕様を正しく理解し動作確認を済ませるまで本番有効化は進めない。Phase 3 (進捗レポート) の実装とは独立した軸だが、業務スーパー管理者の期待 (途中経過配信) が Phase 3 で満たされることを伝えると納得感が上がる。
+**Net=0 の理由**: 本セッションは Phase 3 設計の正式化 (PR #506 merged) + PR 3a 着手 (DTO 拡張 WIP commit) の実装作業。triage 基準該当なし (実害バグ・CI 破壊・rating ≥ 7 のいずれも該当せず)。Phase 3 着手宣言は ADR-039 と PR #506 で代替できているため Issue 化不要。
 
 ---
 
 ## 次セッションへの引継ぎ事項
 
-### ⏭️ Phase 3「進捗レポート 定期自動配信」着手
-1. `/brainstorm` で上記「設計の肝＝要確定 OQ」(特に重複送信ポリシー) を確定
-2. `/impl-plan` で実装計画 (5+ ファイル想定 → Evaluator 分離プロトコル対象)
-3. spec を `docs/specs/` に新規作成、関連 ADR 起票 (レーン分離・冪等設計の判断)
-4. 仕様確定後に triage 判断のうえ Phase 3 Issue 起票
+### ⏭️ PR 3a 残作業 (継続)
 
-### ⏸️ 業務スーパー管理者への返信 (開発者領分)
-上記「業務スーパー管理者への返信で扱う事項」参照。Phase 3 着手の目処が立ってから、①訂正 + 署名場所 + トグル OFF 確認 + 動作確認段取り + Phase 3 着手予定をまとめて返信するのが効率的。
+ブランチ: `feat/phase-3a-shared-types-storage` (commit `512eb58` push 済、PR 未 open)
+
+残作業 6 項目:
+1. `services/api/src/services/dispatch/dispatch-storage.ts` interface に 7 メソッド追加 (`acquireLaneLock` / `tryClaimProgressRecipient` / `markProgressRecipientSent` / `markProgressRecipientFailed` / `promotePendingToManualReview` / `getProgressOccurrence` 等)
+2. `services/api/src/services/dispatch/lane-lock.ts` 新規 (transactional 取得、firestore 実装)
+3. `in-memory-dispatch-storage.ts` / `firestore-dispatch-storage.ts` に 7 メソッド実装
+4. settings PUT を **patch semantics** に変更 (両実装、ADR-039 HIGH-4 反映)
+5. `tenant-data-loader.ts` に `listProgressReportTargetUsers()` (active student + enrollment + 不退会 + 期限内 + 1% 以上) + `getTenantInfo()` 追加
+6. 単体テスト (claim 重複 reject / pending lease 切れ降格 / transactional lane lock 並行 reject / settings patch / 受講中フィルタ境界)
+
+完了したら `gh pr create` で PR 3a を open。AC-PR-01〜22 (impl-plan §2) を Test plan に転載。
+
+### 📌 PR 3b 以降の予定 (実装順)
+
+| PR | 内容 | 規模 | 注意点 |
+|---|---|---|---|
+| 3b | `gmail-dwd-send.ts` multipart/mixed 添付対応、byte-for-byte 回帰テスト | ~450 LOC | RFC 2231 dual-form filename |
+| 3c | `run-progress-reports` + state machine + endpoint + Integration テスト 25 シナリオ | ~1700 LOC | **Evaluator 分離プロトコル発動** + `/codex review` セカンドオピニオン (thread `019e82e8-...` 継続) |
+| 3d | super-admin API バリデーション + FE 設定 UI | ~550 LOC | テナント opt-in トグル UI |
+| 3e | Cloud Scheduler job + TTL Policy + dry-run workflow + cutover runbook | ~250 LOC + infra | 完了通知 cron と **30 分ずらす** |
 
 ### ⚠️ CI failure 継続確認
+
 ```bash
 gh run list --workflow=cleanup-orphan-auth-users.yml --limit 5
 ```
-- 再発なしならスキップ継続。継続するなら `scripts/cleanup-orphan-auth-users.ts` 周辺の原因調査着手
+
+- 2026-06-01 21:52 UTC で再発 (Session 52 では「再発なし」だった)
+- 1 回限りなら継続監視。2 回目再発するなら `scripts/cleanup-orphan-auth-users.ts` 周辺の原因調査着手
 
 ### postponed Issue (4 件、すべて変化なし)
+
 | # | 内容 | 再開条件 |
 |---|---|---|
 | #405 | Gmail draft filename strict MTA 経路リスク | M365/Outlook365/Proofpoint/Mimecast テナント追加 or 添付ファイル名破損問い合わせ |
@@ -180,32 +184,44 @@ gh run list --workflow=cleanup-orphan-auth-users.yml --limit 5
 | #275 | allowed_emails 管理画面 UX 改善 | 同上 |
 | #274 | allowed_emails 運用の可視化・追跡性強化 | 同上 |
 
+### ⏸️ 業務スーパー管理者への返信 (開発者領分、Session 52 から継続)
+
+Phase 3 着手の目処が立った今、Session 52 で整理した返信事項をまとめて送る:
+- **①の訂正**: 現状の自動配信 (完了通知) は 100% 完了者のみ。途中経過の定期配信は Phase 3 として実装着手 (ADR-039 + PR #506 で正式化済、次セッション以降に PR 3a〜3e で実装)
+- **③署名場所案内**: 設定画面「メール署名・本文」セクション内の「署名」欄 (本文欄の上)
+- **配信トグル**: 現在 OFF で間違いない旨
+- **動作確認段取り**: 完了通知の dry-run / smoke は admin SDK workflow に移行済 (FR-8 改訂)。Phase 3 完成後に進捗レポート用 dry-run / smoke が追加される予定
+
 ---
 
 ## 学び (本セッション固有、次回以降にも適用)
 
-### 「自動送信」という語の多義性が認識ずれを生む
+### `.envrc` の `gh auth switch ... 2>/dev/null || true` は silent fail する
 
-本件の根本原因は「自動送信」が 2 つの異なる意味で使われていたこと:
-- Phase 2 の「自動送信」= **手作業 (PDF 作成→添付→送信) の省力化** (手動ボタン押下トリガ)
-- 完了通知の「自動送信」= **スケジュールで自動実行** (100% 完了者のみ)
-- 業務スーパー管理者が期待した「自動送信」= **途中経過の定期自動配信** (Phase 3 = 未実装)
+`/catchup` の Token User 表示が意図と違う account になっていたら、`gh auth switch` が silent fail した可能性を疑う。原因は通常 keyring からの該当 account 失効 (端末間 sync されない user-scope なので、別端末での再 login / token expire / keychain クリアで起きる)。復旧手順は本ファイル §重要な作業内容 §5 を参照。次セッションでは `/catchup` で system-279 表示されることを再検証する。
 
-→ 現場とのやり取りで「自動送信」「自動配信」が出たら、**①トリガ (手動/スケジュール) ②対象者 (全員/100%) ③頻度 (1 回/定期)** の 3 軸で具体化してから合意する。曖昧なまま「✅ 可能です」と返すと本番事故 (ON にしても期待したメールが届かない) になる。
+### Plan stage の Codex セカンドオピニオンは大規模設計で ROI 高い
 
-### 現場フィードバックは実装ベースで検証してから返す
+5 PR / ~3300 LOC 規模の設計を Plan mode で組んだ後、実装着手前に Codex に厳しめレビューを依頼すると、設計上の見落とし (本件は冪等性 race / state machine 欠落 / 標準規格誤同定 / scale 前提未確認の 4 件 CRITICAL + 5 件 HIGH) が複数検出される。Plan が固まる直前は「設計の前提が一発勝負で固定される」タイミングで、後段の手戻りコストが最小化される。CLAUDE.md「destructive migration の impl-plan は AskUserQuestion 前に Codex セカンドオピニオン必須」を、destructive ではない大規模新機能設計まで拡張して運用すると良い (グローバル設定担当 AI に素材として伝達済)。
 
-業務スーパー管理者の質問①に「はい、その認識で大丈夫です」と即答していたら、配信 ON 後に「途中の受講者に何も届かない」事故になっていた。スクショ + 実装 (eligibility / mail-template / CC ロジック) を突き合わせて初めて認識ずれを特定できた。`feedback_field_voice_context_first.md` / `feedback_verify_fact_before_declaring.md` の実践。
+### プロジェクト内 AI とグローバル設定 AI の領分分離
+
+プロジェクト内 AI は、グローバル設定 (`~/.claude/CLAUDE.md` / `~/.claude/memory/*`) への改善案を能動的に出さない。ユーザーから明示的に求められた場合のみ、評価せず素材として列挙する。プロジェクト固有の文脈に強くバイアスされた視点での汎用性判断は、グローバル設定担当 AI の判断領分を侵食する。4 原則 §1 の executor / decision-maker 分離を、AI 種別軸 (プロジェクト / グローバル) でさらに細分化する位置づけ。
 
 ---
 
 ## 関連リソース
 
-- 前セッション handoff: `docs/handoff/archive/2026-05-26-session-51.md`
-- 完了通知 設計仕様書: `docs/specs/2026-05-20-completion-notification-design.md`
-- 手動進捗レポート ADR: `docs/adr/ADR-034-phase2-gmail-draft.md` / `docs/adr/ADR-032-*.md`
-- Phase 2 起票 (Phase 3 先送り記録): Issue #346 (closed)
-- cutover playbook: `docs/runbook/dxcollege-completion-notification-cutover.md`
+- 前セッション handoff: `docs/handoff/archive/2026-06-01-session-52.md`
+- Phase 3 設計 PR: PR #506 (merged `9d9c69f`)
+- ADR-039: `docs/adr/ADR-039-phase3-progress-report-dispatch.md`
+- 設計仕様書: `docs/specs/2026-06-01-progress-report-dispatch-design.md`
+- 実装計画 (AC-PR-01〜22): `docs/specs/2026-06-01-progress-report-dispatch-impl-plan.md`
+- 処理フロー図: `docs/specs/2026-06-01-progress-report-dispatch-flow.mmd`
+- PR 3a WIP commit: `512eb58` on `feat/phase-3a-shared-types-storage`
+- Codex セカンドオピニオン thread: `019e82e8-4228-79c1-a63a-d3c4e7359731` (PR 3c で継続利用)
+- Plan stage 議論記録: `~/.claude/plans/eager-jumping-hoare.md`
+- cutover playbook (mirror 対象): `docs/runbook/dxcollege-completion-notification-cutover.md`
 - 共有 URL (再掲):
   - ヘルプ: https://web-3zcica5euq-an.a.run.app/help/super#super-dispatch-settings
   - 設定画面: https://web-3zcica5euq-an.a.run.app/super/dispatch-settings
