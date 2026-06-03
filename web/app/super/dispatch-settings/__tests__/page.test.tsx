@@ -131,6 +131,98 @@ describe("DispatchSettingsPage", () => {
     expect(screen.getByTestId("run-history-table")).toBeInTheDocument();
   });
 
+  // ============================================================
+  // Phase 3 PR 3d (ADR-039 D-1): progressReport セクション
+  // ============================================================
+
+  it("progressReport セクションが表示される (旧 doc で progressReport 欠落でも default を表示)", async () => {
+    superFetchMock.mockResolvedValueOnce(baseSettings); // progressReport なし
+    render(<DispatchSettingsPage />);
+    await screen.findByDisplayValue("DXcollege運営スタッフ");
+    expect(
+      screen.getByRole("switch", {
+        name: "進捗レポート定期配信を有効化",
+      }),
+    ).toBeInTheDocument();
+    // default OFF 表示
+    expect(
+      screen.getByText("進捗レポート配信 OFF"),
+    ).toBeInTheDocument();
+  });
+
+  it("既存 progressReport ON を読み込み、ON ラベルを表示する", async () => {
+    superFetchMock.mockResolvedValueOnce({
+      ...baseSettings,
+      progressReport: {
+        enabled: true,
+        scheduleDaysOfWeek: [2, 5],
+        scheduleHourJst: 11,
+      },
+    });
+    render(<DispatchSettingsPage />);
+    await screen.findByDisplayValue("DXcollege運営スタッフ");
+    expect(screen.getByText("進捗レポート配信 ON")).toBeInTheDocument();
+  });
+
+  it("保存時に progressReport を含めて PUT する (always-send-all)", async () => {
+    superFetchMock
+      .mockResolvedValueOnce({
+        ...baseSettings,
+        progressReport: {
+          enabled: true,
+          scheduleDaysOfWeek: [3],
+          scheduleHourJst: 8,
+        },
+      })
+      .mockResolvedValueOnce({ ...baseSettings, version: 4 });
+    render(<DispatchSettingsPage />);
+    await screen.findByDisplayValue("DXcollege運営スタッフ");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    });
+
+    await waitFor(() =>
+      expect(superFetchMock).toHaveBeenCalledWith(
+        "/api/v2/super/dispatch/settings",
+        expect.objectContaining({ method: "PUT" }),
+      ),
+    );
+    const putCall = superFetchMock.mock.calls.find((c) => c[1]?.method === "PUT");
+    const sentBody = JSON.parse(putCall![1].body);
+    expect(sentBody.progressReport).toEqual({
+      enabled: true,
+      scheduleDaysOfWeek: [3],
+      scheduleHourJst: 8,
+    });
+  });
+
+  it("旧 doc (progressReport なし) を保存すると default の OFF/空配列/0時を送信する", async () => {
+    superFetchMock
+      .mockResolvedValueOnce(baseSettings) // progressReport なし
+      .mockResolvedValueOnce({ ...baseSettings, version: 4 });
+    render(<DispatchSettingsPage />);
+    await screen.findByDisplayValue("DXcollege運営スタッフ");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    });
+
+    await waitFor(() =>
+      expect(superFetchMock).toHaveBeenCalledWith(
+        "/api/v2/super/dispatch/settings",
+        expect.objectContaining({ method: "PUT" }),
+      ),
+    );
+    const putCall = superFetchMock.mock.calls.find((c) => c[1]?.method === "PUT");
+    const sentBody = JSON.parse(putCall![1].body);
+    expect(sentBody.progressReport).toEqual({
+      enabled: false,
+      scheduleDaysOfWeek: [],
+      scheduleHourJst: 0,
+    });
+  });
+
   it("再読み込み失敗時 loadSettings は form を null 化する (regression: form/error 共存防止)", async () => {
     // 初回 GET 失敗 → error 表示 + 再読み込みボタン
     superFetchMock.mockRejectedValueOnce(

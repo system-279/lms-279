@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   GetDispatchSettingsResponse,
+  ProgressReportSettings,
   PutDispatchSettingsRequest,
 } from "@lms-279/shared-types";
 import { ApiError } from "@/lib/api";
@@ -42,9 +43,22 @@ interface FormState {
   scheduleHourJst: number;
   signatureName: string;
   completionMessageBody: string;
+  /**
+   * Phase 3 (ADR-039 D-1): 進捗レポート定期配信の設定。
+   * undefined のとき UI は default (enabled=false / scheduleDaysOfWeek=[] / scheduleHourJst=0) を表示する。
+   * 保存時は当画面で常に値が確定するため、PUT body には常に含めて送信する (always-send-all)。
+   */
+  progressReport: ProgressReportSettings;
   version: number;
   senderEmail: string;
 }
+
+/** progressReport 欠落時 (旧 doc) の default 値 */
+const DEFAULT_PROGRESS_REPORT: ProgressReportSettings = {
+  enabled: false,
+  scheduleDaysOfWeek: [],
+  scheduleHourJst: 0,
+};
 
 function toFormState(s: GetDispatchSettingsResponse): FormState {
   return {
@@ -53,6 +67,7 @@ function toFormState(s: GetDispatchSettingsResponse): FormState {
     scheduleHourJst: s.scheduleHourJst,
     signatureName: s.signatureName,
     completionMessageBody: s.completionMessageBody,
+    progressReport: s.progressReport ?? DEFAULT_PROGRESS_REPORT,
     version: s.version,
     senderEmail: s.senderEmail,
   };
@@ -144,6 +159,9 @@ export default function DispatchSettingsPage() {
       scheduleHourJst: form.scheduleHourJst,
       signatureName: form.signatureName,
       completionMessageBody: form.completionMessageBody,
+      // Phase 3 (ADR-039 D-1): 当画面が進捗レポート設定の真実の入り口なので
+      // always-send-all 戦略で常に送信。patch semantics は別 UI 経由の保護用。
+      progressReport: form.progressReport,
       version: form.version,
     };
     try {
@@ -172,9 +190,9 @@ export default function DispatchSettingsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-bold">完了通知 配信設定</h1>
+        <h1 className="text-xl font-bold">完了通知・進捗レポート 配信設定</h1>
         <p className="text-sm text-muted-foreground">
-          全コース 100% 完了した受講者へ自動送信する完了通知の設定です。
+          全コース 100% 完了した受講者へ送る完了通知と、受講中の方へ送る進捗レポート（PDF 添付）の定期配信を、それぞれ独立に設定します。
         </p>
       </div>
 
@@ -244,6 +262,46 @@ export default function DispatchSettingsPage() {
                   ...form,
                   signatureName: next.signatureName,
                   completionMessageBody: next.completionMessageBody,
+                })
+              }
+              disabled={saving}
+            />
+          </Section>
+
+          <Section
+            title="進捗レポート 定期配信"
+            description="受講中の方へ、現在の進捗をまとめた PDF を添付したメールを定期的に自動送信する設定です（完了通知とは別のレーンで動きます）。"
+            hint="完了通知レーンとは独立したスケジュールで動きます。OFF にすると次の自動チェック（最大 60 分以内）から進捗レポートのみ停止し、完了通知への影響はありません。テナント単位の opt-in が別途必要です（「テナントごとの CC 追加設定」内のトグル）。"
+          >
+            <label className="flex items-center gap-3 text-sm">
+              <Switch
+                checked={form.progressReport.enabled}
+                onCheckedChange={(v) =>
+                  setForm({
+                    ...form,
+                    progressReport: { ...form.progressReport, enabled: v },
+                  })
+                }
+                disabled={saving}
+                aria-label="進捗レポート定期配信を有効化"
+              />
+              <span>
+                {form.progressReport.enabled
+                  ? "進捗レポート配信 ON"
+                  : "進捗レポート配信 OFF"}
+              </span>
+            </label>
+            <ScheduleEditor
+              daysOfWeek={form.progressReport.scheduleDaysOfWeek}
+              hourJst={form.progressReport.scheduleHourJst}
+              onChange={(next) =>
+                setForm({
+                  ...form,
+                  progressReport: {
+                    ...form.progressReport,
+                    scheduleDaysOfWeek: next.daysOfWeek,
+                    scheduleHourJst: next.hourJst,
+                  },
                 })
               }
               disabled={saving}

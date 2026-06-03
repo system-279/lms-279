@@ -30,18 +30,25 @@ const TENANT_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
 
 /**
  * tenant CC config の I/O 抽象。production は Firestore、test は in-memory fake。
+ *
+ * `progressReportEnabled` は Phase 3 (ADR-039 D-6) で追加。undefined を渡したときは
+ * 既存値を保持 (patch semantics)、boolean を渡したときのみ書き換える。完了通知 OFF と
+ * 進捗レポート OFF は独立に決裁したいテナント運用 (例: 完了通知のみ運用 / 進捗のみ運用)
+ * に対応するため。
  */
 export interface TenantCcConfigStore {
   /** tenant doc の CC config を取得。tenant doc 不在なら null */
   getTenantCcConfig(
     tenantId: string,
   ): Promise<TenantNotificationCcConfig | null>;
-  /** notificationCcEmails / completionNotificationEnabled を更新 (merge) */
+  /** notificationCcEmails / completionNotificationEnabled / progressReportEnabled を更新 (merge) */
   updateTenantCcConfig(
     tenantId: string,
     input: {
       notificationCcEmails: string[];
       completionNotificationEnabled: boolean;
+      /** Phase 3 (ADR-039 D-6): undefined のとき既存値保持 (patch semantics) */
+      progressReportEnabled?: boolean;
     },
   ): Promise<void>;
 }
@@ -85,6 +92,8 @@ export class InMemoryTenantCcConfigStore implements TenantCcConfigStore {
         ownerEmail: null,
         notificationCcEmails: [],
         completionNotificationEnabled: true,
+        // Phase 3 (ADR-039 D-6): default false (opt-in)
+        progressReportEnabled: false,
       });
     }
   }
@@ -100,6 +109,7 @@ export class InMemoryTenantCcConfigStore implements TenantCcConfigStore {
     input: {
       notificationCcEmails: string[];
       completionNotificationEnabled: boolean;
+      progressReportEnabled?: boolean;
     },
   ): Promise<void> {
     const prev = this.configs.get(tenantId);
@@ -107,6 +117,11 @@ export class InMemoryTenantCcConfigStore implements TenantCcConfigStore {
       ownerEmail: prev?.ownerEmail ?? null,
       notificationCcEmails: input.notificationCcEmails,
       completionNotificationEnabled: input.completionNotificationEnabled,
+      // patch semantics: undefined のとき既存値保持 (default false)
+      progressReportEnabled:
+        input.progressReportEnabled !== undefined
+          ? input.progressReportEnabled
+          : (prev?.progressReportEnabled ?? false),
     });
   }
 }
@@ -125,6 +140,9 @@ export class FirestoreTenantCcConfigStore implements TenantCcConfigStore {
       // 既存テナント後方互換: 未設定は default true (loader と整合)
       completionNotificationEnabled:
         (data.completionNotificationEnabled as boolean | undefined) ?? true,
+      // Phase 3 (ADR-039 D-6): 既存テナントは default false (opt-in)
+      progressReportEnabled:
+        (data.progressReportEnabled as boolean | undefined) ?? false,
     };
   }
 
@@ -133,9 +151,12 @@ export class FirestoreTenantCcConfigStore implements TenantCcConfigStore {
     input: {
       notificationCcEmails: string[];
       completionNotificationEnabled: boolean;
+      progressReportEnabled?: boolean;
     },
   ): Promise<void> {
-    // merge: 他の tenant フィールドを保護。両値とも常に定義済 (undefined 混入なし)。
+    // merge: 他の tenant フィールドを保護。
+    // progressReportEnabled は undefined のとき payload に含めず既存値保持
+    // (rules/production-data-safety.md §1)。route handler の同パターン spread と統一。
     await getFirestore()
       .collection("tenants")
       .doc(tenantId)
@@ -143,6 +164,9 @@ export class FirestoreTenantCcConfigStore implements TenantCcConfigStore {
         {
           notificationCcEmails: input.notificationCcEmails,
           completionNotificationEnabled: input.completionNotificationEnabled,
+          ...(input.progressReportEnabled !== undefined && {
+            progressReportEnabled: input.progressReportEnabled,
+          }),
         },
         { merge: true },
       );
@@ -214,6 +238,19 @@ export function createTenantNotificationCcRouter(
         });
         return;
       }
+      // Phase 3 (ADR-039 D-6): progressReportEnabled は optional。送信時のみ
+      // type を検証し、未送信なら storage 層で既存値保持 (patch semantics)。
+      // 旧 UI 由来の PUT は progressReportEnabled を含まないため、既存値が消えない。
+      if (
+        body.progressReportEnabled !== undefined &&
+        typeof body.progressReportEnabled !== "boolean"
+      ) {
+        res.status(400).json({
+          error: "bad_request",
+          message: "progressReportEnabled は boolean が必要です。",
+        });
+        return;
+      }
       if (!Array.isArray(body.notificationCcEmails)) {
         res.status(400).json({
           error: "invalid_cc_emails",
@@ -257,12 +294,22 @@ export function createTenantNotificationCcRouter(
       await deps.store.updateTenantCcConfig(tenantId, {
         notificationCcEmails: deduped,
         completionNotificationEnabled: body.completionNotificationEnabled,
+        // 未送信なら storage 層で既存値保持 (patch semantics、ADR-039 D-6)
+        ...(body.progressReportEnabled !== undefined && {
+          progressReportEnabled: body.progressReportEnabled,
+        }),
       });
 
+      // 応答は更新後の整合値: 送信されたら採用、未送信なら既存値を引き継ぐ
+      const effectiveProgressReportEnabled =
+        body.progressReportEnabled !== undefined
+          ? body.progressReportEnabled
+          : (existing.progressReportEnabled ?? false);
       const response: GetTenantNotificationCcResponse = {
         ownerEmail: existing.ownerEmail,
         notificationCcEmails: deduped,
         completionNotificationEnabled: body.completionNotificationEnabled,
+        progressReportEnabled: effectiveProgressReportEnabled,
       };
       res.json(response);
     },
