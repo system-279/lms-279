@@ -64,7 +64,7 @@
 | 4 | 100% 完了者の扱い | 除外 (`skipCompletedUsers=true` 固定、設定 UI で切替不可) | decision-maker 承認 |
 | 5 | PR 分割粒度 | 5 PR (3a / 3b / 3c / 3d / 3e) | decision-maker 承認 |
 | 6 | Firestore TTL | 90 日 | decision-maker 承認 |
-| 7 | 「受講中」定義 | 厳密: active student + enrollment 有 + 不退会 + 期限内 + 1% 以上進捗 | ADR-039 D-5 |
+| 7 | 「受講中」定義 | **Plan A 4 軸**: role=student + tenant active + videoAccessUntil 期限内 + 進捗 ≥ 1% (ADR-039 D-5 改訂 2026-06-03、退会・enrollment は Firestore schema 不在のため将来 PR で対応) | ADR-039 D-5 |
 | 8 | 受講者最大規模 | < 500 名 / 全テナント合計 (同期バッチ維持) | ADR-039 D-7 |
 | 9 | テナント単位 opt-out | 分離: `tenants/{tid}.progressReportEnabled?: boolean` 新規 (default false) | ADR-039 D-6 |
 
@@ -100,7 +100,7 @@ POST /api/v2/internal/dispatch/run-progress-reports (services/api)
 - **D-2**: 冪等性キー `occurrenceId` を分離 (Cloud Scheduler at-least-once 対応)
 - **D-3**: Recipient state machine `pending → sent / failed / manual_review_required`
 - **D-4**: Lane lock を別 doc + transactional 取得
-- **D-5**: 受講中フィルタ厳密化
+- **D-5**: 受講中フィルタ 4 軸 (Plan A 採用、ADR-039 D-5 改訂)
 - **D-6**: テナント単位 opt-out を分離 (`progressReportEnabled`)
 - **D-7**: < 500 名前提で同期バッチ維持
 - **D-8**: RFC 2231 filename dual-form

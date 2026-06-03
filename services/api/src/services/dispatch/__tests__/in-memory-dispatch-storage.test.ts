@@ -85,6 +85,107 @@ describe("InMemoryDispatchStorage.updateDispatchSettings", () => {
   });
 });
 
+describe("InMemoryDispatchStorage.updateDispatchSettings (Phase 3 patch semantics、AC-PR-18)", () => {
+  let storage: InMemoryDispatchStorage;
+  beforeEach(() => {
+    storage = new InMemoryDispatchStorage();
+  });
+
+  it("既存 progressReport は新規 PUT で progressReport 未送信なら保持される (HIGH-4 中核)", async () => {
+    // 初回 create + progressReport ON
+    await storage.updateDispatchSettings({
+      ...BASE_INPUT,
+      expectedVersion: 0,
+      progressReport: {
+        enabled: true,
+        scheduleDaysOfWeek: [3],
+        scheduleHourJst: 9,
+      },
+    });
+    // 旧 UI からの PUT (progressReport 未送信) で完了通知 fields のみ更新
+    const result = await storage.updateDispatchSettings({
+      ...BASE_INPUT,
+      expectedVersion: 1,
+      enabled: false, // 完了通知だけ OFF にする操作
+      updatedAt: "2026-05-22T02:00:00.000Z",
+      // progressReport を渡さない
+    });
+    expect(result.updated).toBe(true);
+    if (result.updated) {
+      // 既存 progressReport が保持されている
+      expect(result.settings.progressReport).toEqual({
+        enabled: true,
+        scheduleDaysOfWeek: [3],
+        scheduleHourJst: 9,
+      });
+      // 完了通知側は更新された
+      expect(result.settings.enabled).toBe(false);
+    }
+  });
+
+  it("progressReport を新規追加できる (既存値なしから set)", async () => {
+    await storage.updateDispatchSettings({
+      ...BASE_INPUT,
+      expectedVersion: 0,
+    });
+    const result = await storage.updateDispatchSettings({
+      ...BASE_INPUT,
+      expectedVersion: 1,
+      updatedAt: "2026-05-22T02:00:00.000Z",
+      progressReport: {
+        enabled: true,
+        scheduleDaysOfWeek: [4],
+        scheduleHourJst: 11,
+      },
+    });
+    expect(result.updated).toBe(true);
+    if (result.updated) {
+      expect(result.settings.progressReport).toEqual({
+        enabled: true,
+        scheduleDaysOfWeek: [4],
+        scheduleHourJst: 11,
+      });
+    }
+  });
+
+  it("初回 create で必須 field 不足は throw (route 層で validate 済前提)", async () => {
+    // 必須 field 抜き (completionMessageBody) で初回 create
+    await expect(
+      storage.updateDispatchSettings({
+        expectedVersion: 0,
+        enabled: true,
+        scheduleDaysOfWeek: [1],
+        scheduleHourJst: 9,
+        signatureName: "x",
+        // completionMessageBody 抜き
+        senderEmail: "x@y.z",
+        updatedBy: "a",
+        updatedAt: "2026-05-22T00:00:00.000Z",
+      }),
+    ).rejects.toThrow(/initial create requires all completion fields/);
+  });
+
+  it("既存 doc あり時に optional field 全て省略でも version + updatedAt + updatedBy のみ更新", async () => {
+    await storage.updateDispatchSettings({
+      ...BASE_INPUT,
+      expectedVersion: 0,
+    });
+    const result = await storage.updateDispatchSettings({
+      expectedVersion: 1,
+      updatedBy: "different@example.com",
+      updatedAt: "2026-05-22T05:00:00.000Z",
+      // 全 settings field 省略
+    });
+    expect(result.updated).toBe(true);
+    if (result.updated) {
+      expect(result.settings.enabled).toBe(true); // 既存値保持
+      expect(result.settings.scheduleDaysOfWeek).toEqual([1, 4]); // 既存値保持
+      expect(result.settings.updatedBy).toBe("different@example.com"); // 更新
+      expect(result.settings.version).toBe(2); // increment
+    }
+  });
+});
+
 describe("InMemoryDispatchStorage.listRuns", () => {
   let storage: InMemoryDispatchStorage;
   beforeEach(() => {

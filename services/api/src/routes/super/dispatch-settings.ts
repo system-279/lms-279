@@ -56,6 +56,66 @@ function hasForbiddenBodyControlChar(value: string): boolean {
   return false;
 }
 
+/**
+ * Phase 3 (ADR-039 D-1): progressReport sub-object の shape を検証。
+ *
+ * 受け入れ条件 (送信された場合):
+ *   - enabled: boolean
+ *   - scheduleDaysOfWeek: number[] (各要素 0-6 の整数)
+ *   - scheduleHourJst: 0-23 の整数
+ *
+ * 返り値: 検証 OK なら null、NG なら ADR-010 フラット形式の {error, message}。
+ * undefined / null は scope 外 (caller 側で未送信扱い)。
+ */
+function validateProgressReport(
+  value: unknown,
+):
+  | null
+  | {
+      error:
+        | "bad_request"
+        | "invalid_progress_report_schedule_days"
+        | "invalid_progress_report_schedule_hour";
+      message: string;
+    } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {
+      error: "bad_request",
+      message: "progressReport はオブジェクトが必要です。",
+    };
+  }
+  const pr = value as Record<string, unknown>;
+  if (typeof pr.enabled !== "boolean") {
+    return {
+      error: "bad_request",
+      message: "progressReport.enabled は boolean が必要です。",
+    };
+  }
+  if (
+    !Array.isArray(pr.scheduleDaysOfWeek) ||
+    !pr.scheduleDaysOfWeek.every(
+      (d: unknown) => Number.isInteger(d) && (d as number) >= 0 && (d as number) <= 6,
+    )
+  ) {
+    return {
+      error: "invalid_progress_report_schedule_days",
+      message: "progressReport.scheduleDaysOfWeek は 0〜6 の整数配列が必要です。",
+    };
+  }
+  if (
+    typeof pr.scheduleHourJst !== "number" ||
+    !Number.isInteger(pr.scheduleHourJst) ||
+    pr.scheduleHourJst < 0 ||
+    pr.scheduleHourJst > 23
+  ) {
+    return {
+      error: "invalid_progress_report_schedule_hour",
+      message: "progressReport.scheduleHourJst は 0〜23 の整数が必要です。",
+    };
+  }
+  return null;
+}
+
 export function createDispatchSettingsRouter(
   deps: DispatchSettingsRouteDeps,
 ): Router {
@@ -154,6 +214,16 @@ export function createDispatchSettingsRouter(
         });
         return;
       }
+      // Phase 3 (ADR-039 D-1): progressReport は optional。送信時のみ validate。
+      // 未送信なら storage 層で既存値保持 (patch semantics、ADR-039 HIGH-4)。
+      // 旧 UI 由来の PUT は progressReport を含まないため、既存 progressReport は消えない。
+      if (body.progressReport !== undefined) {
+        const prErr = validateProgressReport(body.progressReport);
+        if (prErr) {
+          res.status(400).json(prErr);
+          return;
+        }
+      }
 
       const outcome = await deps.storage.updateDispatchSettings({
         expectedVersion: body.version,
@@ -162,6 +232,10 @@ export function createDispatchSettingsRouter(
         scheduleHourJst: body.scheduleHourJst,
         signatureName: body.signatureName,
         completionMessageBody: body.completionMessageBody,
+        // 送信されていれば渡す (undefined のままにすると storage 側で既存値保持)
+        ...(body.progressReport !== undefined && {
+          progressReport: body.progressReport,
+        }),
         senderEmail: deps.senderEmail,
         updatedBy: req.superAdmin?.email ?? "",
         updatedAt: now().toISOString(),

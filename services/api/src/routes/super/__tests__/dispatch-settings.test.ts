@@ -187,4 +187,93 @@ describe("PUT /super/dispatch/settings", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("bad_request");
   });
+
+  // ============================================================
+  // Phase 3 ADR-039 D-1 / HIGH-4: progressReport patch semantics
+  // ============================================================
+
+  it("progressReport を含めて PUT すると保存される", async () => {
+    const res = await request(makeApp(storage))
+      .put("/api/v2/super/dispatch/settings")
+      .send({
+        ...validBody,
+        progressReport: {
+          enabled: true,
+          scheduleDaysOfWeek: [3],
+          scheduleHourJst: 11,
+        },
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.progressReport).toEqual({
+      enabled: true,
+      scheduleDaysOfWeek: [3],
+      scheduleHourJst: 11,
+    });
+  });
+
+  it("旧 UI 由来の PUT (progressReport 未送信) で既存 progressReport は消えない (AC-PR-18)", async () => {
+    // 初回 PUT で progressReport 設定
+    await request(makeApp(storage))
+      .put("/api/v2/super/dispatch/settings")
+      .send({
+        ...validBody,
+        progressReport: {
+          enabled: true,
+          scheduleDaysOfWeek: [3],
+          scheduleHourJst: 11,
+        },
+      });
+    // 旧 UI からの再 PUT (progressReport なし)
+    const res = await request(makeApp(storage))
+      .put("/api/v2/super/dispatch/settings")
+      .send({ ...validBody, version: 1, enabled: false });
+    expect(res.status).toBe(200);
+    expect(res.body.enabled).toBe(false); // 完了通知は更新
+    expect(res.body.progressReport).toEqual({
+      enabled: true,
+      scheduleDaysOfWeek: [3],
+      scheduleHourJst: 11,
+    });
+  });
+
+  it("progressReport.scheduleDaysOfWeek に 7 を含むと 400 invalid_progress_report_schedule_days", async () => {
+    const res = await request(makeApp(storage))
+      .put("/api/v2/super/dispatch/settings")
+      .send({
+        ...validBody,
+        progressReport: {
+          enabled: true,
+          scheduleDaysOfWeek: [3, 7],
+          scheduleHourJst: 11,
+        },
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_progress_report_schedule_days");
+  });
+
+  it("progressReport.scheduleHourJst=24 は 400 invalid_progress_report_schedule_hour", async () => {
+    const res = await request(makeApp(storage))
+      .put("/api/v2/super/dispatch/settings")
+      .send({
+        ...validBody,
+        progressReport: {
+          enabled: true,
+          scheduleDaysOfWeek: [3],
+          scheduleHourJst: 24,
+        },
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_progress_report_schedule_hour");
+  });
+
+  it("progressReport.enabled が boolean でない (配列指定) は 400 bad_request", async () => {
+    const res = await request(makeApp(storage))
+      .put("/api/v2/super/dispatch/settings")
+      .send({
+        ...validBody,
+        progressReport: [] as unknown as { enabled: boolean; scheduleDaysOfWeek: number[]; scheduleHourJst: number },
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("bad_request");
+  });
 });

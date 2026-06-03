@@ -189,6 +189,15 @@ describe("recordAuditLog - best-effort (§6.1)", () => {
       listAuditLogs: vi.fn(
         (): Promise<DispatchAuditLog[]> => Promise.resolve([]),
       ),
+      // Phase 3 (ADR-039): 本テストでは呼び出されないため no-op stub
+      acquireLaneLock: vi.fn(),
+      completeLaneLock: vi.fn(),
+      abortLaneLock: vi.fn(),
+      tryClaimProgressRecipient: vi.fn(),
+      markProgressRecipientSent: vi.fn(),
+      markProgressRecipientFailed: vi.fn(),
+      promotePendingToManualReview: vi.fn(),
+      getProgressRecipient: vi.fn(),
     };
   }
 
@@ -249,6 +258,15 @@ describe("recordAuditLog - best-effort (§6.1)", () => {
         Promise.reject(new Error("Conflict on user secret@x.com")),
       ),
       listAuditLogs: vi.fn(() => Promise.resolve([])),
+      // Phase 3 (ADR-039): 本テストでは呼び出されないため no-op stub
+      acquireLaneLock: vi.fn(),
+      completeLaneLock: vi.fn(),
+      abortLaneLock: vi.fn(),
+      tryClaimProgressRecipient: vi.fn(),
+      markProgressRecipientSent: vi.fn(),
+      markProgressRecipientFailed: vi.fn(),
+      promotePendingToManualReview: vi.fn(),
+      getProgressRecipient: vi.fn(),
     };
     const warn = vi.fn();
     await recordAuditLog(

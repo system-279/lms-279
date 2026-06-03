@@ -1,11 +1,30 @@
 /**
- * DXcollege 自動完了通知システム DTO
- * 設計仕様書: docs/specs/2026-05-20-completion-notification-design.md
+ * DXcollege 自動完了通知システム DTO + Phase 3 進捗レポート定期自動配信 DTO
+ *
+ * 設計仕様書:
+ *  - docs/specs/2026-05-20-completion-notification-design.md (完了通知)
+ *  - docs/specs/2026-06-01-progress-report-dispatch-design.md (Phase 3 進捗レポート)
  *
  * 既存の手動 Gmail 下書き機能 (progress-pdf.ts、PR #434) と完全独立した別レーン。
  *
- * 関連 ADR: ADR-026 (DWD), ADR-029 (JST), ADR-034 (Phase 2 Gmail draft, PII hash)
+ * 関連 ADR:
+ *  - ADR-026 (DWD), ADR-029 (JST), ADR-034 (Phase 2 Gmail draft, PII hash)
+ *  - ADR-037 (sender impersonation SendAs)
+ *  - ADR-039 (Phase 3 進捗レポート定期自動配信、レーン分離・冪等設計・テナント opt-out 分離)
  */
+
+// ============================================================
+// 配信レーン識別子 (ADR-039 D-1 / D-4)
+// ============================================================
+
+/**
+ * 配信レーンの識別子。両レーンは別 endpoint + 別 Cloud Scheduler job + 別 lane lock。
+ *  - completion: 既存の完了通知レーン (run-completion-notifications.ts、1 人 1 回 reservation、100% 完了者のみ)
+ *  - progress: Phase 3 で追加した進捗レポート定期自動配信レーン (run-progress-reports.ts、1 run 1 回、active 受講者)
+ *
+ * 既存 DispatchRun doc は laneId 欠落時 "completion" 扱い (後方互換)。
+ */
+export type DispatchLane = "completion" | "progress";
 
 // ============================================================
 // 配信設定 (super_dispatch_settings/global)
@@ -24,6 +43,12 @@ export interface DispatchSettings {
   completionMessageBody: string;
   /** 送信元 email (Cloud Run env DXCOLLEGE_SENDER_EMAIL から読み取り、編集不可) */
   senderEmail: string;
+  /**
+   * Phase 3 進捗レポート定期自動配信の設定 (ADR-039 D-1)。
+   * undefined または enabled=false で当レーン無効。完了通知レーンへの影響なし。
+   * 既存テナントは undefined のまま動く (マイグレーション不要、ADR-039 D-6)。
+   */
+  progressReport?: ProgressReportSettings;
   /** 最終更新時刻 (ISO 8601) */
   updatedAt: string;
   /** 最終更新者の email (raw、監査責任明示のため hash 化しない) */
@@ -32,32 +57,67 @@ export interface DispatchSettings {
   version: number;
 }
 
+/**
+ * 進捗レポート定期自動配信の設定 (DispatchSettings.progressReport)。
+ * 完了通知と独立したスケジュール (曜日・時刻)。
+ *
+ * 設定 UI で切替不可な固定挙動 (ADR-039 OQ #2 / #4):
+ *  - skipCompletedUsers=true (100% 完了者は除外、完了通知レーンが既にカバー)
+ *  - includeAttachment=true (PDF 添付あり、手動レーン ADR-034 と同等)
+ *  - 受講中フィルタ厳密 (active + enrollment + 不退会 + 期限内 + 1% 以上、ADR-039 D-5)
+ */
+export interface ProgressReportSettings {
+  /** kill switch: false で次回 cron 起動時に即時停止 (完了通知への影響なし) */
+  enabled: boolean;
+  /** 0-6 (日-土) の配信曜日。完了通知の scheduleDaysOfWeek と独立 */
+  scheduleDaysOfWeek: number[];
+  /** 0-23 の配信時刻 (JST、HH:00 単位)。完了通知の scheduleHourJst と独立 */
+  scheduleHourJst: number;
+}
+
 /** 設定取得レスポンス (senderEmail は env から読み取って併記、編集不可) */
 export type GetDispatchSettingsResponse = DispatchSettings;
 
 /**
- * 設定更新リクエスト (version 不一致で 409)。
+ * 設定更新リクエスト (PUT は patch semantics、ADR-039 HIGH-4 反映)。
  *
- * DispatchSettings から派生 (Pick) し、サーバー側で設定する senderEmail /
- * updatedAt / updatedBy は除外する。version は楽観的ロック用に含める。
- * DispatchSettings に新規 field を追加した際は、本 Pick にも追加するか
- * 自動的に PutRequest 対象外として扱うかを意識的に判断する。
+ * 全 settings field は optional (undefined で既存値保持、storage 層で merge)。
+ * version のみ必須 (楽観的ロック、doc 未作成時は 0)。
+ *
+ * - FE は always-send-all 戦略で完了通知関連 field を毎回送信し、旧 UI 経由での
+ *   意図しないフィールド消失を防ぐ
+ * - progressReport は新規追加 field のため、旧 UI 由来の PUT (progressReport 欠落)
+ *   でも既存値が消えない (HIGH-4 の本質)
+ * - 初回 create 時は route 層で「completion 関連 5 field と senderEmail が揃っているか」
+ *   をバリデーション (storage 層では未指定 field をそのまま undefined として merge)
+ *
+ * Codex review (Plan stage thread 019e8a8d) MEDIUM-M3 反映:
+ *   patch semantics と言いつつ Pick のままだと型上 completion fields が必須となり
+ *   T5 (UpdateDispatchSettingsInput を optional 化) と型矛盾する。`Partial<Pick<...>>`
+ *   で全 field optional 化 + version のみ必須に修正。
  */
-export type PutDispatchSettingsRequest = Pick<
-  DispatchSettings,
-  | "enabled"
-  | "scheduleDaysOfWeek"
-  | "scheduleHourJst"
-  | "signatureName"
-  | "completionMessageBody"
-  | "version"
->;
+export type PutDispatchSettingsRequest = Partial<
+  Pick<
+    DispatchSettings,
+    | "enabled"
+    | "scheduleDaysOfWeek"
+    | "scheduleHourJst"
+    | "signatureName"
+    | "completionMessageBody"
+    | "progressReport"
+  >
+> & {
+  /** 楽観的ロック (必須): doc 未作成時は 0 を期待値とする */
+  version: number;
+};
 
 export type DispatchSettingsErrorCode =
   | "invalid_schedule_days"
   | "invalid_schedule_hour"
   | "invalid_signature_name"
   | "invalid_completion_message_body"
+  | "invalid_progress_report_schedule_days"
+  | "invalid_progress_report_schedule_hour"
   | "version_conflict"
   | "unauthorized"
   | "forbidden";
@@ -71,8 +131,14 @@ export interface TenantNotificationCcConfig {
   ownerEmail: string | null;
   /** 追加 CC email 配列 (上限 10 件、各 email は CRLF/カンマ/制御文字を含まない) */
   notificationCcEmails: string[];
-  /** テナント単位の有効化フラグ、false で当テナントは配信対象外 */
+  /** テナント単位の完了通知レーン有効化フラグ、false で当テナントは完了通知対象外 */
   completionNotificationEnabled: boolean;
+  /**
+   * テナント単位の進捗レポート定期自動配信レーン有効化フラグ (Phase 3、ADR-039 D-6)。
+   * default false (opt-in)。完了通知レーンとは独立。
+   * undefined で false と同等 (マイグレーション不要、後方互換)。
+   */
+  progressReportEnabled?: boolean;
 }
 
 export type GetTenantNotificationCcResponse = TenantNotificationCcConfig;
@@ -80,6 +146,8 @@ export type GetTenantNotificationCcResponse = TenantNotificationCcConfig;
 export interface PutTenantNotificationCcRequest {
   notificationCcEmails: string[];
   completionNotificationEnabled: boolean;
+  /** Phase 3 (ADR-039 D-6)、undefined で既存値保持 (patch semantics) */
+  progressReportEnabled?: boolean;
 }
 
 export type TenantNotificationCcErrorCode =
@@ -155,6 +223,18 @@ export type DispatchRunStatus = "running" | "completed" | "timeout" | "aborted";
 
 export interface DispatchRun {
   runId: string;
+  /**
+   * 配信レーン識別子 (Phase 3、ADR-039 D-1)。
+   * 既存 doc で欠落時は "completion" 扱い (後方互換)。
+   */
+  laneId?: DispatchLane;
+  /**
+   * Phase 3 進捗レポートレーンのみ設定される (ADR-039 D-2)。
+   * sha256(laneId + X-CloudScheduler-ScheduleTime) で算出され、Cloud Scheduler の
+   * at-least-once delivery における同 scheduled execution の retry を冪等化する。
+   * 完了通知レーンでは undefined。
+   */
+  occurrenceId?: string;
   /** cron 起動時刻 (ISO 8601) */
   triggeredAt: string;
   status: DispatchRunStatus;
@@ -174,6 +254,32 @@ export interface DispatchRun {
   abortedReason: string | null;
   /** TTL 期限 (ISO 8601)、triggeredAt + 365 days */
   ttlExpireAt: string;
+}
+
+// ============================================================
+// Lane lock (super_dispatch_lane_locks/{laneId}) — Phase 3 ADR-039 D-4
+// ============================================================
+
+/**
+ * 配信レーン別の排他 lock (ADR-039 D-4)。
+ * 既存 `run-lock.ts` の query→set best-effort では同 lane 並行 request の race を
+ * 解消できないため、`super_dispatch_lane_locks/{laneId}` 別 doc で
+ * `tx.get → lease 判定 → tx.set` を Firestore transaction として実行する。
+ *
+ * 完了通知レーンの既存 run-lock は Phase 3 で破壊せず、Phase 4 で lane-lock 統合検討。
+ */
+export interface DispatchLaneLock {
+  laneId: DispatchLane;
+  /** 現在 lock を保持している runId */
+  ownerRunId: string;
+  /** 進捗レポートレーンのみ設定 (完了通知では undefined) */
+  occurrenceId?: string;
+  /** Lease 期限 (ISO 8601)。Date.now() > leaseExpiresAt で他 runner が再取得可能 */
+  leaseExpiresAt: string;
+  /** 取得時刻 (ISO 8601) */
+  acquiredAt: string;
+  /** 最終更新時刻 (ISO 8601) */
+  updatedAt: string;
 }
 
 /** run 履歴取得クエリ (Phase 5 super-admin runs API) */
@@ -203,6 +309,25 @@ export interface RunCompletionNotificationsResponse {
   manualReviewRequired: number;
 }
 
+/**
+ * 進捗レポート定期自動配信レーン (Phase 3) 実行レスポンス (ADR-039 D-1)。
+ * `RunCompletionNotificationsResponse` と異なり `occurrenceId` を含む (冪等性キー)。
+ *
+ * - pendingPromotedToManualReview: pending lease 切れで降格された user 数
+ * - laneLockContention: lane lock 取得失敗で no-op 終了したか
+ */
+export interface RunProgressReportsResponse {
+  runId: string;
+  /** Cloud Scheduler at-least-once delivery 対応の冪等性キー (ADR-039 D-2) */
+  occurrenceId: string;
+  processedTenants: number;
+  sent: number;
+  skipped: number;
+  failed: number;
+  pendingPromotedToManualReview: number;
+  laneLockContention: boolean;
+}
+
 // ============================================================
 // Audit log (super_dispatch_audit_logs)
 // ============================================================
@@ -220,7 +345,17 @@ export type DispatchAuditEventType =
   | "settings_updated"
   | "test_send"
   | "dry_run"
-  | "orphan_send";
+  | "orphan_send"
+  // ↓ Phase 3 進捗レポート定期自動配信 (ADR-039)
+  | "progress_report_run_started"
+  | "progress_report_run_completed"
+  | "progress_report_run_aborted"
+  | "progress_report_sent"
+  | "progress_report_failed"
+  | "user_skipped_completed"
+  | "pdf_too_large"
+  | "pending_promoted_to_manual_review"
+  | "lane_lock_contention";
 
 export interface DispatchAuditLog {
   auditId: string;
@@ -286,6 +421,78 @@ export type ReservationOutcome =
 export type Gmail403Classification = "scope_revoked" | "user_permanent";
 
 // ============================================================
+// 進捗レポート定期自動配信 recipient (Phase 3、ADR-039 D-3)
+// tenants/{tenantId}/progress_report_sends/{occurrenceId}__{userId}
+// ============================================================
+
+/**
+ * 進捗レポート recipient の状態遷移 (ADR-039 D-3、Codex CRITICAL-2 反映)。
+ * 完了通知の `CompletionNotificationStatus` (userId 単位・永続) とは別目的で、
+ * occurrence 単位の at-most-once attempt 保証 + crash 後 orphan 防御を担う。
+ *
+ *  - pending: claim 直後の状態 (lease 10 min + ttlExpireAt 同時設定)
+ *  - sent: Gmail 受理 + markSent 完了、終端
+ *  - failed: permanent error、終端
+ *  - manual_review_required: pending lease 切れの降格状態、自動再送せず手動確認
+ */
+export type ProgressReportRecipientStatus =
+  | "pending"
+  | "sent"
+  | "failed"
+  | "manual_review_required";
+
+export interface ProgressReportRecipient {
+  /** Cloud Scheduler at-least-once 冪等性キー (ADR-039 D-2) */
+  occurrenceId: string;
+  /** HTTP attempt 単位の監査用 UUID */
+  runId: string;
+  userId: string;
+  status: ProgressReportRecipientStatus;
+  /** claim 時刻 (ISO 8601) */
+  claimedAt: string;
+  /** Lease 期限 (ISO 8601)。pending 時のみ意味を持つ */
+  leaseExpiresAt: string;
+  /** 送信成功時刻 (status=sent のみ) */
+  sentAt: string | null;
+  /** Gmail API messageId (status=sent のみ) */
+  messageId: string | null;
+  /** 送信した PDF サイズ (status=sent のみ) */
+  pdfSizeBytes: number | null;
+  /** 失敗時刻 (status=failed のみ) */
+  failedAt: string | null;
+  /** sanitized error code (status=failed のみ) */
+  errorCode: string | null;
+  /** sanitized error message (status=failed のみ) */
+  errorMessage: string | null;
+  /** pending → manual_review 降格時刻 (status=manual_review_required のみ) */
+  promotedAt: string | null;
+  /** sha256 ハッシュ (ADR-034 PII 最小化) */
+  recipientToHash: string;
+  /** sha256 配列 (CC) */
+  recipientCcHashes: string[];
+  /** TTL 期限 (ISO 8601)。claim 時点で claimedAt + 90 days 設定 (ADR-039 OQ #6) */
+  ttlExpireAt: string;
+}
+
+/**
+ * Recipient claim transaction の結果 (内部 service 用、ADR-039 D-3)。
+ * `tryClaimProgressRecipient` が返す。
+ *  - claimed=true: 新規 pending 作成成功、送信処理に進む
+ *  - claimed=false: 既存 doc あり、reason で skip 理由を返す
+ */
+export type ProgressReportClaimOutcome =
+  | { claimed: true }
+  | {
+      claimed: false;
+      reason:
+        | "already_sent"
+        | "already_failed"
+        | "currently_pending_by_other_worker"
+        | "pending_lease_expired_promoted_to_manual_review"
+        | "already_manual_review_required";
+    };
+
+// ============================================================
 // 制約値 (export して FE/BE で共有)
 // ============================================================
 
@@ -305,4 +512,15 @@ export const DISPATCH_CONSTRAINTS = {
   AUDIT_LOGS_TTL_DAYS: 365,
   /** sanitized error message 上限 */
   SANITIZED_ERROR_MESSAGE_MAX_LENGTH: 1024,
+  // ↓ Phase 3 進捗レポート定期自動配信 (ADR-039)
+  /** 進捗レポート recipient pending lease 期限 (ミリ秒) */
+  PROGRESS_REPORT_RECIPIENT_LEASE_MS: 10 * 60 * 1000,
+  /** 進捗レポート lane lock lease 期限 (ミリ秒、Cloud Run 300 秒に余裕) */
+  PROGRESS_REPORT_LANE_LOCK_LEASE_MS: 280 * 1000,
+  /** 進捗レポート recipient TTL (日、ADR-039 OQ #6) */
+  PROGRESS_REPORT_RECIPIENT_TTL_DAYS: 90,
+  /** 進捗レポート PDF サイズ上限 (バイト、ADR-039 AC-PR-13) */
+  PROGRESS_REPORT_PDF_MAX_BYTES: 5 * 1024 * 1024,
+  /** 受講中フィルタの最低進捗率 (%、ADR-039 D-5) */
+  PROGRESS_REPORT_MIN_PROGRESS_PERCENT: 1,
 } as const;
