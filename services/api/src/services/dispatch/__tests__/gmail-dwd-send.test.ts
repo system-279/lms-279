@@ -60,6 +60,7 @@ vi.mock("@google-cloud/secret-manager", () => {
 // 動的 import (gmail-client.test.ts と同じ hoisted pattern)
 const {
   buildCompletionMime,
+  buildMessageMime,
   encodeMimeHeader,
   isTransientGmailError,
   sendCompletionMail,
@@ -466,5 +467,480 @@ describe("sendCompletionMail (gmail-client 連携)", () => {
     expect(decoded).toContain("From: dxcollege@279279.net");
     expect(decoded).toContain("To: s@x.com");
     expect(decoded).toContain("Cc: cc@x.com");
+  });
+});
+
+/* ============================================================================
+ * Phase 3 PR 3b: buildMessageMime (multipart/mixed 添付対応)
+ *
+ * 設計仕様書 §3.1 改訂 / ADR-039 / Phase 3 PR 3b:
+ *   - 新 export `buildMessageMime`: 進捗レポート PDF 等の添付に対応
+ *   - 既存 `buildCompletionMime` は `buildMessageMime({ attachments: [] })` の
+ *     wrapper にリファクタ。byte-for-byte 後方互換 (AC-PR-14)
+ *
+ * 観点:
+ *   - boundary: ASCII safe、テスト時固定可能、未指定時は random で衝突確率十分低
+ *   - multipart 構造: preamble なし / text/plain part + 添付 part / closing boundary
+ *   - base64 76 char wrap (RFC 2045 §6.8)
+ *   - 日本語ファイル名 (RFC 2231 dual-form): filename="<rfc2047>" + filename*=UTF-8''<percent>
+ *   - ASCII ファイル名: filename="hoge.pdf" のみ (filename* 不要)
+ *   - CR/LF reject for attachment.filename / attachment.contentType
+ *   - 後方互換: 添付なしのとき buildMessageMime と buildCompletionMime の出力が byte 完全一致
+ *   - AC-PR-12 (MIME 構造) / AC-PR-14 (後方互換) 充足
+ * ========================================================================== */
+
+const MIME_BASE = {
+  fromEmail: "dxcollege@279279.net",
+  to: "student@example.com",
+  cc: [] as readonly string[],
+  subject: "進捗レポート",
+  body: "進捗レポートを添付します。",
+};
+
+describe("buildMessageMime (新規 export、Phase 3 PR 3b)", () => {
+  describe("添付なし (後方互換、buildCompletionMime と byte-for-byte 一致)", () => {
+    it("attachments 未指定 → text/plain 単独、buildCompletionMime と完全一致", () => {
+      const completionRaw = buildCompletionMime(MIME_BASE);
+      const messageRaw = buildMessageMime(MIME_BASE);
+      expect(messageRaw).toBe(completionRaw);
+    });
+
+    it("attachments 空配列 → text/plain 単独、buildCompletionMime と完全一致", () => {
+      const completionRaw = buildCompletionMime(MIME_BASE);
+      const messageRaw = buildMessageMime({ ...MIME_BASE, attachments: [] });
+      expect(messageRaw).toBe(completionRaw);
+    });
+
+    it("Cc あり + 添付なし → buildCompletionMime と完全一致 (Cc ヘッダも同順)", () => {
+      const input = { ...MIME_BASE, cc: ["a@x.com", "b@x.com"] };
+      const completionRaw = buildCompletionMime(input);
+      const messageRaw = buildMessageMime(input);
+      expect(messageRaw).toBe(completionRaw);
+    });
+  });
+
+  describe("multipart/mixed 構造 (添付あり)", () => {
+    const PDF_BYTES = Buffer.from("%PDF-1.4\n%fake pdf payload\n%%EOF\n");
+    const FIXED_BOUNDARY = "boundary_TEST_0000000000000001";
+
+    it("Content-Type が multipart/mixed; boundary=...、boundary が ASCII safe", () => {
+      const raw = buildMessageMime({
+        ...MIME_BASE,
+        attachments: [
+          { filename: "report.pdf", contentType: "application/pdf", data: PDF_BYTES },
+        ],
+        boundary: FIXED_BOUNDARY,
+      });
+      const decoded = base64UrlDecode(raw);
+      expect(decoded).toContain(
+        `Content-Type: multipart/mixed; boundary="${FIXED_BOUNDARY}"`,
+      );
+      // boundary は RFC 2046 §5.1.1 で許される ASCII subset
+      expect(FIXED_BOUNDARY).toMatch(/^[A-Za-z0-9_]+$/);
+    });
+
+    it("text/plain part + application/pdf part + closing boundary", () => {
+      const raw = buildMessageMime({
+        ...MIME_BASE,
+        attachments: [
+          { filename: "report.pdf", contentType: "application/pdf", data: PDF_BYTES },
+        ],
+        boundary: FIXED_BOUNDARY,
+      });
+      const decoded = base64UrlDecode(raw);
+      // 開始 / 中間 / 終端 boundary が正しい順序で出現
+      const openBoundary = `--${FIXED_BOUNDARY}\r\n`;
+      const closeBoundary = `\r\n--${FIXED_BOUNDARY}--`;
+      const openIdx = decoded.indexOf(openBoundary);
+      const textPartIdx = decoded.indexOf("Content-Type: text/plain", openIdx);
+      const pdfPartIdx = decoded.indexOf("Content-Type: application/pdf", textPartIdx);
+      const closeIdx = decoded.indexOf(closeBoundary, pdfPartIdx);
+      expect(openIdx).toBeGreaterThan(0);
+      expect(textPartIdx).toBeGreaterThan(openIdx);
+      expect(pdfPartIdx).toBeGreaterThan(textPartIdx);
+      expect(closeIdx).toBeGreaterThan(pdfPartIdx);
+    });
+
+    it("boundary 未指定 → random 生成、十分な entropy (16 hex 以上)", () => {
+      const raw = buildMessageMime({
+        ...MIME_BASE,
+        attachments: [
+          { filename: "r.pdf", contentType: "application/pdf", data: PDF_BYTES },
+        ],
+      });
+      const decoded = base64UrlDecode(raw);
+      const match = decoded.match(/boundary="([^"]+)"/);
+      expect(match).not.toBeNull();
+      const boundary = match![1];
+      // RFC 2046 boundary char subset (ASCII)、エントロピー目安 16 hex 以上
+      expect(boundary).toMatch(/^[A-Za-z0-9_]{16,}$/);
+    });
+
+    it("複数添付 → 各 part が個別 boundary で区切られる", () => {
+      const raw = buildMessageMime({
+        ...MIME_BASE,
+        attachments: [
+          { filename: "a.pdf", contentType: "application/pdf", data: PDF_BYTES },
+          { filename: "b.pdf", contentType: "application/pdf", data: PDF_BYTES },
+        ],
+        boundary: FIXED_BOUNDARY,
+      });
+      const decoded = base64UrlDecode(raw);
+      const boundaryCount = decoded.split(`--${FIXED_BOUNDARY}`).length - 1;
+      // text/plain + a.pdf + b.pdf の 3 part + 終端 = 4 出現
+      expect(boundaryCount).toBe(4);
+    });
+
+    it("無効 boundary 文字 (RFC 2046 §5.1.1 非適合) → throw", () => {
+      // RFC 2046 bcharsnospace に含まれない 半角空白 (0x20) と `!` を含む。
+      // isValidBoundary regex で false → throw 経路 (line 248-251) を verify。
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "r.pdf",
+              contentType: "application/pdf",
+              data: PDF_BYTES,
+            },
+          ],
+          boundary: "bad boundary!",
+        }),
+      ).toThrow(/boundary.*invalid|RFC 2046/i);
+    });
+
+    it("無効 boundary (改行注入) → throw", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "r.pdf",
+              contentType: "application/pdf",
+              data: PDF_BYTES,
+            },
+          ],
+          boundary: "valid_part\r\nX-Injected: 1",
+        }),
+      ).toThrow(/boundary.*invalid|RFC 2046/i);
+    });
+  });
+
+  describe("base64 76 文字折り返し (RFC 2045 §6.8)", () => {
+    const FIXED_BOUNDARY = "boundary_TEST_wrap";
+
+    it("添付 base64 body の各行は 76 文字以下", () => {
+      // 76 文字を確実に超えるサイズ (200 byte → base64 で ~268 char)
+      const largePdf = Buffer.alloc(200, 0x41); // "A" 200 個
+      const raw = buildMessageMime({
+        ...MIME_BASE,
+        attachments: [
+          { filename: "large.pdf", contentType: "application/pdf", data: largePdf },
+        ],
+        boundary: FIXED_BOUNDARY,
+      });
+      const decoded = base64UrlDecode(raw);
+      // 添付 part の base64 body を抽出
+      const pdfPartStart = decoded.indexOf("Content-Type: application/pdf");
+      const partBodyStart = decoded.indexOf("\r\n\r\n", pdfPartStart) + 4;
+      const partBodyEnd = decoded.indexOf(`\r\n--${FIXED_BOUNDARY}`, partBodyStart);
+      const base64Body = decoded.substring(partBodyStart, partBodyEnd);
+      const lines = base64Body.split("\r\n");
+      for (const line of lines) {
+        expect(line.length).toBeLessThanOrEqual(76);
+      }
+      // 少なくとも 1 回は wrap している (200 byte → 複数行になる)
+      expect(lines.length).toBeGreaterThan(1);
+    });
+
+    it("76 byte 未満の小サイズ添付 → 単一行 (wrap なし)", () => {
+      const tinyPdf = Buffer.from("tiny");
+      const raw = buildMessageMime({
+        ...MIME_BASE,
+        attachments: [
+          { filename: "t.pdf", contentType: "application/pdf", data: tinyPdf },
+        ],
+        boundary: FIXED_BOUNDARY,
+      });
+      const decoded = base64UrlDecode(raw);
+      const pdfPartStart = decoded.indexOf("Content-Type: application/pdf");
+      const partBodyStart = decoded.indexOf("\r\n\r\n", pdfPartStart) + 4;
+      const partBodyEnd = decoded.indexOf(`\r\n--${FIXED_BOUNDARY}`, partBodyStart);
+      const base64Body = decoded.substring(partBodyStart, partBodyEnd);
+      // "tiny" (4 byte) → base64 "dGlueQ==" (8 char、単一行)
+      expect(base64Body).toBe("dGlueQ==");
+    });
+  });
+
+  describe("RFC 2231 dual-form filename", () => {
+    const FIXED_BOUNDARY = "boundary_TEST_filename";
+    const PDF_BYTES = Buffer.from("%PDF");
+
+    it("ASCII ファイル名 → filename=\"...\" のみ (filename* なし)", () => {
+      const raw = buildMessageMime({
+        ...MIME_BASE,
+        attachments: [
+          { filename: "report.pdf", contentType: "application/pdf", data: PDF_BYTES },
+        ],
+        boundary: FIXED_BOUNDARY,
+      });
+      const decoded = base64UrlDecode(raw);
+      expect(decoded).toContain('Content-Disposition: attachment; filename="report.pdf"');
+      // 余計な filename*= を追加していない
+      expect(decoded).not.toContain("filename*=");
+    });
+
+    it("日本語ファイル名 → filename=\"<rfc2047 encoded>\" + filename*=UTF-8''<percent>", () => {
+      const raw = buildMessageMime({
+        ...MIME_BASE,
+        attachments: [
+          {
+            filename: "進捗レポート.pdf",
+            contentType: "application/pdf",
+            data: PDF_BYTES,
+          },
+        ],
+        boundary: FIXED_BOUNDARY,
+      });
+      const decoded = base64UrlDecode(raw);
+      // dual-form の両方を含む
+      // (1) filename="=?UTF-8?B?..?=" (RFC 2047 encoded for legacy clients)
+      const expectedRFC2047 = `=?UTF-8?B?${Buffer.from("進捗レポート.pdf", "utf-8").toString("base64")}?=`;
+      expect(decoded).toContain(`filename="${expectedRFC2047}"`);
+      // (2) filename*=UTF-8''<percent-encoded> (RFC 2231 modern clients)
+      const expectedPercent = encodeURIComponent("進捗レポート.pdf");
+      expect(decoded).toContain(`filename*=UTF-8''${expectedPercent}`);
+    });
+
+    it("ASCII safe な ' (apostrophe) を含むファイル名は percent-encode (RFC 2231 必須)", () => {
+      // RFC 2231 では filename* の値内で ' (区切り) と非 attribute-char を percent-encode する
+      const raw = buildMessageMime({
+        ...MIME_BASE,
+        attachments: [
+          {
+            // 非 ASCII を含むので dual-form が出る → filename* 内の特殊文字 encoding を検証
+            filename: "テスト'a b.pdf",
+            contentType: "application/pdf",
+            data: PDF_BYTES,
+          },
+        ],
+        boundary: FIXED_BOUNDARY,
+      });
+      const decoded = base64UrlDecode(raw);
+      // ' → %27、半角空白 → %20、非 ASCII は UTF-8 percent (RFC 5987 §3.2.1 attr-char)
+      const expectedPercent = encodeURIComponent("テスト'a b.pdf").replace(
+        /[!'()*]/g,
+        (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+      );
+      expect(decoded).toContain(`filename*=UTF-8''${expectedPercent}`);
+    });
+
+    it("'!()* も RFC 5987 §3.2.1 attr-char 違反のため percent-encode (Outlook parse 失敗対策)", () => {
+      // 非 ASCII + RFC 5987 で許可されない 5 文字 (`!`, `'`, `(`, `)`, `*`) を含む。
+      // encodeURIComponent が pass-through する文字を encodeRFC2231Value が補完する
+      // ことを byte 単位で検証。Outlook の厳密 filename* parser で parse 失敗を回避。
+      const raw = buildMessageMime({
+        ...MIME_BASE,
+        attachments: [
+          {
+            filename: "テスト!(2026)*'.pdf",
+            contentType: "application/pdf",
+            data: PDF_BYTES,
+          },
+        ],
+        boundary: FIXED_BOUNDARY,
+      });
+      const decoded = base64UrlDecode(raw);
+      // 5 文字すべてが percent-encoded で出力されている
+      // ! → %21, ' → %27, ( → %28, ) → %29, * → %2A
+      expect(decoded).toContain("%21");
+      expect(decoded).toContain("%27");
+      expect(decoded).toContain("%28");
+      expect(decoded).toContain("%29");
+      expect(decoded).toContain("%2A");
+      // filename*= の値内に生の `!()*'` が現れない (RFC 5987 §3.2.1 attr-char 違反)
+      const filenameStarMatch = decoded.match(/filename\*=UTF-8''([^\r\n;]+)/);
+      expect(filenameStarMatch).not.toBeNull();
+      const filenameStar = filenameStarMatch![1];
+      expect(filenameStar).not.toMatch(/[!'()*]/);
+    });
+  });
+
+  describe("CR/LF header injection 防御 (添付メタデータ)", () => {
+    const PDF_BYTES = Buffer.from("%PDF");
+
+    it("attachment.filename に CR/LF → throw", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "report.pdf\r\nX-Injected: 1",
+              contentType: "application/pdf",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/filename.*CR\/LF|filename.*injection/i);
+    });
+
+    it("attachment.contentType に CR/LF → throw", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "report.pdf",
+              contentType: "application/pdf\r\nX-Injected: 1",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/contentType.*CR\/LF|contentType.*injection/i);
+    });
+
+    it("attachment.filename が空文字 → throw", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "",
+              contentType: "application/pdf",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/filename.*non-empty/i);
+    });
+
+    it("attachment.contentType が空文字 → throw", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "report.pdf",
+              contentType: "",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/contentType.*non-empty/i);
+    });
+  });
+
+  describe("MIME quoted-string injection 防御 (security-guidance MEDIUM 対応)", () => {
+    const PDF_BYTES = Buffer.from("%PDF");
+
+    it("attachment.filename に `\"` (Content-Disposition quoted-string 脱出) → throw", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: 'r"; X-Injected: 1; x=".pdf',
+              contentType: "application/pdf",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/quoted-string injection/i);
+    });
+
+    it("attachment.filename に `\\` (Content-Disposition quoted-string 脱出) → throw", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "r\\.pdf",
+              contentType: "application/pdf",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/quoted-string injection/i);
+    });
+
+    it("attachment.contentType に MIME parameter (`;`) 注入 → throw (RFC 6838 strict)", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "r.pdf",
+              contentType: "application/pdf; boundary=fake",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/RFC 6838 type\/subtype/i);
+    });
+
+    it("attachment.contentType に半角空白 → throw (RFC 6838 strict)", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "r.pdf",
+              contentType: "application/pdf with space",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/RFC 6838 type\/subtype/i);
+    });
+
+    it("attachment.contentType が type/subtype 形式違反 → throw (subtype 欠如)", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "r.pdf",
+              contentType: "application",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/RFC 6838 type\/subtype/i);
+    });
+
+    it("正常な RFC 6838 type/subtype は許可 (application/pdf / image/png / application/vnd.ms-excel)", () => {
+      // happy path: 既存テストで application/pdf は通っているが、別 type も明示確認
+      const raw = buildMessageMime({
+        ...MIME_BASE,
+        attachments: [
+          {
+            filename: "a.xlsx",
+            contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            data: PDF_BYTES,
+          },
+        ],
+        boundary: "boundary_TEST_security",
+      });
+      expect(raw).toMatch(/^[A-Za-z0-9_-]+$/);
+    });
+  });
+
+  describe("buildCompletionMime の後方互換性 (AC-PR-14)", () => {
+    // 既存テストが全 pass する = wrapper として byte-for-byte 互換が保証される
+    // 上記「添付なし」テストで buildMessageMime === buildCompletionMime を確認しているが、
+    // wrapper パターンの相互呼び出しが circular にならないよう独立した確認も加える
+    it("buildCompletionMime の出力は base64url 形式で decode 可能", () => {
+      const raw = buildCompletionMime({
+        ...MIME_BASE,
+        cc: ["c@x.com"],
+      });
+      expect(raw).toMatch(/^[A-Za-z0-9_-]+$/);
+      const decoded = base64UrlDecode(raw);
+      expect(decoded).toContain("From: dxcollege@279279.net");
+      expect(decoded).toContain("Cc: c@x.com");
+      // text/plain 単独 (multipart にならない)
+      expect(decoded).not.toContain("multipart/mixed");
+      expect(decoded).toContain("Content-Type: text/plain; charset=UTF-8");
+    });
   });
 });

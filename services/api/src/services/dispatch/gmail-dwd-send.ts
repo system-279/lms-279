@@ -21,6 +21,8 @@
  *   - PII ハッシュ化: caller の責務 (完了後 recipientToHash 等を Firestore に書く際)
  */
 
+import { randomBytes } from "node:crypto";
+
 import { getGmailClientForSender } from "./gmail-client.js";
 
 const MAX_ATTEMPTS = 3;
@@ -110,20 +112,147 @@ export interface BuildCompletionMimeInput {
 }
 
 /**
- * 完了通知メールの raw MIME メッセージを base64url で返す。
- * Gmail API `users.messages.send` の raw フィールドに渡す形式。
+ * 添付ファイル 1 件の MIME 表現。
  *
- * 添付なし固定 (Phase 3 仕様: 進捗 PDF は Phase 4+ で別途検討)。
+ * 設計仕様書 Phase 3 PR 3b / AC-PR-12:
+ *   - filename: UTF-8 string、ASCII safe → filename="..." のみ、非 ASCII → RFC 2231 dual-form
+ *   - contentType: MIME type (例 "application/pdf")
+ *   - data: バイナリ (Buffer)。base64 encode + 76 char wrap (RFC 2045 §6.8) して MIME に埋め込む
  */
-export function buildCompletionMime(input: BuildCompletionMimeInput): string {
-  const { fromEmail, to, cc, subject, body } = input;
+export interface MessageAttachment {
+  filename: string;
+  contentType: string;
+  data: Buffer;
+}
+
+export interface BuildMessageMimeInput extends BuildCompletionMimeInput {
+  /** 添付ファイル配列。空 / 未指定なら text/plain 単独 (buildCompletionMime と byte-for-byte 一致) */
+  attachments?: readonly MessageAttachment[];
+  /** boundary 文字列。テスト用に固定可能。未指定時は crypto.randomBytes(16) hex (32 char) で生成 */
+  boundary?: string;
+}
+
+/** RFC 2046 §5.1.1 の boundary char subset (digit / alpha / 一部記号) を満たすか */
+function isValidBoundary(value: string): boolean {
+  // RFC 2046 §5.1.1: bcharsnospace = DIGIT / ALPHA / "'" / "(" / ")" / "+" / "_" / "," / "-" / "." / "/" / ":" / "=" / "?"
+  return /^[A-Za-z0-9_'()+,\-./:=?]+$/.test(value);
+}
+
+function generateBoundary(): string {
+  // 16 byte → 32 hex char (entropy 128 bit)、prefix で boundary 識別を明示
+  return `boundary_${randomBytes(16).toString("hex")}`;
+}
+
+/** RFC 2045 §6.8 に従い base64 を 76 文字ごとに CRLF で折り返す */
+function wrapBase64(data: Buffer, lineLen = 76): string {
+  const base64 = data.toString("base64");
+  if (base64.length <= lineLen) return base64;
+  const lines: string[] = [];
+  for (let i = 0; i < base64.length; i += lineLen) {
+    lines.push(base64.substring(i, i + lineLen));
+  }
+  return lines.join("\r\n");
+}
+
+/**
+ * RFC 2231 filename* の値を percent-encode する。
+ *
+ * encodeURIComponent は RFC 3986 unreserved subset である `!'()*` を encode しないが、
+ * RFC 5987 §3.2.1 attr-char は `'!()*` を許可していないため、これら 5 文字も
+ * 明示 percent-encode する。`'` は charset/lang 区切りに、`(` `)` は厳密 parser
+ * (Outlook の一部バージョン等) で filename* parse 失敗の原因となる。
+ *
+ * 既存 gmail-draft.ts の rfc5987Encode と同等の挙動。将来 mime-builder 共通化時に
+ * 1 つの helper に集約予定 (Phase 4 OQ)。
+ */
+function encodeRFC2231Value(value: string): string {
+  return encodeURIComponent(value).replace(
+    /[!'()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+/**
+ * RFC 6838 token char (ALPHA / DIGIT / `!#$&^_.+-`) で構成された type/subtype のみ許可。
+ * `;` / `=` / 空白 / `"` 等の MIME parameter separator や quoted-string 脱出文字を
+ * すべて排除する。security-guidance @ Phase 3 PR 3b で指摘された Content-Disposition
+ * parameter breakout (`application/pdf; boundary=fake` 等) を構造的に防止。
+ */
+const MIME_TYPE_REGEX = /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/;
+
+/** 添付 part 1 件の MIME 表現を構築 */
+function buildAttachmentPart(
+  attachment: MessageAttachment,
+  boundary: string,
+): string {
+  assertHeaderSafe(attachment.filename, "attachment.filename");
+  assertHeaderSafe(attachment.contentType, "attachment.contentType");
+
+  // Content-Disposition の `filename="..."` quoted-string 脱出を防ぐ。
+  // assertHeaderSafe は CR/LF + 空文字のみ防御のため、ASCII printable な `"` `\`
+  // (0x22 / 0x5C) を別途 reject する。Phase 4 で escape pattern 採用も検討。
+  if (/["\\]/.test(attachment.filename)) {
+    throw new Error(
+      `gmail-dwd-send: attachment.filename contains " or \\ (MIME quoted-string injection blocked)`,
+    );
+  }
+
+  // contentType を strict RFC 6838 type/subtype に限定し、MIME parameter 注入
+  // (`application/pdf; boundary=...`、charset 付き等) を構造的に排除する。
+  // caller が charset 付き text/plain 等を渡したい場合は Phase 4 で対応検討。
+  if (!MIME_TYPE_REGEX.test(attachment.contentType)) {
+    throw new Error(
+      `gmail-dwd-send: attachment.contentType must be RFC 6838 type/subtype form ` +
+        `(no parameters, no special chars; got "${attachment.contentType}")`,
+    );
+  }
+
+  // RFC 2231 dual-form: ASCII safe なら filename="..." のみ、非 ASCII なら
+  // filename="<rfc2047>" + filename*=UTF-8''<percent-encoded> 両方を出力
+  // (前者は legacy client 互換、後者は RFC 2231 modern client)
+  const isAsciiPrintable = !/[^\x20-\x7E]/.test(attachment.filename);
+  const dispositionLine = isAsciiPrintable
+    ? `Content-Disposition: attachment; filename="${attachment.filename}"`
+    : `Content-Disposition: attachment; filename="${encodeMimeHeader(
+        attachment.filename,
+      )}"; filename*=UTF-8''${encodeRFC2231Value(attachment.filename)}`;
+
+  return [
+    `--${boundary}`,
+    `Content-Type: ${attachment.contentType}`,
+    "Content-Transfer-Encoding: base64",
+    dispositionLine,
+    "",
+    wrapBase64(attachment.data),
+  ].join("\r\n");
+}
+
+/**
+ * 任意添付対応の raw MIME メッセージを base64url で返す (Phase 3 PR 3b)。
+ *
+ * 設計:
+ *   - attachments 空 / 未指定 → text/plain 単独 (旧 buildCompletionMime と byte-for-byte 一致、AC-PR-14)
+ *   - attachments あり → multipart/mixed (boundary 区切り、text/plain part + 添付 part)
+ *   - 添付 base64 は 76 char で wrap (RFC 2045 §6.8)
+ *   - filename は ASCII printable → `filename="..."` のみ、非 ASCII → RFC 2231 dual-form
+ *
+ * Gmail API `users.messages.send` の raw フィールドに渡す形式。
+ */
+export function buildMessageMime(input: BuildMessageMimeInput): string {
+  const {
+    fromEmail,
+    to,
+    cc,
+    subject,
+    body,
+    attachments,
+    boundary: inputBoundary,
+  } = input;
 
   assertHeaderSafe(fromEmail, "fromEmail");
   assertHeaderSafe(to, "to");
   assertHeaderSafe(subject, "subject");
 
-  // Cc は配列、空なら Cc: 行を出さない (Phase 3 完了条件「CC validation 失敗時に
-  // MIME に Cc: ヘッダが出ない」の構造保証)
   if (!Array.isArray(cc)) {
     throw new Error("gmail-dwd-send: cc must be an array");
   }
@@ -133,22 +262,77 @@ export function buildCompletionMime(input: BuildCompletionMimeInput): string {
   const ccLines = cc.length > 0 ? [`Cc: ${cc.join(", ")}`] : [];
 
   const encodedSubject = encodeMimeHeader(subject);
+  const hasAttachments = attachments !== undefined && attachments.length > 0;
 
-  // 添付なしの text/plain メッセージ
-  // 配列要素の `""` は join("\r\n") により空行 (ヘッダとボディ区切り、RFC 2822) になる
-  const headerLines: string[] = [
+  if (!hasAttachments) {
+    // text/plain 単独 (buildCompletionMime と byte-for-byte 一致を保証する経路)
+    const headerLines: string[] = [
+      `From: ${fromEmail}`,
+      `To: ${to}`,
+      ...ccLines,
+      `Subject: ${encodedSubject}`,
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=UTF-8",
+      "Content-Transfer-Encoding: base64",
+      "",
+      Buffer.from(body, "utf-8").toString("base64"),
+    ];
+    return Buffer.from(headerLines.join("\r\n"), "utf-8").toString("base64url");
+  }
+
+  // multipart/mixed (添付あり)
+  const boundary = inputBoundary ?? generateBoundary();
+  if (!isValidBoundary(boundary)) {
+    throw new Error(
+      "gmail-dwd-send: boundary contains invalid characters (RFC 2046 §5.1.1)",
+    );
+  }
+
+  const headers = [
     `From: ${fromEmail}`,
     `To: ${to}`,
     ...ccLines,
     `Subject: ${encodedSubject}`,
     "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    "",
+  ].join("\r\n");
+
+  const textPart = [
+    `--${boundary}`,
     "Content-Type: text/plain; charset=UTF-8",
     "Content-Transfer-Encoding: base64",
-    "", // ← ヘッダとボディの区切り空行 (RFC 2822 §2.1)
+    "",
     Buffer.from(body, "utf-8").toString("base64"),
+  ].join("\r\n");
+
+  // Buffer.concat ベースで raw を組み立てて peak メモリを抑制 (AC-PR-13 5MB PDF 想定)。
+  // 旧実装の template literal concat は V8 ConsString rope → Buffer.from(rope) flatten で
+  // 中間 buffer が double 確保され、5MB PDF (base64 6.7MB) で peak ~12-13MB だった。
+  // Buffer.concat は各 part を独立 alloc + 1 回の output alloc のみで peak ~7MB に削減。
+  const separator = Buffer.from("\r\n", "utf-8");
+  const rawParts: Buffer[] = [
+    Buffer.from(headers, "utf-8"),
+    separator,
+    Buffer.from(textPart, "utf-8"),
   ];
-  const raw = headerLines.join("\r\n");
-  return Buffer.from(raw, "utf-8").toString("base64url");
+  for (const a of attachments) {
+    rawParts.push(separator);
+    rawParts.push(Buffer.from(buildAttachmentPart(a, boundary), "utf-8"));
+  }
+  rawParts.push(Buffer.from(`\r\n--${boundary}--`, "utf-8"));
+  return Buffer.concat(rawParts).toString("base64url");
+}
+
+/**
+ * 完了通知メールの raw MIME メッセージを base64url で返す。
+ * Gmail API `users.messages.send` の raw フィールドに渡す形式。
+ *
+ * 添付なし固定 (Phase 3 仕様: 進捗 PDF は PR 3b の `buildMessageMime` で別途対応)。
+ * Phase 3 PR 3b 以降は `buildMessageMime` の wrapper (byte-for-byte 互換、AC-PR-14)。
+ */
+export function buildCompletionMime(input: BuildCompletionMimeInput): string {
+  return buildMessageMime(input);
 }
 
 export interface SendCompletionMailInput {
