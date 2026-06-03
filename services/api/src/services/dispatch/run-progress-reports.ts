@@ -276,13 +276,21 @@ export async function runProgressReports(
       metrics.processedTenants += 1;
 
       const dataView = loader.getTenantDataView(tenantId);
-      const users = await dataView.listProgressReportTargetUsers(now);
+      // tenant 不変の publishedCourses を tenant ループで 1 回 fetch し、
+      // user 並列ループの各 worker に共有 (code-review #4 反映: N+1 Firestore read 削減、
+      // 完了通知レーン run-completion-notifications.ts L213 と同パターン)。
+      // 独立 I/O のため listProgressReportTargetUsers と Promise.all で並列化。
+      const [publishedCourses, users] = await Promise.all([
+        dataView.listPublishedCourses(),
+        dataView.listProgressReportTargetUsers(now),
+      ]);
 
       // ⑦ user 並列度 8 (FR-3)
       await runWithConcurrency(users, userConcurrency, async (user) => {
         await processProgressUser({
           tenantId,
           user,
+          publishedCourses,
           ccConfig,
           dataView,
           settings,
@@ -324,7 +332,18 @@ export async function runProgressReports(
       });
       return responseFromMetrics(runId, occurrenceId, metrics);
     }
+    // 想定外エラーの abort 経路: lock 解放 + audit 記録 (code-review #8 反映、
+    // 完了通知レーンとの対称性確保。lock 解放のみで audit なしだと運用障害の
+    // 追跡性が低下する)
     await abortLaneLock(storage, "progress", runId, "unexpected_error");
+    await recordAuditLog(storage, {
+      runId,
+      runStartedAt,
+      eventType: "progress_report_run_aborted",
+      errorCode: "unexpected_error",
+      errorMessage: err,
+      now,
+    });
     throw err;
   }
 }
@@ -332,6 +351,10 @@ export async function runProgressReports(
 interface ProcessProgressUserContext {
   tenantId: string;
   user: { id: string; email: string; name: string | null };
+  /** tenant 単位 1 回 fetch 済の published コース一覧 (caller が tenant ループで hoist 済) */
+  publishedCourses: Awaited<
+    ReturnType<DispatchTenantDataView["listPublishedCourses"]>
+  >;
   ccConfig: TenantCcConfigView | null;
   dataView: DispatchTenantDataView;
   settings: DispatchSettings;
@@ -350,6 +373,7 @@ async function processProgressUser(ctx: ProcessProgressUserContext): Promise<voi
   const {
     tenantId,
     user,
+    publishedCourses,
     ccConfig,
     dataView,
     settings,
@@ -382,6 +406,10 @@ async function processProgressUser(ctx: ProcessProgressUserContext): Promise<voi
   const toEmail = toValidation.value;
 
   // ⑧ eligibility 判定 (AC-PR-02: 100% 完了は除外)
+  // code-review #1 反映: evaluateCompletionEligibility は `eligible: false` を多数の
+  // 異常状態 (no_published_courses / missing_progress / malformed_progress /
+  // lesson_count_mismatch / malformed_course) でも返す。これら不整合状態で進捗レポート
+  // 送信に進むと壊れた PDF を配信するため、明示的に skip + audit する。
   let courseProgresses;
   try {
     courseProgresses = await dataView.listCourseProgressForUser(user.id);
@@ -399,7 +427,8 @@ async function processProgressUser(ctx: ProcessProgressUserContext): Promise<voi
     metrics.skipped += 1;
     return;
   }
-  const publishedCourses = await dataView.listPublishedCourses();
+  // publishedCourses は caller の tenant ループで hoist 済 (code-review #4 反映、
+  // N+1 read 削減、完了通知レーンと同パターン)
   const eligibility = evaluateCompletionEligibility(publishedCourses, courseProgresses);
   if (eligibility.eligible) {
     // 100% 完了者は除外 (完了通知レーンの送信対象、本レーンでは skip)
@@ -409,6 +438,22 @@ async function processProgressUser(ctx: ProcessProgressUserContext): Promise<voi
       eventType: "user_skipped_completed",
       tenantId,
       userId: user.id,
+      now,
+    });
+    metrics.skipped += 1;
+    return;
+  }
+  // eligible=false の異常状態 (no_published_courses / missing_progress 等) は受講中
+  // ではない / データ不整合 → 進捗レポート送信せず skip + audit (code-review #1 反映)。
+  // "not_completed" のみが本来の「受講中 = 送信対象」状態で、それ以外は send 不適格。
+  if (eligibility.reason !== "not_completed") {
+    await recordAuditLog(storage, {
+      runId,
+      runStartedAt,
+      eventType: "user_skipped",
+      tenantId,
+      userId: user.id,
+      errorCode: `eligibility_${eligibility.reason}`,
       now,
     });
     metrics.skipped += 1;
@@ -537,7 +582,11 @@ async function processProgressUser(ctx: ProcessProgressUserContext): Promise<voi
       toEmail,
       ccEmails: ccResult.validCcEmails,
       senderName: settings.signatureName,
-      ...(ownerEmail !== null && { ccNoteEmail: ownerEmail }),
+      // ccNoteEmail は trim 後空文字を弾く (code-review #7 反映、defense-in-depth)。
+      // progress-mime-builder docstring (L44-46) と buildMailTemplate 内部の二重防御に
+      // 加えて caller 側でも明示的に gate し、空 owner email で半端な注記が出るのを防ぐ。
+      ...(ownerEmail !== null &&
+        ownerEmail.trim().length > 0 && { ccNoteEmail: ownerEmail }),
     });
   } catch (err) {
     // MIME build 失敗 (CRLF injection / quoted-string injection 等の防御層 throw)
@@ -565,33 +614,18 @@ async function processProgressUser(ctx: ProcessProgressUserContext): Promise<voi
   }
 
   // ⑫ Gmail send → markSent / markFailed
+  // code-review #2 反映: sendRaw 成功後 (= Gmail 既に送信済み) の markRecipientSent /
+  // recordAuditLog の precondition 違反 (lease 切れ race で別 worker が manual_review に
+  // 降格させた等) を gmail send 失敗の catch に流すと classifyAndRecordProgress 経由で
+  // 二重送信リスクが生じる。send 成功後の post-send book-keeping は別 try で分離し、
+  // post-send 失敗を audit に残しつつ run abort へ伝搬しない (orphan_send 相当扱い)。
+  let sendResult: SendCompletionMailResult;
   try {
-    const sendResult = await sendRaw({
+    sendResult = await sendRaw({
       subjectEmail: env.subjectEmail,
       fromEmail: env.fromEmail,
       raw: mimeOutput.raw,
     });
-    await markRecipientSent(storage, {
-      tenantId,
-      userId: user.id,
-      occurrenceId,
-      runId,
-      sentAt: now.toISOString(),
-      messageId: sendResult.messageId,
-      pdfSizeBytes: pdfBuffer.length,
-      recipientToHash: sha256(toEmail),
-      recipientCcHashes: ccResult.validCcEmails.map(sha256),
-    });
-    await recordAuditLog(storage, {
-      runId,
-      runStartedAt,
-      eventType: "progress_report_sent",
-      tenantId,
-      userId: user.id,
-      durationMs: sendResult.attempts,
-      now,
-    });
-    metrics.sent += 1;
   } catch (err) {
     await classifyAndRecordProgress({
       err,
@@ -604,7 +638,54 @@ async function processProgressUser(ctx: ProcessProgressUserContext): Promise<voi
       storage,
       metrics,
     });
+    return;
   }
+
+  // send 成功後の post-send book-keeping (markSent precondition / audit log)。
+  // Gmail には既に送信済みなので、本ブロック内の throw は run abort に伝搬させず
+  // orphan_send audit のみ記録して metrics.sent += 1 に進める (受講者は受信済)。
+  try {
+    await markRecipientSent(storage, {
+      tenantId,
+      userId: user.id,
+      occurrenceId,
+      runId,
+      sentAt: now.toISOString(),
+      messageId: sendResult.messageId,
+      pdfSizeBytes: pdfBuffer.length,
+      recipientToHash: sha256(toEmail),
+      recipientCcHashes: ccResult.validCcEmails.map(sha256),
+    });
+  } catch (err) {
+    // markRecipientSent の precondition 失敗 (lease 切れ race 等)。Gmail には送信済なので
+    // markFailed もせず orphan_send audit のみ。Gmail messageId は audit に残せず errorMessage
+    // で sanitize 経由で記録。code-review #2 反映。
+    await recordAuditLog(storage, {
+      runId,
+      runStartedAt,
+      eventType: "orphan_send",
+      tenantId,
+      userId: user.id,
+      errorCode: "marksent_precondition_failed_after_send",
+      errorMessage: err,
+      now,
+    });
+    metrics.sent += 1;
+    return;
+  }
+  // markSent 成功 → 通常 sent audit (code-review #3 反映: durationMs に attempts を
+  // 渡していた誤用を削除。durationMs はミリ秒を意図する field、attempts は retry 回数で
+  // 意味論不一致。完了通知レーンと整合させる)。
+  await recordAuditLog(storage, {
+    runId,
+    runStartedAt,
+    eventType: "progress_report_sent",
+    tenantId,
+    userId: user.id,
+    now,
+  });
+  void sendResult.attempts; // 将来 audit metadata 追加時に活用予定 (現状未使用)
+  metrics.sent += 1;
 }
 
 interface ClassifyProgressContext {

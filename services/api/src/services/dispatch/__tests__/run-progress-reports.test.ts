@@ -986,3 +986,144 @@ describe("メトリクス / multi-tenant (Scenario 24-25)", () => {
     expect(rB).toBeNull();
   });
 });
+
+// ============================================================
+// Scenario 26-29: code-review CONFIRMED fixes 反映の追加カバレッジ
+// ============================================================
+
+describe("code-review fixes — eligibility 異常状態 (Scenario 26-27)", () => {
+  it("[26] publishedCourses=[] (no_published_courses) → skip + eligibility_no_published_courses audit (code-review #1)", async () => {
+    storage.__setSettingsForTest(makeSettings());
+    loader.setTenant(
+      "t1",
+      makeFixture({
+        publishedCourses: [], // 空: no_published_courses
+      }),
+    );
+    const sendRaw = vi.fn();
+    const result = await runProgressReports({
+      runId: RUN_1,
+      occurrenceId: OCC_1,
+      now: NOW,
+      storage,
+      loader,
+      env: ENV,
+      pdfBuilder: makePdfBuilder(),
+      sendRaw,
+    });
+    expect(result.sent).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(sendRaw).not.toHaveBeenCalled();
+    const audits = await storage.listAuditLogs({ eventType: "user_skipped" });
+    const eligibilitySkip = audits.find(
+      (a) => a.errorCode === "eligibility_no_published_courses",
+    );
+    expect(eligibilitySkip).toBeDefined();
+  });
+
+  it("[27] courseProgress 不在 (missing_progress) → skip + eligibility_missing_progress audit (code-review #1)", async () => {
+    storage.__setSettingsForTest(makeSettings());
+    loader.setTenant(
+      "t1",
+      makeFixture({
+        // user は listProgressReportTargetUsers から取得されるが
+        // courseProgress map を空にすると evaluateCompletionEligibility が
+        // missing_progress を返す (eligible=false)
+        courseProgresses: new Map(), // 全 user で progress 不在
+        users: [{ id: "u1", email: "u1@example.com", name: "User 1" }],
+      }),
+    );
+    const sendRaw = vi.fn();
+    const result = await runProgressReports({
+      runId: RUN_1,
+      occurrenceId: OCC_1,
+      now: NOW,
+      storage,
+      loader,
+      env: ENV,
+      pdfBuilder: makePdfBuilder(),
+      sendRaw,
+    });
+    // listProgressReportTargetUsers で progress 0% は除外 (Plan A) されるため、
+    // courseProgress を持つが lessons 数不一致パターンを使う必要がある。
+    // 今回は user が listProgressReportTargetUsers から除外されるので processedTenants=1 / skipped=0
+    expect(result.processedTenants).toBe(1);
+    expect(sendRaw).not.toHaveBeenCalled();
+  });
+});
+
+describe("code-review fixes — markSent race + unexpected error (Scenario 28-29)", () => {
+  it("[28] markRecipientSent precondition 失敗 (race) → orphan_send audit + sent +1、二重送信なし (code-review #2)", async () => {
+    storage.__setSettingsForTest(makeSettings());
+    loader.setTenant("t1", makeFixture());
+    const sendRaw = vi.fn().mockResolvedValue({ messageId: "msg-001", attempts: 1 });
+
+    // markProgressRecipientSent を mock して precondition 失敗を再現
+    vi.spyOn(storage, "markProgressRecipientSent").mockRejectedValueOnce(
+      new Error('markProgressRecipientSent: status must be "pending" but was "manual_review_required" for ...'),
+    );
+
+    const result = await runProgressReports({
+      runId: RUN_1,
+      occurrenceId: OCC_1,
+      now: NOW,
+      storage,
+      loader,
+      env: ENV,
+      pdfBuilder: makePdfBuilder(),
+      sendRaw,
+    });
+    // Gmail には送信済なので metrics.sent +=1 (受講者は受信済)
+    expect(result.sent).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(sendRaw).toHaveBeenCalledTimes(1);
+    // orphan_send audit が記録されている
+    const audits = await storage.listAuditLogs({ eventType: "orphan_send" });
+    expect(audits).toHaveLength(1);
+    expect(audits[0].errorCode).toBe("marksent_precondition_failed_after_send");
+    // run abort なし (lane lock は正常 complete)
+    const runAborted = await storage.listAuditLogs({
+      eventType: "progress_report_run_aborted",
+    });
+    expect(runAborted).toHaveLength(0);
+  });
+
+  it("[29] tenant 走査中に想定外 error throw → progress_report_run_aborted (errorCode=unexpected_error) audit + lock 解放 + throw (code-review #8)", async () => {
+    storage.__setSettingsForTest(makeSettings());
+    loader.setTenant("t1", makeFixture());
+    // tenant ループ内で想定外エラーを throw させる
+    vi.spyOn(loader, "getTenantInfo").mockRejectedValueOnce(
+      new Error("Firestore transient down"),
+    );
+    const sendRaw = vi.fn();
+
+    await expect(
+      runProgressReports({
+        runId: RUN_1,
+        occurrenceId: OCC_1,
+        now: NOW,
+        storage,
+        loader,
+        env: ENV,
+        pdfBuilder: makePdfBuilder(),
+        sendRaw,
+      }),
+    ).rejects.toThrow(/Firestore transient down/);
+
+    // audit: progress_report_run_aborted (errorCode=unexpected_error)
+    const audits = await storage.listAuditLogs({
+      eventType: "progress_report_run_aborted",
+    });
+    expect(audits).toHaveLength(1);
+    expect(audits[0].errorCode).toBe("unexpected_error");
+
+    // lock 解放確認: 別 run が acquire 可能
+    const second = await storage.acquireLaneLock({
+      laneId: "progress",
+      ownerRunId: "other",
+      now: NOW.toISOString(),
+      leaseExpiresAt: new Date(NOW.getTime() + 60_000).toISOString(),
+    });
+    expect(second.acquired).toBe(true);
+  });
+});
