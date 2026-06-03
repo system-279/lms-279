@@ -172,6 +172,14 @@ function encodeRFC2231Value(value: string): string {
   );
 }
 
+/**
+ * RFC 6838 token char (ALPHA / DIGIT / `!#$&^_.+-`) で構成された type/subtype のみ許可。
+ * `;` / `=` / 空白 / `"` 等の MIME parameter separator や quoted-string 脱出文字を
+ * すべて排除する。security-guidance @ Phase 3 PR 3b で指摘された Content-Disposition
+ * parameter breakout (`application/pdf; boundary=fake` 等) を構造的に防止。
+ */
+const MIME_TYPE_REGEX = /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/;
+
 /** 添付 part 1 件の MIME 表現を構築 */
 function buildAttachmentPart(
   attachment: MessageAttachment,
@@ -179,6 +187,25 @@ function buildAttachmentPart(
 ): string {
   assertHeaderSafe(attachment.filename, "attachment.filename");
   assertHeaderSafe(attachment.contentType, "attachment.contentType");
+
+  // Content-Disposition の `filename="..."` quoted-string 脱出を防ぐ。
+  // assertHeaderSafe は CR/LF + 空文字のみ防御のため、ASCII printable な `"` `\`
+  // (0x22 / 0x5C) を別途 reject する。Phase 4 で escape pattern 採用も検討。
+  if (/["\\]/.test(attachment.filename)) {
+    throw new Error(
+      `gmail-dwd-send: attachment.filename contains " or \\ (MIME quoted-string injection blocked)`,
+    );
+  }
+
+  // contentType を strict RFC 6838 type/subtype に限定し、MIME parameter 注入
+  // (`application/pdf; boundary=...`、charset 付き等) を構造的に排除する。
+  // caller が charset 付き text/plain 等を渡したい場合は Phase 4 で対応検討。
+  if (!MIME_TYPE_REGEX.test(attachment.contentType)) {
+    throw new Error(
+      `gmail-dwd-send: attachment.contentType must be RFC 6838 type/subtype form ` +
+        `(no parameters, no special chars; got "${attachment.contentType}")`,
+    );
+  }
 
   // RFC 2231 dual-form: ASCII safe なら filename="..." のみ、非 ASCII なら
   // filename="<rfc2047>" + filename*=UTF-8''<percent-encoded> 両方を出力

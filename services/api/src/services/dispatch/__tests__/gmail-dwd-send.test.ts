@@ -830,6 +830,101 @@ describe("buildMessageMime (新規 export、Phase 3 PR 3b)", () => {
     });
   });
 
+  describe("MIME quoted-string injection 防御 (security-guidance MEDIUM 対応)", () => {
+    const PDF_BYTES = Buffer.from("%PDF");
+
+    it("attachment.filename に `\"` (Content-Disposition quoted-string 脱出) → throw", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: 'r"; X-Injected: 1; x=".pdf',
+              contentType: "application/pdf",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/quoted-string injection/i);
+    });
+
+    it("attachment.filename に `\\` (Content-Disposition quoted-string 脱出) → throw", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "r\\.pdf",
+              contentType: "application/pdf",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/quoted-string injection/i);
+    });
+
+    it("attachment.contentType に MIME parameter (`;`) 注入 → throw (RFC 6838 strict)", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "r.pdf",
+              contentType: "application/pdf; boundary=fake",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/RFC 6838 type\/subtype/i);
+    });
+
+    it("attachment.contentType に半角空白 → throw (RFC 6838 strict)", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "r.pdf",
+              contentType: "application/pdf with space",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/RFC 6838 type\/subtype/i);
+    });
+
+    it("attachment.contentType が type/subtype 形式違反 → throw (subtype 欠如)", () => {
+      expect(() =>
+        buildMessageMime({
+          ...MIME_BASE,
+          attachments: [
+            {
+              filename: "r.pdf",
+              contentType: "application",
+              data: PDF_BYTES,
+            },
+          ],
+        }),
+      ).toThrow(/RFC 6838 type\/subtype/i);
+    });
+
+    it("正常な RFC 6838 type/subtype は許可 (application/pdf / image/png / application/vnd.ms-excel)", () => {
+      // happy path: 既存テストで application/pdf は通っているが、別 type も明示確認
+      const raw = buildMessageMime({
+        ...MIME_BASE,
+        attachments: [
+          {
+            filename: "a.xlsx",
+            contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            data: PDF_BYTES,
+          },
+        ],
+        boundary: "boundary_TEST_security",
+      });
+      expect(raw).toMatch(/^[A-Za-z0-9_-]+$/);
+    });
+  });
+
   describe("buildCompletionMime の後方互換性 (AC-PR-14)", () => {
     // 既存テストが全 pass する = wrapper として byte-for-byte 互換が保証される
     // 上記「添付なし」テストで buildMessageMime === buildCompletionMime を確認しているが、
