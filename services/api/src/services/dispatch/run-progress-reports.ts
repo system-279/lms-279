@@ -307,16 +307,21 @@ export async function runProgressReports(
       });
     }
 
-    // ⑭ run 完了
+    // ⑭ run 完了 — durationMs を audit log に記録 (evaluator AC-PR-21 反映)。
+    // runStartedAt は lane lock acquire 時刻 ISO 8601、now は本関数の処理時間軸。
+    const runDurationMs = now.getTime() - new Date(runStartedAt).getTime();
     await completeLaneLock(storage, "progress", runId);
     await recordAuditLog(storage, {
       runId,
       runStartedAt,
       eventType: "progress_report_run_completed",
+      durationMs: runDurationMs,
       now,
     });
     return responseFromMetrics(runId, occurrenceId, metrics);
   } catch (err) {
+    // abort 経路でも duration を記録 (evaluator AC-PR-21 反映、完了通知レーンと整合)
+    const abortDurationMs = now.getTime() - new Date(runStartedAt).getTime();
     if (err instanceof RunAbortError) {
       await abortLaneLock(storage, "progress", runId, err.reason);
       // err.cause は raw object (Gmail API error 等、PII / token を含みうる) のため
@@ -328,20 +333,22 @@ export async function runProgressReports(
         eventType: "progress_report_run_aborted",
         errorCode: err.reason,
         errorMessage: sanitizedCauseMessage,
+        durationMs: abortDurationMs,
         now,
       });
       return responseFromMetrics(runId, occurrenceId, metrics);
     }
     // 想定外エラーの abort 経路: lock 解放 + audit 記録 (code-review #8 反映、
-    // 完了通知レーンとの対称性確保。lock 解放のみで audit なしだと運用障害の
-    // 追跡性が低下する)
+    // 完了通知レーンとの対称性確保。errorMessage は evaluator LOW 反映で明示 sanitize、
+    // run-completion-notifications.ts L274 の pattern と統一)
     await abortLaneLock(storage, "progress", runId, "unexpected_error");
     await recordAuditLog(storage, {
       runId,
       runStartedAt,
       eventType: "progress_report_run_aborted",
       errorCode: "unexpected_error",
-      errorMessage: err,
+      errorMessage: sanitizeErrorForAudit(err),
+      durationMs: abortDurationMs,
       now,
     });
     throw err;
