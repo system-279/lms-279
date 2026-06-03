@@ -21,6 +21,8 @@
  */
 
 import { getFirestore } from "firebase-admin/firestore";
+import { renderToBuffer } from "@react-pdf/renderer";
+import { DISPATCH_CONSTRAINTS } from "@lms-279/shared-types";
 
 import { FirestoreDispatchStorage } from "./firestore-dispatch-storage.js";
 import { FirestoreTenantDataLoader } from "./firestore-tenant-data-loader.js";
@@ -33,6 +35,13 @@ import {
 import type { DispatchStorage } from "./dispatch-storage.js";
 import type { TenantDataLoader } from "./tenant-data-loader.js";
 import type { DispatchEnv } from "./run-completion-notifications.js";
+import type { ProgressReportPdfBuilder } from "./run-progress-reports.js";
+import { getDataSource } from "../../datasource/factory.js";
+import {
+  buildProgressPdfData,
+  type TenantInfo,
+} from "../progress-pdf.js";
+import { ProgressPdfDocument } from "../progress-pdf-document.js";
 
 export interface DispatchFactoryOutput {
   storage: DispatchStorage;
@@ -40,9 +49,97 @@ export interface DispatchFactoryOutput {
   env: DispatchEnv;
   expectedAudience: string;
   verifier: OidcTokenVerifier;
+  /**
+   * Phase 3 PR 3c: 進捗レポートレーン用 PDF 生成 builder (Codex セカンドオピニオン HIGH #2 反映)。
+   * production では `getDataSource + buildProgressPdfData + ProgressPdfDocument + renderToBuffer`
+   * の wrapper、in-memory では簡易 stub を返す。
+   */
+  progressPdfBuilder: ProgressReportPdfBuilder;
   /** 切り替えモードの可視化 (logging 用) */
   mode: "firestore" | "in-memory";
 }
+
+/**
+ * Production PDF builder: tenant doc を Firestore から読み、`getDataSource` 経由で
+ * tenant scope の DataSource を作り、`buildProgressPdfData` + `ProgressPdfDocument` +
+ * `renderToBuffer` で PDF Buffer を生成し、5MB 上限判定を行う。
+ *
+ * 設計仕様書 §6.1: PDF 生成は run-progress-reports.ts 範囲外の責務とし、本 factory で
+ * inject する形を採用 (test 容易性確保 + 関心事分離)。
+ */
+async function buildProductionPdf(
+  tenantId: string,
+  userId: string,
+  now: Date,
+): Promise<
+  | { kind: "ready"; pdfData: Awaited<ReturnType<typeof buildProgressPdfData>>; pdfBuffer: Buffer }
+  | { kind: "pdf_too_large"; sizeBytes: number }
+> {
+  const db = getFirestore();
+  const tenantDoc = await db.collection("tenants").doc(tenantId).get();
+  const tenantData = tenantDoc.data() ?? {};
+  const tenant: TenantInfo = {
+    id: tenantId,
+    name: typeof tenantData.name === "string" ? tenantData.name : tenantId,
+    ownerEmail:
+      typeof tenantData.ownerEmail === "string" && tenantData.ownerEmail.length > 0
+        ? tenantData.ownerEmail
+        : null,
+  };
+  const dataSource = getDataSource({ tenantId, isDemo: false });
+  const pdfData = await buildProgressPdfData({
+    dataSource,
+    tenant,
+    userId,
+    now,
+  });
+  // すべての section を含める (進捗レポートは手動 draft と異なり、定期配信では情報量を絞らない)
+  const allSections = {
+    profile: true,
+    deadline: true,
+    summary: true,
+    lessons: true,
+    quiz: true,
+    pace: true,
+    video: true,
+  } as const;
+  const pdfBuffer = await renderToBuffer(
+    ProgressPdfDocument({ data: pdfData, sections: allSections }),
+  );
+  if (pdfBuffer.length > DISPATCH_CONSTRAINTS.PROGRESS_REPORT_PDF_MAX_BYTES) {
+    return { kind: "pdf_too_large", sizeBytes: pdfBuffer.length };
+  }
+  return { kind: "ready", pdfData, pdfBuffer };
+}
+
+/** In-memory 用の最小 stub PDF builder (dev / E2E test 用、本番では呼ばれない) */
+const inMemoryPdfBuilder: ProgressReportPdfBuilder = async ({ tenantId, user, now }) => {
+  // shape を満たす最小 ProgressPdfData (in-memory test 用、実 PDF 内容は意味を持たない)
+  const pdfData = {
+    generatedAt: now.toISOString(),
+    user: { id: user.id, name: user.name, email: user.email },
+    tenant: { id: tenantId, name: tenantId, ownerEmail: null },
+    deadline: {
+      enrolledAt: null,
+      deadlineBaseDate: null,
+      videoAccessUntil: null,
+      quizAccessUntil: null,
+      daysRemainingVideo: null,
+      daysRemainingQuiz: null,
+    },
+    courses: [],
+    pace: {
+      status: "ongoing" as const,
+      remainingLessons: 0,
+      remainingDays: null,
+      lessonsPerWeek: null,
+      minutesPerDay: null,
+    },
+    videoSummary: { totalWatchedSec: 0, totalDurationSec: 0 },
+  };
+  // 最小 PDF stub (Buffer 0 byte でも buildMessageMime は構造的に有効、AC-PR-12 はテスト [15] で確認済)
+  return { kind: "ready" as const, pdfData, pdfBuffer: Buffer.from("%PDF-1.4 in-memory stub") };
+};
 
 /**
  * 環境変数から必須値を読む (未設定なら明示 throw、silent fallback しない)。
@@ -114,6 +211,7 @@ export function buildDispatchFactory(): DispatchFactoryOutput {
       env: { subjectEmail, fromEmail },
       expectedAudience,
       verifier: new GoogleOidcTokenVerifier(),
+      progressPdfBuilder: inMemoryPdfBuilder,
       mode: "in-memory",
     };
   }
@@ -130,6 +228,9 @@ export function buildDispatchFactory(): DispatchFactoryOutput {
     env,
     expectedAudience,
     verifier: new GoogleOidcTokenVerifier(),
+    // production PDF builder wiring (Codex セカンドオピニオン HIGH #2 反映)
+    progressPdfBuilder: async ({ tenantId, user, now }) =>
+      buildProductionPdf(tenantId, user.id, now),
     mode: "firestore",
   };
 }
