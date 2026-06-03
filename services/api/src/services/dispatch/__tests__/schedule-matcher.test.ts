@@ -17,8 +17,11 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { shouldRunNow } from "../schedule-matcher.js";
-import type { DispatchSettings } from "@lms-279/shared-types";
+import { shouldRunNow, shouldRunProgressReportNow } from "../schedule-matcher.js";
+import type {
+  DispatchSettings,
+  ProgressReportSettings,
+} from "@lms-279/shared-types";
 
 function makeSettings(
   partial: Partial<DispatchSettings> = {},
@@ -160,6 +163,79 @@ describe("shouldRunNow", () => {
     it("月木の 09:00 JST に月曜 09:59 で true (時単位一致、分は無視)", () => {
       const now = new Date("2026-05-18T00:59:00.000Z"); // 月曜 JST 09:59
       expect(shouldRunNow(makeSettings(), now)).toBe(true);
+    });
+  });
+});
+
+// ============================================================
+// shouldRunProgressReportNow (Phase 3、ADR-039、AC-PR-01 / AC-PR-05 / AC-PR-22)
+// ============================================================
+
+function makeProgressReport(
+  partial: Partial<ProgressReportSettings> = {},
+): ProgressReportSettings {
+  return {
+    enabled: true,
+    scheduleDaysOfWeek: [1], // 月のみ
+    scheduleHourJst: 10,
+    ...partial,
+  };
+}
+
+describe("shouldRunProgressReportNow", () => {
+  describe("kill switch / undefined", () => {
+    it("progressReport=undefined → 常に false (AC-PR-05)", () => {
+      const now = new Date("2026-05-18T01:00:00.000Z"); // 月曜 JST 10:00
+      expect(shouldRunProgressReportNow(undefined, now)).toBe(false);
+    });
+
+    it("progressReport.enabled=false → 常に false (AC-PR-22)", () => {
+      const now = new Date("2026-05-18T01:00:00.000Z");
+      expect(
+        shouldRunProgressReportNow(
+          makeProgressReport({ enabled: false }),
+          now,
+        ),
+      ).toBe(false);
+    });
+
+    it("scheduleDaysOfWeek 空配列 → 常に false", () => {
+      const now = new Date("2026-05-18T01:00:00.000Z");
+      expect(
+        shouldRunProgressReportNow(
+          makeProgressReport({ scheduleDaysOfWeek: [] }),
+          now,
+        ),
+      ).toBe(false);
+    });
+  });
+
+  describe("schedule 一致", () => {
+    it("月曜 10:00 JST、settings 月 10:00 → true", () => {
+      const now = new Date("2026-05-18T01:00:00.000Z"); // 月曜 JST 10:00
+      expect(shouldRunProgressReportNow(makeProgressReport(), now)).toBe(true);
+    });
+
+    it("月曜 11:00 JST、settings 月 10:00 → false (時刻不一致)", () => {
+      const now = new Date("2026-05-18T02:00:00.000Z"); // 月曜 JST 11:00
+      expect(shouldRunProgressReportNow(makeProgressReport(), now)).toBe(false);
+    });
+
+    it("火曜 10:00 JST、settings 月 10:00 → false (曜日不一致)", () => {
+      const now = new Date("2026-05-19T01:00:00.000Z"); // 火曜 JST 10:00
+      expect(shouldRunProgressReportNow(makeProgressReport(), now)).toBe(false);
+    });
+
+    it("完了通知レーン (9:00) と進捗レーン (10:00) は独立判定 (AC-PR-11 構造的根拠)", () => {
+      // 月曜 09:00 JST: 完了通知のみ true、進捗 false
+      const now9 = new Date("2026-05-18T00:00:00.000Z");
+      expect(shouldRunNow(makeSettings(), now9)).toBe(true);
+      expect(shouldRunProgressReportNow(makeProgressReport(), now9)).toBe(false);
+
+      // 月曜 10:00 JST: 進捗のみ true、完了通知 false
+      const now10 = new Date("2026-05-18T01:00:00.000Z");
+      expect(shouldRunNow(makeSettings(), now10)).toBe(false);
+      expect(shouldRunProgressReportNow(makeProgressReport(), now10)).toBe(true);
     });
   });
 });

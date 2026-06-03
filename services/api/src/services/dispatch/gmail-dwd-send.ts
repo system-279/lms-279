@@ -366,22 +366,20 @@ const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Gmail API users.messages.send で完了通知を送信する。
- * 429 / 503 / transient ネットワークエラーは exponential backoff で最大
- * MAX_ATTEMPTS 回まで retry。それ以外は 1 回目で throw。
+ * Gmail API users.messages.send に raw を投げて messageId を取得する共有 helper。
+ * 429 / 503 / transient ネットワークエラーは exponential backoff で最大 MAX_ATTEMPTS 回 retry。
  *
- * 戻り値の messageId は caller が completion_notifications.messageId に保存する。
+ * 完了通知 (`sendCompletionMail`) と進捗レポート (`sendRawMessage`) から共有される
+ * (PR 3c DRY、retry/transient classification logic 一本化)。
  *
  * @throws raw Gmail API error (caller 側で dispatch-403-classifier 等で分類)
  */
-export async function sendCompletionMail(
-  input: SendCompletionMailInput,
-  options: SendCompletionMailOptions = {},
+async function executeSendWithRetry(
+  subjectEmail: string,
+  fromEmail: string,
+  raw: string,
+  sleep: (ms: number) => Promise<void>,
 ): Promise<SendCompletionMailResult> {
-  const { subjectEmail, fromEmail, to, cc, subject, body } = input;
-  const sleep = options.sleep ?? defaultSleep;
-
-  const raw = buildCompletionMime({ fromEmail, to, cc, subject, body });
   const gmail = await getGmailClientForSender(subjectEmail, fromEmail);
 
   let lastError: unknown;
@@ -411,4 +409,52 @@ export async function sendCompletionMail(
   }
   // ループ脱出パスは throw 済のため到達不可だが TypeScript の網羅性のために残す
   throw lastError;
+}
+
+/**
+ * Gmail API users.messages.send で完了通知を送信する。
+ *
+ * 内部で `buildCompletionMime` (= `buildMessageMime` 添付なし wrapper、byte-for-byte 互換) で
+ * raw を構築し、`executeSendWithRetry` に委譲。AC-PR-14 後方互換維持。
+ *
+ * 戻り値の messageId は caller が completion_notifications.messageId に保存する。
+ *
+ * @throws raw Gmail API error (caller 側で dispatch-403-classifier 等で分類)
+ */
+export async function sendCompletionMail(
+  input: SendCompletionMailInput,
+  options: SendCompletionMailOptions = {},
+): Promise<SendCompletionMailResult> {
+  const { subjectEmail, fromEmail, to, cc, subject, body } = input;
+  const sleep = options.sleep ?? defaultSleep;
+  const raw = buildCompletionMime({ fromEmail, to, cc, subject, body });
+  return executeSendWithRetry(subjectEmail, fromEmail, raw, sleep);
+}
+
+/**
+ * 既に構築済の raw MIME (base64url) を Gmail API users.messages.send に投げる (Phase 3 PR 3c)。
+ *
+ * 進捗レポートレーン (`run-progress-reports.ts`) から呼ばれる:
+ *   1. caller が `progress-mime-builder.buildProgressReportMime` で raw を構築
+ *   2. 本関数で gmail-client (DWD JWT subject 切り替え) + retry を提供
+ *
+ * `sendCompletionMail` と内部実装を共有 (retry/transient classification、Codex DRY)。
+ *
+ * @throws raw Gmail API error (caller 側で dispatch-403-classifier 等で分類)
+ */
+export interface SendRawMessageInput {
+  /** DWD JWT subject (実在 mailbox、`DXCOLLEGE_DISPATCH_SUBJECT` env) */
+  subjectEmail: string;
+  /** MIME From ヘッダ (SendAs alias、`DXCOLLEGE_SENDER_EMAIL` env)。本関数は raw を信頼 */
+  fromEmail: string;
+  /** 既に構築済の raw MIME (base64url、`buildMessageMime` の出力) */
+  raw: string;
+}
+
+export async function sendRawMessage(
+  input: SendRawMessageInput,
+  options: SendCompletionMailOptions = {},
+): Promise<SendCompletionMailResult> {
+  const sleep = options.sleep ?? defaultSleep;
+  return executeSendWithRetry(input.subjectEmail, input.fromEmail, input.raw, sleep);
 }

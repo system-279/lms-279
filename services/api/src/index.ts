@@ -18,6 +18,7 @@ import { superAdminRouter } from "./routes/super-admin.js";
 import { helpRoleRouter } from "./routes/help-role.js";
 import { publicRouter } from "./routes/public.js";
 import { createInternalDispatchRouter } from "./routes/internal/dispatch.js";
+import { createInternalProgressReportsRouter } from "./routes/internal/progress-reports.js";
 import { createDispatchSuperRouter } from "./routes/super/dispatch-super-router.js";
 import {
   InMemoryTenantCcConfigStore,
@@ -178,7 +179,22 @@ try {
       env: dispatchFactory.env,
     }),
   );
-  logger.info("Internal dispatch router mounted", { mode: dispatchFactory.mode });
+  // Phase 3 PR 3c: 進捗レポート定期自動配信 endpoint mount (Codex セカンドオピニオン HIGH #1 反映)。
+  // 同 factory output から progressPdfBuilder を受け取り、completion lane と peer な internal route として配信。
+  app.use(
+    "/api/v2/internal",
+    createInternalProgressReportsRouter({
+      expectedAudience: dispatchFactory.expectedAudience,
+      verifier: dispatchFactory.verifier,
+      storage: dispatchFactory.storage,
+      loader: dispatchFactory.loader,
+      env: dispatchFactory.env,
+      pdfBuilder: dispatchFactory.progressPdfBuilder,
+    }),
+  );
+  logger.info("Internal dispatch routers mounted (completion + progress)", {
+    mode: dispatchFactory.mode,
+  });
 } catch (err) {
   const errorMsg = err instanceof Error ? err.message : String(err);
   if (isProductionGcpRuntime()) {
