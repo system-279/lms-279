@@ -288,13 +288,107 @@ describe("TenantCcForm", () => {
     const putCall = superFetchMock.mock.calls.find(
       (c) => c[1]?.method === "PUT",
     );
+    // ADR-039 D-6: progressReportEnabled は always-send-all で常に送信
     expect(JSON.parse(putCall![1].body)).toEqual({
       notificationCcEmails: ["cc1@example.com"],
       completionNotificationEnabled: true,
+      progressReportEnabled: false,
     });
     expect(await screen.findByText("保存しました。")).toBeInTheDocument();
     // 保存後は差分なし → 保存ボタン disable
     expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+  });
+
+  // ============================================================
+  // ADR-039 D-6: progressReportEnabled テナント opt-in
+  // ============================================================
+
+  it("progressReportEnabled トグルが表示され、既存値を反映する", async () => {
+    superFetchMock.mockResolvedValueOnce({
+      ...baseConfig,
+      progressReportEnabled: true,
+    });
+    renderForm();
+    await screen.findByText("cc1@example.com");
+    expect(
+      screen.getByRole("switch", {
+        name: "このテナントへの進捗レポート定期配信を有効化",
+      }),
+    ).toBeChecked();
+    expect(
+      screen.getByText("このテナントへの進捗レポート定期配信 ON"),
+    ).toBeInTheDocument();
+  });
+
+  it("旧テナント (progressReportEnabled 欠落) は default OFF を表示する", async () => {
+    superFetchMock.mockResolvedValueOnce(baseConfig); // progressReportEnabled なし
+    renderForm();
+    await screen.findByText("cc1@example.com");
+    expect(
+      screen.getByRole("switch", {
+        name: "このテナントへの進捗レポート定期配信を有効化",
+      }),
+    ).not.toBeChecked();
+    expect(
+      screen.getByText("このテナントへの進捗レポート定期配信 OFF"),
+    ).toBeInTheDocument();
+  });
+
+  it("progressReportEnabled のみ変更でも dirty 扱いとなり保存ボタン enable", async () => {
+    superFetchMock.mockResolvedValueOnce(baseConfig);
+    renderForm();
+    await screen.findByText("cc1@example.com");
+
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+
+    // 進捗レポート OFF → ON に切替で dirty
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "このテナントへの進捗レポート定期配信を有効化",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "保存" })).toBeEnabled(),
+    );
+  });
+
+  it("保存時に progressReportEnabled を含めて PUT する (always-send-all)", async () => {
+    superFetchMock
+      .mockResolvedValueOnce(baseConfig) // GET
+      .mockResolvedValueOnce({
+        ...baseConfig,
+        progressReportEnabled: true,
+      }); // PUT
+    renderForm();
+    await screen.findByText("cc1@example.com");
+
+    // 進捗レポート ON に切替
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "このテナントへの進捗レポート定期配信を有効化",
+      }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    });
+
+    await waitFor(() =>
+      expect(superFetchMock).toHaveBeenCalledWith(
+        "/api/v2/super/tenants/t1/notification-cc-emails",
+        expect.objectContaining({ method: "PUT" }),
+      ),
+    );
+    const putCall = superFetchMock.mock.calls.find(
+      (c) => c[1]?.method === "PUT",
+    );
+    const sentBody = JSON.parse(putCall![1].body);
+    expect(sentBody.progressReportEnabled).toBe(true);
+    // 既存の CC / 完了通知の field も常に送信されている (always-send-all)
+    expect(sentBody.completionNotificationEnabled).toBe(true);
+    expect(sentBody.notificationCcEmails).toEqual([
+      "cc1@example.com",
+      "cc2@example.com",
+    ]);
   });
 
   it("保存失敗時はエラー表示し chips state は維持", async () => {

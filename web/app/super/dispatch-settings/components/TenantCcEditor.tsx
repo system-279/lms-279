@@ -108,8 +108,13 @@ export function TenantCcForm({
 
   const [originalEmails, setOriginalEmails] = useState<string[]>([]);
   const [originalEnabled, setOriginalEnabled] = useState<boolean>(true);
+  // ADR-039 D-6: progressReport テナント opt-in を CC 編集と同一画面に統合
+  const [originalProgressReportEnabled, setOriginalProgressReportEnabled] =
+    useState<boolean>(false);
   const [emails, setEmails] = useState<string[]>([]);
   const [enabled, setEnabled] = useState<boolean>(true);
+  const [progressReportEnabled, setProgressReportEnabled] =
+    useState<boolean>(false);
 
   const [draft, setDraft] = useState("");
   const [draftError, setDraftError] = useState<string | null>(null);
@@ -122,8 +127,12 @@ export function TenantCcForm({
     setConfig(data);
     setOriginalEmails(data.notificationCcEmails);
     setOriginalEnabled(data.completionNotificationEnabled);
+    // 旧テナント (progressReportEnabled 欠落) は default false で初期化
+    const progressReport = data.progressReportEnabled ?? false;
+    setOriginalProgressReportEnabled(progressReport);
     setEmails(data.notificationCcEmails);
     setEnabled(data.completionNotificationEnabled);
+    setProgressReportEnabled(progressReport);
     setDraft("");
     setDraftError(null);
   };
@@ -179,6 +188,7 @@ export function TenantCcForm({
 
   const isDirty =
     enabled !== originalEnabled ||
+    progressReportEnabled !== originalProgressReportEnabled ||
     emails.length !== originalEmails.length ||
     emails.some((e, i) => originalEmails[i] !== e);
 
@@ -190,6 +200,8 @@ export function TenantCcForm({
     const body: PutTenantNotificationCcRequest = {
       notificationCcEmails: emails,
       completionNotificationEnabled: enabled,
+      // 当画面で常に値が確定するので always-send-all (旧 UI の patch 保護は BE 側)
+      progressReportEnabled,
     };
     try {
       const updated = await superFetch<GetTenantNotificationCcResponse>(
@@ -232,7 +244,23 @@ export function TenantCcForm({
           aria-label="このテナントへの完了通知を有効化"
         />
         <span>
-          {enabled ? "このテナントへの配信 ON" : "このテナントへの配信 OFF"}
+          {enabled
+            ? "このテナントへの完了通知 配信 ON"
+            : "このテナントへの完了通知 配信 OFF"}
+        </span>
+      </label>
+
+      <label className="flex items-center gap-3 text-sm">
+        <Switch
+          checked={progressReportEnabled}
+          onCheckedChange={setProgressReportEnabled}
+          disabled={saving}
+          aria-label="このテナントへの進捗レポート定期配信を有効化"
+        />
+        <span>
+          {progressReportEnabled
+            ? "このテナントへの進捗レポート定期配信 ON"
+            : "このテナントへの進捗レポート定期配信 OFF"}
         </span>
       </label>
 
