@@ -108,7 +108,7 @@ import {
   );
 }
 
-// --- scaleTriggerExceeded 境界: 300 名超でフラグが立つことを期待 (impl-plan §4.3) ---
+// --- scaleTriggerExceeded 境界: 300 名超でフラグが立つことを期待 (ADR-039) ---
 {
   const belowThreshold: DryRunResultCli["scaleTriggerExceeded"] = false;
   const aboveThreshold: DryRunResultCli["scaleTriggerExceeded"] = true;

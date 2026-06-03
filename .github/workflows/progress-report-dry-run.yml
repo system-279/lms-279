@@ -1,6 +1,6 @@
 name: Progress Report Dry Run
 
-# 進捗レポート定期自動配信 dry-run admin SDK CLI workflow (ADR-039、impl-plan §PR 3e)。
+# 進捗レポート定期自動配信 dry-run admin SDK CLI workflow (ADR-039)。
 #
 # 目的:
 #   cutover 前に「次の cron 実行で何件送られるか」「テナント別の対象人数 / CC 数」
@@ -87,15 +87,17 @@ jobs:
           RESULT_FILE="${result_files[0]:-}"
           if [ -z "$RESULT_FILE" ]; then
             {
-              echo "## Progress Report Dry Run"
+              echo "## Progress Report Dry Run — FAILED"
               echo ""
-              echo "結果 JSON が見つかりません。スクリプトが異常終了した可能性があります。"
+              echo "結果 JSON が見つかりません。CLI が異常終了した可能性があります。"
               echo "Run ステップの実行ログで原因を確認してください。"
             } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            # CLI 異常終了で artifact 不在の場合は workflow を確実に失敗させる
+            # (exit 0 で握りつぶすと cutover 担当が「workflow OK」を Step 4 完了の根拠にする silent fail 経路を生む)
+            exit 1
           fi
           # `// 0` / `// "null"` fallback で JSON 異常時に `null` 文字列が bash 算術 / table 出力に
-          # 混入して set -euo pipefail で異常終了するのを防ぐ (code-review IMPORTANT 反映)
+          # 混入して set -euo pipefail で異常終了するのを防ぐ
           EVALUATED_AT=$(jq -r '.evaluatedAt // "null"' "$RESULT_FILE")
           SETTINGS_LOADED=$(jq -r '.settingsLoaded // "null"' "$RESULT_FILE")
           TENANTS_SCANNED=$(jq -r '.tenantsScanned // 0' "$RESULT_FILE")
@@ -128,7 +130,7 @@ jobs:
             echo "| scaleTriggerExceeded (>300 名) | $SCALE_EXCEEDED |"
             echo ""
             if [ "$SCALE_EXCEEDED" = "true" ]; then
-              echo "> ⚠️ **scale trigger 超過**: 全テナント合計 300 名超 → Cloud Tasks 移行検討 (impl-plan §4.3)"
+              echo "> ⚠️ **scale trigger 超過**: 全テナント合計 300 名超 → Cloud Tasks 移行検討"
               echo ""
             fi
             echo "### テナント別サマリ (上位 10 件)"

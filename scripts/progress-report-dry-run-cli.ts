@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * 進捗レポート定期自動配信 dry-run admin SDK CLI (ADR-039、impl-plan §PR 3e)。
+ * 進捗レポート定期自動配信 dry-run admin SDK CLI (ADR-039)。
  *
  * 目的:
  *   cutover 前に「次の cron 実行で何件送られるか」「テナント別の対象人数 / CC 数」
@@ -68,11 +68,24 @@ import type { DispatchSettings } from "@lms-279/shared-types";
 // 型定義 (CLI 出力 JSON shape)
 // ============================================================
 
+/**
+ * tenant 単位で skip された場合の理由。`skipped === true` のときのみ意味を持つ。
+ *
+ * `tenant_doc_not_found` は listAllTenantIds() が tenantId を返したが tenants/{tid}
+ * doc が存在しない異常状態 (subcollection 孤児等)。stderr に WARN を出して運用者の
+ * 注意を喚起する。他の skip 理由は通常運用範囲内。
+ */
+export type DryRunSkipReason =
+  | "tenant_doc_not_found"
+  | "tenant_not_active"
+  | "progress_report_disabled"
+  | "no_published_courses";
+
 export interface DryRunTenantSummary {
   tenantId: string;
   skipped: boolean;
-  /** "tenant_doc_not_found" | "tenant_not_active" | "progress_report_disabled" | "no_published_courses" */
-  skipReason?: string;
+  /** `skipped === true` のときのみ設定される */
+  skipReason?: DryRunSkipReason;
   usersScanned: number;
   /** listProgressReportTargetUsers の戻り値そのまま (進捗 1% 以上 + 期限内 + student) */
   candidateCount: number;
@@ -111,7 +124,7 @@ export interface DryRunResultCli {
    * 経験値レンジ。実測は cutover smoke で確認すること。
    */
   estimatedPdfSizeKbRange: { min: number; typical: number; max: number };
-  /** scale trigger: 全テナント合計 300 名超は Cloud Tasks 移行検討 (impl-plan §4.3) */
+  /** scale trigger: 全テナント合計 300 名超は Cloud Tasks 移行検討 */
   scaleTriggerExceeded: boolean;
 }
 
@@ -127,7 +140,7 @@ const SENDER_EMAIL = process.env.DXCOLLEGE_SENDER_EMAIL ?? "dxcollege@279279.net
 const AVG_PER_USER_MS = 2000;
 /** user 並列度 (run-progress-reports DEFAULT_USER_CONCURRENCY と一致) */
 const USER_CONCURRENCY = 8;
-/** scale trigger threshold (impl-plan §4.3) */
+/** scale trigger threshold */
 const SCALE_TRIGGER_THRESHOLD = 300;
 /** 推定 PDF サイズ範囲 (KB)。実測は cutover smoke で確認 */
 const PDF_SIZE_KB_RANGE = { min: 150, typical: 350, max: 1200 };
@@ -172,8 +185,8 @@ export async function runProgressReportDryRunCli(
 
   // ① settings 読み取り
   // doc missing 許容: 初期化前 cutover リハーサル想定で「対象規模見積もり」だけは返す。
-  // read/parse error (throw) は cutover 判断材料整合性に直結するため致命扱いし workflow を
-  // 失敗させる (dispatch-dry-run-cli 既存パターン Low-1 反映)。
+  // read/parse error は致命扱いし fail-fast にする (silent fallback は cutover 判断材料の
+  // 整合性を壊すため、dispatch-dry-run-cli と同パターン)。
   const settings: DispatchSettings | null = await storage.getDispatchSettings();
 
   // ② tenants 走査
@@ -186,6 +199,12 @@ export async function runProgressReportDryRunCli(
     // ③ active + progressReportEnabled チェック (AC-PR-04)
     const tenantInfo = await loader.getTenantInfo(tenantId);
     if (!tenantInfo) {
+      // listAllTenantIds() は tenantId を返したが tenants/{tid} doc が不在。
+      // subcollection 孤児やテナント cascade delete 未完了の可能性があり、
+      // 後で同一 tenantId が再利用されたら誤配信に直結するため stderr で alert。
+      console.error(
+        `[WARN] tenant_doc_not_found: tenants/${tenantId} doc が存在しません。subcollection 孤児の可能性があるため運用者の確認推奨。`,
+      );
       tenantsSummary.push({
         tenantId,
         skipped: true,
@@ -257,7 +276,7 @@ export async function runProgressReportDryRunCli(
     const users = await dataView.listProgressReportTargetUsers(now);
     // candidateCount は listProgressReportTargetUsers 戻り値全体を表す。
     // 送信不能要因 (invalid email / 100% 完了) は内訳カウンタで切り分け、運用者が
-    // 「dry-run で見えない skip 規模」を取りこぼさないようにする (Codex MEDIUM 反映)。
+    // 「dry-run で見えない skip 規模」を取りこぼさないようにする。
     const candidateCount = users.length;
     let invalidEmailCount = 0;
     let completedCount = 0;
@@ -353,10 +372,19 @@ async function main(): Promise<void> {
       `${result.tenantsScanned} tenant(s) scanned, ` +
       `~${Math.round(result.estimatedDurationMs / 1000)}s estimated`,
   );
+  const orphanCount = result.tenantsSummary.filter(
+    (s) => s.skipReason === "tenant_doc_not_found",
+  ).length;
+  if (orphanCount > 0) {
+    console.error(
+      `[progress-report-dry-run-cli] WARN: tenant_doc_not_found が ${orphanCount} 件。` +
+        `subcollection 孤児の可能性があるため確認推奨。`,
+    );
+  }
   if (result.scaleTriggerExceeded) {
     console.error(
       `[progress-report-dry-run-cli] WARN: scale trigger exceeded ` +
-        `(>${SCALE_TRIGGER_THRESHOLD} targets) — Cloud Tasks 移行検討 (impl-plan §4.3)`,
+        `(>${SCALE_TRIGGER_THRESHOLD} targets) — Cloud Tasks 移行検討`,
     );
   }
 }
