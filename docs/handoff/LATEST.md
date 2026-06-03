@@ -1,23 +1,22 @@
-# Session Handoff — 2026-06-03 (Session 54)
+# Session Handoff — 2026-06-03 (Session 55)
 
 ## TL;DR
 
-Phase 3「進捗レポート 定期自動配信」の **PR 3a (shared-types + storage interface 拡張) を完成 → PR #508 で merged**。残作業 6 項目を T0-T7 として整理し、Codex Plan stage review (thread `019e8a8d-...`、HIGH 5 + MEDIUM 4) を全反映、`/code-review medium` (7 finder + verify) で **CRITICAL 1 (collection 名 typo `enrollment_settings`→`enrollment_setting`) + HIGH 1 (acquireRunLock の cross-lane 排他) + MEDIUM 2 (email 防御 / N+1 query)** を発見・全件本コミット内で修正。`/safe-refactor` LOW 2 件は現状維持判断 (許容範囲)。新規/拡張テスト ~70 件で **1469 tests 全 pass**、type-check / lint クリーン。本 PR は基盤層のみで本番影響ゼロ (起動経路 4 ゲート全部未実装、本田様明示 ON でのみ稼働の建付け維持)。Phase 3 全体は 5 PR 中 1/5 完了 (PR 3a)。
+Phase 3「進捗レポート 定期自動配信」の **PR 3b (gmail-dwd-send.ts multipart/mixed 添付対応) を完成 → PR #510 で merged**。新 export `buildMessageMime` / `MessageAttachment` / `BuildMessageMimeInput` を追加し、既存 `buildCompletionMime` を `buildMessageMime` の wrapper にリファクタ (AC-PR-14 byte-for-byte 後方互換)。`/code-review medium` (7 finder + 1-vote verify) で **CONFIRMED 4 + PLAUSIBLE 2 + REFUTED 2**、CONFIRMED 3 件 (RFC 5987 §3.2.1 違反 / Buffer.concat メモリ peak / 無効 boundary 負例テスト) を本 PR 内 fix-up。background security review (MEDIUM、`security-guidance@claude-code-plugins`) で 2 回検出された **MIME quoted-string injection 脆弱性** (`filename` の `"` `\` 注入 / `contentType` の `;` parameter breakout) も追加 commit で対応。1495 tests 全 pass、CI 5 jobs 全 pass。本 PR は MIME builder の export 追加と既存挙動の byte-for-byte 維持のみで本番影響ゼロ (起動経路 4 ゲート全部未実装、開発者明示 ON でのみ稼働の建付け維持)。Phase 3 全体は 5 PR 中 2/5 完了 (PR 3a / 3b)。
 
 | 主要成果 | 結果 |
 |---|---|
-| PR 3a 完成 + merged | ✅ PR #508 (squash `f4be4f6`、17 files、+2860/-50) |
-| T0 Firestore schema 調査 → Plan A 4 軸採用 | ✅ AskUser で本田様判断 (退会・enrollment は将来 PR で対応) |
-| Codex Plan stage review 反映 | ✅ HIGH 5 / MEDIUM 4 全反映 (thread `019e8a8d-4842-7bd1-8ddf-3b626311be68`) |
-| `/code-review medium` Implementation stage fix-up | ✅ CRITICAL 1 + HIGH 1 + MEDIUM 2 を発見・修正、本コミット内に統合 |
-| ADR-039 D-5 改訂 (Plan A 簡素化) | ✅ ADR + design + impl-plan 3 ファイル同期 |
-| 単体テスト追加 | ✅ ~70 件、1469 / 1469 pass |
-| CI (Build / Lint / Test / Type Check / Playwright E2E) | ✅ 全 pass |
-| 本田様明示認可 → squash merge | ✅ 番号単位明示 + 要約形式で承認、merge 後 main 同期 |
+| PR 3b 完成 + merged | ✅ PR #510 (squash `7100a5b`、2 files、+673/-13) |
+| `/code-review medium` Implementation stage fix-up | ✅ CONFIRMED 3 件本 PR 内修正 (RFC 5987 / Buffer.concat / 負例テスト) |
+| Security review (MEDIUM x2 重複) 対応 | ✅ MIME quoted-string injection 防御 (filename `"`/`\` reject + contentType RFC 6838 strict regex) |
+| 単体テスト追加 | ✅ ~25 件、1495 / 1495 pass |
+| CI 全 pass (Build / Lint / Test / Type Check / Playwright E2E) | ✅ 5 jobs SUCCESS |
+| 開発者明示認可 → squash merge | ✅ 「PR #510 を squash merge」で番号単位明示認可、merge 後 main 同期 |
+| Phase 4 OQ 3 件 PR 本文に記録 | ✅ multipart 構築重複 80 LOC / assertHeaderSafe 3 実装 / header 5-7 行抽出 |
 
-- **Issue Net**: 0 件 (Close 0 / 起票 0)
-- **マージ済 PR**: 1 件 (#508、本セッション handoff PR を除く)
-- **CI / Deploy**: ✅ 通常 CI 全 pass、`Cleanup Orphan Auth Users` failure の状況は未確認 (本セッションは Phase 3 実装作業に集中)
+- **Issue Net**: 0 件 (Close 0 / 起票 0)。本セッションは Phase 3 大規模機能実装のため Issue 紐付けなし、進捗計測は PR ベース
+- **マージ済 PR**: 1 件 (#510、本セッション handoff PR を除く)
+- **CI / Deploy**: ✅ 通常 CI 全 pass、`Deploy to Cloud Run` (前回 docker hub timeout で fail) は merge 後再走 → 状況未確認 (本セッションは PR 3b 実装に集中、deploy は開発者領分)
 - **Open Issue**: active 0 / postponed 4 (#274 / #275 / #276 / #405、変化なし)
 - **残留プロセス**: ✅ なし
 
@@ -34,203 +33,191 @@ git fetch origin main && git log --oneline -5 origin/main
 gh run list --branch main --limit 5
 gh run list --workflow=cleanup-orphan-auth-users.yml --limit 5
 
-# 3. PR 3a merged 状態の確認
-gh pr view 508 --json state,mergedAt
+# 3. PR 3b merged 状態の確認
+gh pr view 510 --json state,mergedAt
 
 # 4. OPEN Issue (4 件すべて postponed、明示指示なき限り着手不可)
 gh issue list --state open --limit 15
 
-# 5. Phase 3 残作業 (PR 3b / 3c / 3d / 3e) 着手判断
-#    PR 3b (Gmail multipart 添付対応) が次の最有力候補
+# 5. Phase 3 残作業 (PR 3c / 3d / 3e) 着手判断
+#    PR 3c (run-progress-reports + state machine + endpoint + Integration 25 シナリオ) が次。
+#    ~1700 LOC、Evaluator 分離プロトコル発動 (5+ ファイル + 新機能)
 ```
 
-**次セッションの最初の一手**: 本田様の指示に応じて Phase 3 PR 3b (gmail-dwd-send.ts multipart/mixed 添付対応) 着手 or 別タスク。PR 3b は ~450 LOC で焦点絞られている (Evaluator 分離プロトコル非該当、`/code-review medium` で十分)。
+**次セッションの最初の一手**: 開発者の指示に応じて Phase 3 PR 3c (run-progress-reports + state machine + Integration 25 シナリオ) 着手 or 別タスク。PR 3c は ~1700 LOC で **Evaluator 分離プロトコル発動** (5+ ファイル + 新機能)、Codex review セカンドオピニオン併用 (Plan stage thread `019e82e8-...` 継続)。本 PR 3b の `buildMessageMime` を PR 3c の `progress-mime-builder.ts` で適切に統合する設計確認が初手。
 
 ---
 
 ## 重要な作業内容 (本セッション)
 
-### 1. PR 3a 残作業の WBS 化 + 着手 (impl-plan + Codex Plan review)
+### 1. 着手判断 + impl-plan 既存利用
 
-Session 53 から引き継いだ「PR 3a の残作業 6 項目」を impl-plan skill で WBS 化:
-- T1: DispatchStorage interface に 8 メソッド + 入出力型追加 (foundation)
-- T2: lane-lock.ts helper 新規 (transactional 取得ラッパ)
-- T3: InMemory に 8 メソッド + settings patch 実装
-- T4: Firestore に 8 メソッド + settings patch 実装
-- T5: route handler を patch semantics 化 + progressReport validation
-- T6: tenant-data-loader に listProgressReportTargetUsers + getTenantInfo 追加
-- T7: 単体テスト 5 ファイル新規/拡張
+Session 54 handoff の「次のアクション」(優先順位リスト) を受領し優先順に着手:
+1. ✅ CI failure 確認 (Deploy to Cloud Run / Cleanup Orphan Auth Users) → 両方 AI executor 領分外と判定し報告のみ
+2. ✅ Phase 3 PR 3b 着手 (`docs/specs/2026-06-01-progress-report-dispatch-impl-plan.md` §PR 3b 既存利用)
+3. (3 業務担当者返信は開発者領分、4 postponed Issue は着手不可)
 
-着手前に Codex Plan stage セカンドオピニオン (新 thread `019e8a8d-4842-7bd1-8ddf-3b626311be68`) を起動:
-- **CRITICAL: 0 件**
-- **HIGH: 5 件全反映**
-  - HIGH-1: T1 を「8 メソッド」に訂正 (含 getProgressRecipient)、AcquireRunLockInput に optional laneId? / occurrenceId? 追加で run doc 契約も明示
-  - HIGH-2: markProgressRecipientSent / markProgressRecipientFailed の三者一致 precondition (status=pending + occurrenceId + runId 一致) を契約化
-  - HIGH-3: T6 Firestore schema 対応 → T0 を新タスクとして追加、Explore agent で schema 調査
-  - HIGH-4: T7 は InMemory に集中、Firestore integration は PR 3c で本格対応
-  - HIGH-5: T5 で「FE always-send-all 戦略 + progressReport のみ optional validate」に整理
-- **MEDIUM: 4 件全反映**
-  - M1: undefined=保持 / null は型レベルで不許可
-  - M2: lane lock の completeLaneLock / abortLaneLock は ownerRunId 不一致時 no-op
-  - M3: PutDispatchSettingsRequest を `Partial<Pick<...>> & {version}` に fix-up
-  - M4: Firestore transaction race テストは PR 3c で本格対応
+PR 3b は ~450 LOC、複数ファイル想定だが結果は 2 ファイル (prod + test) のみ。`/impl-plan` は既存仕様書を再利用、新規作成不要。
 
-### 2. T0 (Firestore schema 調査) で Plan A 採用 (本田様判断)
+### 2. CI failure 確認 (AI 領分外と判定)
 
-ADR-039 D-5 「受講中=active+enrollment+不退会+期限内+1%」の実装可能性を Explore agent で調査:
-- ✅ tenant active / role=student / videoAccessUntil / progressRatio: 全て既存 schema で対応可
-- ❌ **不退会**: `users/{uid}` に `status` / `withdrawn` / `deletedAt` 等の退会 field **完全不在**
-- ❌ **enrollment 存在**: `TenantEnrollmentSetting` は tenant-wide 1 doc、user-level 存否を表現する schema 不在
+**Deploy to Cloud Run** (#26856345272、前 handoff PR #509 merge 後):
+- 原因: `docker.io/library/node:24-slim` メタデータ取得 i/o timeout (`registry-1.docker.io` 一過性)
+- 内容: docs のみの handoff push で deploy workflow が走った
+- 判断: 再実行は本番デプロイで AI executor 領分外 (auto mode classifier も拒否)
+- 次の機能 PR push で再評価可能
 
-→ CLAUDE.md「設計仕様書未記載の列挙値・分類を実装で独断追加しない」原則に従い、AskUser で本田様判断を仰ぐ:
-- **Plan A 採用** (推奨): 4 軸に簡素化 (role=student / tenant active / 期限内 / 1%)、「不退会」「enrollment」は将来の User schema 拡張 PR で対応
-- 採用根拠: PR 3a スコープを超える schema 変更を避ける、本番 ON 前に運用評価可能、tenant active + 期限内 + 1% で「事実上アクティブな受講者」をカバー
+**Cleanup Orphan Auth Users** (5/25, 6/1 連続失敗):
+- 原因: 週次 dry-run で **孤児 Auth ユーザー 3 件を検出** → workflow が意図的に exit 1 (human-in-loop 通知)
+- バグではなく「掃除が必要」というオペレーション通知
+- 解消には `workflow_dispatch` を `execute=true` で手動実行 (destructive 操作 = 開発者番号単位明示認可必要)
+- Issue #276 (postponed) と関連
 
-→ ADR-039 D-5 + design.md §3 OQ-7 + impl-plan §AC-PR-03 の 3 ファイルに Plan A 反映 (退会判定は将来 PR、Codex HIGH-1 への対応状況も明記)
+### 3. PR 3b TDD 実装 (RED → GREEN → REFACTOR)
 
-### 3. T1-T7 実装 (1469 tests pass、type-check + lint クリーン)
+設計仕様書 (`docs/specs/2026-06-01-progress-report-dispatch-impl-plan.md` §PR 3b) に従い:
 
-実装規模 (新コミット `f201c1b` + 既存 `512eb58`):
-- shared-types DTO 拡張 (前 PR で push 済 `512eb58`)
-- DispatchStorage interface: +332 LOC (8 メソッド + 関連型)
-- InMemory impl: +322 LOC (8 メソッド + settings patch)
-- Firestore impl: +462 LOC (8 メソッド + settings patch + transactional)
-- lane-lock.ts (新規): 96 LOC
-- tenant-data-loader.ts: +89 LOC (interface + InMemory impl)
-- firestore-tenant-data-loader.ts: +91 LOC (Plan A 4 軸フィルタ + tenant info)
-- routes/super/dispatch-settings.ts: +74 LOC (progressReport validation + storage patch)
-- 単体テスト: ~70 件 (新規 3 ファイル + 既存 3 ファイル拡張)
-- ADR-039 / design.md / impl-plan.md 同期更新
+**RED** (テスト先行、16 件失敗):
+- multipart/mixed 構造 (boundary 区切り、text/plain + 添付 part)
+- RFC 2231 dual-form filename (ASCII safe → `filename="..."`、非 ASCII → `filename*=UTF-8''<percent>`)
+- base64 76 char wrap (RFC 2045 §6.8)
+- CR/LF injection 防御 (filename / contentType)
+- 後方互換性 (`buildMessageMime({attachments: []})` === `buildCompletionMime(...)`)
 
-### 4. `/code-review medium` (7 finder + verify) で CRITICAL 1 + HIGH 1 + MEDIUM 2 を発見・修正
+**GREEN** (実装、56 tests 全 pass):
+- `MessageAttachment` interface (filename / contentType / data: Buffer)
+- `BuildMessageMimeInput extends BuildCompletionMimeInput` (+ optional attachments + boundary)
+- `buildMessageMime`: attachments 空/未指定 → text/plain 単独 (byte-for-byte 互換) / あり → multipart/mixed
+- 内部 helper: `isValidBoundary` (RFC 2046 §5.1.1) / `generateBoundary` (crypto.randomBytes 16 byte hex) / `wrapBase64` / `encodeRFC2231Value`
+- `buildCompletionMime` を `buildMessageMime` の 1 行 wrapper に置換
 
-実装直後の品質ゲートとして `/code-review medium` を起動。7 finder (line-by-line / removed-behavior / cross-file / reuse / simplify / efficiency / altitude) を並列実行し dedup + verify した結果:
+### 4. `/code-review medium` (7 angles × 1-vote verify)
 
-| 重要度 | 内容 | 修正 |
-|---|---|---|
-| **CRITICAL** | `enrollment_settings` (plural) typo → 既存 prod schema は `enrollment_setting` (singular、firestore.ts:1674 + 7 箇所) | `firestore-tenant-data-loader.ts` で singular に訂正 |
-| **HIGH** | `acquireRunLock` running scan が laneId 無視で cross-lane 相互ブロック | Firestore + InMemory 両実装で laneId filter 追加 + cross-lane 独立 / 同 lane 排他のテスト 2 件追加 |
-| **MEDIUM** | email 欠落 student doc を undefined のまま下流に流す | `?? ""` 防御追加 (既存 `listNotificationTargetUsers` と対称) |
-| **MEDIUM** | 500 user で 25 秒の N+1 sequential Firestore read | Promise.all で並列化、数 RTT に短縮 |
+CLAUDE.md「3 ファイル以上 → /safe-refactor + /code-review」は非該当 (2 ファイル) だが、impl-plan が medium を明示推奨。
 
-LOW 4 件 (型-route 乖離 / DRY / lane-lock.ts 薄さ / 三者一致 precondition 重複) は受容 (`/safe-refactor` でも現状維持判断、PR 3c で再評価)。
+**7 finder angles** (Angle A-G、各最大 6 candidates) 並列起動 → 候補集約 → 6 verifier 並列起動:
 
-### 5. commit + push + PR open + merge
+| Angle | 結果 |
+|---|---|
+| A: line-by-line diff scan | bug なし `[]` |
+| B: removed-behavior auditor | 全 invariant 維持確認 `[]` |
+| C: cross-file tracer | LOW 候補のみ (caller 影響なし) |
+| D: Reuse | gmail-draft.ts に類似実装多数 (D-1 D-3 D-5 等) |
+| E: Simplification | header 重複 (E-1) / wrapBase64 早期 return (E-2) 等 |
+| F: Efficiency | wrapBase64 O(N²) (F-1) / Buffer.concat (F-3) 等 |
+| G: Altitude | 型階層方向性 (G-1) / contentType validation 不足 (G-3) 等 |
 
-- commit `f201c1b` (17 files、+2652/-51): T1-T7 + Codex Plan review + Implementation review fix-up + ADR/spec 更新を 1 commit に統合
-- push 認証問題: Session 53 と同じ silent fail が初回 push で再発 (403)、`direnv exec` 経由で復旧
-- PR #508 open → 全 CI pass (Build / Lint / Test / Type Check / Playwright E2E)
-- **本田様明示認可** (番号単位 + `PR #508 — タイトル (17 files, +2860/-50)` 要約形式) → squash merge (`f4be4f6`) → main 同期 (`git reset --hard origin/main`、CLAUDE.md memory 準拠)
+**Verifier 判定**:
+- **CONFIRMED 4 件**:
+  1. **D-1: `encodeRFC2231Value` の RFC 5987 §3.2.1 違反** — `!()*` を pass-through、Outlook 厳密 parser で filename* 無視
+  2. **D-5: multipart 構築 gmail-draft.ts と ~80 LOC 重複** — cleanup、Phase 4 OQ
+  3. **F-3: template literal concat メモリ peak ~12-13MB** — Buffer.concat 化で ~7MB に削減 (Cloud Run 512MB / 5MB PDF + 並行送信で OOM リスク)
+  4. **CROSS-2: isValidBoundary 負例テスト欠如** — line 248-251 throw 経路 0 カバレッジ
+- **PLAUSIBLE 2 件**: D-4 (assertHeaderSafe 3 実装、既存設計判断あり) / E-1 (header 重複、byte 互換性検証コストとトレードオフ)
+- **REFUTED 2 件 drop**: F-1+E-2 (wrapBase64 O(N²) → V8 SlicedString で回避) / G-1+E-3 (型階層 → LSP-safe)
+
+### 5. CONFIRMED 3 件本 PR 内 fix-up
+
+開発者判断「CONFIRMED 3 件すべて本 PR 内で修正 (推奨)」を受領:
+
+1. **RFC 5987 fix** (`/[!'()*]/g` で 5 文字すべて percent-encode、gmail-draft.ts:125 の rfc5987Encode と同等)
+2. **Buffer.concat 置換** (template literal concat → Buffer.concat ベース、各 part 独立 alloc で peak 半減)
+3. **負例 boundary テスト 2 件追加** (RFC 2046 §5.1.1 非適合文字 / 改行注入)
+
+### 6. Security review MEDIUM (重複検出 2 件) 対応
+
+PR push 後の background security review (`security-guidance@claude-code-plugins`) で **MIME Header Injection (Content-Disposition parameter breakout)** を MEDIUM で 2 回検出 (同一脆弱性の重複 review):
+
+- `attachment.filename` に `"` 注入 → `filename="r"; X-Injected: 1; x=".pdf"` で追加 parameter 注入可能
+- `attachment.contentType` に `;` 注入 → `application/pdf; boundary=fake` で MIME parameter breakout 可能
+
+**対応** (`fix(phase-3b/security)` 別 commit):
+- `attachment.filename`: `["\\]` を reject (Content-Disposition quoted-string 脱出防御)
+- `attachment.contentType`: RFC 6838 strict regex `/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/` で validate (`;` / `=` / 空白 / `"` / parameter すべて構造的に排除)
+- テスト 6 件追加 (`"` 注入 / `\` 注入 / `;` parameter / 半角空白 / subtype 欠如 / 正常な複雑 type)
+
+### 7. PR #510 作成 + merge
+
+**push 認証**: catchup output の Token User が `sasakisystem0801-source` (read-only) のまま固定されており、初回 push で 403。Session 53/54 で確立した **`direnv exec . bash -c 'git push'`** で `.envrc` を強制 reload して system-279 token を流し込み、復旧 (CLAUDE.md memory `feedback_direnv_env_var_in_bash_subshell.md` の典型例、本セッションも反射的に適用)。
+
+**CI**: 5 jobs (Build / Lint / Test / Type Check / Playwright E2E) 全 pass、約 2 分。
+
+**Merge**: 開発者「PR #510 を squash merge」(番号単位明示認可 + `PR #番号 — タイトル (N files, +X/-Y)` 形式で要約済) を受領 → `gh pr merge 510 --squash --delete-branch` 実行 → main `7100a5b` に統合 → ローカル `git reset --hard origin/main` で同期。
 
 ---
 
-## Issue Net 変化
+## 引継ぎ事項
 
-```
-- Close 数: 0 件
-- 起票数: 0 件
-- Net: 0 件
-```
+### Phase 3 全体進捗 (2/5 完了)
 
-**Net=0 の理由**: 本セッションは Phase 3 PR 3a の実装作業のみ。triage 基準該当なし (実害バグ・CI 破壊・rating ≥ 7 のいずれも該当せず、本田様からの明示的タスク化指示なし)。Phase 3 残作業 (PR 3b〜3e) は ADR-039 + 設計仕様書 + impl-plan で計画化済のため Issue 化不要。`/code-review medium` で発見した CRITICAL/HIGH/MEDIUM はすべて本 PR 内で fix-up commit に統合済 (Issue 化せず)。
-
----
-
-## 次セッションへの引継ぎ事項
-
-### ⏭️ Phase 3 残作業 (PR 3a merged、PR 3b〜3e 残)
-
-| PR | 内容 | 規模 | 注意点 |
+| PR | 内容 | 状態 | 規模 |
 |---|---|---|---|
-| **3b** | `gmail-dwd-send.ts` multipart/mixed 添付対応、byte-for-byte 回帰テスト | ~450 LOC | RFC 2231 dual-form filename、`/code-review medium` で十分 (Evaluator 分離非該当) |
-| **3c** | `run-progress-reports` + state machine + endpoint + Integration 25 シナリオ | ~1700 LOC | **Evaluator 分離プロトコル発動** + `/codex review` セカンドオピニオン継続 (thread `019e8a8d-...`)、Firestore transaction race の本格検証ここで対応 |
-| **3d** | super-admin API バリデーション + FE 設定 UI (ON トグル UI が初登場) | ~550 LOC | テナント opt-in トグル UI、進捗レポート設定セクション追加 |
-| **3e** | Cloud Scheduler job + TTL Policy + dry-run workflow + cutover runbook | ~250 LOC + infra | 完了通知 cron と **30 分ずらす**、ここで初めて本番稼働経路ができる |
+| 3a | shared-types + storage interface 拡張 + lane-lock + tenant-data-loader 進捗対応 + patch semantics | ✅ #508 merged (Session 54) | 17 files / +2860/-50 |
+| **3b** | **gmail-dwd-send.ts multipart/mixed 添付対応** | ✅ **#510 merged (Session 55、本セッション)** | **2 files / +673/-13** |
+| 3c | run-progress-reports + state machine + endpoint + Integration 25 シナリオ | 未着手 (次の最有力候補) | ~1700 LOC、Evaluator 分離発動 |
+| 3d | super-admin API バリデーション + FE 設定 UI | 未着手 | ~550 LOC |
+| 3e | Cloud Scheduler job + TTL Policy + dry-run workflow + cutover runbook | 未着手 | ~250 LOC + infra |
 
-**PR 3b 次の一手 (推奨)**:
-```bash
-# 1. ブランチ作成
-git checkout -b feat/phase-3b-gmail-multipart
+### Phase 4 OQ (PR 3b code review より、本 PR 範囲外で記録)
 
-# 2. 着手項目
-#    - gmail-dwd-send.ts に新 export buildMessageMime (multipart/mixed)
-#    - 既存 buildCompletionMime を wrapper にリファクタ
-#    - byte-for-byte 回帰テスト (既存出力不変)
-#    - RFC 2231 filename dual-form
-#    - 単体テスト: boundary / base64 76char wrap / 日本語ファイル名 / CR/LF reject / 後方互換
-```
+1. **multipart 構築 ~80 LOC 重複** (gmail-draft.ts `buildRawMimeMessage` vs gmail-dwd-send.ts `buildMessageMime`) → 共通 mime-builder utility 化
+2. **assertHeaderSafe 3 実装** (gmail-dwd-send / completion-notification-mail / gmail-draft.`assertNoCRLF`) の責務統合
+3. **buildMessageMime 添付なし path / multipart path の共通 5-7 行 header 抽出** (byte-for-byte 互換性検証コストとトレードオフ)
 
-### 📌 本番安全性の建付け (本田様明示 ON でのみ稼働、PR 3a merge 後も維持)
+PR #510 本文で記録済、impl-plan には未追記 (本 PR は code 変更 2 files のみに絞った)。次セッションで PR 3c 着手時に共通 mime-builder 化を再検討推奨。
 
-| ゲート | 状態 | 担当 PR |
+### 本番安全性ゲート (Phase 3 全体、PR 3a + 3b 完了後も変わらず)
+
+| ゲート | 状態 | 解除条件 |
 |---|---|---|
-| Cloud Scheduler job `dxcollege-progress-reports` | ❌ 未作成 | PR 3e |
-| 設定 UI `progressReport.enabled` トグル | ❌ 未実装 | PR 3d |
-| テナント opt-in `progressReportEnabled` トグル | ❌ UI 未実装、default false | PR 3d |
-| 主フロー `run-progress-reports.ts` | ❌ 未実装 | PR 3c |
+| 1. Cloud Scheduler `dxcollege-progress-reports` job | ❌ 未作成 | PR 3e で provisioning |
+| 2. dispatch-settings UI `progressReport.enabled` トグル | ❌ 未実装 | PR 3d で UI 提供 |
+| 3. Tenant `progressReportEnabled=true` opt-in | ❌ 全テナント false | テナント単位 cutover (runbook 準拠、開発者作業) |
+| 4. 主フロー `progress-report-recipient.ts` 起動経路 | ❌ 未実装 | PR 3c で実装 |
 
-→ PR 3a merge 後も起動経路ゼロ。本田様明示 ON で初めて稼働の建付け維持。PR 3d merge 後にやっと UI トグル登場、PR 3e merge 後にやっと Cloud Scheduler job 起動。
+全 4 ゲート未実装維持で起動経路ゼロ、本番影響ゼロ。
 
-### ⚠️ CI failure 継続確認 (本セッションは未確認)
+### 残課題 (開発者領分、AI 着手不可)
 
-```bash
-gh run list --workflow=cleanup-orphan-auth-users.yml --limit 5
-```
+1. **業務スーパー管理者への返信送付** (Session 52 から継続中、Phase 3 PR 3a → 3b と進捗を共有するタイミングが適切)
+2. **`Cleanup Orphan Auth Users` workflow_dispatch 手動 execute=true 実行** (孤児 Auth 3 件の掃除、destructive 操作で番号単位明示認可必要)
+3. **`Deploy to Cloud Run` 状況確認** (前回 merge 後 docker hub timeout で fail、本セッション PR 3b merge 後も in_progress で離脱)
 
-Session 53 で「2026-06-01 21:52 UTC に再検知 (Session 52 では再発なし)」と記録。本セッションは Phase 3 実装に集中したため未確認。次セッションで状況確認、3 回目再発なら `scripts/cleanup-orphan-auth-users.ts` 周辺の原因調査着手。
+### postponed Issue 4 件 (明示指示なき限り着手不可)
 
-### postponed Issue (4 件、本セッションも変化なし)
-
-| # | 内容 | 再開条件 |
+| # | タイトル | 再開条件 |
 |---|---|---|
-| #405 | Gmail draft filename strict MTA 経路リスク | M365/Outlook365/Proofpoint/Mimecast テナント追加 or 添付ファイル名破損問い合わせ |
-| #276 | allowed_emails 削除時の即時セッション失効 + 孤児 Auth 掃除 | ADR-031 Phase 3 (GCIP 移行本体) 完了 (再評価日 2026-10-24) |
-| #275 | allowed_emails 管理画面 UX 改善 | 同上 |
-| #274 | allowed_emails 運用の可視化・追跡性強化 | 同上 |
-
-### ⏸️ 業務スーパー管理者への返信 (開発者領分、Session 52 から継続中)
-
-Phase 3 着手の目処は十分立った今、Session 52 で整理した返信事項をまとめて送る:
-- ①の訂正 (完了通知=100% 完了者のみ、途中経過の定期配信は Phase 3 として実装着手)
-- ③署名場所案内
-- 配信トグル現在 OFF の旨
-- 動作確認段取り (dry-run / smoke の admin SDK workflow)
-
-特に Phase 3 PR 3a が merged で「実装はもう動き出している」段階になったため、業務スーパー管理者への進捗共有タイミングとして適切。
+| 405 | Gmail draft filename の生 Unicode quoted-string が strict MTA 経路で reject/normalize されるリスク | Phase 2 follow-up、本田様判断 |
+| 276 | allowed_emails 削除時の即時セッション失効 + 孤児 Auth 掃除自動化 | Phase 5、本田様判断 |
+| 275 | allowed_emails 管理画面 UX 改善 | Phase 5、本田様判断 |
+| 274 | allowed_emails 運用の可視化・追跡性強化 | Phase 5、本田様判断 |
 
 ---
 
-## 学び (本セッション固有、次回以降にも適用)
+## ドキュメント整合性 (本セッション分)
 
-### Implementation stage の `/code-review medium` は CRITICAL 救出に値する
-
-`/safe-refactor` (cleanup-only) を通った後でも、`/code-review medium` (7 finder × 6 candidates × 1-vote verify) で **CRITICAL 1 件 (collection 名 typo) + HIGH 1 件 (cross-lane interference) + MEDIUM 2 件** を救出。特に collection 名 `enrollment_settings` (plural) は既存全コードの `enrollment_setting` (singular) と相違、本番 ON 時に videoAccessUntil filter が完全 no-op になる致命的バグだった。`/safe-refactor` は cleanup 専門で命名 / 重複しか拾わないため、Implementation stage `/code-review medium` を type-check + lint pass 後も必ず通す価値が高い (CLAUDE.md MUST「3 ファイル以上の変更 → `/code-review`」を再確認、effort は規模で適正調整)。
-
-### Codex セカンドオピニオンは Plan stage と Implementation stage の両方が機能する
-
-Plan stage (PR #506 で thread `019e82e8-...`、本 PR で thread `019e8a8d-...`) で WBS 段階のリスクを潰し、Implementation stage で `/code-review medium` (Anthropic 内部 review) を通して bug を救出。両者は重複せず補完関係。Plan stage は「設計の前提」、Implementation stage は「コード断面のリアリティ」を見る。Phase 3 残 PR (3b〜3e) でも同じ二段構えで品質確保する。
-
-### `direnv exec` 経由の git push が `.envrc` silent fail の確実な workaround
-
-Session 53 で記録した silent fail (`.envrc` の `gh auth switch ... 2>/dev/null || true` が gh keyring 失効時に黙って失敗) が本セッションでも初回 push で再発。`direnv exec . bash -c 'git push ...'` で `.envrc` を強制 reload して system-279 token を env に流せば確実に push できる。Session 53 では「keyring 再登録」を行ったが、本セッションでは `direnv exec` だけで復旧できたため、keyring は生存していると判明。Bash tool の subshell が direnv hook を発火しないことが主因 (CLAUDE.md memory `feedback_direnv_env_var_in_bash_subshell.md` の典型例)。次セッション以降、catchup で「Token User: sasakisystem0801-source」と表示されたら反射的に `direnv exec . bash -c 'git push ...'` を使う。
-
-### 設計仕様書未記載の判定軸を実装で勝手に追加しない (AskUser の徹底)
-
-ADR-039 D-5 で「不退会」「enrollment 存在」と書かれていたが、Firestore schema 調査で「該当 field 不在」と判明。CLAUDE.md「設計仕様書未記載の列挙値・分類を実装で独断追加しない」に基づき、Firebase Auth disabled 属性 (Plan B) や User schema 拡張 (Plan C) を AI が独断採用せず、AskUser で本田様判断 → Plan A (簡素化) を選択。設計と実装基盤の gap が判明した時の「executor が決裁者の領分に踏み込まない」原則の実践例として記録。
+| 項目 | 状態 |
+|---|---|
+| CLAUDE.md (プロジェクト) | 変更なし (Phase 3 ADR-039 は既存反映済) |
+| ADR-039 (進捗レポート) | 変更なし (PR 3b は §D-5 / §D-7 / §D-9 等の範囲内、新規 ADR 不要) |
+| design / impl-plan | PR 3b 範囲は既存仕様書通りに実装、ファイル変更なし |
+| docs/runbook | 変更なし (Phase 3e で初稿予定) |
+| Phase 4 OQ | PR #510 本文に記録、impl-plan には未追記 (次セッション着手時に再評価) |
 
 ---
 
-## 関連リソース
+## メタ情報 (再利用可能な workflow)
 
-- 前セッション handoff: `docs/handoff/archive/2026-06-02-session-53.md`
-- Phase 3 設計 PR (merged): PR #506
-- Phase 3 PR 3a (merged): PR #508 (squash `f4be4f6`)
-- ADR-039: `docs/adr/ADR-039-phase3-progress-report-dispatch.md` (D-5 改訂、Plan A 採用)
-- 設計仕様書: `docs/specs/2026-06-01-progress-report-dispatch-design.md` (OQ-7 更新)
-- 実装計画: `docs/specs/2026-06-01-progress-report-dispatch-impl-plan.md` (AC-PR-03 更新)
-- Codex Plan stage thread (Phase 3 全体): `019e82e8-4228-79c1-a63a-d3c4e7359731`
-- Codex Plan stage thread (PR 3a WBS review): `019e8a8d-4842-7bd1-8ddf-3b626311be68`
-- cutover playbook (mirror 対象): `docs/runbook/dxcollege-completion-notification-cutover.md`
-- 共有 URL (再掲、本 PR では UI 変更なし):
-  - ヘルプ: https://web-3zcica5euq-an.a.run.app/help/super#super-dispatch-settings
-  - 設定画面: https://web-3zcica5euq-an.a.run.app/super/dispatch-settings
+- **`/code-review medium` の 7 finder × 1-vote verify pattern**: 2 ファイル / +469 行の中規模 PR で適切に bug 1 件 + cleanup 5 件 + REFUTED 2 件を分離。fix-up 判断は CONFIRMED 3 件のみに集中できた
+- **Security review 二重検出への対応**: 同一脆弱性を background security review が 2 回別 metric で flag した。対応は同 commit で十分 (重複検出を機械的に「別件」扱いしない)
+- **direnv exec . bash -c 'git push ...'**: catchup で Token User=sasakisystem0801-source 表示時の反射対応。Session 53/54/55 と 3 連続で発生、`feedback_direnv_env_var_in_bash_subshell.md` の運用根拠を強化
+
+---
+
+## 次セッション着手判断のためのチェックリスト
+
+- [ ] `git log --oneline -5` で `7100a5b feat(phase-3b): ... (#510)` が main に存在
+- [ ] `gh issue list --state open` で active 0 / postponed 4 を確認
+- [ ] `gh run list --branch main --limit 5` で Deploy to Cloud Run の最終結果確認 (前回 fail、今回再走)
+- [ ] PR 3c 着手前に `docs/specs/2026-06-01-progress-report-dispatch-impl-plan.md` §PR 3c を読み返し、本 PR 3b の `buildMessageMime` を `progress-mime-builder.ts` で活用する設計確認
+- [ ] PR 3c は **Evaluator 分離プロトコル発動** (5+ ファイル + 新機能)、Codex review セカンドオピニオン併用 (Plan stage thread `019e82e8-4228-79c1-a63a-d3c4e7359731` 継続)
