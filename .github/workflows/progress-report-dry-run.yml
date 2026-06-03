@@ -1,0 +1,141 @@
+name: Progress Report Dry Run
+
+# 進捗レポート定期自動配信 dry-run admin SDK CLI workflow (ADR-039)。
+#
+# 目的:
+#   cutover 前に「次の cron 実行で何件送られるか」「テナント別の対象人数 / CC 数」
+#   「推定処理時間 / 推定 PDF サイズ範囲」を read-only で確認する。
+#
+# 安全性:
+#   - 完全 read-only (Gmail 送信なし、PDF 実生成なし、Firestore write なし)
+#   - 既存 services/api/src/services/dispatch/{firestore-tenant-data-loader,firestore-dispatch-storage}
+#     を直接利用するため本番 logic と query 構造が完全一致
+#
+# 出力:
+#   - workflow log (stdout): 結果 JSON 全文
+#   - artifact: progress-report-dry-run-result-*.json (30 日保持)
+#   - $GITHUB_STEP_SUMMARY: 対象件数 + 推定処理時間 + scale trigger フラグ
+#
+# セキュリティ: workflow_dispatch 入力は本 workflow では受け取らない (固定動作)。
+# 参考: https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+#
+# 関連:
+#   - impl-plan: docs/specs/2026-06-01-progress-report-dispatch-impl-plan.md §PR 3e
+#   - runbook: docs/runbook/dxcollege-progress-report-cutover.md
+#   - スクリプト: scripts/progress-report-dry-run-cli.ts
+#   - mirror: .github/workflows/dispatch-dry-run.yml (完了通知レーン dry-run)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  dry-run:
+    name: Progress Report Dry Run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FIREBASE_PROJECT_ID: lms-279
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared-types
+        # scripts/progress-report-dry-run-cli.ts は @lms-279/shared-types から DispatchSettings を
+        # import するため build 必須 (package.json main が dist/index.js を指す)。
+        run: npm run build -w @lms-279/shared-types
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
+
+      - name: Run progress report dry-run CLI
+        env:
+          GOOGLE_CLOUD_PROJECT: lms-279
+          DXCOLLEGE_SENDER_EMAIL: dxcollege@279279.net
+        run: |
+          set -euo pipefail
+          npx tsx scripts/progress-report-dry-run-cli.ts
+
+      - name: Upload result artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: progress-report-dry-run-${{ github.run_id }}
+          path: progress-report-dry-run-result-*.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Summarize result
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          result_files=(progress-report-dry-run-result-*.json)
+          RESULT_FILE="${result_files[0]:-}"
+          if [ -z "$RESULT_FILE" ]; then
+            {
+              echo "## Progress Report Dry Run — FAILED"
+              echo ""
+              echo "結果 JSON が見つかりません。CLI が異常終了した可能性があります。"
+              echo "Run ステップの実行ログで原因を確認してください。"
+            } >> "$GITHUB_STEP_SUMMARY"
+            # CLI 異常終了で artifact 不在の場合は workflow を確実に失敗させる
+            # (exit 0 で握りつぶすと cutover 担当が「workflow OK」を Step 4 完了の根拠にする silent fail 経路を生む)
+            exit 1
+          fi
+          # `// 0` / `// "null"` fallback で JSON 異常時に `null` 文字列が bash 算術 / table 出力に
+          # 混入して set -euo pipefail で異常終了するのを防ぐ
+          EVALUATED_AT=$(jq -r '.evaluatedAt // "null"' "$RESULT_FILE")
+          SETTINGS_LOADED=$(jq -r '.settingsLoaded // "null"' "$RESULT_FILE")
+          TENANTS_SCANNED=$(jq -r '.tenantsScanned // 0' "$RESULT_FILE")
+          TOTAL_WOULD_SEND=$(jq -r '.totalWouldSendCount // 0' "$RESULT_FILE")
+          TOTAL_CC=$(jq -r '.totalCcCount // 0' "$RESULT_FILE")
+          EST_DURATION_MS=$(jq -r '.estimatedDurationMs // 0' "$RESULT_FILE")
+          EST_DURATION_S=$((EST_DURATION_MS / 1000))
+          SCALE_EXCEEDED=$(jq -r '.scaleTriggerExceeded // false' "$RESULT_FILE")
+          PR_ENABLED=$(jq -r '.settingsSnapshot.progressReportEnabled // "null"' "$RESULT_FILE")
+          DOW=$(jq -rc '.settingsSnapshot.scheduleDaysOfWeek // "null"' "$RESULT_FILE")
+          HOUR=$(jq -r '.settingsSnapshot.scheduleHourJst // "null"' "$RESULT_FILE")
+          PDF_MIN=$(jq -r '.estimatedPdfSizeKbRange.min' "$RESULT_FILE")
+          PDF_TYPICAL=$(jq -r '.estimatedPdfSizeKbRange.typical' "$RESULT_FILE")
+          PDF_MAX=$(jq -r '.estimatedPdfSizeKbRange.max' "$RESULT_FILE")
+          {
+            echo "## Progress Report Dry Run"
+            echo ""
+            echo "| 項目 | 値 |"
+            echo "|---|---|"
+            echo "| evaluatedAt | $EVALUATED_AT |"
+            echo "| settingsLoaded | $SETTINGS_LOADED |"
+            echo "| progressReport.enabled | $PR_ENABLED |"
+            echo "| progressReport.scheduleDaysOfWeek | $DOW |"
+            echo "| progressReport.scheduleHourJst | $HOUR |"
+            echo "| tenantsScanned | $TENANTS_SCANNED |"
+            echo "| **totalWouldSendCount** | **$TOTAL_WOULD_SEND** |"
+            echo "| totalCcCount (To 1 件あたりに付与される CC の延べ数) | $TOTAL_CC |"
+            echo "| estimatedDurationMs (推定) | ${EST_DURATION_MS} (≈${EST_DURATION_S}s) |"
+            echo "| estimatedPdfSizeKbRange (経験値) | min=${PDF_MIN} / typical=${PDF_TYPICAL} / max=${PDF_MAX} KB |"
+            echo "| scaleTriggerExceeded (>300 名) | $SCALE_EXCEEDED |"
+            echo ""
+            if [ "$SCALE_EXCEEDED" = "true" ]; then
+              echo "> ⚠️ **scale trigger 超過**: 全テナント合計 300 名超 → Cloud Tasks 移行検討"
+              echo ""
+            fi
+            echo "### テナント別サマリ (上位 10 件)"
+            echo ""
+            echo "| tenantId | skipped | reason | usersScanned | candidate | invalidEmail | completed | wouldSend | ccCount |"
+            echo "|---|---|---|---|---|---|---|---|---|"
+            jq -r '.tenantsSummary | .[0:10] | .[] | "| \(.tenantId) | \(.skipped) | \(.skipReason // "-") | \(.usersScanned) | \(.candidateCount) | \(.invalidEmailCount) | \(.completedCount) | \(.wouldSendCount) | \(.ccCount) |"' "$RESULT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          } >> "$GITHUB_STEP_SUMMARY"
