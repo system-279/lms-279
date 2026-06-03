@@ -23,7 +23,7 @@ class FakeStore implements TenantCcConfigStore {
     tenantId: string;
     notificationCcEmails: string[];
     enabled: boolean;
-    /** Phase 3 (ADR-039 D-6): undefined = 未送信 (patch semantics で既存値保持) */
+    /** ADR-039 D-6: undefined = 未送信 (patch semantics で既存値保持) */
     progressReportEnabled?: boolean;
   }[] = [];
 
@@ -218,7 +218,7 @@ describe("PUT /super/tenants/:tenantId/notification-cc-emails", () => {
   });
 
   // ============================================================
-  // Phase 3 ADR-039 D-6: progressReportEnabled patch semantics
+  // ADR-039 D-6: progressReportEnabled patch semantics
   // ============================================================
 
   it("progressReportEnabled を含めて PUT すると保存され、response にも含まれる", async () => {
@@ -234,7 +234,7 @@ describe("PUT /super/tenants/:tenantId/notification-cc-emails", () => {
     expect(store.updates[0]!.progressReportEnabled).toBe(true);
   });
 
-  it("progressReportEnabled=true 既存テナントに対し未送信 PUT で既存値 true を保持する (AC-PR-19)", async () => {
+  it("progressReportEnabled=true 既存テナントに対し未送信 PUT で既存値 true を保持する (AC-PR-18 tenant 拡張)", async () => {
     // 事前に true を保存
     await request(makeApp(store))
       .put("/api/v2/super/tenants/atali82i/notification-cc-emails")
@@ -268,8 +268,53 @@ describe("PUT /super/tenants/:tenantId/notification-cc-emails", () => {
     expect(res.body.error).toBe("bad_request");
   });
 
-  // Codex セカンドオピニオン LOW 指摘: 既存 true を明示 false で OFF にする境界テスト。
-  // 将来 `...(body.progressReportEnabled && ...)` のような truthy 判定退行を検知するため。
+  // `null` は `typeof null === "object"` で undefined と異なる。`??` を使った patch
+  // 簡略化リファクタで `null` が「未送信」扱いされる退行を防ぐ境界テスト。
+  it("progressReportEnabled=null は 400 bad_request (undefined と等価扱いにしない)", async () => {
+    const res = await request(makeApp(store))
+      .put("/api/v2/super/tenants/atali82i/notification-cc-emails")
+      .send({
+        notificationCcEmails: [],
+        completionNotificationEnabled: true,
+        progressReportEnabled: null,
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("bad_request");
+  });
+
+  // 完了通知 OFF + 進捗レポート ON の独立組合せ。AC-PR-11 (両レーン独立性 - 設定) と
+  // AC-PR-19 (テナント独立性) の中核ケース。2 つの boolean が混同される実装ミス
+  // (例: enabled = completion || progress) を防ぐ。
+  it("完了通知 OFF + 進捗レポート ON を独立に保存できる (AC-PR-11 / AC-PR-19 直交性)", async () => {
+    const res = await request(makeApp(store))
+      .put("/api/v2/super/tenants/atali82i/notification-cc-emails")
+      .send({
+        notificationCcEmails: ["cc@example.com"],
+        completionNotificationEnabled: false,
+        progressReportEnabled: true,
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.completionNotificationEnabled).toBe(false);
+    expect(res.body.progressReportEnabled).toBe(true);
+  });
+
+  // 逆組合せ (完了通知 ON + 進捗レポート OFF) も同時保存できることの対称性確認
+  it("完了通知 ON + 進捗レポート OFF を独立に保存できる (AC-PR-11 / AC-PR-19 直交性、逆)", async () => {
+    const res = await request(makeApp(store))
+      .put("/api/v2/super/tenants/atali82i/notification-cc-emails")
+      .send({
+        notificationCcEmails: ["cc@example.com"],
+        completionNotificationEnabled: true,
+        progressReportEnabled: false,
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.completionNotificationEnabled).toBe(true);
+    expect(res.body.progressReportEnabled).toBe(false);
+  });
+
+  // 既存 true を明示 false で OFF にできることを検証
+  // (`...(body.progressReportEnabled && ...)` 等の truthy 判定への退行で false 更新だけが
+  // 静かに無視されるリグレッションを検知するため)
   it("既存 progressReportEnabled=true を明示 false で送信すると false に更新される (truthy 退行防止)", async () => {
     // 事前に true を保存
     await request(makeApp(store))
@@ -304,7 +349,7 @@ describe("InMemoryTenantCcConfigStore", () => {
       ownerEmail: null,
       notificationCcEmails: [],
       completionNotificationEnabled: true,
-      // Phase 3 (ADR-039 D-6): default false (opt-in)
+      // ADR-039 D-6: default false (opt-in)
       progressReportEnabled: false,
     });
     expect(await store.getTenantCcConfig("tenant-a")).toEqual({
@@ -355,7 +400,7 @@ describe("InMemoryTenantCcConfigStore", () => {
   });
 
   // ============================================================
-  // Phase 3 ADR-039 D-6: InMemoryTenantCcConfigStore patch semantics
+  // ADR-039 D-6: InMemoryTenantCcConfigStore patch semantics
   // ============================================================
 
   it("updateTenantCcConfig で progressReportEnabled を true に切替できる", async () => {

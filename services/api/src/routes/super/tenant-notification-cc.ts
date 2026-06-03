@@ -31,7 +31,7 @@ const TENANT_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
 /**
  * tenant CC config の I/O 抽象。production は Firestore、test は in-memory fake。
  *
- * `progressReportEnabled` は Phase 3 (ADR-039 D-6) で追加。undefined を渡したときは
+ * `progressReportEnabled` は ADR-039 D-6 で追加。undefined を渡したときは
  * 既存値を保持 (patch semantics)、boolean を渡したときのみ書き換える。完了通知 OFF と
  * 進捗レポート OFF は独立に決裁したいテナント運用 (例: 完了通知のみ運用 / 進捗のみ運用)
  * に対応するため。
@@ -47,7 +47,7 @@ export interface TenantCcConfigStore {
     input: {
       notificationCcEmails: string[];
       completionNotificationEnabled: boolean;
-      /** Phase 3 (ADR-039 D-6): undefined のとき既存値保持 (patch semantics) */
+      /** ADR-039 D-6: undefined のとき既存値保持 (patch semantics) */
       progressReportEnabled?: boolean;
     },
   ): Promise<void>;
@@ -92,7 +92,7 @@ export class InMemoryTenantCcConfigStore implements TenantCcConfigStore {
         ownerEmail: null,
         notificationCcEmails: [],
         completionNotificationEnabled: true,
-        // Phase 3 (ADR-039 D-6): default false (opt-in)
+        // ADR-039 D-6: default false (opt-in)
         progressReportEnabled: false,
       });
     }
@@ -140,7 +140,7 @@ export class FirestoreTenantCcConfigStore implements TenantCcConfigStore {
       // 既存テナント後方互換: 未設定は default true (loader と整合)
       completionNotificationEnabled:
         (data.completionNotificationEnabled as boolean | undefined) ?? true,
-      // Phase 3 (ADR-039 D-6): 既存テナントは default false (opt-in)
+      // ADR-039 D-6: 既存テナントは default false (opt-in)
       progressReportEnabled:
         (data.progressReportEnabled as boolean | undefined) ?? false,
     };
@@ -238,7 +238,7 @@ export function createTenantNotificationCcRouter(
         });
         return;
       }
-      // Phase 3 (ADR-039 D-6): progressReportEnabled は optional。送信時のみ
+      // ADR-039 D-6: progressReportEnabled は optional。送信時のみ
       // type を検証し、未送信なら storage 層で既存値保持 (patch semantics)。
       // 旧 UI 由来の PUT は progressReportEnabled を含まないため、既存値が消えない。
       if (

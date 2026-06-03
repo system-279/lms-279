@@ -288,7 +288,7 @@ describe("TenantCcForm", () => {
     const putCall = superFetchMock.mock.calls.find(
       (c) => c[1]?.method === "PUT",
     );
-    // Phase 3 PR 3d: progressReportEnabled は always-send-all で常に送信
+    // ADR-039 D-6: progressReportEnabled は always-send-all で常に送信
     expect(JSON.parse(putCall![1].body)).toEqual({
       notificationCcEmails: ["cc1@example.com"],
       completionNotificationEnabled: true,
@@ -300,7 +300,7 @@ describe("TenantCcForm", () => {
   });
 
   // ============================================================
-  // Phase 3 PR 3d (ADR-039 D-6): progressReportEnabled テナント opt-in
+  // ADR-039 D-6: progressReportEnabled テナント opt-in
   // ============================================================
 
   it("progressReportEnabled トグルが表示され、既存値を反映する", async () => {

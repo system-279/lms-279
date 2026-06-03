@@ -132,7 +132,7 @@ describe("DispatchSettingsPage", () => {
   });
 
   // ============================================================
-  // Phase 3 PR 3d (ADR-039 D-1): progressReport セクション
+  // ADR-039 D-1: progressReport セクション
   // ============================================================
 
   it("progressReport セクションが表示される (旧 doc で progressReport 欠落でも default を表示)", async () => {

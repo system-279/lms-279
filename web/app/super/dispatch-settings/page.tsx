@@ -44,7 +44,7 @@ interface FormState {
   signatureName: string;
   completionMessageBody: string;
   /**
-   * Phase 3 (ADR-039 D-1): 進捗レポート定期配信の設定。
+   * ADR-039 D-1: 進捗レポート定期配信の設定。
    * undefined のとき UI は default (enabled=false / scheduleDaysOfWeek=[] / scheduleHourJst=0) を表示する。
    * 保存時は当画面で常に値が確定するため、PUT body には常に含めて送信する (always-send-all)。
    */
@@ -159,8 +159,8 @@ export default function DispatchSettingsPage() {
       scheduleHourJst: form.scheduleHourJst,
       signatureName: form.signatureName,
       completionMessageBody: form.completionMessageBody,
-      // Phase 3 (ADR-039 D-1): 当画面が進捗レポート設定の真実の入り口なので
-      // always-send-all 戦略で常に送信。patch semantics は別 UI 経由の保護用。
+      // ADR-039 D-1: 当画面が進捗レポート設定の真実の入り口なので always-send-all 戦略で
+      // 常に送信。patch semantics は他経路 (CLI / 旧 UI) からの PUT 保護用。
       progressReport: form.progressReport,
       version: form.version,
     };

@@ -108,7 +108,7 @@ export function TenantCcForm({
 
   const [originalEmails, setOriginalEmails] = useState<string[]>([]);
   const [originalEnabled, setOriginalEnabled] = useState<boolean>(true);
-  // Phase 3 (ADR-039 D-6): progressReport テナント opt-in を CC 編集と同一画面に統合
+  // ADR-039 D-6: progressReport テナント opt-in を CC 編集と同一画面に統合
   const [originalProgressReportEnabled, setOriginalProgressReportEnabled] =
     useState<boolean>(false);
   const [emails, setEmails] = useState<string[]>([]);
