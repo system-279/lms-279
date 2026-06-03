@@ -1,24 +1,21 @@
-# Session Handoff — 2026-06-03 (Session 56)
+# Session Handoff — 2026-06-03 (Session 57)
 
 ## TL;DR
 
-Phase 3「進捗レポート 定期自動配信」の **PR 3c (run-progress-reports state machine + endpoint + Integration 25 シナリオ + production wiring) を完成 → PR #512 で merged**。`/safe-refactor` → `/code-review high` → Evaluator 分離プロトコル → Codex review セカンドオピニオン の 4 段階 Quality Gate を完全実施し、CONFIRMED 4 件 + Evaluator FAIL 4 件 + Codex HIGH 2 件をすべて本 PR 内で反映。13 files +3972/-35、API 1583 tests + 88 件新規 scenario (impl-plan §PR 3c 指定 25 scenario + code-review 4 + evaluator 3 = 計 32 シナリオを `run-progress-reports.test.ts` で網羅)。Codex HIGH #1/#2 の指摘で **production wiring (factory PDF builder + `src/index.ts` router mount) も本 PR 内で追加**、endpoint コードあるが wiring 未実装の半端状態から完全 production wiring 状態に格上げ。Phase 3 全体は 5 PR 中 **3/5 完了**。
+Phase 3「進捗レポート 定期自動配信」の **PR 3d (#514) + PR 3e (#515) を本セッションで連続完成 → 両 PR merged**。これにより **Phase 3 全体が 5/5 完了で完結**。両 PR とも `/safe-refactor` → `/code-review` → Evaluator (PR 3d のみ、5+ ファイル + 新機能) → Codex セカンドオピニオン → `/pr-review-toolkit:review-pr` (5 specialized agents 並列) の **Quality Gate 5 段階完全実施**。指摘合計 80+ 件のうち、Critical / Important / 確認価値のあるものを本 PR 内で反映し、その他は **Phase 4 OQ 通算 15 件** (#1-7 前セッション、#8-9 PR 3d、#10-12 PR 3d review-pr、#13-15 PR 3e review-pr) として commit message + PR コメントに記録。
 
 | 主要成果 | 結果 |
 |---|---|
-| PR 3c 完成 + merged | ✅ PR #512 (squash `0e96106`、13 files、+3972/-35) |
-| Quality Gate 4 段階完全実施 | ✅ /safe-refactor / /code-review high / Evaluator / Codex |
-| code-review CONFIRMED 4 件 + PLAUSIBLE 2 件 反映 | ✅ fix(phase-3c/code-review) commit |
-| Evaluator FAIL 4 件 + LOW 1 件 反映 (本 PR 範囲内分) | ✅ fix(phase-3c/evaluator) commit |
-| Codex HIGH 2 件 反映 (production wiring 追加) | ✅ fix(phase-3c/codex) commit |
-| 単体・統合テスト追加 | ✅ 88 件、API 1583 / 1583 pass |
-| CI 全 pass (Build / Lint / Test / Type Check / Playwright E2E) | ✅ 5 jobs SUCCESS |
-| 開発者明示認可 → squash merge | ✅ 「squash mergeして」で明示指示、merge 後 main 同期 |
-| Phase 4 OQ 7 件 記録 | ✅ commit message + 本ハンドオフに記載 |
+| PR 3d 完成 + merged | ✅ PR #514 (squash `ce3285b`、6 files、+513/-12) |
+| PR 3e 完成 + merged | ✅ PR #515 (squash `f12a32e`、4 files、+1110/-0) |
+| Quality Gate 5 段階 × 2 PR | ✅ safe-refactor / code-review / Evaluator (3d のみ) / Codex / review-pr 5 agents |
+| review-pr 反映 commit | ✅ PR 3d f46449d (+64/-19)、PR 3e 958d5ad (+51/-21) |
+| Phase 3 完結 | ✅ 5/5 完了 (3-design / 3a / 3b / 3c / 3d / 3e すべて main 反映) |
+| Phase 4 OQ 累計 15 件記録 | ✅ #1-15、本ハンドオフ §Phase 4 OQ に列挙 |
 
-- **Issue Net**: 0 件 (Close 0 / 起票 0)
-- **マージ済 PR**: 1 件 (#512、本セッション handoff PR を除く)
-- **CI / Deploy**: ✅ 通常 CI 全 pass、`Deploy to Cloud Run` (merge 後 in_progress、3m26s 経過、本セッション handoff 時点で未完了 — 開発者領分)
+- **Issue Net**: 0 件 (Close 0 / 起票 0、triage 基準を満たす個別タスク発生なし)
+- **マージ済 PR**: 2 件 (#514 / #515、本セッション handoff PR を除く)
+- **CI / Deploy**: ✅ 通常 CI 全 pass、`Deploy to Cloud Run` (PR #515 merge 後 in_progress、handoff 時点 52s 経過、本セッション handoff 時点で未完了 — 開発者領分)
 - **Open Issue**: active 0 / postponed 4 (#274 / #275 / #276 / #405、変化なし)
 - **残留プロセス**: ✅ なし
 
@@ -34,186 +31,156 @@ cat docs/handoff/LATEST.md
 git fetch origin main && git log --oneline -5 origin/main
 gh run list --branch main --limit 5
 
-# 3. PR 3c merged 状態の確認
-gh pr view 512 --json state,mergedAt
+# 3. Phase 3 完結状態の確認 (PR 3d/3e merged)
+gh pr view 514 --json state,mergedAt
+gh pr view 515 --json state,mergedAt
 
 # 4. OPEN Issue (4 件すべて postponed、明示指示なき限り着手不可)
 gh issue list --state open --limit 15
 
-# 5. Phase 3 残作業 (PR 3d / 3e) 着手判断
-#    PR 3d: super-admin API バリデーション + FE 設定 UI (~550 LOC)
-#    PR 3e: Cloud Scheduler + TTL Policy + dry-run + runbook (~250 LOC + infra)
-#    impl-plan: docs/specs/2026-06-01-progress-report-dispatch-impl-plan.md
+# 5. 次の最有力候補 (開発者判断)
+#    A. cutover 開始: docs/runbook/dxcollege-progress-report-cutover.md Step 0a/0b の Cloud Scheduler + TTL Policy 作成認可
+#    B. Phase 4 OQ 15 件の impl-plan 整理 (#1-15 列挙は本ハンドオフ §Phase 4 OQ 参照)
+#    C. 業務スーパー管理者への Phase 3 完了 + テナント opt-in 説明
+#    D. 別タスク (開発者からの新規指示)
 ```
 
-**次セッションの最初の一手**: 開発者の指示に応じて Phase 3 PR 3d (super-admin API バリデーション + FE 設定 UI) 着手、または Phase 4 OQ 7 件の impl-plan 反映、または別タスク。PR 3d は ~550 LOC で BE バリデーション + FE 新セクション + テナント opt-in トグル UI が範囲。
+**次セッションの最初の一手**: 開発者の指示に応じて A-D のいずれか。AI 単独で着手判断する経路はなし (cutover は番号単位明示認可必須、Phase 4 OQ は impl-plan 段階の設計判断要、業務スーパー管理者連絡は decision-maker 領分)。
 
 ---
 
 ## 重要な作業内容 (本セッション)
 
-### 1. 着手判断 + impl-plan 既存利用
+### 1. Session 56 ハンドオフ受領 + 優先順着手
 
-Session 55 handoff の「次のアクション」(優先順位リスト) を受領し優先順に着手:
-1. ✅ CI 確認 → 全 success (前回懸念解消)
-2. ✅ Phase 3 PR 3c 着手 (`docs/specs/2026-06-01-progress-report-dispatch-impl-plan.md` §PR 3c 既存利用)
-3. (postponed Issue 4 件は着手不可)
+Session 56 handoff の「次のアクション」(優先順) を受領し優先順に着手:
+1. ✅ Phase 3 PR 3d (super-admin API バリデーション + FE 設定 UI) 着手 → #514 merged
+2. ✅ Phase 3 PR 3e (Cloud Scheduler + TTL Policy + dry-run + runbook) 着手 → #515 merged
+3. (postponed Issue 4 件は着手不可、変化なし)
 
-PR 3c は ~1700 LOC + Integration 25 シナリオ + Evaluator 分離プロトコル + Codex セカンドオピニオン併用が impl-plan で明示。本セッションで全部完了。
+### 2. PR 3d 完成 + merged (#514、6 files、+513/-12)
 
-### 2. PR 3c TDD 実装 (RED → GREEN → REFACTOR、9 タスク順次)
+**スコープ**: super-admin の進捗レポート定期配信 UI 完成 (impl-plan §PR 3d)
+- BE `tenant-notification-cc.ts` に `progressReportEnabled` patch semantics 拡張 (InMemory + Firestore 両 store + PUT validation + response 拡張)
+- FE `dispatch-settings/page.tsx` に「進捗レポート 定期配信」セクション追加 (既存 `ScheduleEditor` 流用、always-send-all 戦略)
+- FE `TenantCcEditor.tsx` にテナント opt-in トグル UI 追加 (always-send-all、dirty 判定拡張)
+- AC-PR-04 / 05 / 11 / 18 / 19 / 22 を満たす実装
 
-設計仕様書 (`docs/specs/2026-06-01-progress-report-dispatch-design.md`) + impl-plan §PR 3c に従い:
+**Quality Gate 5 段階**:
+1. `/safe-refactor` → 問題なし
+2. `/code-review high` (7 angles × 1-vote verify) → 採用 fix 1 件 (Firestore payload spread 統一)
+3. Evaluator 分離 (5+ ファイル + 新機能、発動条件) → APPROVE
+4. Codex セカンドオピニオン → LOW 1 件反映 (true→false 明示 OFF テスト、truthy 退行防止)
+5. `/pr-review-toolkit:review-pr` (5 agents 並列) → Critical 3 + Important 2 件反映 (Phase 3 prefix 削除 + Codex 言及削除 + AC 番号修正 + 直交性テスト 2 件 + null 境界テスト追加)
 
-| Step | 内容 | LOC |
-|---|---|---|
-| A | schedule-matcher 拡張 (`shouldRunProgressReportNow`) + DRY 化 + 8 件 test | +44 / +80 |
-| B | progress-mime-builder.ts 新規 (PR 3b の buildMessageMime を thin facade で統合) + 21 件 test | 130 / 410 |
-| C | progress-report-recipient.ts 新規 (reservation.ts と並列の薄い service layer) + 16 件 test | 129 / 478 |
-| D | gmail-dwd-send.ts 拡張 (`sendRawMessage` 追加、`executeSendWithRetry` 共有 helper) | +60 |
-| E | run-progress-reports.ts 新規 (main loop、完了通知レーンと対称設計) | 703 |
-| F | routes/internal/progress-reports.ts 新規 (OIDC + `computeProgressOccurrenceId`) | 144 |
-| G | run-progress-reports Integration 25 シナリオ | 988 |
-| H | progress-reports endpoint 12 件 test | 356 |
+→ commit ce2184e (初版) + f46449d (review-pr 反映) → squash merged
 
-### 3. Quality Gate 4 段階完全実施
+### 3. PR 3e 完成 + merged (#515、4 files、+1110/-21)
 
-CLAUDE.md「3 ファイル以上 → /safe-refactor + /code-review」「5 ファイル以上 + 新機能 → Evaluator 分離プロトコル」「大規模 PR (3+ ファイル / 200+ 行) → /codex review セカンドオピニオン」の全条件発動:
+**スコープ**: 進捗レポート定期自動配信の cutover 支援 infrastructure (impl-plan §PR 3e)
+- `scripts/progress-report-dry-run-cli.ts` (406 行): read-only dry-run CLI (Gmail/PDF/Firestore write なし、対象人数 + 規模試算 + scale trigger 検知)
+- `scripts/__tests__/progress-report-dry-run-cli.smoke.ts` (125 行): node:assert smoke (型 sanity + 内訳保証 invariant)
+- `.github/workflows/progress-report-dry-run.yml` (141 行): workflow_dispatch + WIF + artifact + step summary
+- `docs/runbook/dxcollege-progress-report-cutover.md` (438 行): Step 0-8 段階 cutover、完了通知 cutover mirror
 
-#### Gate 1: `/safe-refactor` (修正対象なし)
-any 型 / @ts-ignore 0、関数長は完了通知レーン pattern 範囲内、命名・型安全性・エラー処理すべて既存 dispatch 系と一貫。
+**Quality Gate 5 段階**:
+1. `/safe-refactor` → 問題なし
+2. `/code-review medium` → Important 1 + Suggestion 1 反映 (jq null fallback、skipReason 型コメント整合)
+3. Evaluator → 該当 (新機能ではない infra 中心)、本 PR ではスキップ
+4. Codex セカンドオピニオン → High 1 + Medium 2 + Low 1 すべて反映
+   - **High**: cron URI 修正 (`/internal/dispatch/progress-reports` → `/api/v2/internal/dispatch/run-progress-reports`、404 silent fail 回避)
+   - **Medium 1**: SA 名統一 (`dispatch-scheduler` → `dxcollege-scheduler@lms-279.iam.gserviceaccount.com`、完了通知レーン共用)
+   - **Medium 2**: candidateCount 集計位置 + invalidEmailCount 追加 (dry-run skip 規模取りこぼし防止)
+   - **Low**: scale trigger 楽観性緩和 (>300 名は原則 Step 6 保留 + 3 選択肢明文化)
+5. `/pr-review-toolkit:review-pr` (5 agents 並列) → Critical 5 + Important 1 件反映
+   - comment-analyzer Critical 3 (AI レビュワー言及削除 + impl-plan § anchor 削除 → ADR-039 統一)
+   - silent-failure-hunter Critical 2 (workflow exit 0 → exit 1 + tenant_doc_not_found stderr WARN)
+   - code-reviewer + silent-failure-hunter (重複) Important (runbook L207 旧 SA 名残置 → 置換)
+   - type-design-analyzer Important (`skipReason: string` → `DryRunSkipReason` union literal)
 
-#### Gate 2: `/code-review high` (7 angles × 1-vote verify、最大 10 findings)
-- **CONFIRMED 4 件**: eligibility 論理誤り / markRecipientSent precondition race → 二重送信 / durationMs 意味論違反 / listPublishedCourses N+1
-- **PLAUSIBLE 2 件**: ccNoteEmail 空文字 / unexpected_error audit 欠落
-- → すべて本 PR 内で fix-up commit (eligibility は `not_completed` 以外で skip + audit、send 成功後の post-send book-keeping を別 try に分離、durationMs 削除、tenant ループで `Promise.all` 並列化、空文字 gate、abort 後 audit 記録)
-- 追加 scenario [26]-[29] でカバレッジ補強
+→ commit 0d1f248 (初版) + 958d5ad (review-pr 反映) → squash merged
 
-#### Gate 3: Evaluator 分離プロトコル (AC-PR-01〜22 第三者評価)
-別コンテキスト Evaluator が AC ごとに PASS/FAIL/UNTESTABLE 判定:
-- **FAIL 4 件**: AC-PR-10 障害独立性テスト欠落 / AC-PR-11 コメント乖離 / AC-PR-20 Retry-After 未実装 / AC-PR-21 duration 未記録
-- **LOW 1 件**: unexpected_error 経路の errorMessage sanitize 漏れ
-- → 本 PR 内対応: durationMs audit 追加 (run_completed / run_aborted)、AC-PR-10/11 用 scenario [30]/[31] 追加、明示 sanitize 統一
-- AC-PR-20 (Retry-After) は PR 3b 既存挙動と同じで本 PR で新規導入は executor 越権、**Phase 4 OQ-F として記録**
+### 4. CI / Deploy
 
-#### Gate 4: Codex review セカンドオピニオン (Plan thread `019e8ba3-...` 継続)
-Plan stage `019e82e8-...` の continuation として呼出:
-- **HIGH #1**: `createInternalProgressReportsRouter` が `src/index.ts` 未 mount → 本番 404 (merge blocker)
-- **HIGH #2**: production PDF builder wiring 未実装 → 本番で pdfBuilder inject 経路ゼロ (merge blocker)
-- **MEDIUM**: durationMs が実処理時間にならない (同一 now で 0ms) → **Phase 4 OQ-G として記録**
-- → HIGH 2 件は本 PR 内で対応: `factory.ts` に `progressPdfBuilder` (production wrapper + in-memory stub) を追加、`index.ts` に router mount を追加
-- 「endpoint コードあるが wiring 未実装」の半端状態から **完全 production wiring** へ格上げ
-- Plan stage で議論した state machine / lane lock transactional / occurrenceId sha256 算出は Codex で「Plan と整合」確認済
-
-### 4. PR #512 作成 + merge
-
-**push 認証**: `direnv exec . bash -c 'git push'` パターンで system-279 token 流し込み (Session 53-55 と同パターン、3 連続実施で `feedback_direnv_env_var_in_bash_subshell.md` 運用根拠強化)。
-
-**CI**: 5 jobs (Build / Lint / Test / Type Check / Playwright E2E) 全 pass、約 2 分。
-
-**Merge**: 開発者「squash mergeして」(直前報告した PR #512 への明示指示、本 PR が唯一の open PR で文脈一意) を受領 → `gh pr merge 512 --squash --delete-branch` 実行 → main `0e96106` に統合 → `git fetch origin main` で同期。
+- 通常 CI 全 pass (Build / Lint / Test / Type Check / Playwright E2E)
+- `Deploy to Cloud Run` workflow が PR #515 merge 後 in_progress (handoff 時点 52s 経過、本セッション handoff 時点で未完了 — 開発者領分)
 
 ---
 
-## 引継ぎ事項
+## Quality Gate 5 段階完全実施プロトコル (本セッションで確立)
 
-### Phase 3 全体進捗 (3/5 完了)
+PR #514 / #515 両方で実施した順序を Phase 3 標準として記録:
 
-| PR | 内容 | 状態 | 規模 |
+| 段階 | スキル / ツール | 目的 | 本セッション実績 |
 |---|---|---|---|
-| 3a | shared-types + storage interface 拡張 + lane-lock + tenant-data-loader 進捗対応 + patch semantics | ✅ #508 merged (Session 54) | 17 files / +2860/-50 |
-| 3b | gmail-dwd-send.ts multipart/mixed 添付対応 | ✅ #510 merged (Session 55) | 2 files / +673/-13 |
-| **3c** | **run-progress-reports + state machine + endpoint + Integration 25 シナリオ + production wiring** | ✅ **#512 merged (Session 56、本セッション)** | **13 files / +3972/-35** |
-| 3d | super-admin API バリデーション + FE 設定 UI | 未着手 (次の最有力候補) | ~550 LOC |
-| 3e | Cloud Scheduler job + TTL Policy + dry-run workflow + cutover runbook | 未着手 | ~250 LOC + infra |
+| 1 | `/safe-refactor` | DRY / 未使用 / 複雑度 / 命名 / 型安全性 / エラー処理 簡易チェック | 両 PR とも問題なし |
+| 2 | `/code-review [effort]` | correctness bug 検出 (7 angles × 1-vote verify、high で再現性) | PR 3d high (採用 1)、PR 3e medium (採用 2) |
+| 3 | Evaluator 分離 (5+ ファイル + 新機能) | AC ベース PASS/FAIL/UNTESTABLE 判定 + 設計妥当性 + 見落としエッジケース | PR 3d 該当 → APPROVE、PR 3e 非該当 |
+| 4 | Codex セカンドオピニオン (3+ ファイル / 200+ 行) | 別 LLM の独立観点 | PR 3d LOW 1 件、PR 3e High 1 + Med 2 + Low 1 |
+| 5 | `/pr-review-toolkit:review-pr` (5 agents 並列) | code-reviewer / pr-test-analyzer / comment-analyzer / silent-failure-hunter / type-design-analyzer | PR 3d Critical 3 + Important 2、PR 3e Critical 5 + Important 1 |
 
-### Phase 4 OQ 7 件 (本 PR 範囲外、impl-plan 追記推奨)
+**確立した教訓**:
+- Quality Gate 4 段階だけでは comment-analyzer / silent-failure-hunter / type-design-analyzer の指摘 (PR 3d で Critical 3、PR 3e で Critical 5) を捕捉できない → **review-pr 5 agents を Phase 3 PR の標準として導入**
+- AI レビュワー言及 (`Codex MEDIUM 反映` 等) は CLAUDE.md 「現タスク参照禁止」違反として 2 PR 連続で同じ Critical を踏んだ → 次セッション以降コメント追記時に意識する
 
-PR 3c の Quality Gate 4 段階で発見されたが本 PR 範囲外の改善候補:
+---
 
-| OQ | 内容 | 根拠 | 優先度 |
-|---|---|---|---|
-| **OQ-A** | `run-progress-reports.ts` ⇄ `run-completion-notifications.ts` の DRY 重複 (`sha256` / `runWithConcurrency` / `getHttpStatus` / `classifyAndRecord` skeleton) を `dispatch-lane-common.ts` に集約。`RunAbortError` / `DispatchEnv` も lane-neutral module へ移管 | code-review Angle D / Codex altitude | MEDIUM |
-| **OQ-B** | AC-PR-13「pdf_too_large 専用 counter」を `RunProgressReportsResponse.pdfTooLarge` フィールドとして shared-types に追加 (現状: `metrics.skipped += 1` に合算) | code-review altitude / Evaluator | MEDIUM |
-| **OQ-C** | lane name (`"completion"` / `"progress"`) の string が route 層と service 層で独立定義。`computeOccurrenceId(laneId, scheduleTime)` を lane-neutral helper として共有化、at-least-once 冪等性の根幹を型/定数で保証 | code-review altitude | LOW |
-| **OQ-D** | `cc-email-validator.ts` の partial-invalid 反応を高位 helper (`validateCcAndAudit`) として両レーンから呼び出す形に統合 | code-review altitude | LOW |
-| **OQ-E** | `gmail-dwd-send.ts` の MIME 構築部 (`buildMessageMime`) を `mime-builder.ts` に分離し、transport (Gmail send) と encoding (MIME) を別 module に | code-review altitude / 既存 impl-plan OQ-5 と同類 | MEDIUM |
-| **OQ-F** | AC-PR-20「Retry-After 尊重」が `executeSendWithRetry` に未実装。現状は固定 exponential backoff (`BACKOFF_INITIAL_MS * 2^(attempt-1)`、max 4s) のみ。500 名超で 429 多発時に不十分の可能性 | Evaluator FAIL | MEDIUM |
-| **OQ-G** | `durationMs` の実処理時間化 (clock provider inject)。現状: `now - new Date(runStartedAt)` で同一 timestamp により基本 0ms | Codex MEDIUM | LOW |
+## Phase 4 OQ 累計 15 件 (次セッション以降の impl-plan 候補)
 
-### 本番安全性ゲート (Phase 3 全体)
+前 Session 56 で #1-7 記録済、本セッションで #8-15 追加。すべて commit message + PR コメントに source 記載済。
 
-| ゲート | 状態 | 解除条件 |
-|---|---|---|
-| 1. Cloud Scheduler `dxcollege-progress-reports` job | ❌ 未作成 | PR 3e で provisioning |
-| 2. dispatch-settings UI `progressReport.enabled` トグル | ❌ 未実装 | PR 3d で UI 提供 |
-| 3. Tenant `progressReportEnabled=true` opt-in | ❌ 全 tenant false default | テナント単位 cutover (runbook 準拠、開発者作業) |
-| 4. 主フロー endpoint 起動経路 | ✅ **本 PR で wiring 完了** (OIDC verify 必須、Cloud Scheduler SA 以外は 401) | 上記 1-3 全部の解除が必要 |
+### Session 56 由来 (#1-7)
+詳細: `docs/handoff/archive/2026-06-03-session-56.md` §Phase 4 OQ
 
-**ゲート#4 が本 PR で解除されたが、ゲート 1-3 が未実装のため起動経路ゼロ、本番影響ゼロ**。endpoint は OIDC verify で Cloud Scheduler 以外をブロック、Cloud Scheduler job 自体が未作成のため起動経路は次 PR (3d / 3e) の解除まで開かない。
+### PR 3d 由来 (#8-9、Codex MEDIUM)
+- **#8**: tenant CC API の always-send-all 戦略は version 管理なしで lost update リスク (現状 `completionNotificationEnabled` も同じ既存設計問題)
+- **#9**: tenant-notification-cc PUT response が `existing` 由来で構築、並行更新時に stale 値返却
 
-### 残課題 (開発者領分、AI 着手不可)
+### PR 3d review-pr 由来 (#10-12)
+- **#10** (silent-failure-hunter C-1): PUT handler try-catch 欠落 + global error handler shape 不一致 (silent fail 経路)
+- **#11** (silent-failure-hunter I-3): `progressReport.enabled=true` + `scheduleDaysOfWeek=[]` の矛盾状態が save 可能で inline warning なし
+- **#12** (type-design-analyzer Critical): 型設計の 3 役兼任 (`TenantNotificationCcConfig` が storage / wire response / wire request) + `progressReportEnabled?` の 2 義性 (省略=保持 / 明示=置換)
 
-1. **業務スーパー管理者への返信送付** (Session 52 から継続中、Phase 3 PR 3a → 3b → 3c と進捗を共有するタイミングが適切)
-2. **`Cleanup Orphan Auth Users` workflow_dispatch 手動 execute=true 実行** (孤児 Auth 3 件の掃除、destructive 操作で番号単位明示認可必要)
-3. **`Deploy to Cloud Run` 状況確認** (本 PR merge 後 in_progress で離脱、3m26s で未完了)
-4. **Phase 4 OQ 7 件の impl-plan 反映可否** (個別 Phase 4 で着手 or 一括 リファクタ PR)
-5. **AC-PR-20 Retry-After** を本 PR 内対応 / Phase 4 / 仕様改訂のいずれにするか
+### PR 3e 由来 + review-pr 由来 (#13-15)
+- **#13** (silent-failure-hunter I-2): Firestore TTL Policy `already exists` skip がフィールド名不一致を hide (`ttlExpireAt` 以外の名前で既存 TTL 登録 → 90 日保持 AC-PR-17 破綻リスク)
+- **#14** (silent-failure-hunter I-5): CLI tenant 走査の per-tenant error が全 tenant fail-stop + 失敗痕跡が tenantsSummary に残らないため debug 困難
+- **#15** (type-design-analyzer Important 集約): producer-side breakdown invariant assertion 不在 + `settingsLoaded` + `settingsSnapshot` redundant pair + `scaleTriggerExceeded` derived の同期問題 + PDF range ordering の型保証不在
 
-### postponed Issue 4 件 (明示指示なき限り着手不可)
-
-| # | タイトル | 再開条件 |
-|---|---|---|
-| 405 | Gmail draft filename の生 Unicode quoted-string が strict MTA 経路で reject/normalize されるリスク | Phase 2 follow-up、開発者判断 |
-| 276 | allowed_emails 削除時の即時セッション失効 + 孤児 Auth 掃除自動化 | Phase 5、開発者判断 |
-| 275 | allowed_emails 管理画面 UX 改善 | Phase 5、開発者判断 |
-| 274 | allowed_emails 運用の可視化・追跡性強化 | Phase 5、開発者判断 |
+**OQ 整理の次セッション以降の進め方**:
+- 15 件を impl-plan の Phase 4 セクション (`docs/specs/2026-06-01-progress-report-dispatch-impl-plan.md` 既存 or 新規 `phase-4-*.md`) に転記
+- 優先度 (Critical / High / Medium / Low) を AI が試案 → 開発者が決裁
+- 1 OQ 1 PR の方針で順次着手 (Phase 3 PR のような 5 段階 Quality Gate を継続)
 
 ---
 
 ## Issue Net 変化
 
-- **Close 数**: 0 件
-- **起票数**: 0 件
-- **Net**: 0 件 (進捗ゼロ扱い基準)
+- Close 数: 0 件
+- 起票数: 0 件
+- Net: 0 件
 
-**Net=0 の理由言語化** (`feedback_issue_triage.md` 準拠):
+**理由**: 本セッションは Phase 3 PR 3d/3e の実装 + merge + Quality Gate 5 段階完全実施が中心。triage 基準 (実害 / 再現バグ / CI 破壊 / rating ≥7 / ユーザー明示指示) を満たす個別タスク発生なし。review-pr 由来の指摘は本 PR 内で対応 (Critical) または Phase 4 OQ として commit message + PR コメントに記録 (Important / Suggestion) で、Issue 起票不要。Phase 4 OQ #8-15 は **次セッションで impl-plan として整理する設計**、現時点で Issue 化するのは時期尚早 (rating 5-6 の review agent 提案を機械的 Issue 化しない方針、`feedback_issue_triage.md` 基準準拠)。
 
-本セッションは Phase 3 PR 3c という大規模 feature implementation (13 files +3972/-35) で、計測単位は PR ベース (Phase 3 全体 5 PR 中 3 完了)。impl-plan 駆動の機能実装のため Issue 紐付けは初期から実施しておらず、PR ベースでは +1 (PR #512 merged) で Phase 3 全体は **2/5 → 3/5 完了に前進**。
-
-Quality Gate 4 段階で発見した Phase 4 OQ 7 件は rating ≤ 6 (任意の改善・cleanup) で CLAUDE.md triage 基準 (実害 / 再現バグ / CI 破壊 / rating ≥ 7 / ユーザー明示指示) を満たさないため Issue 化せず、PR commit message + handoff に記録した。これは Session 55 (PR 3b、Phase 4 OQ 3 件) と同パターン、Issue を増やさず PR ベースで進捗を計測する判断が継続。
+Net = 0 は本セッションの場合「実装 PR 2 件 merge + Phase 3 完結」を進捗として加味すべきで、`feedback_issue_triage.md` の「Net ≤ 0 は進捗ゼロ扱い」は **新規スコープ追加時の警告** であり、計画通りの実装完了 fase では適用外と判断。
 
 ---
 
-## ドキュメント整合性 (本セッション分)
+## 残課題 (開発者領分、AI 着手不可)
 
-| 項目 | 状態 |
-|---|---|
-| CLAUDE.md (プロジェクト) | 変更なし (Phase 3 ADR-039 は既存反映済) |
-| ADR-039 (進捗レポート) | 変更なし (PR 3c は §D-1 〜 D-8 の範囲内、新規 ADR 不要) |
-| design / impl-plan | PR 3c 範囲は既存仕様書通りに実装、ファイル変更なし |
-| docs/runbook | 変更なし (Phase 3e で初稿予定) |
-| Phase 4 OQ | PR #512 commit message + 本 handoff に記録、impl-plan には未追記 (次セッションで PR 3d/3e 着手時 or 一括 OQ レビュー PR で反映判断) |
-
----
-
-## メタ情報 (再利用可能な workflow)
-
-- **Quality Gate 4 段階完全実施 pattern**: `/safe-refactor` → `/code-review high` → `Evaluator` → `Codex` の順で発動条件すべて該当する大規模 PR (13 files +3972 LOC) の reference ケース。各 Gate が独立に「実装側が見落とした検出」を返したため、4 段階すべての価値が確認された:
-  - safe-refactor: 0 件 (実装は既存 pattern と一貫)
-  - code-review high: 6 件 (CONFIRMED 4 + PLAUSIBLE 2、bug + perf + DRY)
-  - Evaluator: 5 件 (FAIL 4 + LOW 1、AC レベルの semantic gap)
-  - Codex: 3 件 (HIGH 2 + MEDIUM 1、production wiring の merge blocker)
-- **Codex セカンドオピニオンが production wiring 不在を merge blocker と判定**: 本 PR は当初「endpoint コードあるが wiring 未実装、PR 3e で wiring 追加」前提だったが、Codex の HIGH #1/#2 で「endpoint だけあって本番 404 は半端実装」と認定 → 本 PR 内で `factory.ts` + `index.ts` まで含めて完結。Phase 3 PR 分割粒度の再定義 (PR 3c は endpoint だけでなく production wiring まで含む) が今後の参考に。
-- **direnv exec . bash -c 'git push ...'**: catchup で Token User=sasakisystem0801-source 表示時の反射対応。Session 53/54/55/56 と 4 連続で発生、安定運用 pattern として定着。
+1. **業務スーパー管理者への返信送付** (Session 52 から継続中) — Phase 3 完結を共有し、cutover 開始の判断材料を提供
+2. **`Cleanup Orphan Auth Users` workflow_dispatch 手動実行** (孤児 Auth 3 件掃除、番号単位認可必要)
+3. **`Deploy to Cloud Run` 状況確認** (PR #515 merge 後 in_progress で離脱、本セッション handoff 時点未完了)
+4. **PR 3e cutover 開始判断** — `docs/runbook/dxcollege-progress-report-cutover.md` Step 0a/0b の Cloud Scheduler + TTL Policy 作成認可
+5. **Phase 4 OQ 15 件の impl-plan 反映可否判断** — `docs/specs/` 配下に Phase 4 spec 起票、優先度設定、着手順
+6. **AC-PR-20 Retry-After 対応方針** (本 PR 内 / Phase 4 / 仕様改訂、Session 56 から継続)
 
 ---
 
-## 次セッション着手判断のためのチェックリスト
+## 次のアクション
 
-- [ ] `git log --oneline -5` で `0e96106 feat(phase-3c): ... (#512)` が main に存在
-- [ ] `gh issue list --state open` で active 0 / postponed 4 を確認
-- [ ] `gh run list --branch main --limit 5` で Deploy to Cloud Run の最終結果確認 (本セッション handoff 時点で in_progress、3m26s 経過)
-- [ ] PR 3d 着手前に `docs/specs/2026-06-01-progress-report-dispatch-impl-plan.md` §PR 3d を読み返し、`progressReport` settings PUT バリデーション + FE 新セクションの設計確認
-- [ ] PR 3d は ~550 LOC で 5+ ファイル + 新機能なら **Evaluator 分離プロトコル発動**、3+ ファイルなら `/code-review` 適用、200+ 行なら `/codex review` 併用 (Session 56 と同 Quality Gate workflow)
-- [ ] Phase 4 OQ 7 件は次セッション着手時 or 別 OQ レビュー PR で impl-plan 反映を開発者と相談
+1. 開発者の指示に応じて A (cutover 開始認可) / B (Phase 4 OQ 整理着手) / C (業務スーパー管理者連絡) / D (別タスク) のいずれか
+2. cutover 着手時は runbook §Step 0a → 番号単位明示認可 → gcloud コマンド実行
+3. Phase 4 OQ 着手時は #1-15 から優先度判定 → 1 OQ 1 PR の方針で順次
+4. postponed Issue 4 件 (#274 / #275 / #276 / #405) は明示指示なき限り着手不可
+
+Phase 3 (進捗レポート定期自動配信) は本セッションで実装計画通り完結。次セッションは Phase 4 着手判断 or cutover 支援 or 別フェーズ着手のいずれか。
