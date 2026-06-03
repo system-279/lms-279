@@ -17,19 +17,33 @@ import type {
   CompletionNotification,
   CompletionNotificationStatus,
   DispatchAuditLog,
+  DispatchLane,
+  DispatchLaneLock,
   DispatchRun,
   DispatchRunStatus,
   DispatchSettings,
+  ProgressReportClaimOutcome,
+  ProgressReportRecipient,
+  ProgressReportRecipientStatus,
   ReservationOutcome,
 } from "@lms-279/shared-types";
 
 import type {
+  AbortLaneLockInput,
+  AcquireLaneLockInput,
+  AcquireLaneLockOutcome,
   AcquireRunLockInput,
   AcquireRunLockOutcome,
   AppendAuditLogInput,
+  ClaimProgressRecipientInput,
+  CompleteLaneLockInput,
   DispatchStorage,
+  GetProgressRecipientInput,
   MarkFailedPermanentInput,
+  MarkProgressRecipientFailedInput,
+  MarkProgressRecipientSentInput,
   MarkSentInput,
+  PromotePendingToManualReviewInput,
   ReserveCompletionNotificationInput,
   UpdateDispatchSettingsInput,
   UpdateDispatchSettingsOutcome,
@@ -49,11 +63,25 @@ function nkey(tenantId: string, userId: string): NotificationKey {
   return `${tenantId}${KEY_SEPARATOR}${userId}`;
 }
 
+/**
+ * progress_report_sends の compound key 生成 (tenantId|occurrenceId|userId)。
+ * Firestore impl の doc id (`${occurrenceId}__${userId}`) と異なり tenantId も含む
+ * (InMemory では tenant subcollection に相当する分離が無いため key で表現)。
+ */
+type ProgressRecipientKey = string;
+function pkey(tenantId: string, occurrenceId: string, userId: string): ProgressRecipientKey {
+  return `${tenantId}${KEY_SEPARATOR}${occurrenceId}${KEY_SEPARATOR}${userId}`;
+}
+
 export class InMemoryDispatchStorage implements DispatchStorage {
   private notifications = new Map<NotificationKey, CompletionNotification>();
   private runs = new Map<string, DispatchRun>();
   private auditLogs: DispatchAuditLog[] = [];
   private settings: DispatchSettings | null = null;
+  /** Phase 3 ADR-039 D-4: super_dispatch_lane_locks/{laneId} */
+  private laneLocks = new Map<DispatchLane, DispatchLaneLock>();
+  /** Phase 3 ADR-039 D-3: tenants/{tid}/progress_report_sends/{occurrenceId}__{userId} */
+  private progressRecipients = new Map<ProgressRecipientKey, ProgressReportRecipient>();
 
   // テスト用クリアメソッド (production には呼ばない)
   __resetForTest(): void {
@@ -61,6 +89,8 @@ export class InMemoryDispatchStorage implements DispatchStorage {
     this.runs.clear();
     this.auditLogs = [];
     this.settings = null;
+    this.laneLocks.clear();
+    this.progressRecipients.clear();
   }
 
   /** テスト用 settings setter (Phase 5 で PUT API 経由のメソッドに置き換える) */
@@ -88,6 +118,51 @@ export class InMemoryDispatchStorage implements DispatchStorage {
         current: this.settings,
       };
     }
+
+    // patch semantics (ADR-039 HIGH-4): 既存 doc あり → undefined 既存値保持
+    if (this.settings) {
+      const next: DispatchSettings = {
+        ...this.settings,
+        ...(input.enabled !== undefined && { enabled: input.enabled }),
+        ...(input.scheduleDaysOfWeek !== undefined && {
+          scheduleDaysOfWeek: input.scheduleDaysOfWeek,
+        }),
+        ...(input.scheduleHourJst !== undefined && {
+          scheduleHourJst: input.scheduleHourJst,
+        }),
+        ...(input.signatureName !== undefined && {
+          signatureName: input.signatureName,
+        }),
+        ...(input.completionMessageBody !== undefined && {
+          completionMessageBody: input.completionMessageBody,
+        }),
+        ...(input.progressReport !== undefined && {
+          progressReport: input.progressReport,
+        }),
+        ...(input.senderEmail !== undefined && {
+          senderEmail: input.senderEmail,
+        }),
+        updatedAt: input.updatedAt,
+        updatedBy: input.updatedBy,
+        version: currentVersion + 1,
+      };
+      this.settings = next;
+      return { updated: true, settings: next };
+    }
+
+    // 初回 create: 必須 field 揃いを self-defense check (route 層で validate 済前提)
+    if (
+      input.enabled === undefined ||
+      input.scheduleDaysOfWeek === undefined ||
+      input.scheduleHourJst === undefined ||
+      input.signatureName === undefined ||
+      input.completionMessageBody === undefined ||
+      input.senderEmail === undefined
+    ) {
+      throw new Error(
+        "updateDispatchSettings: initial create requires all completion fields + senderEmail; got undefined for required field(s). Route handler must validate before calling.",
+      );
+    }
     const next: DispatchSettings = {
       enabled: input.enabled,
       scheduleDaysOfWeek: input.scheduleDaysOfWeek,
@@ -95,6 +170,9 @@ export class InMemoryDispatchStorage implements DispatchStorage {
       signatureName: input.signatureName,
       completionMessageBody: input.completionMessageBody,
       senderEmail: input.senderEmail,
+      ...(input.progressReport !== undefined && {
+        progressReport: input.progressReport,
+      }),
       updatedAt: input.updatedAt,
       updatedBy: input.updatedBy,
       version: currentVersion + 1,
@@ -251,19 +329,26 @@ export class InMemoryDispatchStorage implements DispatchStorage {
       return { acquired: false, reason: "duplicate_run_id" };
     }
 
-    // 直近 lease 内に running run が他にいれば拒否
+    // 直近 lease 内に **同 lane の** running run が他にいれば拒否 (Phase 3 ADR-039 D-1 反映)。
+    // 別 lane (completion vs progress) の running は無関係 (lane 並行起動を許可、
+    // 各 lane 内の重複は `acquireLaneLock` 側で防ぐ)。
+    // 既存 doc / input で laneId 欠落の場合は "completion" 扱い (後方互換規約)。
     const nowMs = Date.parse(input.triggeredAt);
+    const inputLaneId: DispatchLane = input.laneId ?? "completion";
     for (const run of this.runs.values()) {
-      if (
-        run.status === "running" &&
-        Date.parse(run.leaseExpiresAt) > nowMs
-      ) {
+      if (run.status !== "running") continue;
+      const existingLaneId: DispatchLane = run.laneId ?? "completion";
+      if (existingLaneId !== inputLaneId) continue; // 別 lane は排他対象外
+      if (Date.parse(run.leaseExpiresAt) > nowMs) {
         return { acquired: false, reason: "another_run_active" };
       }
     }
 
     const newRun: DispatchRun = {
       runId: input.runId,
+      // Phase 3: optional field は明示的に指定された時のみ載せる (undefined を上書きしない)
+      ...(input.laneId !== undefined && { laneId: input.laneId }),
+      ...(input.occurrenceId !== undefined && { occurrenceId: input.occurrenceId }),
       triggeredAt: input.triggeredAt,
       status: "running",
       leaseExpiresAt: input.leaseExpiresAt,
@@ -350,6 +435,238 @@ export class InMemoryDispatchStorage implements DispatchStorage {
       return true;
     });
   }
+
+  // ===================================================================
+  // Lane lock (Phase 3, ADR-039 D-4)
+  // ===================================================================
+
+  async acquireLaneLock(
+    input: AcquireLaneLockInput,
+  ): Promise<AcquireLaneLockOutcome> {
+    // read-modify-write は await を挟まず atomic (Node.js single-threaded を活用)
+    const existing = this.laneLocks.get(input.laneId);
+    const nowMs = Date.parse(input.now);
+
+    if (existing && Date.parse(existing.leaseExpiresAt) > nowMs) {
+      // lease 期限内: 他 run 保持中
+      return {
+        acquired: false,
+        reason: "lane_lock_held_by_other_run",
+        currentLock: { ...existing },
+      };
+    }
+
+    // 既存 lock なし or lease 切れ → 新規取得 (lease 切れの場合は上書き update)
+    const newLock: DispatchLaneLock = {
+      laneId: input.laneId,
+      ownerRunId: input.ownerRunId,
+      ...(input.occurrenceId !== undefined && {
+        occurrenceId: input.occurrenceId,
+      }),
+      leaseExpiresAt: input.leaseExpiresAt,
+      acquiredAt: input.now,
+      updatedAt: input.now,
+    };
+    this.laneLocks.set(input.laneId, newLock);
+    return { acquired: true, lock: { ...newLock } };
+  }
+
+  async completeLaneLock(input: CompleteLaneLockInput): Promise<void> {
+    // ownerRunId 不一致なら no-op (古い run が新 lock を消さない、Codex MEDIUM 反映)
+    const existing = this.laneLocks.get(input.laneId);
+    if (!existing || existing.ownerRunId !== input.ownerRunId) {
+      return;
+    }
+    this.laneLocks.delete(input.laneId);
+  }
+
+  async abortLaneLock(input: AbortLaneLockInput): Promise<void> {
+    // ownerRunId 不一致なら no-op (completeLaneLock と同じ契約)
+    const existing = this.laneLocks.get(input.laneId);
+    if (!existing || existing.ownerRunId !== input.ownerRunId) {
+      return;
+    }
+    this.laneLocks.delete(input.laneId);
+    // abortedReason は本 InMemory impl では state に残さない (caller が audit に記録する想定)
+    void input.abortedReason;
+  }
+
+  // ===================================================================
+  // Progress recipient state machine (Phase 3, ADR-039 D-3)
+  // ===================================================================
+
+  async tryClaimProgressRecipient(
+    input: ClaimProgressRecipientInput,
+  ): Promise<ProgressReportClaimOutcome> {
+    const { tenantId, userId, occurrenceId, runId, now, leaseExpiresAt, ttlExpireAt } = input;
+    const key = pkey(tenantId, occurrenceId, userId);
+    const existing = this.progressRecipients.get(key);
+
+    // 既存 doc なし → 新規 create (await を挟まず atomic)
+    if (!existing) {
+      const claimed: ProgressReportRecipient = {
+        occurrenceId,
+        runId,
+        userId,
+        status: "pending",
+        claimedAt: now,
+        leaseExpiresAt,
+        sentAt: null,
+        messageId: null,
+        pdfSizeBytes: null,
+        failedAt: null,
+        errorCode: null,
+        errorMessage: null,
+        promotedAt: null,
+        // PII hash は markSent 時点で確定する (完了通知レーンと同 pattern)
+        recipientToHash: "",
+        recipientCcHashes: [],
+        ttlExpireAt,
+      };
+      this.progressRecipients.set(key, claimed);
+      return { claimed: true };
+    }
+
+    // 既存 state による分岐
+    switch (existing.status) {
+      case "sent":
+        return { claimed: false, reason: "already_sent" };
+      case "failed":
+        return { claimed: false, reason: "already_failed" };
+      case "manual_review_required":
+        return { claimed: false, reason: "already_manual_review_required" };
+      case "pending": {
+        const leaseExpired = Date.parse(existing.leaseExpiresAt) <= Date.parse(now);
+        if (leaseExpired) {
+          // pending lease 切れ → manual_review_required に降格 (AC-PR-07)
+          this.progressRecipients.set(key, {
+            ...existing,
+            status: "manual_review_required",
+            promotedAt: now,
+          });
+          return {
+            claimed: false,
+            reason: "pending_lease_expired_promoted_to_manual_review",
+          };
+        }
+        return { claimed: false, reason: "currently_pending_by_other_worker" };
+      }
+      default: {
+        // 型網羅性チェック (将来 status 追加時の早期検出)
+        const _exhaustive: never = existing.status;
+        throw new Error(
+          `Unhandled progress recipient status: ${String(_exhaustive)}`,
+        );
+      }
+    }
+  }
+
+  async markProgressRecipientSent(
+    input: MarkProgressRecipientSentInput,
+  ): Promise<void> {
+    const key = pkey(input.tenantId, input.occurrenceId, input.userId);
+    const existing = this.progressRecipients.get(key);
+    if (!existing) {
+      throw new Error(
+        `markProgressRecipientSent: no recipient for ${key} (caller must claim first)`,
+      );
+    }
+    // 三者一致 precondition (Codex HIGH-2): status=pending かつ occurrenceId/runId 一致
+    if (existing.status !== "pending") {
+      throw new Error(
+        `markProgressRecipientSent: status must be "pending" but was "${existing.status}" for ${key}`,
+      );
+    }
+    if (existing.occurrenceId !== input.occurrenceId) {
+      throw new Error(
+        `markProgressRecipientSent: occurrenceId mismatch (expected="${existing.occurrenceId}", got="${input.occurrenceId}") for ${key}`,
+      );
+    }
+    if (existing.runId !== input.runId) {
+      throw new Error(
+        `markProgressRecipientSent: runId mismatch (expected="${existing.runId}", got="${input.runId}") for ${key}`,
+      );
+    }
+    this.progressRecipients.set(key, {
+      ...existing,
+      status: "sent",
+      sentAt: input.sentAt,
+      messageId: input.messageId,
+      pdfSizeBytes: input.pdfSizeBytes,
+      recipientToHash: input.recipientToHash,
+      recipientCcHashes: input.recipientCcHashes,
+    });
+  }
+
+  async markProgressRecipientFailed(
+    input: MarkProgressRecipientFailedInput,
+  ): Promise<void> {
+    const key = pkey(input.tenantId, input.occurrenceId, input.userId);
+    const existing = this.progressRecipients.get(key);
+    if (!existing) {
+      throw new Error(
+        `markProgressRecipientFailed: no recipient for ${key} (caller must claim first)`,
+      );
+    }
+    // 三者一致 precondition (markProgressRecipientSent と同じ契約)
+    if (existing.status !== "pending") {
+      throw new Error(
+        `markProgressRecipientFailed: status must be "pending" but was "${existing.status}" for ${key}`,
+      );
+    }
+    if (existing.occurrenceId !== input.occurrenceId) {
+      throw new Error(
+        `markProgressRecipientFailed: occurrenceId mismatch (expected="${existing.occurrenceId}", got="${input.occurrenceId}") for ${key}`,
+      );
+    }
+    if (existing.runId !== input.runId) {
+      throw new Error(
+        `markProgressRecipientFailed: runId mismatch (expected="${existing.runId}", got="${input.runId}") for ${key}`,
+      );
+    }
+    this.progressRecipients.set(key, {
+      ...existing,
+      status: "failed",
+      failedAt: input.failedAt,
+      errorCode: input.errorCode,
+      errorMessage: input.errorMessage,
+      ...(input.recipientToHash !== undefined && {
+        recipientToHash: input.recipientToHash,
+      }),
+      ...(input.recipientCcHashes !== undefined && {
+        recipientCcHashes: input.recipientCcHashes,
+      }),
+    });
+  }
+
+  async promotePendingToManualReview(
+    input: PromotePendingToManualReviewInput,
+  ): Promise<void> {
+    const key = pkey(input.tenantId, input.occurrenceId, input.userId);
+    const existing = this.progressRecipients.get(key);
+    if (!existing) {
+      throw new Error(
+        `promotePendingToManualReview: no recipient for ${key}`,
+      );
+    }
+    if (existing.status !== "pending") {
+      throw new Error(
+        `promotePendingToManualReview: status must be "pending" but was "${existing.status}" for ${key}`,
+      );
+    }
+    this.progressRecipients.set(key, {
+      ...existing,
+      status: "manual_review_required",
+      promotedAt: input.promotedAt,
+    });
+  }
+
+  async getProgressRecipient(
+    input: GetProgressRecipientInput,
+  ): Promise<ProgressReportRecipient | null> {
+    const key = pkey(input.tenantId, input.occurrenceId, input.userId);
+    return this.progressRecipients.get(key) ?? null;
+  }
 }
 
 // 型網羅性チェック (CompletionNotificationStatus 追加時のコンパイルエラー検出)
@@ -368,3 +685,12 @@ const _runStatusCoverage: Record<DispatchRunStatus, true> = {
   aborted: true,
 };
 void _runStatusCoverage;
+
+// Phase 3 ADR-039 D-3: ProgressReportRecipientStatus の網羅性チェック
+const _progressRecipientStatusCoverage: Record<ProgressReportRecipientStatus, true> = {
+  pending: true,
+  sent: true,
+  failed: true,
+  manual_review_required: true,
+};
+void _progressRecipientStatusCoverage;

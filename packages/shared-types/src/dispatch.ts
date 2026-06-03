@@ -79,28 +79,37 @@ export interface ProgressReportSettings {
 export type GetDispatchSettingsResponse = DispatchSettings;
 
 /**
- * 設定更新リクエスト (version 不一致で 409)。
+ * 設定更新リクエスト (PUT は patch semantics、ADR-039 HIGH-4 反映)。
  *
- * DispatchSettings から派生 (Pick) し、サーバー側で設定する senderEmail /
- * updatedAt / updatedBy は除外する。version は楽観的ロック用に含める。
- * DispatchSettings に新規 field を追加した際は、本 Pick にも追加するか
- * 自動的に PutRequest 対象外として扱うかを意識的に判断する。
+ * 全 settings field は optional (undefined で既存値保持、storage 層で merge)。
+ * version のみ必須 (楽観的ロック、doc 未作成時は 0)。
+ *
+ * - FE は always-send-all 戦略で完了通知関連 field を毎回送信し、旧 UI 経由での
+ *   意図しないフィールド消失を防ぐ
+ * - progressReport は新規追加 field のため、旧 UI 由来の PUT (progressReport 欠落)
+ *   でも既存値が消えない (HIGH-4 の本質)
+ * - 初回 create 時は route 層で「completion 関連 5 field と senderEmail が揃っているか」
+ *   をバリデーション (storage 層では未指定 field をそのまま undefined として merge)
+ *
+ * Codex review (Plan stage thread 019e8a8d) MEDIUM-M3 反映:
+ *   patch semantics と言いつつ Pick のままだと型上 completion fields が必須となり
+ *   T5 (UpdateDispatchSettingsInput を optional 化) と型矛盾する。`Partial<Pick<...>>`
+ *   で全 field optional 化 + version のみ必須に修正。
  */
-/**
- * PUT は patch semantics (ADR-039 HIGH-4 反映): storage 層で未指定 field を既存値で保持。
- * FE は always-send-all 戦略で送信し、旧 UI 経由での意図しないフィールド消失を防ぐ。
- * progressReport を含めない PUT で既存 progressReport は不変。
- */
-export type PutDispatchSettingsRequest = Pick<
-  DispatchSettings,
-  | "enabled"
-  | "scheduleDaysOfWeek"
-  | "scheduleHourJst"
-  | "signatureName"
-  | "completionMessageBody"
-  | "progressReport"
-  | "version"
->;
+export type PutDispatchSettingsRequest = Partial<
+  Pick<
+    DispatchSettings,
+    | "enabled"
+    | "scheduleDaysOfWeek"
+    | "scheduleHourJst"
+    | "signatureName"
+    | "completionMessageBody"
+    | "progressReport"
+  >
+> & {
+  /** 楽観的ロック (必須): doc 未作成時は 0 を期待値とする */
+  version: number;
+};
 
 export type DispatchSettingsErrorCode =
   | "invalid_schedule_days"

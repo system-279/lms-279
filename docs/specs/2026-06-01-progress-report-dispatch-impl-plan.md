@@ -72,7 +72,7 @@
 ### 機能要件
 - **AC-PR-01** 基本配信: 設定 ON + schedule 一致 + active 受講者有 → 受講者 (To) + テナント担当者 (CC) に進捗レポート (PDF 添付) 送信
 - **AC-PR-02** 100% 完了者除外 → skip + `user_skipped_completed` audit
-- **AC-PR-03** 受講中フィルタ: 退会 / 期限切れ / 0% / 非 student / 非 active tenant 全 skip
+- **AC-PR-03** 受講中フィルタ (Plan A 4 軸、ADR-039 D-5 改訂): 期限切れ / 0% / 非 student / 非 active tenant 全 skip (退会判定は Firestore schema 不在のため将来 User schema 拡張 PR で対応)
 - **AC-PR-04** `progressReportEnabled=false` テナント全件 skip
 - **AC-PR-05** `progressReport.enabled=false` → no-op
 
