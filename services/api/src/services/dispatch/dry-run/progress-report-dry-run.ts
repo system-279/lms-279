@@ -54,7 +54,11 @@ export const PDF_SIZE_KB_RANGE = { min: 150, typical: 350, max: 1200 };
 
 /**
  * 警告 logger inject。CLI 経由では console.error、HTTP endpoint 経由では
- * 構造化ログ、test では noop を渡せる。
+ * 構造化ログ (`utils/logger.ts`)、test では noop を渡せる。
+ *
+ * Phase 4 α-7 code-review F4 反映: HTTP endpoint 経由でも tenant_doc_not_found
+ * WARN が Cloud Logging に出るよう、route 層で構造化 logger を inject する。
+ * NOOP fallback は test 専用とし、production 経路では必ず logger を渡す。
  */
 export interface ProgressDryRunLogger {
   warnTenantDocNotFound(tenantId: string): void;
@@ -75,6 +79,23 @@ export const CONSOLE_PROGRESS_DRY_RUN_LOGGER: ProgressDryRunLogger = {
     );
   },
 };
+
+/**
+ * 構造化 logger (`utils/logger.ts`) を adapter として包む実装 (HTTP endpoint default)。
+ * Cloud Logging に WARNING severity + tenantId メタデータ付きで出力される。
+ */
+export function createStructuredProgressDryRunLogger(structured: {
+  warn(message: string, metadata?: Record<string, unknown>): void;
+}): ProgressDryRunLogger {
+  return {
+    warnTenantDocNotFound: (tenantId) => {
+      structured.warn(
+        "dispatch.dry_run.tenant_doc_not_found: tenants/{tenantId} doc 不在、subcollection 孤児疑い",
+        { tenantId, lane: "progress" },
+      );
+    },
+  };
+}
 
 /**
  * `runProgressReportDryRun` の入力。
@@ -134,6 +155,7 @@ export async function runProgressReportDryRun(
         candidateCount: 0,
         invalidEmailCount: 0,
         completedCount: 0,
+        ineligibleCount: 0,
         wouldSendCount: 0,
         ccCount: 0,
       });
@@ -148,6 +170,7 @@ export async function runProgressReportDryRun(
         candidateCount: 0,
         invalidEmailCount: 0,
         completedCount: 0,
+        ineligibleCount: 0,
         wouldSendCount: 0,
         ccCount: 0,
       });
@@ -162,6 +185,7 @@ export async function runProgressReportDryRun(
         candidateCount: 0,
         invalidEmailCount: 0,
         completedCount: 0,
+        ineligibleCount: 0,
         wouldSendCount: 0,
         ccCount: 0,
       });
@@ -188,6 +212,7 @@ export async function runProgressReportDryRun(
         candidateCount: 0,
         invalidEmailCount: 0,
         completedCount: 0,
+        ineligibleCount: 0,
         wouldSendCount: 0,
         ccCount,
       });
@@ -196,11 +221,12 @@ export async function runProgressReportDryRun(
 
     const users = await dataView.listProgressReportTargetUsers(now);
     // candidateCount は listProgressReportTargetUsers 戻り値全体を表す。
-    // 送信不能要因 (invalid email / 100% 完了) は内訳カウンタで切り分け、運用者が
-    // 「dry-run で見えない skip 規模」を取りこぼさないようにする。
+    // 送信不能要因 (invalid email / 100% 完了 / 不適格データ状態) は内訳カウンタで
+    // 切り分け、運用者が「dry-run で見えない skip 規模」を取りこぼさないようにする。
     const candidateCount = users.length;
     let invalidEmailCount = 0;
     let completedCount = 0;
+    let ineligibleCount = 0;
     let wouldSendCount = 0;
 
     for (const user of users) {
@@ -211,7 +237,12 @@ export async function runProgressReportDryRun(
         continue;
       }
 
-      // 100% 完了者は進捗レーン skip (AC-PR-02、完了通知レーンがカバー済)
+      // eligibility 判定 (本番 processProgressUser:439-468 と同分岐)
+      //  - eligible === true     → 100% 完了 = 完了通知レーンがカバー、当レーンは skip
+      //  - reason !== "not_completed" → 不適格データ (missing_progress 等)、本番も skip
+      //  - reason === "not_completed" のみ → 進捗レポート送信対象
+      // Phase 4 α-7 code-review F1 反映: 旧実装は eligible:false を全部 wouldSendCount
+      // に算入していたため preview が overestimate していた。本番との整合性を回復する。
       const progresses = await dataView.listCourseProgressForUser(user.id);
       const eligibility = evaluateCompletionEligibility(
         publishedCourses,
@@ -219,6 +250,10 @@ export async function runProgressReportDryRun(
       );
       if (eligibility.eligible) {
         completedCount += 1;
+        continue;
+      }
+      if (eligibility.reason !== "not_completed") {
+        ineligibleCount += 1;
         continue;
       }
 
@@ -232,6 +267,7 @@ export async function runProgressReportDryRun(
       candidateCount,
       invalidEmailCount,
       completedCount,
+      ineligibleCount,
       wouldSendCount,
       ccCount,
     });

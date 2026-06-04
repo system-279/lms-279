@@ -38,8 +38,12 @@ export const dispatchDryRunLimiter = rateLimit({
     const email = user?.email;
     if (email) return `email:${email.toLowerCase()}`;
     // super-admin auth 失敗時の fallback (本来は middleware が先に 403 で弾く想定)。
-    // ipKeyGenerator(ip, subnet?) helper で IPv6 prefix を考慮 (ERR_ERL_KEY_GEN_IPV6 回避)
-    return `ip:${ipKeyGenerator(req.ip ?? "")}`;
+    // Phase 4 α-7 code-review F6 反映: `req.ip ?? ""` を `ipKeyGenerator` に渡すと
+    // 空文字解釈で全 anonymous request が固定 key に collapse し self-DoS の温床に
+    // なる。fallback を fixed sentinel に切り替え、本来到達しないコード経路で
+    // 偶発的 collapse が起きないようにする。
+    const ip = req.ip;
+    return ip ? `ip:${ipKeyGenerator(ip)}` : "ip:anonymous-no-ip";
   },
   message: {
     error: {

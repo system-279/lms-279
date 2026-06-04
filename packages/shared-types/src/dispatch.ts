@@ -528,7 +528,14 @@ export interface ProgressDryRunTenantSummary {
   invalidEmailCount: number;
   /** 100% 完了者 (進捗レーンは skip 対象、AC-PR-02。完了通知レーンがカバー済) */
   completedCount: number;
-  /** 実送信対象数 = candidateCount - invalidEmailCount - completedCount */
+  /**
+   * eligibility が `not_completed` 以外の `false` 状態 (missing_progress /
+   * malformed_progress / malformed_course / lesson_count_mismatch /
+   * no_published_courses) で本番 processProgressUser が skip + audit する不適格者数。
+   * Phase 4 α-7 code-review F1 反映: 本番との挙動一致のため dry-run でも分離計上。
+   */
+  ineligibleCount: number;
+  /** 実送信対象数 = candidateCount - invalidEmailCount - completedCount - ineligibleCount */
   wouldSendCount: number;
   /** dedup 後の CC 件数 (ownerEmail + notificationCcEmails) */
   ccCount: number;
@@ -594,6 +601,13 @@ export interface CompletionDryRunTenantSummary {
   skipReason?: CompletionDryRunSkipReason;
   usersScanned: number;
   eligibleCount: number;
+  /**
+   * email が cc-email-validator で reject された user 数 (送信不能)。
+   * Phase 4 α-7 code-review F8 反映: ProgressDryRunTenantSummary との対称性を回復し、
+   * cutover 認可で「想定 N 名のうち M 名が malformed email で silent skip される」事象を
+   * preview 段階で可視化する。
+   */
+  invalidEmailCount: number;
 }
 
 /** 完了通知 dry-run の戻り値。`lane: "completion"` で discriminated union のタグ化。 */
@@ -606,7 +620,12 @@ export interface CompletionDryRunResult {
     scheduleDaysOfWeek: number[];
     scheduleHourJst: number;
     signatureName: string;
-    completionMessageBodyLength: number;
+    /**
+     * Phase 4 α-7 code-review F3 反映: PutDispatchSettingsRequest の Partial 化
+     * (patch semantics) で completionMessageBody が undefined 状態でも 500 を起こさない
+     * よう null 許容に拡張。`null` は「doc は存在するが本文未設定」を表す。
+     */
+    completionMessageBodyLength: number | null;
   } | null;
   tenantsScanned: number;
   tenantsSummary: CompletionDryRunTenantSummary[];

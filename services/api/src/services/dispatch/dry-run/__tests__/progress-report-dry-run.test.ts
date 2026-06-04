@@ -14,12 +14,10 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import type { DispatchSettings } from "@lms-279/shared-types";
 
 import { InMemoryDispatchStorage } from "../../in-memory-dispatch-storage.js";
 import {
   InMemoryTenantDataLoader,
-  type InMemoryTenantFixture,
   type TenantDataLoader,
   type DispatchTenantDataView,
 } from "../../tenant-data-loader.js";
@@ -31,59 +29,13 @@ import {
   SCALE_TRIGGER_THRESHOLD,
   PDF_SIZE_KB_RANGE,
 } from "../progress-report-dry-run.js";
-
-// ============================================================
-// fixture / helper
-// ============================================================
-
-const NOW = new Date("2026-06-03T00:00:00.000Z");
-
-function makeSettings(partial: Partial<DispatchSettings> = {}): DispatchSettings {
-  return {
-    enabled: true,
-    scheduleDaysOfWeek: [1, 4],
-    scheduleHourJst: 9,
-    signatureName: "DXcollege運営スタッフ",
-    completionMessageBody: "受講お疲れ様でした。",
-    senderEmail: "dxcollege@279279.net",
-    updatedAt: "2026-05-20T00:00:00.000Z",
-    updatedBy: "admin@279279.net",
-    version: 1,
-    progressReport: {
-      enabled: false,
-      scheduleDaysOfWeek: [1],
-      scheduleHourJst: 10,
-    },
-    ...partial,
-  };
-}
-
-function makeFixture(
-  partial: Partial<InMemoryTenantFixture> = {},
-): InMemoryTenantFixture {
-  return {
-    publishedCourses: [{ id: "c1", lessonOrder: ["l1", "l2", "l3"] }],
-    users: [],
-    courseProgresses: new Map(),
-    ccConfig: null,
-    info: { active: true, progressReportEnabled: true },
-    ...partial,
-  };
-}
-
-/** progressRatio = 1/3 ≈ 33% の進捗 (eligibility false、対象) */
-function partialProgress(courseId = "c1") {
-  return [
-    { courseId, isCompleted: false, totalLessons: 3, completedLessons: 1 },
-  ];
-}
-
-/** progressRatio = 3/3 = 100% の進捗 (eligibility true、skip 対象) */
-function completedProgress(courseId = "c1") {
-  return [
-    { courseId, isCompleted: true, totalLessons: 3, completedLessons: 3 },
-  ];
-}
+import {
+  FIXTURE_NOW as NOW,
+  makeSettings,
+  makeFixture,
+  partialProgress,
+  completedProgress,
+} from "./dry-run-fixtures.js";
 
 // ============================================================
 // tests
@@ -339,6 +291,88 @@ describe("runProgressReportDryRun", () => {
         candidateCount: 1,
         invalidEmailCount: 0,
         completedCount: 1,
+        ineligibleCount: 0,
+        wouldSendCount: 0,
+      });
+    });
+
+    it("should count user with missing courseProgress as ineligibleCount=1 (not wouldSendCount, F1 regression)", async () => {
+      // 進捗 user 既出 + 一部 course の courseProgress doc 不在 →
+      // evaluateCompletionEligibility は {eligible: false, reason: "missing_progress"}
+      // を返す。本番 processProgressUser は reason !== "not_completed" を skip するため、
+      // dry-run も ineligibleCount に計上して wouldSendCount overestimate を防ぐ
+      // (Phase 4 α-7 code-review F1)。
+      // ※ リアルシナリオ: ユーザーが c1 を完了した後に管理者が c2 を新規 publish
+      //    したケース。listProgressReportTargetUsers は ratio>=1% で候補化、
+      //    evaluateCompletionEligibility は publishedCourses 順走査で c1 (完了) →
+      //    c2 (progress doc 不在) で `missing_progress` reason を返す。
+      const storage = new InMemoryDispatchStorage();
+      const loader = new InMemoryTenantDataLoader();
+      const courseProgresses = new Map<
+        string,
+        { courseId: string; isCompleted: boolean; totalLessons: number; completedLessons: number }[]
+      >();
+      courseProgresses.set("u1", [
+        { courseId: "c1", isCompleted: true, totalLessons: 3, completedLessons: 3 },
+      ]);
+      loader.setTenant(
+        "t1",
+        makeFixture({
+          publishedCourses: [
+            { id: "c1", lessonOrder: ["l1", "l2", "l3"] },
+            { id: "c2", lessonOrder: ["l1", "l2", "l3"] },
+          ],
+          users: [{ id: "u1", email: "u1@example.com", name: "U1" }],
+          courseProgresses,
+        }),
+      );
+
+      const result = await runProgressReportDryRun({
+        storage,
+        loader,
+        now: NOW,
+      });
+
+      expect(result.tenantsSummary[0]).toMatchObject({
+        candidateCount: 1,
+        invalidEmailCount: 0,
+        completedCount: 0,
+        ineligibleCount: 1,
+        wouldSendCount: 0,
+      });
+      expect(result.totalWouldSendCount).toBe(0);
+    });
+
+    it("should count user with lesson_count_mismatch as ineligibleCount=1 (not wouldSendCount, F1 regression)", async () => {
+      // isCompleted:true だが totalLessons (2) !== course.lessonOrder.length (3)
+      // → eligibility = {eligible: false, reason: "lesson_count_mismatch"}
+      // 本番 processProgressUser は skip 扱い、dry-run も ineligibleCount に算入する。
+      const storage = new InMemoryDispatchStorage();
+      const loader = new InMemoryTenantDataLoader();
+      const courseProgresses = new Map<
+        string,
+        { courseId: string; isCompleted: boolean; totalLessons: number; completedLessons: number }[]
+      >();
+      courseProgresses.set("u1", [
+        { courseId: "c1", isCompleted: true, totalLessons: 2, completedLessons: 2 },
+      ]);
+      loader.setTenant(
+        "t1",
+        makeFixture({
+          users: [{ id: "u1", email: "u1@example.com", name: "U1" }],
+          courseProgresses,
+        }),
+      );
+
+      const result = await runProgressReportDryRun({
+        storage,
+        loader,
+        now: NOW,
+      });
+
+      expect(result.tenantsSummary[0]).toMatchObject({
+        candidateCount: 1,
+        ineligibleCount: 1,
         wouldSendCount: 0,
       });
     });

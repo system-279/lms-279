@@ -108,6 +108,7 @@ export async function runCompletionNotificationDryRun(
         skipReason: "tenant_completion_notification_disabled",
         usersScanned: 0,
         eligibleCount: 0,
+        invalidEmailCount: 0,
       });
       continue;
     }
@@ -121,17 +122,24 @@ export async function runCompletionNotificationDryRun(
         skipReason: "no_published_courses",
         usersScanned: 0,
         eligibleCount: 0,
+        invalidEmailCount: 0,
       });
       continue;
     }
 
     const users = await dataView.listNotificationTargetUsers();
     let eligibleCount = 0;
+    let invalidEmailCount = 0;
 
     for (const user of users) {
       // email 無効はどのみち送信されない (AC-19)
+      // Phase 4 α-7 code-review F8 反映: invalidEmailCount を独立計上し、
+      // 進捗レーンの ProgressDryRunTenantSummary.invalidEmailCount と対称化。
       const emailV = validateSingleEmail(user.email);
-      if (!emailV.ok) continue;
+      if (!emailV.ok) {
+        invalidEmailCount += 1;
+        continue;
+      }
 
       const progresses = await dataView.listCourseProgressForUser(user.id);
       const eligibility = evaluateCompletionEligibility(
@@ -182,6 +190,7 @@ export async function runCompletionNotificationDryRun(
       skipped: false,
       usersScanned: users.length,
       eligibleCount,
+      invalidEmailCount,
     });
   }
 
@@ -195,7 +204,14 @@ export async function runCompletionNotificationDryRun(
           scheduleDaysOfWeek: settings.scheduleDaysOfWeek,
           scheduleHourJst: settings.scheduleHourJst,
           signatureName: settings.signatureName,
-          completionMessageBodyLength: settings.completionMessageBody.length,
+          // Phase 4 α-7 code-review F3 反映: PutDispatchSettingsRequest が patch
+          // semantics (Partial) で completionMessageBody optional 化後、storage 経由で
+          // undefined が来た場合に `undefined.length` で TypeError を起こすのを防ぐ。
+          // `null` は「doc 存在 + 本文未設定」を表す。
+          completionMessageBodyLength:
+            typeof settings.completionMessageBody === "string"
+              ? settings.completionMessageBody.length
+              : null,
         }
       : null,
     tenantsScanned: tenantIds.length,

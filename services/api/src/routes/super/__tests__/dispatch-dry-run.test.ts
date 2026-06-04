@@ -18,28 +18,36 @@ import request from "supertest";
 import rateLimit from "express-rate-limit";
 import type {
   CompletionDryRunResult,
-  DispatchSettings,
   ProgressDryRunResult,
 } from "@lms-279/shared-types";
 
 import { InMemoryDispatchStorage } from "../../../services/dispatch/in-memory-dispatch-storage.js";
 import {
   InMemoryTenantDataLoader,
-  type InMemoryTenantFixture,
+  type TenantDataLoader,
+  type DispatchTenantDataView,
 } from "../../../services/dispatch/tenant-data-loader.js";
 import { createDispatchDryRunSingleFlightForTest } from "../../../services/dispatch/dry-run/single-flight.js";
+import type { ProgressDryRunLogger } from "../../../services/dispatch/dry-run/progress-report-dry-run.js";
 import { createDispatchDryRunRouter } from "../dispatch-dry-run.js";
+import {
+  FIXTURE_SENDER_EMAIL as SENDER,
+  makeSettings,
+  makeFixture,
+  partialProgress,
+  completedProgress,
+} from "../../../services/dispatch/dry-run/__tests__/dry-run-fixtures.js";
 
 const ADMIN_EMAIL = "admin@example.com";
-const SENDER = "dxcollege@279279.net";
 
 function makeApp(
   storage: InMemoryDispatchStorage,
-  loader: InMemoryTenantDataLoader,
+  loader: InMemoryTenantDataLoader | TenantDataLoader,
   opts: {
     enableLimiter?: boolean;
     limiterLimit?: number;
     singleFlight?: ReturnType<typeof createDispatchDryRunSingleFlightForTest>;
+    progressDryRunLogger?: ProgressDryRunLogger;
   } = {},
 ): express.Express {
   const app = express();
@@ -71,6 +79,10 @@ function makeApp(
       })
     : noopLimiter;
 
+  // Default test logger は noop で標準出力汚染を避ける。F4 regression test では
+  // 明示的に spy logger を渡して呼び出しを assert する。
+  const noopLogger: ProgressDryRunLogger = { warnTenantDocNotFound: () => {} };
+
   app.use(
     "/api/v2/super",
     createDispatchDryRunRouter({
@@ -80,56 +92,14 @@ function makeApp(
       limiter: testLimiter,
       singleFlight:
         opts.singleFlight ?? createDispatchDryRunSingleFlightForTest(),
+      progressDryRunLogger: opts.progressDryRunLogger ?? noopLogger,
     }),
   );
   return app;
 }
 
-function makeFixture(
-  partial: Partial<InMemoryTenantFixture> = {},
-): InMemoryTenantFixture {
-  return {
-    publishedCourses: [{ id: "c1", lessonOrder: ["l1", "l2", "l3"] }],
-    users: [],
-    courseProgresses: new Map(),
-    ccConfig: {
-      completionNotificationEnabled: true,
-      ownerEmail: null,
-      notificationCcEmails: [],
-    },
-    info: { active: true, progressReportEnabled: true },
-    ...partial,
-  };
-}
-
-function makeSettings(
-  partial: Partial<DispatchSettings> = {},
-): DispatchSettings {
-  return {
-    enabled: true,
-    scheduleDaysOfWeek: [1, 4],
-    scheduleHourJst: 9,
-    signatureName: "DXcollege運営スタッフ",
-    completionMessageBody: "受講お疲れ様でした。",
-    senderEmail: SENDER,
-    updatedAt: "2026-05-20T00:00:00.000Z",
-    updatedBy: "admin@279279.net",
-    version: 1,
-    ...partial,
-  };
-}
-
-function partialProgress(courseId = "c1") {
-  return [
-    { courseId, isCompleted: false, totalLessons: 3, completedLessons: 1 },
-  ];
-}
-
-function completedProgress(courseId = "c1") {
-  return [
-    { courseId, isCompleted: true, totalLessons: 3, completedLessons: 3 },
-  ];
-}
+// makeFixture / makeSettings / partialProgress / completedProgress は
+// services/api/src/services/dispatch/dry-run/__tests__/dry-run-fixtures.ts に集約 (safe-refactor M2)。
 
 // ============================================================
 // GET /super/dispatch/dry-run/progress
@@ -307,6 +277,47 @@ describe("single-flight integration", () => {
 });
 
 // ============================================================
+// logger injection (F4 silent-fail-paired-signal regression)
+// ============================================================
+
+describe("progressDryRunLogger integration (F4)", () => {
+  it("should invoke injected logger.warnTenantDocNotFound when tenant doc is missing", async () => {
+    // Phase 4 α-7 code-review F4: HTTP route が tenant_doc_not_found 警告を silent
+    // drop しないことを担保。CLI 経由は CONSOLE_PROGRESS_DRY_RUN_LOGGER で stderr に
+    // 出ていたが、HTTP route は NOOP に fallback していたため Cloud Logging に痕跡が
+    // 残らず CLAUDE.md silent-fail-paired-signal ルールに抵触していた。
+    const storage = new InMemoryDispatchStorage();
+    const ghostLoader: TenantDataLoader = {
+      async listAllTenantIds() {
+        return ["ghost"];
+      },
+      async getTenantInfo() {
+        return null;
+      },
+      async getTenantCcConfig() {
+        return null;
+      },
+      getTenantDataView(): DispatchTenantDataView {
+        throw new Error("not reachable: tenant_doc_not_found path should skip");
+      },
+    };
+    const warnSpy = vi.fn();
+    const app = makeApp(storage, ghostLoader, {
+      progressDryRunLogger: { warnTenantDocNotFound: warnSpy },
+    });
+
+    const res = await request(app).get(
+      "/api/v2/super/dispatch/dry-run/progress",
+    );
+
+    expect(res.status).toBe(200);
+    const body = res.body as ProgressDryRunResult;
+    expect(body.tenantsSummary[0]?.skipReason).toBe("tenant_doc_not_found");
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith("ghost");
+  });
+});
+
+// ============================================================
 // limiter integration (429)
 // ============================================================
 
@@ -328,6 +339,75 @@ describe("limiter integration (429)", () => {
     expect(r2.status).toBe(200);
     expect(r3.status).toBe(429);
     expect(r3.body.error?.code).toBe("RATE_LIMIT_EXCEEDED");
+  });
+
+  it("should share limiter budget across progress and completion lanes (F5 documented behavior)", async () => {
+    // Phase 4 α-7 code-review F5 / Evaluator エッジ-1 反映:
+    // 単一 dispatchDryRunLimiter instance を両 handler に貼っているため、10 req/min は
+    // **両 lane 合算** の budget となる仕様。本 test で lane 横断バジェット共有を
+    // pin し、将来 per-lane 化への refactor が入ったときに気付けるようにする。
+    const storage = new InMemoryDispatchStorage();
+    const loader = new InMemoryTenantDataLoader();
+    const app = makeApp(storage, loader, {
+      enableLimiter: true,
+      limiterLimit: 2,
+    });
+
+    const r1 = await request(app).get("/api/v2/super/dispatch/dry-run/progress");
+    const r2 = await request(app).get(
+      "/api/v2/super/dispatch/dry-run/completion",
+    );
+    const r3 = await request(app).get("/api/v2/super/dispatch/dry-run/progress");
+
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    expect(r3.status).toBe(429);
+    expect(r3.body.error?.code).toBe("RATE_LIMIT_EXCEEDED");
+  });
+});
+
+// ============================================================
+// AC-α7-05: super-admin auth 拒否時 403 (Evaluator 反映)
+// ============================================================
+
+describe("AC-α7-05 super-admin auth rejection", () => {
+  it("should return 403 when parent auth middleware rejects (no super-admin)", async () => {
+    // 親 router (本番 index.ts では `/api/v2/super` に superAdminAuthMiddleware を
+    // mount) が 403 を返す状況を模擬。createDispatchDryRunRouter は auth を内包
+    // しない設計なので、本テストは「auth middleware 不在なら handler に到達しない」
+    // 責務分離を pin する。AC-α7-05 の BE 側保証。
+    const storage = new InMemoryDispatchStorage();
+    const loader = new InMemoryTenantDataLoader();
+    const app = express();
+    app.use(express.json());
+    // 親で 403 を返す fake auth (super-admin 以外を一律拒否する形を模擬)
+    app.use("/api/v2/super", (_req, res) => {
+      res.status(403).json({
+        error: { code: "FORBIDDEN", message: "super-admin only" },
+      });
+    });
+    // 上の middleware で response が返るため、下の router には到達しない
+    app.use(
+      "/api/v2/super",
+      createDispatchDryRunRouter({
+        storage,
+        loader,
+        senderEmail: SENDER,
+        singleFlight: createDispatchDryRunSingleFlightForTest(),
+        progressDryRunLogger: { warnTenantDocNotFound: () => {} },
+      }),
+    );
+
+    const progressRes = await request(app).get(
+      "/api/v2/super/dispatch/dry-run/progress",
+    );
+    const completionRes = await request(app).get(
+      "/api/v2/super/dispatch/dry-run/completion",
+    );
+
+    expect(progressRes.status).toBe(403);
+    expect(completionRes.status).toBe(403);
+    expect(progressRes.body.error?.code).toBe("FORBIDDEN");
   });
 });
 

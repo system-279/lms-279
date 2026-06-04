@@ -15,71 +15,21 @@
 import { describe, it, expect } from "vitest";
 import type { DispatchSettings, CompletionNotification } from "@lms-279/shared-types";
 
-import { InMemoryDispatchStorage } from "../../in-memory-dispatch-storage.js";
-import {
-  InMemoryTenantDataLoader,
-  type InMemoryTenantFixture,
-} from "../../tenant-data-loader.js";
-import type { DispatchStorage } from "../../dispatch-storage.js";
+import { InMemoryTenantDataLoader } from "../../tenant-data-loader.js";
 import {
   runCompletionNotificationDryRun,
   DEFAULT_SIGNATURE,
   DEFAULT_BODY,
   type RunCompletionNotificationDryRunInput,
 } from "../completion-notification-dry-run.js";
-
-// ============================================================
-// fixture / helper
-// ============================================================
-
-const NOW = new Date("2026-06-03T00:00:00.000Z");
-const SENDER_EMAIL = "dxcollege@279279.net";
-
-function makeSettings(partial: Partial<DispatchSettings> = {}): DispatchSettings {
-  return {
-    enabled: true,
-    scheduleDaysOfWeek: [1, 4],
-    scheduleHourJst: 9,
-    signatureName: "DXcollege運営スタッフ",
-    completionMessageBody: "受講お疲れ様でした。",
-    senderEmail: SENDER_EMAIL,
-    updatedAt: "2026-05-20T00:00:00.000Z",
-    updatedBy: "admin@279279.net",
-    version: 1,
-    ...partial,
-  };
-}
-
-function makeFixture(
-  partial: Partial<InMemoryTenantFixture> = {},
-): InMemoryTenantFixture {
-  return {
-    publishedCourses: [{ id: "c1", lessonOrder: ["l1", "l2", "l3"] }],
-    users: [],
-    courseProgresses: new Map(),
-    ccConfig: {
-      completionNotificationEnabled: true,
-      ownerEmail: null,
-      notificationCcEmails: [],
-    },
-    info: { active: true, progressReportEnabled: false },
-    ...partial,
-  };
-}
-
-/** progressRatio = 3/3 = 100% の進捗 (eligibility true、対象) */
-function completedProgress(courseId = "c1") {
-  return [
-    { courseId, isCompleted: true, totalLessons: 3, completedLessons: 3 },
-  ];
-}
-
-/** progressRatio = 1/3 ≈ 33% の進捗 (eligibility false、skip 対象) */
-function partialProgress(courseId = "c1") {
-  return [
-    { courseId, isCompleted: false, totalLessons: 3, completedLessons: 1 },
-  ];
-}
+import {
+  FIXTURE_NOW as NOW,
+  FIXTURE_SENDER_EMAIL as SENDER_EMAIL,
+  makeSettings,
+  makeFixture,
+  partialProgress,
+  completedProgress,
+} from "./dry-run-fixtures.js";
 
 /**
  * test 用 storage stub。`getCompletionNotification` を inject 可能にし、
@@ -170,6 +120,25 @@ describe("runCompletionNotificationDryRun", () => {
         completionMessageBodyLength: "テスト本文 12 文字".length,
       });
     });
+
+    it("should return completionMessageBodyLength=null when settings.completionMessageBody is undefined (F3 regression)", async () => {
+      // Phase 4 α-7 code-review F3: PutDispatchSettingsRequest が patch semantics で
+      // 全 field optional になり、Firestore に partial doc が残ると storage 経由で
+      // `completionMessageBody: undefined` が返る。旧実装は `.length` で TypeError を
+      // throw して 500 → cutover preview が UI で死ぬ。null 許容で graceful fallback。
+      const settings = makeSettings();
+      // 型をすり抜けて undefined を強制 (storage roundtrip 経由のパーシャル状態を模倣)
+      delete (settings as { completionMessageBody?: string }).completionMessageBody;
+
+      const result = await runCompletionNotificationDryRun(
+        defaultInput({ storage: new TestDryRunStorage(settings) }),
+      );
+
+      expect(result.settingsLoaded).toBe(true);
+      expect(result.settingsSnapshot?.completionMessageBodyLength).toBeNull();
+      // signatureName 等の他フィールドは引き続き取れる (no throw)
+      expect(result.settingsSnapshot?.signatureName).toBe("DXcollege運営スタッフ");
+    });
   });
 
   describe("skip reasons (Codex AC-α7-07: 5 パス regression 強化)", () => {
@@ -227,7 +196,10 @@ describe("runCompletionNotificationDryRun", () => {
       });
     });
 
-    it("should reject invalid email and exclude from wouldNotify (not counted in eligibleCount)", async () => {
+    it("should reject invalid email and expose invalidEmailCount=1 (F8 regression)", async () => {
+      // Phase 4 α-7 code-review F8: 進捗レーンとの対称性回復のため、完了通知レーンでも
+      // invalidEmailCount を tenantsSummary で公開する。malformed email user は
+      // eligibleCount に含めず invalidEmailCount に独立計上する。
       const loader = new InMemoryTenantDataLoader();
       const courseProgresses = new Map<string, ReturnType<typeof completedProgress>>();
       courseProgresses.set("u-invalid", completedProgress());
@@ -247,6 +219,7 @@ describe("runCompletionNotificationDryRun", () => {
         skipped: false,
         usersScanned: 1,
         eligibleCount: 0,
+        invalidEmailCount: 1,
       });
       expect(result.wouldNotifyCount).toBe(0);
     });
