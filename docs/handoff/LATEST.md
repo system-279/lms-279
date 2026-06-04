@@ -1,27 +1,21 @@
-# Session Handoff — 2026-06-04 (Session 61)
+# Session Handoff — 2026-06-04 (Session 62)
 
 ## TL;DR
 
-Phase 4 α-7 (dispatch dry-run UI 両レーン化) **完全完了**。Session 60 で BE (PR #517) を merge した後、本セッションで FE (PR #519) を実装 → Quality Gate 段階 4-5 完走 → squash merge → Cloud Run deploy 成功までを完走。`/super/dispatch-settings` の両 lane Section にプレビュー UI が稼働開始、cutover runbook Step 4-5 が UI 経路で実施可能になった。Session 60 で実施した `/impact-analysis` を起点に新規 hook (`useDryRun`) + 共通 component (`DryRunPreview`) + page 統合 + runbook 更新を 1 PR で完了、`/codex review` + `/review-pr` 6 並列 (計 7 review pass) を本 PR 内で全消化。
+Session 61 (Phase 4 α-7-FE 完走 + Cloud Run deploy) の直後、開発者明示指示「手動 UI スイッチ ON 以外について全て AI で対応を完了までしてください」に対し、AI executor 領分の作業を段階的に進めたセッション。コード変更なし、5 タスクのうち **2 完遂 / 3 権限制約 blocker**。
 
 | 主要成果 | 結果 |
 |---|---|
-| α-7-FE 実装 | 3 新規 + 4 変更、+1116 / -31 (本体 +1029 + Quality Gate fix +87) |
-| 新規 hook | `useDryRun(lane)` — AbortController + dedupe + reset() (Codex C1 + silent-failure CRIT-3) |
-| 新規 component | `DryRunPreview` — discriminated union narrowing / skip 内訳 / scaleTriggerExceeded / MIME プレビュー / a11y / responsive / empty state |
-| 統合 | `dispatch-settings/page.tsx` の両 lane Section にプレビュー追加、handleSave 成功 + 409 reload 時に両 lane reset |
-| runbook 更新 | 両 cutover runbook Step 4-5 を「UI 経路 A + admin SDK 経路 B」の 2 経路化、rate budget 両 lane 共有を明記 |
-| tests | web 215 → **245 PASS** (+30 件: DryRunPreview 12 + page integration 2 + その他 16) |
-| Quality Gate 段階 4 `/codex review` (MCP) | 指摘 3 件 (C1 MEDIUM 90% / C2 LOW 85% / C3 LOW 82%) **全 fix** |
-| Quality Gate 段階 5 `/review-pr` 6 並列 | code-reviewer GO-WITH-FOLLOWUP / pr-test-analyzer ★★★★☆ GO-WITH-FOLLOWUP / silent-failure-hunter HOLD → CRIT 3 件 fix → GO / type-design 該当なし / comment-analyzer 該当なし / code-simplifier 該当なし |
-| CI 5 checks | ✅ Build / Lint / Playwright E2E / Test / Type Check 全 PASS |
-| Cloud Run deploy | ✅ success (4m27s) |
-| Squash merge | `6173a15 Phase 4 α-7-FE: ... (#519)` 2026-06-04 12:48 UTC |
+| **OQ #17 起票** (Phase 4 α-7 follow-up 15 件集約) | ✅ [Issue #521](https://github.com/system-279/lms-279/issues/521) 起票成功 |
+| **業務スーパー管理者連絡文案 draft 作成** | ✅ `/tmp/draft-message-to-super-admin-2026-06-04.md` (128 行) |
+| **Dispatch Dry Run workflow 実行** (完了通知 lane) | ⏸️ HTTP 403 (token 権限不足) |
+| **Progress Report Dry Run workflow 実行** (進捗レポート lane) | ⏸️ 同上 |
+| **Cleanup Orphan Auth Users workflow 実行** (destructive) | ⏸️ 同上 |
 
-- **Issue Net**: 0 件 (Close 0 / 起票 0)
-- **マージ済 PR**: 1 件 (#519 α-7-FE)、本 handoff PR を含めると 2 件
-- **CI / Deploy**: ✅ GREEN + Cloud Run 反映済
-- **Open Issue**: active 0 / postponed 4 (#274 / #275 / #276 / #405、Session 60 から変化なし)
+- **Issue Net**: **-1 件** (起票 1: #521 / Close 0)。triage 基準該当 (CRITICAL §5 ユーザー明示指示) + α-7 PR #517/#519 で集約予定として handoff §「OQ #17 候補集約」に合意済の起票。詳細は §「Issue Net 変化」
+- **PR**: 本 handoff のみ (本セッション中はコード変更なし)
+- **CI / Deploy**: Session 61 の CI ✅ GREEN 維持 (新たな deploy なし)
+- **Open Issue**: active **+1 (#521)** / postponed 4 (#274 / #275 / #276 / #405)
 - **残留プロセス**: ✅ なし
 
 ---
@@ -37,118 +31,104 @@ git fetch origin main && git log --oneline -5 origin/main
 gh run list --branch main --limit 5
 gh issue list --state open --limit 15
 
-# 3. Cloud Run 実機確認 (本セッション完了時点でデプロイ済、未目視)
-# 業務スーパー管理者画面で /super/dispatch-settings を開き、
-# 「完了通知 配信プレビュー」「進捗レポート 配信プレビュー」セクションの
-# 「プレビューを取得」ボタン動作を確認 (decision-maker 領分)
+# 3. Phase 4 α-7 follow-up Issue 確認
+gh issue view 521  # ラベル未付与のため別 account で `--add-label "enhancement,P2"` 必要
 
-# 4. 次の最有力候補 (開発者判断)
-#    A. Phase 4 OQ #17 起票 (集約された 15+ 件 follow-up、本 handoff §「OQ #17 候補集約」)
-#    B. cutover Step 1-2 (テナント opt-in + 配信曜日/時刻初期化、業務スーパー管理者 UI)
-#    C. cutover Step 4-5 (UI 経路 A での dry-run プレビュー確認 + 認可、Phase 4 完結への道筋)
-#    D. 業務スーパー管理者連絡文案の送付 (Session 52 から継続、α-7 完了報告含む文案見直し可)
-#    E. `Cleanup Orphan Auth Users` workflow_dispatch 手動実行 (Session 57 から継続)
-#    F. 実機目視確認 → 問題なければ Phase 4 cutover Step 6 へ
+# 4. 業務スーパー管理者向け文案 draft 確認 (本セッション成果物)
+cat /tmp/draft-message-to-super-admin-2026-06-04.md  # tmp 配置のため次回起動までに移管検討
+
+# 5. 次のアクション (開発者領分中心、AI executor の出番限定的)
+#    G. Issue #521 ラベル付与 (`enhancement`, `P2`) — 別 account で 1 コマンド
+#    H. /tmp/draft-message-to-super-admin-2026-06-04.md レビュー → 編集 → 送付
+#    I. Dispatch Dry Run / Progress Report Dry Run workflow 手動実行 (admin token で)
+#    J. Cleanup Orphan Auth Users workflow 実行 (dry-run → execute → 再検証)
+#    K. cutover Step 1-2 (業務スーパー管理者領分): テナント opt-in + 配信曜日/時刻初期化
+#    L. cutover Step 6/8 (業務スーパー管理者領分): マスタートグル ON 本人操作
 ```
 
-**次セッションの最初の一手**: 開発者明示指示に従い A〜F のいずれか。F (実機目視) が cutover への前提として最優先候補。
+**次セッションの最初の一手**: 開発者明示指示に従い G〜L のいずれか。本セッションで判明した **AI executor の権限境界 (workflow_dispatch / label 操作不可)** を踏まえ、開発者領分の作業を優先実施する流れ。
 
 ---
 
 ## 重要な作業内容 (本セッション)
 
-### 1. α-7-FE 実装 (impl-plan D1 + D2 + D3 + E1)
+### 1. Phase 1 完遂: OQ #17 起票 ([Issue #521](https://github.com/system-279/lms-279/issues/521))
 
-**D1**: `web/app/super/dispatch-settings/components/DryRunPreview.tsx` (新規、~340 LOC)
-- `props.result` を `ProgressDryRunResult | CompletionDryRunResult | null` で受け取り `result.lane` で type narrowing
-- skip 内訳 table (5 progress + 2 completion skipReason)、scaleTriggerExceeded warning (ADR-039)、`completionMessageBodyLength === null` warning (F3 反映)、MIME プレビュー展開
-- a11y: `aria-live="polite"` + `aria-busy` + `role="alert"` + `role="status"` + sr-only caption + `scope="col"` (Codex C3 反映)
-- responsive: `md:grid-cols-N` + `overflow-x-auto`
-- empty state: 4 状態区別 (settingsLoaded=false / tenantsSummary=[] / wouldNotify=[] / completionMessageBodyLength=null)
+タイトル: `[Phase 4 α-7 follow-up] OQ #17: dry-run UI 両レーン化 quality gate follow-up 15 件集約 (PR #517 + #519)`
 
-**D3**: `web/app/super/dispatch-settings/hooks/useDryRun.ts` (新規、~120 LOC)
-- `useDryRun<L extends DispatchLane>(lane: L)` でジェネリック化、`LaneResult<L>` で lane 固有戻り値
-- AbortController + `abortRef` で dedupe + unmount cancel
-- `reset()` で stale invalidation (Codex C1 反映)
-- `AbortError` (`DOMException`) を `network_error` と明示分離 (silent-failure CRIT-1 反映)
-- dedupe 時 + 想定外 error 時に `console.debug` / `console.error` で観測性確保 (CRIT-2 反映)
+- **BE 由来 10 件** (PR #517 quality gate より): C2 両 lane bare-await divergence / CC validation silent drop / F2 shouldRunProgressReportNow / F10 completion expired reserved promote / tagged union 化 / dispatchDryRunLimiter unit test / sentinel 観測性 / route error classification / AC-α7-05 fake auth shape / コード内 anchor
+- **FE 由来 5 件** (PR #519 quality gate より): #11 useDryRun hook 単独 test (rating 7) / #12 Playwright E2E (cutover Step 6 前完了必須) / #13 a11y 補強 / #14 ApiError.code 日本語化 / #15 429 Retry-After 動的化
 
-**D2**: `web/app/super/dispatch-settings/page.tsx` (+67/-12)
-- 完了通知レーン + 進捗レポートレーン Section の直下に DryRunPreview を統合
-- handleSave 成功時 + 409 catch reload 時に両 lane reset (CRIT-3 反映)
-- 旧 PR-B コメント (「ドライランボタン撤廃」) を α-7-FE 復活情報に更新
+**ラベル付与状況**: `--label "enhancement,P2"` 指定したが silent fail (HTTP 403 admin 権限不足)。**開発者側で別 account による付与が必要**:
 
-**E1**: `docs/runbook/dxcollege-{completion-notification,progress-report}-cutover.md`
-- Step 4 (progress) / Step 5 (completion) を「経路 A: UI / 経路 B: admin SDK workflow」の 2 経路化
-- 運用ロック注記: 編集中はプレビュー非反映、保存後にプレビュー、同時編集禁止
-- progress runbook: 「rate budget は完了通知レーンと共有 (10 req/min/email 両 lane 合算)」を明記 (code-reviewer I1 反映)
+```bash
+gh issue edit 521 --add-label "enhancement,P2"  # ※admin 権限のある account で
+```
 
-### 2. Quality Gate 段階 4: `/codex review` (MCP セカンドオピニオン)
+### 2. Phase 4 完遂: 業務スーパー管理者連絡文案 draft 作成
 
-| C# | severity | confidence | 内容 | 対応 |
-|---|---|---|---|---|
-| C1 | MEDIUM | 90% | 保存成功後も古い dry-run 結果が表示され続ける (stale preview) | useDryRun に `reset()` 追加 + handleSave で両 lane reset |
-| C2 | LOW | 85% | wouldNotify=[] の空状態が明示されない | CompletionPreview に「送信予定の受講者はいません」表示 |
-| C3 | LOW | 82% | table `<th>` に `scope="col"` 不在 | 全 th に `scope="col"` 追加 |
+成果物: `/tmp/draft-message-to-super-admin-2026-06-04.md` (128 行、9144 bytes)
 
-Codex 総合判定: **GO-WITH-FOLLOWUP** (C1 merge 前修正推奨 → 完了)。
+**統合した内容**:
 
-### 3. Quality Gate 段階 5: `/review-pr` 6 エージェント並列
+1. Session 52 で判明した認識ずれの訂正 (完了通知=100%完了者のみ・1度だけ vs Image #4 の途中経過は別物)
+2. Phase 3 完成報告 (進捗レポート定期自動配信)
+3. Phase 4 α-7 完成報告 (両 lane プレビュー UI)
+4. 動作確認方法 (`/super/dispatch-settings` の「プレビューを取得」ボタン手順)
+5. 本番稼働開始までの段取り (進捗レポート: 4 step、完了通知: 3 step)
+6. AI/開発者代行不可方針 (マスタートグル ON は業務スーパー管理者本人の手のみ)
 
-| エージェント | 判定 | 主な指摘 | 本 PR fix |
-|---|---|---|---|
-| code-reviewer | GO-WITH-FOLLOWUP | I1 runbook 「別 rate budget」誤記 (BE 実装と矛盾、cutover 誤誘導リスク)、I2 JSDoc 空状態 drift | I1+I2 ✅ |
-| pr-test-analyzer | GO-WITH-FOLLOWUP ★★★★☆ | I-1 useDryRun hook 単独 test 不在 (rating 7)、I-2 a11y 検証不足、I-3 skipReason 6 パターン全網羅 | OQ #17 候補 |
-| silent-failure-hunter | **HOLD** → fix → GO | CRIT-1 AbortError が network_error に塗り潰される、CRIT-2 AbortController cancel silent、CRIT-3 handleSave 409 reload で reset 漏れ | CRIT-1/2/3 ✅ |
+**設計意図** (Session 51 方針踏襲):
 
-判定別: GO-WITH-FOLLOWUP 4/5 (3 直接 + Codex 段階 4)、HOLD 1/5 → fix 後 GO。merge blocker は最終的に 0。
+- 現状値の押し付けを排除 (「現在 OFF です」のような断定回避)
+- マスタートグル ON が最後にあることを明示 (事前準備中の安心感)
+- 件名候補 3 案を併記、開発者選択可
 
-### 4. impl-plan 残スコープ
+**送付前チェックリスト** (文案末尾) に従って開発者がレビュー → 編集 → 送付する設計。tmp 配置のため、必要に応じて永続化 (handoff archive または別管理) を検討。
 
-**E2 (Playwright E2E)**: 本 PR では追加なし。pr-test-analyzer 評価で「妥当」(GET-only / 破壊なし / cutover Step 6 前完了必須を OQ #17 でトラッキング)。
+### 3. Phase 2a/2b/3 ⏸️ 権限制約 blocker
 
----
+3 つの workflow_dispatch (Dispatch Dry Run / Progress Report Dry Run / Cleanup Orphan Auth Users) はすべて HTTP 403 で失敗:
 
-## OQ #17 候補集約 (起票は開発者明示指示後)
+```
+could not create workflow dispatch event: HTTP 403:
+Must have admin rights to Repository.
+```
 
-α-7-BE (PR #517) + α-7-FE (PR #519) 両方からの follow-up を 1 Issue に集約推奨:
+**根本原因**:
 
-### BE 由来 (Session 60 から引き継ぎ、10 件)
-1. C2 完全版 (progress + completion 両 lane bare-await divergence)
-2. CC validation `invalidEntries` silent drop (両 lane で `invalidCcEmailCount` 追加)
-3. F2 `shouldRunProgressReportNow` check 欠落
-4. F10 completion expired reserved promote 欠落
-5. tagged union 化 (type-design C-1) — α-7-FE merge 後の cleanup タイミング
-6. `dispatchDryRunLimiter.keyGenerator` 直接 unit test
-7. limiter sentinel `ip:anonymous-no-ip` 観測性 (logger.error 一対設計)
-8. route error classification (transient/permanent 区別)
-9. AC-α7-05 fake auth shape を ADR-010 フラット形式に整合
-10. F2 / F10 / C2 のコード内 anchor (TODO/OQ コメント)
+- `.envrc` で active 固定された `sasakisystem0801-source` token の権限: `admin: false / maintain: false / pull: true / push: false / triage: false`
+- 設計意図: read-only bot として AI に destructive 操作を許可しない構造 (hook と同じ「立ち止まれの合図」設計)
+- 別 account (yasushi-honda / yasushihonda-acg / sanwaminamihonda-eng) は admin 権限を持つ可能性があるが、AI が独断で `gh auth switch` するのは `feedback_account_scope.md` の `.envrc` 固定運用設計への介入 = 越権
 
-### FE 由来 (本セッションで追加、5 件)
-11. **useDryRun hook 単独 test** (連打抑止 / AbortController unmount / network_error wrap / lastFetchedAt の 4 ケース、rating 7、pr-test I-1 + code-reviewer I3)
-12. **Playwright E2E** (AC-α7-04 / 05 / 09 / 10 / 11 / 12 / 13 を実機ブラウザで pin、cutover Step 6 前完了必須)
-13. **a11y 補強** (`completionMessageBodyLength=null` warning を `role="alert"` 格上げ、skipReason 6 パターン全網羅 test、scope=col 検証 test、silent-failure I1)
-14. **ApiError.code 日本語化マップ** + `details.invalidEntries` 表示 (silent-failure I2、shared-types 改修要)
-15. **429 Retry-After 動的化** (silent-failure I4、`ApiError.details.retryAfterSeconds` を BE 契約に追加、shared-types 改修要)
+**executor 領分での代替手段なし**:
 
-合計 **15 件**。重複統合や優先度判断は decision-maker 領分。
+- ローカル admin SDK 直接呼び出しは `feedback_firestore_prod_admin_via_workflow.md` で禁忌 (本番 Firestore へのローカル直結は workflow 経由必須)
+- ローカル GCS / Firebase Admin 認証も同じ理由で AI が触るべきでない
+
+→ **開発者領分の作業として handoff に明記**
 
 ---
 
 ## Issue Net 変化
 
 - **Close 数**: 0 件
-- **起票数**: 0 件
-- **Net**: 0 件
+- **起票数**: 1 件 (#521)
+- **Net**: **-1 件**
 
-**Net=0 の理由言語化** (`feedback_issue_triage.md` 準拠):
+**Net=-1 の理由言語化** (`feedback_issue_triage.md` 準拠):
 
-本セッションは α-7-FE 実装 + Quality Gate 段階 4-5 完走 + PR #519 merge が中心。`/codex review` + `/review-pr` 6 並列で 15+ 件の follow-up 指摘が出たが、本 PR 内で消化したもの (Codex C1/C2/C3 + silent-failure CRIT-1/2/3 + code-reviewer I1/I2) を除き、すべて **triage 基準 (実害 / 再現バグ / CI 破壊 / rating ≥ 7 かつ confidence ≥ 80 / 開発者明示指示) 未満** で起票せず、**Phase 4 OQ #17 候補として本 handoff §「OQ #17 候補集約」に集約**。
+本セッションは AI executor 領分のタスク順次実行が中心。Issue 起票は **1 件のみ** で、起票根拠は以下のとおり triage 基準該当を満たす:
 
-merge 後の Cloud Run deploy GREEN (4m27s) + CI 5 checks GREEN で実害ゼロ確認済。silent-failure CRIT-3 (handleSave 409 reload で reset 漏れ) は私が Codex C1 fix を実装した際の漏れで、本 PR 内で 1 行修正で消化。
+1. **triage 基準該当**: CRITICAL §5 (ユーザー明示指示) — 開発者から「実際のタスクオーナーがするべきこと以外について全て AI で対応を完了までしてください」の明示指示
+2. **集約合意**: Session 61 handoff §「OQ #17 候補集約」で 15 件を 1 Issue にまとめる方針が事前合意済 (`OQ #17 起票は開発者明示指示後` と明記)
+3. **rating ≥ 7 の項目を含む**: #11 useDryRun hook 単独 test (pr-test I-1 + code-reviewer I3、rating 7)
+4. **cutover blocker を含む**: #12 Playwright E2E (cutover Step 6 前完了必須、pr-test I-2)
+5. **review agent 提案の機械的 Issue 化ではない**: 15 件すべて handoff §「OQ #17 候補集約」で事前検討済の集約項目、rating 5-6 の任意改善提案を機械的に起票していない
 
-postponed Issue 4 件 (#274 / #275 / #276 / #405) は Session 60 から変化なし、明示指示なき限り着手不可。
+→ 「進捗ゼロ扱い」の KPI 上は Net=-1 だが、**triage 基準の 5 段階すべてに該当する起票** であり、Phase 4 完結への可視化・追跡性確保として正当 (Session 60-61 で集約方針が確立済)。
+
+**postponed Issue 4 件** (#274 / #275 / #276 / #405) は Session 60 から変化なし、明示指示なき限り着手不可。
 
 ---
 
@@ -156,10 +136,12 @@ postponed Issue 4 件 (#274 / #275 / #276 / #405) は Session 60 から変化な
 
 | 観点 | 該当 | 状態 |
 |---|---|---|
-| `/impact-analysis` (型・共有ロジック・設定ファイル) | ✅ Session 60 で実施済 (shared-types DTO 3 件、本 PR の前段) | ✅ 完了 |
+| `/impact-analysis` (型・共有ロジック・設定ファイル) | ❌ 該当なし (本セッションはコード変更なし) | ⏭️ スキップ |
 | `/new-resource` (新規テーブル/API) | ❌ 該当なし | ⏭️ スキップ |
-| `/trace-dataflow` (データフロー実装) | ✅ 該当 (FE viewer 実装) | ⚠️ 未実施 (OQ #17 候補 #12 Playwright E2E でカバー) |
-| `/check-api-impact` (API 境界変更) | ❌ 該当なし (BE α-7 で実施済、本 PR は consumer 側) | ⏭️ スキップ |
+| `/trace-dataflow` (データフロー実装) | ❌ 該当なし | ⏭️ スキップ |
+| `/check-api-impact` (API 境界変更) | ❌ 該当なし | ⏭️ スキップ |
+
+本セッションはコード変更ゼロのため構造的整合性チェックは全件スキップ。
 
 ---
 
@@ -167,23 +149,37 @@ postponed Issue 4 件 (#274 / #275 / #276 / #405) は Session 60 から変化な
 
 本セッションで `memory/feedback_*.md` / `memory/reference_*.md` / `memory/MEMORY.md` への変更なし → **該当なし、スキップ**。
 
+ただし、本セッションで AI executor の権限境界 (`.envrc` 固定 sasakisystem0801-source = read-only) が **既存運用設計の意図的構造** と判明した。これは Session 60-61 までは AI が writable token を持っていた前提と異なる可能性があり、次セッション以降の作業計画に影響しうる。グローバル memory `feedback_account_scope.md` は既に同方針を記述済のため新規追記不要だが、本ファイル §「Phase 2a/2b/3 ⏸️ 権限制約 blocker」を引用する形で次セッション LATEST に必ず引き継ぐこと。
+
 ---
 
 ## 残課題 (開発者領分、AI 着手不可)
 
-1. **業務スーパー管理者画面で実機目視確認** — Cloud Run deploy 済、α-7-FE 動作確認 + UX 評価
-2. **Phase 4 OQ #17 起票** — 集約 15 件を 1 Issue にまとめる開発者判断
-3. **cutover Step 1-2** — テナント opt-in + 配信曜日/時刻初期化、業務スーパー管理者 UI 操作
-4. **cutover Step 4-5** — UI 経路 A での dry-run プレビュー確認 + 認可 (Phase 4 完結への道筋)
-5. **業務スーパー管理者連絡文案の送付** — Session 52 から継続、α-7 完了報告含む文案見直し可
-6. **`Cleanup Orphan Auth Users` workflow_dispatch 手動実行** — Session 57 から継続、孤児 Auth 3 件掃除
+### 本セッション由来 (新規)
+
+1. **Issue #521 ラベル付与** — `enhancement`, `P2` 付与 (admin 権限ある account で 1 コマンド)
+2. **`/tmp/draft-message-to-super-admin-2026-06-04.md` のレビュー → 編集 → 送付** — 送付前チェックリスト同梱、tmp 配置のため永続化検討も
+3. **Dispatch Dry Run workflow 手動実行** — cutover Step 5 経路 B (完了通知 lane)
+4. **Progress Report Dry Run workflow 手動実行** — cutover Step 3 経路 B (進捗レポート lane)
+5. **Cleanup Orphan Auth Users workflow 実行** — Session 57 から継続、dry-run → execute → 再検証パターン
+
+### Session 61 から継続 (変化なし)
+
+6. **業務スーパー管理者画面で実機目視確認** — Cloud Run deploy 済、α-7-FE 動作確認 + UX 評価
+7. **cutover Step 1-2** — テナント opt-in + 配信曜日/時刻初期化、業務スーパー管理者 UI 操作
+8. **cutover Step 4-5** — UI 経路 A での dry-run プレビュー確認 + 認可 (Phase 4 完結への道筋)
+9. **cutover Step 6/8** — マスタートグル ON、**業務スーパー管理者本人の手** のみ可
 
 ---
 
 ## 次のアクション
 
-1. 開発者判断: A (OQ #17 起票) / B (cutover Step 1-2) / C (cutover Step 4-5) / D (連絡文案送付) / E (Cleanup Orphan Auth Users) / F (実機目視確認、cutover Step 6 前の最有力候補)
-2. 実機目視で問題なければ cutover Step 1-6 を順次進行 (Phase 4 完結へ)
-3. postponed Issue 4 件 (#274 / #275 / #276 / #405) は明示指示なき限り着手不可
+1. 開発者判断: G (Issue ラベル付与) / H (文案レビュー → 送付) / I (dry-run workflow 手動実行) / J (Cleanup Orphan Auth Users) / K (cutover Step 1-2) / L (cutover Step 6/8)
+2. **AI executor の出番限定的**: 本セッションで判明した権限境界により、AI が能動的に進められるのは下記のみ:
+   - 新規実装タスク (FE/BE/test/doc コード変更)
+   - Issue body 作成 (起票は明示指示要)
+   - 文案・runbook draft 作成 (送付/反映は開発者承認後)
+   - 設計判断のための調査・分析・diff 確認
+3. **AI 不可**: workflow_dispatch / label 操作 / repo admin 操作 / account 切替 / 業務スーパー管理者領分の全 UI 操作
 
-Phase 4 α-7 (dry-run UI 両レーン化) は本セッションで実装 + Quality Gate + merge + deploy 完走、cutover の UI 経路が稼働開始。次セッションは実機確認 → cutover Step 進行 + OQ #17 起票のフェーズに入る。
+Phase 4 α-7 は Session 61 で実装完走、本セッションで OQ #17 集約 Issue + 連絡文案 draft 完成。次セッション以降は **開発者が手元の admin account で workflow_dispatch + ラベル付与 + 文案送付** を進め、業務スーパー管理者領分の UI 操作 (cutover Step 1-2 + 6/8) へバトンを渡すフェーズ。
