@@ -1,23 +1,24 @@
-# Session Handoff — 2026-06-04 (Session 59)
+# Session Handoff — 2026-06-04 (Session 60)
 
 ## TL;DR
 
-Phase 4 α-7-BE の **Quality Gate 段階 1-3 完了** (`/safe-refactor` + `/code-review high` + Evaluator)。code-review で 10 finding 抽出 (F1〜F9) のうち 8 件 fix + 2 件 documented behavior、Evaluator は **READY-WITH-NOTES** 判定で追加フォロー 2 件 (AC-α7-05 403 / 限ter 両 lane 合算 budget) を同 PR 内で消化。本セッションで 2 commit 追加 (refactor + feat、計 12 files、+570/-265)、tests 1643 → **1649 PASS**。ネットワーク不可で段階 4-5 (`/codex review` / push + `gh pr create` / `/review-pr`) は未実施 → 次セッションでネット復旧後に実施。
+Phase 4 α-7-BE の **Quality Gate 段階 4-5 完走 + PR #517 merge 完了**。前セッション (Session 59) で段階 1-3 を消化済 (3 commits unpushed)、本セッションでネット復旧後に `/codex review` (MCP) を実施し C1 (limiter `req.user` → `req.superAdmin` shape 不一致) + C3 (CLI smoke DTO 追随) を本 PR 内で fix。push → PR #517 作成 → `/review-pr` 6 エージェント並列レビュー → CI 5 checks GREEN → squash merge 完了。全 6 エージェント GO-WITH-FOLLOWUP 判定で merge blocker 不在、follow-up 指摘は **Phase 4 OQ #17 候補に集約** (起票は開発者明示指示後)。merge 後 `/impact-analysis` で α-7-FE 着手前準備 (shared-types DTO 拡張 3 件の consumer 影響洗い出し) を実施、FE 側は既存影響ゼロを確認。
 
 | 主要成果 | 結果 |
 |---|---|
-| 段階 1 `/safe-refactor` | M1 (CLI init helper 抽出) + M2 (test fixture 集約)、-205 行重複削減 |
-| 段階 2 `/code-review high` | 7 angle × 約 42 候補 → dedup → 10 findings (F1〜F9)、8 件 fix + 2 件 documented |
-| 段階 3 Evaluator (別コンテキスト) | 5 BE-scope AC 評価 (3 PASS / 1 PARTIAL / 1 UNTESTABLE)、**READY-WITH-NOTES** |
-| Evaluator フォロー 2 件 | AC-α7-05 403 直接 assert + 限ter 両 lane 合算 budget test pin |
-| Test count | 1643 → **1649 PASS** (+6 regression test) |
-| type-check / Lint | 全 PASS / 0 errors |
-| 未 push commit | 3 件 (`41ac184` Session 58 handoff、`fe9b429` refactor、`260790d` feat、加えて本 handoff commit が今追加) |
+| 段階 4 `/codex review` (MCP) | 指摘 3 件 (C1 MEDIUM 96% / C3 LOW 95% / C2 MEDIUM 88%)、C1+C3 本 PR fix、C2 OQ #17 候補 |
+| C1+C3 fix commit (`e2aace5`) | 4 files, +36/-11、1649 tests PASS 維持 |
+| PR #517 作成 | https://github.com/system-279/lms-279/pull/517 (23 files, +4001/-674) |
+| 段階 5 `/review-pr` 6 エージェント並列 | 全員 GO-WITH-FOLLOWUP、Critical 0、follow-up 多数 (集約 → OQ #17) |
+| CI 5 checks | ✅ Build / Lint / Playwright E2E / Test / Type Check 全 PASS |
+| Squash merge | `c5cb77c Phase 4 α-7-BE: ... (#517)` 2026-06-04 09:55 UTC |
+| Deploy to Cloud Run | ✅ success (4m7s) |
+| `/impact-analysis` (α-7-FE 着手前準備) | FE 既存影響ゼロ確認、新規 viewer 実装の TODO 列挙 |
 
 - **Issue Net**: 0 件 (Close 0 / 起票 0)
-- **マージ済 PR**: 0 件 (α-7-BE PR は未作成、push 段階で停止中)
-- **CI / Deploy**: ⏭️ commit は未 push、ネット復旧後に push + PR 作成予定
-- **Open Issue**: ⚠️ gh CLI ネット不通で確認不可、Session 58 baseline は active 0 / postponed 4 (#274 / #275 / #276 / #405)
+- **マージ済 PR**: 1 件 (#517 Phase 4 α-7-BE)
+- **CI / Deploy**: ✅ GREEN + Cloud Run 反映済
+- **Open Issue**: active 0 / postponed 4 (#274 / #275 / #276 / #405、Session 58 から変化なし)
 - **残留プロセス**: ✅ なし
 
 ---
@@ -28,119 +29,131 @@ Phase 4 α-7-BE の **Quality Gate 段階 1-3 完了** (`/safe-refactor` + `/cod
 # 1. 状況復元
 cat docs/handoff/LATEST.md
 
-# 2. ネットワーク確認 (本セッション時点で gh / GCP OAuth ともに不通)
-curl -s --max-time 5 -o /dev/null -w "%{http_code}" https://api.github.com
-curl -s --max-time 5 -o /dev/null -w "%{http_code}" https://oauth2.googleapis.com
-
-# 3. ネット OK の場合
+# 2. リモート同期確認
 git fetch origin main && git log --oneline -5 origin/main
 gh run list --branch main --limit 5
 gh issue list --state open --limit 15
 
-# 4. α-7-BE feature ブランチ確認 (未 push commit 3 件あり)
-git checkout feat/phase-4-pr-alpha-7-be-dry-run-ui
-git log --oneline -5
-
-# 5. Quality Gate 段階 4-5 をネット復旧後に
-#    a. /codex review (3+ files / 200+ 行 PR 該当、CLAUDE.md 必須)
-#    b. git push -u origin feat/phase-4-pr-alpha-7-be-dry-run-ui
-#    c. gh pr create --title "..." --body "..."
-#    d. /review-pr (6 エージェント並列)
-#    e. quality gate pass → merge
-
-# 6. cutover 状態確認 (Session 58 から変化なし想定)
-gcloud scheduler jobs describe dxcollege-progress-reports --location=asia-northeast1 --project=lms-279 --format="value(state,schedule)"
-gcloud firestore fields ttls list --project=lms-279 --database='(default)' --filter="name~progress_report_sends" --format="value(name,ttlConfig.state)"
-
-# 7. 次の最有力候補 (開発者判断)
-#    A. Quality Gate 段階 4-5 + PR 作成 → merge (最優先、ネット復旧後)
-#    B. α-7-FE 着手 (FE viewer + 統合 + Playwright + runbook 更新、cutover Step 6 前完了必須)
-#    C. 業務スーパー管理者連絡文案の送付判断 (decision-maker 領分、Session 52 から継続)
-#    D. cutover Step 1-2 (テナント opt-in + 配信曜日/時刻初期化、業務スーパー管理者 UI 操作)
-#    E. Phase 4 OQ #17 起票 (Evaluator エッジ-2/3 + F10 expired reserved promote、開発者明示指示前提)
-#    F. `Cleanup Orphan Auth Users` workflow_dispatch 手動実行 (Session 57 から継続)
+# 3. 次の最有力候補 (開発者判断)
+#    A. α-7-FE 着手 (shared-types DTO 拡張 3 件の FE viewer 実装、本 handoff §「α-7-FE 着手時 TODO」参照)
+#    B. Phase 4 OQ #17 起票 (集約された 10 件の follow-up を 1 Issue にまとめる、開発者明示指示前提)
+#    C. cutover Step 1-2 (テナント opt-in + 配信曜日/時刻初期化、業務スーパー管理者 UI 操作)
+#    D. 業務スーパー管理者連絡文案の送付 (Session 52 から継続、decision-maker 領分)
+#    E. `Cleanup Orphan Auth Users` workflow_dispatch 手動実行 (Session 57 から継続、孤児 Auth 3 件)
 ```
 
-**次セッションの最初の一手**: ネット復旧確認 → 段階 4 (`/codex review`) → push + PR 作成 → 段階 5 (`/review-pr`)。
+**次セッションの最初の一手**: 開発者明示指示に従い A/B/C/D/E のいずれか。A 着手なら本 handoff §「α-7-FE 着手時 TODO」を順に消化。
 
 ---
 
 ## 重要な作業内容 (本セッション)
 
-### 1. Quality Gate 段階 1: `/safe-refactor`
+### 1. Quality Gate 段階 4: `/codex review` (MCP セカンドオピニオン)
 
-α-7-BE 14 production/test ファイルを分析し以下を抽出:
+大規模 PR (3+ ファイル / 200+ 行) 該当のため CLAUDE.md MUST により実施。指摘 3 件:
 
-- **M1**: scripts/dispatch-dry-run-cli.ts と scripts/progress-report-dry-run-cli.ts に完全重複していた Firebase Admin SDK 初期化 (約 22 行 × 2) を `scripts/lib/init-firebase-admin.ts` に集約
-- **M2**: 3 つの dry-run test ファイル (`progress-report-dry-run.test.ts` / `completion-notification-dry-run.test.ts` / `dispatch-dry-run.test.ts`) に重複していた `makeSettings` / `makeFixture` / `partialProgress` / `completedProgress` (各 40-50 行) を `services/api/src/services/dispatch/dry-run/__tests__/dry-run-fixtures.ts` に集約
-- **L1** (skip-branch repetition): readability 維持判断で保留 (decision-maker 判断不要、L1 ペースで follow-up)
+| C# | severity | confidence | 内容 | 対応 |
+|---|---|---|---|---|
+| C1 | MEDIUM | 96% | `dispatchDryRunLimiter.keyGenerator` が `req.user.email` を読むが本番 `superAdminAuthMiddleware` は `req.superAdmin = { email, firebaseUid? }` を set。本番では IP fallback に collapse、AC-α7-12 不整合。test の fake auth も同じズレで偽陽性 | **本 PR で fix** |
+| C3 | LOW | 95% | CLI smoke fixture が F1 `ineligibleCount` / F8 `invalidEmailCount` 追加後の DTO 未追随で回帰検知できない | **本 PR で fix** |
+| C2 | MEDIUM | 88% | user 単位 `listCourseProgressForUser` 失敗時、本番 lane は skip 継続するが dry-run は bare await で endpoint 全体 500 (divergence) | **OQ #17 候補** |
 
-結果: 1643 tests PASS 維持、-205 行 重複削減 + 170 行 helper 追加 = 純減 -35 行。
+Codex 総合判定: **GO-WITH-FOLLOWUP** (C1 merge 前修正推奨 → 完了)。
 
-### 2. Quality Gate 段階 2: `/code-review high`
+### 2. C1 + C3 fix commit
 
-7 angle (line-by-line / removed-behavior / cross-file / reuse / simplification / efficiency / altitude) × 約 42 候補を並列 finder で抽出、dedup + verify で 10 finding に絞り込み:
+`e2aace5 fix(phase-4-alpha-7-be): Codex review C1/C3 反映 (limiter key + CLI smoke DTO 追随)` (4 files, +36/-11):
+- `services/api/src/middleware/dispatch-dry-run-limiter.ts`: keyGenerator を `req.superAdmin?.email` 優先に変更、jsdoc を本番 middleware shape に追随
+- `services/api/src/routes/super/__tests__/dispatch-dry-run.test.ts`: fake auth を `req.superAdmin` shape に揃え本番と一致
+- `scripts/__tests__/progress-report-dry-run-cli.smoke.ts`: `ineligibleCount` fixture + invariant 式更新
+- `scripts/__tests__/dispatch-dry-run-cli.smoke.ts`: `invalidEmailCount` fixture + 非負整数 invariant 新設
 
-| Finding | severity | 対応 |
-|---|---|---|
-| F1 progress dry-run の eligibility.reason 非分岐 (overestimate) | HIGH | fix 済、`ineligibleCount` 新カウンタ追加 + 本番 processProgressUser:439-468 と一致 |
-| F2 shouldRunProgressReportNow check 欠落 | MEDIUM | follow-up (dry-run semantics は decision-maker 領分) |
-| F3 completionMessageBodyLength undefined throw | HIGH | fix 済、null fallback + DTO `number \| null` 拡張 |
-| F4 HTTP route logger NOOP silent fail | HIGH | fix 済、`createStructuredProgressDryRunLogger` 経由で `utils/logger.ts` を inject |
-| F5 両 lane 共有 limiter (10/min 全体) | MEDIUM | documented (route deps コメント、現実装は仕様通り) |
-| F6 limiter IP fallback collapse self-DoS | MEDIUM | fix 済、sentinel `ip:anonymous-no-ip` に変更 |
-| F7 single-flight cross-caller fail-fast | MEDIUM | documented (route deps コメントで意図明示) |
-| F8 completion lane `invalidEmailCount` 欠落 | MEDIUM | fix 済、DTO 拡張 + 進捗レーンと対称化 |
-| F9 storage 型レベル read-only 担保 (Pick narrow) | LOW-MEDIUM | fix 済、`Pick<DispatchStorage, "getDispatchSettings" \| "getCompletionNotification">` |
-| F10 completion existing notification expired reserved promote 欠落 | MEDIUM | Phase 4 OQ #17 候補 (DTO 拡張 + FE 連動が必要) |
+### 3. PR #517 作成 + push
 
-P0 (F3 / F4) + P1 (F1 / F6 / F8 / F9) = 6 件 fix + F5 / F7 documented を本 PR 内で完了。F2 / F10 は follow-up (OQ #17 候補)。
+未 push 5 commits (refactor `fe9b429` / feat `260790d` / handoff `6a1060a` / fix `e2aace5` + Session 58 handoff `41ac184`) を origin にプッシュ。PR #517 を gh CLI 経由で作成、Test plan に AC-α7-05〜08 / 12 担保項目 + Codex C1/C3 反映 + C2 OQ #17 候補を明示。
 
-### 3. Quality Gate 段階 3: Evaluator (別コンテキスト)
+### 4. Quality Gate 段階 5: `/review-pr` 6 エージェント並列
 
-`rules/quality-gate.md` 発動条件 (5 ファイル以上 + 新機能) 該当のため `evaluator` subagent_type で AC-α7-05 / 06 / 07 / 08 / 12 を独立評価:
+| エージェント | 判定 | Critical | Important | 主な指摘 |
+|---|---|---|---|---|
+| pr-test-analyzer | GO-WITH-FOLLOWUP ★★★★☆ | 0 | 7 | dispatchDryRunLimiter keyGenerator 直接 unit test 不在 (rating 7)、AC-α7-05 fake auth shape の本番乖離 |
+| comment-analyzer | GO-WITH-FOLLOWUP | 0 | 6 | F2 / F10 / C2 のコード内 anchor (TODO/FIXME/OQ) 不在 → grep 性低下 |
+| silent-failure-hunter | GO-WITH-FOLLOWUP | 2 | 5 | **CRIT-1 completion lane にも C2 と同じ bare-await pattern**、**CRIT-2 CC validation `invalidEntries` silent drop (F8 と同型)** |
+| type-design-analyzer | GO-WITH-FOLLOWUP (Per-axis 3/3/5/3) | 2 | 6 | C-1 `Progress/CompletionDryRunTenantSummary` を tagged union 化 (α-7-FE 着手前が最適)、C-2 内訳 invariant の factory + dev assert |
+| code-simplifier | (推奨 3 件 本 PR 内 / 多数次の PR) | - | - | C3 `ccResult` を user-loop 外 hoist (3 行) / F1+F3 fixture explicit return type が本 PR 消化推奨 (採用判断は次セッション) |
+| code-reviewer | GO-WITH-FOLLOWUP | 0 | 2 | I1 limiter keyGenerator 直接 test、I2 AC-α7-05 fake auth shape を ADR-010 フラット形式へ整合 |
 
-| AC | 判定 | 根拠 |
-|---|---|---|
-| AC-α7-05 (super-admin 403) | **PARTIAL** | route test に 403 直接 assert 不在 → 本 PR 内で追加 fix 済 |
-| AC-α7-06 (read-only / test-send 不在 / dispatch-settings 不影響) | **PASS** | Pick narrow + 404 test + grep 検証で test-send 経路ゼロ確認 |
-| AC-α7-07 (CLI 互換 + 完了通知 5 パス regression) | **PASS** | service + route 双方 test で全パス確認 |
-| AC-α7-08 (Performance p95 5 秒以内) | **UNTESTABLE** | impl-plan 注記通り BE benchmark integration なし、InMemory で μs オーダー |
-| AC-α7-12 (limiter + single-flight) | **PASS** | limiter 429 + single-flight 5 unit test + route 429 確認 |
+全 6 エージェント merge blocker 不在、follow-up 指摘多数。
 
-**総合: READY-WITH-NOTES**。Evaluator 指摘 2 件 (AC-α7-05 403 / 限ter 両 lane 合算 budget) を本 PR 内で追加 test 化、エッジケース残 3 件は documented behavior or follow-up に分類。
+### 5. CI + squash merge
 
-### 4. 2 commit に分割
+CI 5 checks GREEN (Build 56s / Lint 42s / Playwright E2E 1m20s / Test 2m7s / Type Check 48s)。
+開発者から番号単位明示認可 (`PR #517 — Phase 4 α-7-BE: dispatch dry-run UI 両レーン化 BE 実装 + Quality Gate 段階 1-4 反映 (23 files, +4001/-674) を merge して`) を受領し、`gh pr merge 517 --squash --delete-branch` 実行。merge commit `c5cb77c`、Cloud Run deploy 4m7s ✅。
 
-| commit | 内容 | 統計 |
-|---|---|---|
-| `fe9b429` refactor | safe-refactor M1/M2 (CLI init helper + test fixture file 新設) | 4 files, +193/-88 |
-| `260790d` feat | code-review F1-F9 反映 + Evaluator フォロー (限ter 両 lane / AC-α7-05 403) | 8 files, +377/-177 |
+### 6. `/impact-analysis` (α-7-FE 着手前準備)
 
-`safe-refactor` M2 の test ファイル import 置換は feat commit に集約 (test に新 it block と混在するため file 単位で feat に含めた)。
+shared-types DTO 拡張 3 件 (`ineligibleCount` / `invalidEmailCount` / `completionMessageBodyLength: number | null`) の consumer 影響を全レイヤー走査。
 
-### 5. 業務スーパー管理者連絡 (Session 52 から継続)
-
-Session 58 で作成した連絡文案 (3 回改訂) に変化なし。送信判断・送信操作は decision-maker 領分。本セッションで追加対応なし。
+| 観点 | 結果 |
+|---|---|
+| FE 既存画面影響 | ✅ ゼロ (`web/` 配下に DryRun 系参照なし、新規実装予定地) |
+| CLI artifact 互換 | ✅ `Omit<..., "lane">` で旧構造維持 |
+| CLI smoke 回帰検知 | ✅ Codex C3 fix で機能 |
+| `dispatch-settings-write-cli.ts` | ✅ 独立 (shared-types 非依存の独自定義 `completionMessageBodyLength: number`) |
+| 並行ビュー | CLI artifact / HTTP route / α-7-FE viewer (未実装) の 3 view 想定 |
+| 型安全性バイパス | limiter `as unknown as` 1 箇所 (意図的、別 PR で Express augmentation 検討) |
 
 ---
 
-## DTO 拡張 (shared-types)
+## 段階 5 follow-up 集約 → Phase 4 OQ #17 候補 (起票は開発者明示指示後)
 
-本セッションで `packages/shared-types/src/dispatch.ts` に追加:
+10 件 (重複統合済):
 
-```ts
-// F1 反映
-ProgressDryRunTenantSummary.ineligibleCount: number
+1. **C2 完全版**: progress lane (`progress-report-dry-run.ts:246` bare-await) + **completion lane (`completion-notification-dry-run.ts:144` 同 pattern、silent-failure CRIT-1)** の本番 vs dry-run divergence を両 lane 対称に修正。DTO に `readErrorCount` 追加 or `ineligibleCount` 集約方針判断要
+2. **CC validation `invalidEntries` silent drop** (silent-failure CRIT-2): 両 lane で `validateAndDedupeCcEmails().invalidEntries` が discarded。F8 と同型の silent fail、`invalidCcEmailCount` 追加で対称化
+3. **F2** (code-review): `shouldRunProgressReportNow` check 欠落。dry-run を「今走るか」判定に使う UI なら誤判断
+4. **F10** (code-review): completion expired reserved promote 欠落。stuck reservation 可視化不足
+5. **tagged union 化** (type-design C-1): `Progress/CompletionDryRunTenantSummary` を `{skipped:true; skipReason} | {skipped:false; ...counts}` の tagged union へ。同ファイル既存 `ReservationOutcome` パターン流用。**α-7-FE 着手前が最適タイミング**
+6. **dispatchDryRunLimiter keyGenerator 直接 unit test** (pr-test I-1 / code-reviewer I1): integration test は fake `() => "test-key"` で本番 keyGenerator 未 exercised。`req.superAdmin.email` / `req.ip` / sentinel の 3 経路を pin
+7. **limiter sentinel `ip:anonymous-no-ip` 観測性** (silent-failure IMP-3): 到達時に `logger.error` で「shape contract broken」シグナル発火 (silent_fail_paired_signal 一対設計)
+8. **route error classification** (silent-failure IMP-4): single-flight 経由 rejection が `errorHandler` で transient/permanent 区別なく 500 INTERNAL_ERROR に collapse。route 層で classification + log
+9. **AC-α7-05 fake auth shape を ADR-010 フラット形式に整合** (code-reviewer I2): 現状 nested `{ error: { code: "FORBIDDEN" } }` で本番 `superAdminAuthMiddleware` フラット形式と乖離
+10. **OQ #17 候補のコード内 anchor 追加** (comment Imp-6): F2 / F10 / C2 / CRIT-1 / CRIT-2 のロジック箇所に最低 1 行 TODO/OQ コメントで grep 性確保
 
-// F3 反映
-CompletionDryRunResult.settingsSnapshot.completionMessageBodyLength: number | null
+別整理:
+- **code-simplifier 推奨 3 件 (小規模)**: C3 hoist + F1/F3 fixture return type は OQ #17 に含めず、別 cleanup PR で消化推奨
+- **code-simplifier 「次の PR」推奨 (中規模)**: A1+A2 `pushSkippedTenant` helper / B1 Express `Request` augmentation / B3 `runCliMain` helper / D2 logger 切り出し → α-7-FE 着手後の cleanup PR
 
-// F8 反映
-CompletionDryRunTenantSummary.invalidEmailCount: number
-```
+---
 
-**α-7-FE 着手前に `/impact-analysis` 実施推奨**: shared-types DTO 拡張 (3 件) で FE 連動が必要。FE viewer の skip 内訳表示 (AC-α7-04) で `ineligibleCount` / `invalidEmailCount` の UI 表現を要設計。
+## α-7-FE 着手時 TODO (impact-analysis 派生)
+
+### Step 1: 新規 viewer 実装
+1. `web/lib/super-api.ts` 拡張 (`fetchDispatchDryRun(lane: DispatchLane)` 追加) — 既存 super-fetch パターン流用
+2. `web/app/super/dispatch-dry-run/page.tsx` 新規 — `useState` + `useEffect` で lane 切替 + result fetch、`result.lane === "progress"` discriminator narrowing
+3. `web/app/super/dispatch-dry-run/components/` 新規:
+   - `SkipBreakdownBar.tsx` — `wouldSendCount + invalidEmailCount + completedCount + ineligibleCount = candidateCount` 内訳バー (AC-α7-04)
+   - `CompletionMessageWarning.tsx` — `completionMessageBodyLength === null` 時の「本文未設定」warning (silent-failure SUG-2 反映)
+   - `ScaleTriggerWarning.tsx` — `scaleTriggerExceeded: true` 時の Cloud Tasks 移行検討 warning (ADR-039)
+   - `MimePreview.tsx` — `wouldNotify[].mimePreview` (From/To/Cc/Subject/Body) 表示
+
+### Step 2: error handling
+- **403**: ADR-010 フラット形式 `{ error: "forbidden", message }` を想定 (code-reviewer I2 で fake auth shape ズレ指摘済、OQ #17 で BE 側も整合させる)
+- **429**: nested 形式 `{ error: { code: "RATE_LIMIT_EXCEEDED", message } }` ← ADR-010 不整合 (既存 limiter precedent、code-reviewer S5)
+- **500**: silent-failure IMP-4 で transient/permanent 区別不能と指摘。FE は「再試行可」 / 「サポート連絡」の 2 系統 fallback 用意
+
+### Step 3: 同一 lane 連打防止
+- BE の single-flight + limiter (10/min) と FE 側 dedupe (button disable 中) を一対で実装
+- silent-failure-hunter テスト推奨パターン: 「button 連打 → 1 リクエストのみ発火」を E2E で pin
+
+### Step 4: Playwright E2E
+- AC-α7-04 (skip 内訳表示、5 progress + 4 completion skipReason 全網羅)
+- AC-α7-05 (super-admin 以外 403、FE 側エラー表示)
+- AC-α7-12 (429 rendered with retry-after timing)
+
+### Step 5: runbook 更新
+- `docs/specs/2026-06-03-phase-4-pr-alpha-7-dry-run-ui-impl-plan.md` の FE タスク section を完了マーク
+- cutover runbook (Phase 4 cutover Step 6 前完了必須) の dry-run viewer 使用手順を追記
 
 ---
 
@@ -152,13 +165,11 @@ CompletionDryRunTenantSummary.invalidEmailCount: number
 
 **Net=0 の理由言語化** (`feedback_issue_triage.md` 準拠):
 
-本セッションは Phase 4 α-7-BE の Quality Gate 段階 1-3 完了 (refactor commit `fe9b429` + feat commit `260790d`) が中心。triage 基準 (実害 / 再現バグ / CI 破壊 / rating ≥ 7 / ユーザー明示指示) を満たす個別タスク発生なし。
+本セッションは Phase 4 α-7-BE の Quality Gate 段階 4-5 完走 + PR #517 merge が中心。`/review-pr` 6 エージェント並列レビューで 10+ 件の follow-up 指摘 (CRIT-1 / CRIT-2 / I1 / I2 / Imp-6 / type-design C-1 等) が出たが、すべて **rating ≤ 7 or confidence < 80 % or decision-maker 領分** で triage 基準 (実害 / 再現バグ / CI 破壊 / rating ≥ 7 かつ confidence ≥ 80 / 開発者明示指示) を満たさず。merge した PR は CI GREEN + Cloud Run deploy 成功で実害ゼロ確認済。
 
-`/code-review high` で抽出した 10 finding (F1〜F9) のうち F1 (HIGH) / F3 (HIGH) / F4 (HIGH) / F6 (MEDIUM) / F8 (MEDIUM) / F9 (LOW-MEDIUM) は本 PR 内で全 fix。F5 / F7 は documented behavior として route deps コメントに明示 (現実装が仕様通り、test で granularity pin)。F2 (shouldRunProgressReportNow check) / F10 (expired reserved promote) は Phase 4 OQ #17 候補だが、起票には開発者明示指示が必要 (decision-maker 領分)。
+すべての follow-up は **Phase 4 OQ #17 候補として本 handoff §「段階 5 follow-up 集約」に集約**、起票は次セッション以降の開発者明示指示後 (10 件まとめて 1 Issue 化推奨)。silent-failure-hunter の CRIT-1 (completion lane bare-await) は Codex C2 (progress lane) と同根のため、別起票せず C2 の scope 拡張として扱う方針。
 
-Evaluator の見落としエッジ 3 件のうち 2 件 (AC-α7-05 403 / 限ter 両 lane 合算) は本 PR 内で追加 test 化。残 1 件 (evaluateCompletionEligibility reason 新規追加時 auto-coverage exhaust check 不在) は defensive default (`reason !== "not_completed"` で skip 側に寄せる安全側設計) で future-proof のため Issue 化不要。
-
-ネットワーク不通で `gh issue list` 不可、Session 58 baseline (active 0 / postponed 4) からの変化未確認だが、本セッションで新規 Issue 起票なし + close なしのため Net=0 は確定。
+postponed Issue 4 件 (#274 / #275 / #276 / #405) は Session 58 から変化なし、明示指示なき限り着手不可。
 
 ---
 
@@ -166,11 +177,9 @@ Evaluator の見落としエッジ 3 件のうち 2 件 (AC-α7-05 403 / 限ter 
 
 | 観点 | 該当 | 状態 |
 |---|---|---|
-| `/impact-analysis` (型・共有ロジック・設定ファイル) | ✅ 該当 (shared-types DTO 3 件拡張) | ⚠️ 未実施 (α-7-FE 着手前に推奨) |
-| `/new-resource` (新規テーブル/API) | ❌ 該当なし (前 commit で対応済) | ⏭️ スキップ |
+| `/impact-analysis` (型・共有ロジック・設定ファイル) | ✅ 該当 (shared-types DTO 3 件拡張) | ✅ **本セッションで実施済** (本 handoff §「`/impact-analysis`」参照) |
+| `/new-resource` (新規テーブル/API) | ❌ 該当なし | ⏭️ スキップ |
 | `/trace-dataflow` (データフロー実装) | ❌ 該当なし (FE 不在、α-7-FE で実施) | ⏭️ スキップ |
-
-DTO 拡張は本 PR (BE のみ) に閉じるが、`ineligibleCount` / `invalidEmailCount` / `completionMessageBodyLength: number \| null` を FE viewer がどう表示するかは α-7-FE 設計時に impact-analysis で全 consumer を洗い出すべき。
 
 ---
 
@@ -183,20 +192,18 @@ DTO 拡張は本 PR (BE のみ) に閉じるが、`ineligibleCount` / `invalidEm
 ## 残課題 (開発者領分、AI 着手不可)
 
 1. **業務スーパー管理者への返信送付** — Session 52 から継続、Session 58 文案 (3 回改訂、安全機能追加 + cutover 遅延反映) を送信判断待ち
-2. **α-7-BE Quality Gate 段階 4-5** — ネット復旧後に実施 (`/codex review` + push + PR 作成 + `/review-pr`)
-3. **α-7-BE PR 作成 → merge** — 段階 4-5 合格後
-4. **α-7-FE 着手** — α-7-BE merge 後、`/impact-analysis` で DTO 拡張の FE 影響洗い出し + Playwright + runbook 更新
-5. **cutover Step 1-2** — テナント opt-in + 配信曜日/時刻初期化、業務スーパー管理者 UI 操作
-6. **Phase 4 OQ #17 起票判断** — F2 (shouldRunProgressReportNow check) / F10 (expired reserved promote) を OQ spec に追記するか開発者判断
-7. **`Cleanup Orphan Auth Users` workflow_dispatch 手動実行** — Session 57 から継続、孤児 Auth 3 件掃除
+2. **α-7-FE 着手判断** — 本 handoff §「α-7-FE 着手時 TODO」を順に実施、cutover Step 6 前完了必須
+3. **Phase 4 OQ #17 起票判断** — §「段階 5 follow-up 集約」10 件を 1 Issue にまとめる開発者判断
+4. **cutover Step 1-2** — テナント opt-in + 配信曜日/時刻初期化、業務スーパー管理者 UI 操作
+5. **`Cleanup Orphan Auth Users` workflow_dispatch 手動実行** — Session 57 から継続、孤児 Auth 3 件掃除
 
 ---
 
 ## 次のアクション
 
-1. ネット復旧 → `git push -u origin feat/phase-4-pr-alpha-7-be-dry-run-ui` + `/codex review` + `gh pr create` + `/review-pr`
-2. PR 作成時は本 handoff commit を含めた 3 commits (`41ac184` Session 58 handoff + `fe9b429` refactor + `260790d` feat) + 本 handoff commit を含む
-3. Test plan には dry-run endpoint 動作確認 + AC-α7-05〜08 / 12 の BE 側担保項目を明記
+1. 開発者判断: A (α-7-FE) / B (OQ #17 起票) / C (cutover Step 1-2) / D (連絡文案送付) / E (Cleanup Orphan Auth Users) のいずれか
+2. A 着手なら本 handoff §「α-7-FE 着手時 TODO」を Step 1 → Step 5 順に消化
+3. B 着手なら 10 件 follow-up を 1 Issue にまとめ、本 handoff §「段階 5 follow-up 集約」を Issue body のテンプレとする
 4. postponed Issue 4 件 (#274 / #275 / #276 / #405) は明示指示なき限り着手不可
 
-Phase 4 α-7-BE は本セッションで Quality Gate 段階 1-3 まで進めた。次セッションは段階 4-5 + PR merge → α-7-FE 着手のフェーズに入る。
+Phase 4 α-7-BE は本セッションで Quality Gate 段階 1-5 全完走 + PR #517 merge + Cloud Run deploy まで完了。次セッションは α-7-FE 着手 + OQ #17 起票 + cutover 進行のフェーズに入る。
