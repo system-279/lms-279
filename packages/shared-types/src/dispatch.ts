@@ -493,6 +493,139 @@ export type ProgressReportClaimOutcome =
     };
 
 // ============================================================
+// Dry-Run DTO (Phase 4 α-7、PR #490 撤廃済型を別名で再導入)
+// ============================================================
+//
+// 進捗レポート + 完了通知の両レーンを **discriminated union** で厳密化。
+// PR #490 (2026-05-24) で撤廃された旧 `DryRunResponse` / `DryRunTarget` は
+// 同名復活させず、`DispatchDryRunResult` / `CompletionDryRunTarget` 等の
+// 別名で再導入する (git log 検索性 + 過去 PR との差別化)。
+//
+// 関連: docs/specs/2026-06-03-phase-4-pr-alpha-7-dry-run-ui-impl-plan.md §「PR #490 撤廃理由の解消」
+// 関連: docs/specs/2026-06-03-phase-4-pr-alpha-7-dry-run-ui-impl-plan.md §8 推奨 DTO 例
+
+/**
+ * 進捗レポート dry-run の skip 理由 (`skipped === true` のときのみ意味を持つ)。
+ *
+ * `tenant_doc_not_found` は listAllTenantIds() が tenantId を返したが tenants/{tid}
+ * doc が存在しない異常状態。logger 経由で運用者の注意を喚起する。
+ */
+export type ProgressDryRunSkipReason =
+  | "tenant_doc_not_found"
+  | "tenant_not_active"
+  | "progress_report_disabled"
+  | "no_published_courses";
+
+export interface ProgressDryRunTenantSummary {
+  tenantId: string;
+  skipped: boolean;
+  /** `skipped === true` のときのみ設定される */
+  skipReason?: ProgressDryRunSkipReason;
+  usersScanned: number;
+  /** listProgressReportTargetUsers の戻り値そのまま (進捗 1% 以上 + 期限内 + student) */
+  candidateCount: number;
+  /** email が cc-email-validator で reject された user 数 (送信不能) */
+  invalidEmailCount: number;
+  /** 100% 完了者 (進捗レーンは skip 対象、AC-PR-02。完了通知レーンがカバー済) */
+  completedCount: number;
+  /** 実送信対象数 = candidateCount - invalidEmailCount - completedCount */
+  wouldSendCount: number;
+  /** dedup 後の CC 件数 (ownerEmail + notificationCcEmails) */
+  ccCount: number;
+}
+
+/** 進捗レポート dry-run の戻り値。`lane: "progress"` で discriminated union のタグ化。 */
+export interface ProgressDryRunResult {
+  lane: "progress";
+  evaluatedAt: string;
+  settingsLoaded: boolean;
+  settingsSnapshot: {
+    progressReportEnabled: boolean;
+    scheduleDaysOfWeek: number[];
+    scheduleHourJst: number;
+    signatureName: string;
+  } | null;
+  tenantsScanned: number;
+  tenantsSummary: ProgressDryRunTenantSummary[];
+  /** 全テナント合算の実送信対象数 */
+  totalWouldSendCount: number;
+  /** 全テナント合算の CC 件数 (To 1 件あたり付与される CC の延べ数) */
+  totalCcCount: number;
+  /** 推定処理時間 (ミリ秒)、user 並列度 + PDF 生成経験値で算出 */
+  estimatedDurationMs: number;
+  /** 推定 PDF サイズ範囲 (KB)、PR 3a 以前の draft 経験値 */
+  estimatedPdfSizeKbRange: { min: number; typical: number; max: number };
+  /** scale trigger: 全テナント合計 300 名超で Cloud Tasks 移行検討 */
+  scaleTriggerExceeded: boolean;
+}
+
+/**
+ * 完了通知 dry-run の skip 理由。
+ *
+ * 注意: 進捗レポートと異なり `tenant_not_active` / `tenant_doc_not_found` は判定対象外
+ * (既存 CLI 挙動と整合、CC config の `completionNotificationEnabled` に統一)。
+ */
+export type CompletionDryRunSkipReason =
+  | "tenant_completion_notification_disabled"
+  | "no_published_courses";
+
+/** MIME プレビュー (CC dedup 後の最終形、completion lane のみで生成)。 */
+export interface DryRunMimePreview {
+  from: string;
+  to: string;
+  cc: string[];
+  subject: string;
+  body: string;
+}
+
+export interface CompletionDryRunTarget {
+  tenantId: string;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  courseIdsSnapshot: string[];
+  mimePreview: DryRunMimePreview;
+}
+
+export interface CompletionDryRunTenantSummary {
+  tenantId: string;
+  skipped: boolean;
+  /** `skipped === true` のときのみ設定される */
+  skipReason?: CompletionDryRunSkipReason;
+  usersScanned: number;
+  eligibleCount: number;
+}
+
+/** 完了通知 dry-run の戻り値。`lane: "completion"` で discriminated union のタグ化。 */
+export interface CompletionDryRunResult {
+  lane: "completion";
+  evaluatedAt: string;
+  settingsLoaded: boolean;
+  settingsSnapshot: {
+    enabled: boolean;
+    scheduleDaysOfWeek: number[];
+    scheduleHourJst: number;
+    signatureName: string;
+    completionMessageBodyLength: number;
+  } | null;
+  tenantsScanned: number;
+  tenantsSummary: CompletionDryRunTenantSummary[];
+  wouldNotifyCount: number;
+  wouldNotify: CompletionDryRunTarget[];
+}
+
+/**
+ * 両レーン共通の戻り値型 (discriminated union)。
+ *
+ * FE 側で `result.lane === "progress"` の type narrowing により
+ * `result.totalWouldSendCount` 等の lane 固有 field に安全アクセスできる。
+ * `lane` field を必ず先頭で switch することで optional 大量化を避ける。
+ */
+export type DispatchDryRunResult =
+  | ProgressDryRunResult
+  | CompletionDryRunResult;
+
+// ============================================================
 // 制約値 (export して FE/BE で共有)
 // ============================================================
 
