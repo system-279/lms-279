@@ -77,7 +77,7 @@ describe("DispatchSettingsPage", () => {
     );
     const putCall = superFetchMock.mock.calls.find((c) => c[1]?.method === "PUT");
     expect(JSON.parse(putCall![1].body)).toMatchObject({ version: 3 });
-    expect(await screen.findByText("保存しました。")).toBeInTheDocument();
+    expect(await screen.findByText(/保存しました。/)).toBeInTheDocument();
     expect(screen.getByText("version 4")).toBeInTheDocument();
   });
 
@@ -221,6 +221,64 @@ describe("DispatchSettingsPage", () => {
       scheduleDaysOfWeek: [],
       scheduleHourJst: 0,
     });
+  });
+
+  it("Phase 4 α-7-FE: 両 lane の dry-run プレビュー Section がマウントされる", async () => {
+    superFetchMock.mockResolvedValueOnce(baseSettings);
+    render(<DispatchSettingsPage />);
+    await screen.findByDisplayValue("DXcollege運営スタッフ");
+
+    // 両 lane の Section title が表示される
+    expect(screen.getByText("完了通知 配信プレビュー")).toBeInTheDocument();
+    expect(screen.getByText("進捗レポート 配信プレビュー")).toBeInTheDocument();
+
+    // 両 lane の「プレビューを取得」ボタンが存在 (aria-label で識別)
+    expect(
+      screen.getByRole("button", { name: /完了通知 配信プレビューを再取得/ }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: /進捗レポート 配信プレビューを再取得/ }),
+    ).toBeEnabled();
+  });
+
+  it("Phase 4 α-7-FE: progress プレビュー取得で /api/v2/super/dispatch/dry-run/progress を fetch", async () => {
+    superFetchMock.mockResolvedValueOnce(baseSettings);
+    render(<DispatchSettingsPage />);
+    await screen.findByDisplayValue("DXcollege運営スタッフ");
+
+    superFetchMock.mockResolvedValueOnce({
+      lane: "progress",
+      evaluatedAt: "2026-06-04T10:00:00.000Z",
+      settingsLoaded: true,
+      settingsSnapshot: {
+        progressReportEnabled: true,
+        scheduleDaysOfWeek: [1, 4],
+        scheduleHourJst: 9,
+        signatureName: "DXcollege運営スタッフ",
+      },
+      tenantsScanned: 0,
+      tenantsSummary: [],
+      totalWouldSendCount: 0,
+      totalCcCount: 0,
+      estimatedDurationMs: 0,
+      estimatedPdfSizeKbRange: { min: 0, typical: 0, max: 0 },
+      scaleTriggerExceeded: false,
+    });
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: /進捗レポート 配信プレビューを再取得/,
+        }),
+      );
+    });
+
+    // 2 回目の呼び出しが dry-run/progress であることを確認
+    const calls = superFetchMock.mock.calls;
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(calls[calls.length - 1]?.[0]).toBe(
+      "/api/v2/super/dispatch/dry-run/progress",
+    );
   });
 
   it("再読み込み失敗時 loadSettings は form を null 化する (regression: form/error 共存防止)", async () => {

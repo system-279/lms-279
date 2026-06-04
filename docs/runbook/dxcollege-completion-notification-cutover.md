@@ -220,11 +220,26 @@ UI の「テスト送信」ボタン + `/api/v2/super/dispatch/test-send` endpoi
 
 ---
 
-## Step 5: dry-run で対象一覧取得 (AI 主導、2026-05-24 PR-B で UI 撤廃 → admin SDK 経由)
+## Step 5: dry-run で対象一覧取得 (2 経路、Phase 4 α-7-FE で UI 復活)
 
-### 手順
+### 経路 A: UI 経由 (推奨、業務スーパー管理者でも実施可)
 
-UI の「ドライラン」ボタンは撤廃済み。AI が `dispatch-dry-run.yml` workflow を起動して対象一覧 + MIME プレビューを取得:
+Phase 4 α-7-FE (PR #519) で UI の「配信プレビュー」セクションが復活。`/super/dispatch-settings` ページの「完了通知 配信プレビュー」セクションで「プレビューを取得」ボタンを押す:
+
+1. ブラウザで `/super/dispatch-settings` を開く
+2. 「メール署名・本文」セクションで設定が保存済みであることを確認 (本文文字数が表示される)
+3. 直下の「完了通知 配信プレビュー」セクションの「プレビューを取得」ボタンを押す
+4. 5 秒以内に対象テナント数 / 送信予定数 / MIME プレビューが表示される
+5. 「送信内容プレビュー (N 件)」を展開し、各受講者の From/To/Cc/Subject/Body を確認
+
+**運用ロック注記** (α-7-FE 仕様、AC-α7-13):
+- 「メール署名・本文」「テナントごとの CC 追加設定」を編集中はプレビューに反映されない (保存済み設定で計算)
+- 編集後は必ず「保存」ボタンを押してから「プレビューを取得」を押す
+- 同時に複数の業務スーパー管理者が編集・プレビューしないこと (10 req/min/email の rate limit + α-5 未実施で lost update リスク)
+
+### 経路 B: admin SDK workflow (経路 A 不可時、AI 主導)
+
+UI が表示できない / 一時的に落ちている場合、AI が `dispatch-dry-run.yml` workflow を起動:
 
 ```bash
 gh workflow run dispatch-dry-run.yml --ref main
