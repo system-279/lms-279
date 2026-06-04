@@ -28,13 +28,22 @@ import { Switch } from "@/components/ui/switch";
 import { ScheduleEditor } from "./components/ScheduleEditor";
 import { MessageBodyEditor } from "./components/MessageBodyEditor";
 // 2026-05-24 PR-B: テスト送信 / ドライランボタンの UI は撤廃。
-// 代替の admin SDK workflow:
-//   - dry-run: .github/workflows/dispatch-dry-run.yml
-//   - test-send: .github/workflows/smoke-dwd-gmail-send.yml (SendAs smoke)
+// 2026-06-04 Phase 4 α-7-FE (PR #519): ドライランは UI に復活 (両 lane、別設計)。
+//   - dry-run UI: 本ファイル下部 DryRunPreview Section 参照 (GET endpoint 経由)
+//   - dry-run admin SDK (経路 B、UI 不可時の fallback): .github/workflows/dispatch-dry-run.yml
+//   - test-send: .github/workflows/smoke-dwd-gmail-send.yml (SendAs smoke、UI は撤廃継続)
 import { TenantCcEditor } from "./components/TenantCcEditor";
 import { AuditLogTable } from "./components/AuditLogTable";
 import { RunHistoryTable } from "./components/RunHistoryTable";
 import { InlineFeedback } from "./components/InlineFeedback";
+// Phase 4 α-7-FE (PR #519): dispatch dry-run UI 復活。
+// 2026-05-24 PR-B で撤廃された旧「ドライラン」ボタンとは別設計で、両 lane (完了通知 +
+// 進捗レポート) のプレビューを `GET /api/v2/super/dispatch/dry-run/{lane}` 経由で取得。
+// 旧設計との違い:
+//   - 同名シンボル復活なし (DryRunPreview / useDryRun は新規)
+//   - 永久に再導入しない: test-send (PR #490 撤廃方針維持)
+import { DryRunPreview } from "./components/DryRunPreview";
+import { useDryRun } from "./hooks/useDryRun";
 import { getDispatchErrorMessage } from "./errorMessage";
 
 interface FormState {
@@ -121,6 +130,11 @@ export default function DispatchSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Phase 4 α-7-FE: 両 lane の dry-run プレビュー (impl-plan D3)。
+  // ボタン押下時にのみ fetch (自動連打防止、AC-α7-12)。
+  const progressDryRun = useDryRun("progress");
+  const completionDryRun = useDryRun("completion");
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -269,6 +283,21 @@ export default function DispatchSettingsPage() {
           </Section>
 
           <Section
+            title="完了通知 配信プレビュー"
+            description="現在の設定で配信される予定の宛先・件数・本文を計算します。送信は行いません。編集中の内容は保存後にプレビューへ反映されます。"
+            hint="このプレビューは保存済みの設定に基づきます。本文・署名・テナント CC を変更した場合は、先にページ下の「保存」ボタンを押してから「プレビューを取得」を押してください。10 リクエスト/分の制限があります。"
+          >
+            <DryRunPreview
+              lane="completion"
+              result={completionDryRun.result}
+              isLoading={completionDryRun.isLoading}
+              error={completionDryRun.error}
+              lastFetchedAt={completionDryRun.lastFetchedAt}
+              onRefresh={completionDryRun.refresh}
+            />
+          </Section>
+
+          <Section
             title="進捗レポート 定期配信"
             description="受講中の方へ、現在の進捗をまとめた PDF を添付したメールを定期的に自動送信する設定です（完了通知とは別のレーンで動きます）。"
             hint="完了通知レーンとは独立したスケジュールで動きます。OFF にすると次の自動チェック（最大 60 分以内）から進捗レポートのみ停止し、完了通知への影響はありません。テナント単位の opt-in が別途必要です（「テナントごとの CC 追加設定」内のトグル）。"
@@ -305,6 +334,21 @@ export default function DispatchSettingsPage() {
                 })
               }
               disabled={saving}
+            />
+          </Section>
+
+          <Section
+            title="進捗レポート 配信プレビュー"
+            description="現在の設定で配信される予定の宛先・件数・推定処理時間を計算します。PDF 生成は行いません。編集中の内容は保存後にプレビューへ反映されます。"
+            hint="このプレビューは保存済みの設定に基づきます。曜日・時刻・テナント opt-in を変更した場合は、先にページ下の「保存」ボタンを押してから「プレビューを取得」を押してください。10 リクエスト/分の制限があります。送信予定数が 300 を超えると Cloud Tasks 移行検討 warning が表示されます (ADR-039)。"
+          >
+            <DryRunPreview
+              lane="progress"
+              result={progressDryRun.result}
+              isLoading={progressDryRun.isLoading}
+              error={progressDryRun.error}
+              lastFetchedAt={progressDryRun.lastFetchedAt}
+              onRefresh={progressDryRun.refresh}
             />
           </Section>
 

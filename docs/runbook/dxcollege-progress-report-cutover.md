@@ -248,11 +248,28 @@ gcloud iam service-accounts get-iam-policy \
 
 ---
 
-## Step 4: dry-run で対象一覧取得 (AI 主導)
+## Step 4: dry-run で対象一覧取得 (2 経路、Phase 4 α-7-FE で UI 復活)
 
-### 手順
+### 経路 A: UI 経由 (推奨、業務スーパー管理者でも実施可)
 
-AI が `progress-report-dry-run.yml` workflow を起動して対象一覧 + 規模試算を取得:
+Phase 4 α-7-FE (PR #519) で UI の「配信プレビュー」セクションが復活。`/super/dispatch-settings` ページの「進捗レポート 配信プレビュー」セクションで「プレビューを取得」ボタンを押す:
+
+1. ブラウザで `/super/dispatch-settings` を開く
+2. 「進捗レポート 定期配信」セクションで `progressReport.enabled` / 曜日 / 時刻が保存済みであることを確認
+3. 直下の「進捗レポート 配信プレビュー」セクションの「プレビューを取得」ボタンを押す
+4. 5 秒以内に対象テナント数 / 送信予定数 / 推定処理時間 / PDF 推定サイズが表示される
+5. 「scale trigger 超過」warning が出た場合は Step 5 で Cloud Tasks 移行検討の要否を判断 (ADR-039)
+6. テナント別 table で `skipped` / `wouldSendCount` / `ineligibleCount` 等の内訳を確認
+
+**運用ロック注記** (α-7-FE 仕様、AC-α7-13):
+- 進捗レポート設定 (曜日 / 時刻 / `progressReport.enabled`) を編集中はプレビューに反映されない (保存済み設定で計算)
+- 編集後は必ず「保存」ボタンを押してから「プレビューを取得」を押す
+- 同時に複数の業務スーパー管理者が編集・プレビューしないこと (10 req/min/email の rate limit + α-5 未実施で lost update リスク)
+- 完了通知レーンとは別の rate budget だが、両 lane を同時連打すると体感ボタン応答が遅延する場合あり
+
+### 経路 B: admin SDK workflow (経路 A 不可時、AI 主導)
+
+UI が表示できない / 一時的に落ちている場合、AI が `progress-report-dry-run.yml` workflow を起動:
 
 ```bash
 gh workflow run progress-report-dry-run.yml --ref main
