@@ -33,16 +33,9 @@
  */
 
 import { pathToFileURL } from "node:url";
-import { readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { writeFileSync } from "node:fs";
 
-import {
-  applicationDefault,
-  cert,
-  initializeApp,
-  type ServiceAccount,
-} from "firebase-admin/app";
-import { getFirestore, type Firestore } from "firebase-admin/firestore";
+import type { Firestore } from "firebase-admin/firestore";
 
 import { FirestoreDispatchStorage } from "../services/api/src/services/dispatch/firestore-dispatch-storage.js";
 import { FirestoreTenantDataLoader } from "../services/api/src/services/dispatch/firestore-tenant-data-loader.js";
@@ -54,6 +47,11 @@ import type {
   CompletionDryRunTenantSummary,
   DryRunMimePreview as SharedDryRunMimePreview,
 } from "@lms-279/shared-types";
+import {
+  GCP_PROJECT_ID,
+  SENDER_EMAIL,
+  initFirestoreForCli,
+} from "./lib/init-firebase-admin.js";
 
 // ============================================================
 // 旧 CLI 公開型 (A3 wrapper 化、smoke test との 1:1 互換維持)
@@ -69,40 +67,9 @@ export type DryRunTenantSummary = CompletionDryRunTenantSummary;
  */
 export type DryRunResultCli = Omit<CompletionDryRunResult, "lane">;
 
-// ============================================================
-// 環境変数
-// ============================================================
-
-const GCP_PROJECT_ID =
-  process.env.GOOGLE_CLOUD_PROJECT ?? process.env.FIREBASE_PROJECT_ID ?? "lms-279";
-const SENDER_EMAIL = process.env.DXCOLLEGE_SENDER_EMAIL ?? "dxcollege@279279.net";
-
-// ============================================================
-// Firebase Admin SDK 初期化 (progress-report-dry-run-cli と同パターン)
-// ============================================================
-
-function initFirestore(): Firestore {
-  const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (credPath) {
-    const jsonPath = resolve(process.cwd(), credPath);
-    const credJson = JSON.parse(readFileSync(jsonPath, "utf-8")) as {
-      type?: string;
-    };
-    if (credJson.type === "service_account") {
-      initializeApp({ credential: cert(credJson as ServiceAccount) });
-      console.error(`[init] 認証: サービスアカウント JSON (${jsonPath})`);
-    } else {
-      initializeApp({ credential: applicationDefault() });
-      console.error(
-        `[init] 認証: ADC (cred file type=${credJson.type ?? "unknown"}, WIF 想定)`,
-      );
-    }
-  } else {
-    initializeApp({ credential: applicationDefault() });
-    console.error("[init] 認証: Application Default Credentials");
-  }
-  return getFirestore();
-}
+// 環境変数 (GCP_PROJECT_ID / SENDER_EMAIL) と Firebase Admin SDK 初期化は
+// scripts/lib/init-firebase-admin.ts に集約 (safe-refactor M1)。
+// 旧 `initFirestore()` ローカル定義は撤去。
 
 // ============================================================
 // CLI wrapper エントリ (service module 呼出 + lane field 除外で旧互換維持)
@@ -132,7 +99,7 @@ async function main(): Promise<void> {
   console.error(`  sender:  ${SENDER_EMAIL}`);
   console.error("");
 
-  const db = initFirestore();
+  const db = initFirestoreForCli();
   const result = await runDryRunCli(db);
 
   // stdout に JSON 出力 (workflow log でも見える)
