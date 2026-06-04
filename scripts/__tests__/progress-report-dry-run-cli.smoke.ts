@@ -45,6 +45,9 @@ import {
     candidateCount: 10,
     invalidEmailCount: 2,
     completedCount: 1,
+    // Phase 4 α-7 Codex review (2026-06-04): F1 で追加された ineligibleCount を
+    // smoke fixture / invariant に追随させ、DTO 拡張時の回帰検知を機能させる。
+    ineligibleCount: 0,
     wouldSendCount: 7,
     ccCount: 2,
   };
@@ -75,10 +78,13 @@ import {
   assert.ok(
     result.tenantsSummary.every(
       (s) =>
-        s.wouldSendCount + s.completedCount + s.invalidEmailCount ===
+        s.wouldSendCount +
+          s.completedCount +
+          s.invalidEmailCount +
+          s.ineligibleCount ===
         s.candidateCount,
     ),
-    "candidateCount == wouldSendCount + completedCount + invalidEmailCount (内訳保証)",
+    "candidateCount == wouldSendCount + completedCount + invalidEmailCount + ineligibleCount (内訳保証、F1 反映)",
   );
   assert.ok(
     result.estimatedPdfSizeKbRange.min <= result.estimatedPdfSizeKbRange.typical &&
@@ -97,6 +103,7 @@ import {
     candidateCount: 0,
     invalidEmailCount: 0,
     completedCount: 0,
+    ineligibleCount: 0,
     wouldSendCount: 0,
     ccCount: 0,
   };

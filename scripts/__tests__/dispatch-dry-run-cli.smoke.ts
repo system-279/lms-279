@@ -55,6 +55,9 @@ import {
     skipped: false,
     usersScanned: 10,
     eligibleCount: 1,
+    // Phase 4 α-7 Codex review (2026-06-04): F8 で進捗レーンと対称化された
+    // invalidEmailCount を smoke fixture に追加し、DTO 拡張時の回帰検知を機能させる。
+    invalidEmailCount: 0,
   };
   const result: DryRunResultCli = {
     evaluatedAt: "2026-05-23T12:00:00.000Z",
@@ -75,6 +78,13 @@ import {
   // 構造 invariants
   assert.equal(result.wouldNotifyCount, result.wouldNotify.length);
   assert.ok(result.tenantsSummary.every((s) => s.eligibleCount >= 0));
+  // F8 反映: invalidEmailCount は非負整数 (cc-email-validator で reject された送信不能数)
+  assert.ok(
+    result.tenantsSummary.every(
+      (s) => Number.isInteger(s.invalidEmailCount) && s.invalidEmailCount >= 0,
+    ),
+    "invalidEmailCount must be a non-negative integer",
+  );
   assert.match(target.mimePreview.from, /<.*@.*>$/, "from header MUST contain angle-bracketed email");
 }
 
@@ -86,6 +96,7 @@ import {
     skipReason: "tenant_completion_notification_disabled",
     usersScanned: 0,
     eligibleCount: 0,
+    invalidEmailCount: 0,
   };
   assert.equal(skipped.usersScanned, 0, "skipped tenant has 0 users scanned");
   assert.equal(skipped.eligibleCount, 0, "skipped tenant has 0 eligible");
