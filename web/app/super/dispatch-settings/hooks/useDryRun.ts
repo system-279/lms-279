@@ -41,6 +41,12 @@ export interface UseDryRunState<L extends DispatchLane> {
 export interface UseDryRunReturn<L extends DispatchLane>
   extends UseDryRunState<L> {
   refresh: () => Promise<void>;
+  /**
+   * 進行中の fetch を abort し、result / error / lastFetchedAt を初期化する。
+   * 配信設定が保存された直後に呼び、古いプレビュー (stale) が cutover 確認で
+   * 承認されないよう invalidate する用途。Codex review C1 (PR #519、2026-06-04) 反映。
+   */
+  reset: () => void;
 }
 
 const LANE_TO_PATH: Record<DispatchLane, string> = {
@@ -72,7 +78,12 @@ export function useDryRun<L extends DispatchLane>(
 
   const refresh = useCallback(async () => {
     if (abortRef.current) {
-      // 既に進行中なら何もしない (BE single-flight + FE dedupe の一対設計)
+      // 既に進行中なら何もしない (BE single-flight + FE dedupe の一対設計)。
+      // silent-failure-hunter CRIT-2 (PR #519、2026-06-04): silent な no-op は
+      // cutover デバッグで「ボタン押したのに反応なし」事象の再現切り分けを
+      // 困難にするため、最低限 debug ログを残す (button disable で UI 防護は別途あり)。
+      // eslint-disable-next-line no-console
+      console.debug("[useDryRun] refresh skipped, in-flight", { lane });
       return;
     }
     const controller = new AbortController();
@@ -91,10 +102,32 @@ export function useDryRun<L extends DispatchLane>(
       });
     } catch (err) {
       if (controller.signal.aborted) return;
+      // Phase 4 α-7-FE silent-failure-hunter CRIT-1 (PR #519、2026-06-04):
+      // `apiFetch` の network エラー catch は AbortError (DOMException) も
+      // `ApiError(0, "network_error", ...)` で wrap してしまう。signal.aborted
+      // の早期 return では捕捉漏れする可能性があるため、ここで DOMException を
+      // 明示判別して silently return し、network エラーと混同しない。
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
       const apiError =
         err instanceof ApiError
           ? err
-          : new ApiError(0, "network_error", "予期しないエラーが発生しました");
+          : new ApiError(
+              0,
+              "network_error",
+              `通信エラーまたは想定外のエラーが発生しました (${err instanceof Error ? err.name : typeof err})`,
+              {
+                originalError:
+                  err instanceof Error ? err.message : String(err),
+              },
+            );
+      if (!(err instanceof ApiError)) {
+        // silent_fail_paired_signal: ApiError 以外を network_error に wrap する
+        // ときは原因情報を console に残し、cutover デバッグで原因切り分け可に
+        // (console.error は eslint allow リスト)。
+        console.error("[useDryRun] unexpected error", { lane, err });
+      }
       setState((prev) => ({ ...prev, isLoading: false, error: apiError }));
     } finally {
       if (abortRef.current === controller) {
@@ -103,5 +136,16 @@ export function useDryRun<L extends DispatchLane>(
     }
   }, [lane, superFetch]);
 
-  return { ...state, refresh };
+  const reset = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setState({
+      result: null,
+      isLoading: false,
+      error: null,
+      lastFetchedAt: null,
+    });
+  }, []);
+
+  return { ...state, refresh, reset };
 }

@@ -7,10 +7,12 @@
  *   - **discriminated union narrowing**: props.result は
  *     `ProgressDryRunResult | CompletionDryRunResult` で、`result.lane` で分岐し
  *     lane 固有 field (estimatedPdfSizeKbRange / wouldNotify 等) に安全アクセス。
- *   - **空状態 / disabled / null** はそれぞれ別表示 (AC-α7-11):
- *     - `settingsLoaded === false`: 「配信設定が未保存」(disabled state)
- *     - `tenantsScanned === 0`: 「対象テナント 0 件」
- *     - `settingsSnapshot === null`: 「設定が読み込めません」
+ *   - **空状態 / disabled** の表示 (AC-α7-11):
+ *     - `settingsLoaded === false`: 「配信設定が未保存」warning (`PreviewHeader` 内)。
+ *       `settingsSnapshot === null` の場合もこの分岐に集約される。
+ *     - `tenantsSummary === []`: 「対象テナントがありません」 (`TenantSummaryTable` 内)
+ *     - completion lane `wouldNotify === []`: 「送信予定の受講者はいません」
+ *     - completion lane `completionMessageBodyLength === null`: 「本文未設定」warning
  *   - **aria-live="polite"** で状態更新を読み上げ (AC-α7-09)。
  *   - **responsive**: `md:` breakpoint で table 表示を縦並びに切替 (AC-α7-10)。
  *
@@ -242,8 +244,14 @@ function CompletionPreview({ result }: { result: CompletionDryRunResult }) {
         summaries={result.tenantsSummary}
       />
 
-      {result.wouldNotify.length > 0 && (
+      {result.wouldNotify.length > 0 ? (
         <MimePreviewList targets={result.wouldNotify} />
+      ) : (
+        // Codex review C2 (PR #519、2026-06-04): wouldNotify=[] を「単に表示しない」
+        // ではなく「送信予定者なし」として明示 (AC-α7-11)。
+        <p className="text-xs text-muted-foreground" role="status">
+          送信予定の受講者はいません。
+        </p>
       )}
     </div>
   );
@@ -290,21 +298,21 @@ function TenantSummaryTable({
         </caption>
         <thead>
           <tr className="border-b text-left">
-            <th className="py-1.5 pr-2 font-medium">テナント</th>
-            <th className="py-1.5 pr-2 font-medium">状態</th>
+            <th scope="col" className="py-1.5 pr-2 font-medium">テナント</th>
+            <th scope="col" className="py-1.5 pr-2 font-medium">状態</th>
             {lane === "progress" ? (
               <>
-                <th className="py-1.5 pr-2 text-right font-medium">候補</th>
-                <th className="py-1.5 pr-2 text-right font-medium">送信</th>
-                <th className="py-1.5 pr-2 text-right font-medium">完了済</th>
-                <th className="py-1.5 pr-2 text-right font-medium">無効email</th>
-                <th className="py-1.5 pr-2 text-right font-medium">不適格</th>
-                <th className="py-1.5 pr-2 text-right font-medium">CC</th>
+                <th scope="col" className="py-1.5 pr-2 text-right font-medium">候補</th>
+                <th scope="col" className="py-1.5 pr-2 text-right font-medium">送信</th>
+                <th scope="col" className="py-1.5 pr-2 text-right font-medium">完了済</th>
+                <th scope="col" className="py-1.5 pr-2 text-right font-medium">無効email</th>
+                <th scope="col" className="py-1.5 pr-2 text-right font-medium">不適格</th>
+                <th scope="col" className="py-1.5 pr-2 text-right font-medium">CC</th>
               </>
             ) : (
               <>
-                <th className="py-1.5 pr-2 text-right font-medium">送信予定</th>
-                <th className="py-1.5 pr-2 text-right font-medium">無効email</th>
+                <th scope="col" className="py-1.5 pr-2 text-right font-medium">送信予定</th>
+                <th scope="col" className="py-1.5 pr-2 text-right font-medium">無効email</th>
               </>
             )}
           </tr>

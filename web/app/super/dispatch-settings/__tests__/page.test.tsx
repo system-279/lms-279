@@ -77,7 +77,7 @@ describe("DispatchSettingsPage", () => {
     );
     const putCall = superFetchMock.mock.calls.find((c) => c[1]?.method === "PUT");
     expect(JSON.parse(putCall![1].body)).toMatchObject({ version: 3 });
-    expect(await screen.findByText("保存しました。")).toBeInTheDocument();
+    expect(await screen.findByText(/保存しました。/)).toBeInTheDocument();
     expect(screen.getByText("version 4")).toBeInTheDocument();
   });
 

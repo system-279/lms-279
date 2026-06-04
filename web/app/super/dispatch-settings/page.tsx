@@ -185,13 +185,26 @@ export default function DispatchSettingsPage() {
           { method: "PUT", body: JSON.stringify(body) },
         );
       setForm(toFormState(updated));
-      setNotice("保存しました。");
+      // Phase 4 α-7-FE Codex review C1 (PR #519、2026-06-04) 反映:
+      // 保存成功で両 lane の dry-run 結果を invalidate し、stale な preview を
+      // cutover 確認担当者が誤って承認するリスクを除去する。
+      progressDryRun.reset();
+      completionDryRun.reset();
+      setNotice(
+        "保存しました。配信プレビューは古くなったため、必要に応じて「プレビューを取得」を押し直してください。",
+      );
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
         // version 競合: 最新値を再取得してフォームへ反映 (AC-23)
         await loadSettings();
+        // Phase 4 α-7-FE silent-failure-hunter CRIT-3 (PR #519、2026-06-04) 反映:
+        // 409 reload で settings が他管理者の更新で書き換わったため、両 lane の
+        // dry-run preview も stale 化する。try 内成功時と同様に invalidate して
+        // cutover 認可担当者が古い preview を承認する事故を防ぐ。
+        progressDryRun.reset();
+        completionDryRun.reset();
         setSaveError(
-          "他の管理者が設定を更新したため、最新の値を読み込みました。内容を確認して再度保存してください。",
+          "他の管理者が設定を更新したため、最新の値を読み込みました。配信プレビューも古くなったため、内容を確認して再度保存・プレビューしてください。",
         );
       } else {
         setSaveError(getDispatchErrorMessage(e, "保存に失敗しました"));
