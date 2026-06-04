@@ -54,9 +54,12 @@ function makeApp(
   app.use(express.json());
   // fake super-admin auth (親 router で適用される設計)
   app.use((req, _res, next) => {
-    // limiter の keyGenerator が duck typing で email field のみ読む。
-    // 強い型 assertion で AuthUser (id / role 必須) との不一致を回避。
-    (req as unknown as { user: { email: string } }).user = {
+    // 本番 superAdminAuthMiddleware (services/api/src/middleware/super-admin.ts:376 /
+    // :485) は `req.superAdmin = { email, firebaseUid? }` を set する。Codex review
+    // (2026-06-04) で test が `req.user` を入れていたため、limiter の
+    // keyGenerator が本番と test で異なる field を読む偽陽性が発生していた問題を
+    // 解消するため、本 test も `req.superAdmin` に揃える。
+    (req as unknown as { superAdmin: { email: string } }).superAdmin = {
       email: ADMIN_EMAIL,
     };
     next();

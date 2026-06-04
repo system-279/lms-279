@@ -8,7 +8,7 @@
  *
  * 設計:
  *   - 10 req/min/superAdminEmail
- *   - keyGenerator で req.user.email を取得 (super-admin auth middleware で
+ *   - keyGenerator で req.superAdmin.email を取得 (super-admin auth middleware で
  *     セット済前提)。fallback は IP → "anonymous"
  *   - testSendLimiter (PR #490 で撤廃) とは別名・別設計 (過去シンボル復活回避)
  *
@@ -24,9 +24,11 @@ import type { Request } from "express";
  * dispatch-dry-run 専用 limiter。
  * `Router.get(path, dispatchDryRunLimiter, handler)` の形で wire する。
  *
- * `req.user` は親 super-admin auth middleware で set される (型は middleware 側で
- * Express namespace 拡張)。本 limiter はその拡張に依存せず、email field を最小限
- * 取り出す duck typing で keyGenerator を実装。
+ * `req.superAdmin` は親 `superAdminAuthMiddleware` で `{ email, firebaseUid? }`
+ * として set される (services/api/src/middleware/super-admin.ts:376 / :485)。
+ * 本 limiter はその拡張に依存せず、email field を最小限取り出す duck typing で
+ * keyGenerator を実装。Codex review (2026-06-04) で `req.user` 読みは middleware
+ * と shape 不一致のため IP fallback に collapse する誤りが指摘され修正済。
  */
 export const dispatchDryRunLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -34,8 +36,10 @@ export const dispatchDryRunLimiter = rateLimit({
   standardHeaders: "draft-7",
   legacyHeaders: false,
   keyGenerator: (req: Request) => {
-    const user = (req as unknown as { user?: { email?: string | null } }).user;
-    const email = user?.email;
+    const superAdmin = (
+      req as unknown as { superAdmin?: { email?: string | null } }
+    ).superAdmin;
+    const email = superAdmin?.email;
     if (email) return `email:${email.toLowerCase()}`;
     // super-admin auth 失敗時の fallback (本来は middleware が先に 403 で弾く想定)。
     // Phase 4 α-7 code-review F6 反映: `req.ip ?? ""` を `ipKeyGenerator` に渡すと
