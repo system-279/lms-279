@@ -135,7 +135,7 @@ export function DryRunPreview(props: DryRunPreviewProps) {
 
       {result && !error && (
         <div className="space-y-3">
-          <PreviewHeader result={result} />
+          <PreviewHeader result={result} lastFetchedAt={lastFetchedAt} />
           {result.lane === "progress" ? (
             <ProgressPreview result={result} />
           ) : (
@@ -153,11 +153,46 @@ export function DryRunPreview(props: DryRunPreviewProps) {
   );
 }
 
+const FRESHNESS_THRESHOLD_MS = 5 * 60 * 1000;
+
+function isLaneDisabled(
+  result: ProgressDryRunResult | CompletionDryRunResult,
+): boolean {
+  if (!result.settingsSnapshot) return false;
+  if (result.lane === "progress") {
+    return result.settingsSnapshot.progressReportEnabled === false;
+  }
+  return result.settingsSnapshot.enabled === false;
+}
+
+function hasEmptySchedule(
+  result: ProgressDryRunResult | CompletionDryRunResult,
+): boolean {
+  if (!result.settingsSnapshot) return false;
+  return (result.settingsSnapshot.scheduleDaysOfWeek ?? []).length === 0;
+}
+
+function isStale(lastFetchedAt: string | null): boolean {
+  if (!lastFetchedAt) return false;
+  const fetched = new Date(lastFetchedAt).getTime();
+  if (Number.isNaN(fetched)) return false;
+  return Date.now() - fetched > FRESHNESS_THRESHOLD_MS;
+}
+
 function PreviewHeader({
   result,
+  lastFetchedAt,
 }: {
   result: ProgressDryRunResult | CompletionDryRunResult;
+  lastFetchedAt: string | null;
 }) {
+  // AC-α7-11 (c): lane disabled (progressReportEnabled=false / enabled=false)
+  const laneDisabled = isLaneDisabled(result);
+  // AC-α7-11 (d): scheduleDaysOfWeek=[]
+  const emptySchedule = hasEmptySchedule(result);
+  // AC-α7-13: 5 分超で古いプレビュー警告
+  const stale = isStale(lastFetchedAt);
+
   return (
     <div className="space-y-1 text-xs text-muted-foreground">
       <p>評価時刻: {formatJst(result.evaluatedAt)} (JST)</p>
@@ -167,6 +202,21 @@ function PreviewHeader({
       {!result.settingsLoaded && (
         <p className="text-amber-700 dark:text-amber-400" role="status">
           ⚠️ 配信設定が未保存です。プレビューは default 値で計算されています。
+        </p>
+      )}
+      {laneDisabled && (
+        <p className="text-amber-700 dark:text-amber-400" role="status">
+          ⚠️ このレーンは現在 OFF です。マスタートグルを ON にしてから配信が始まります。
+        </p>
+      )}
+      {emptySchedule && (
+        <p className="text-amber-700 dark:text-amber-400" role="status">
+          ⚠️ 配信曜日が選択されていません。「曜日と時刻」セクションで曜日を 1 つ以上選んでください。
+        </p>
+      )}
+      {stale && (
+        <p className="text-amber-700 dark:text-amber-400" role="status">
+          ⚠️ 結果が古い可能性があります (5 分以上経過)。最新の状態で確認するには「プレビューを取得」を再実行してください。
         </p>
       )}
     </div>
