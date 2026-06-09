@@ -49,6 +49,10 @@ import {
   SYNTHETIC_KIND_OPTIONS,
   type SyntheticKind,
 } from "./_helpers/synthetic-filter";
+import {
+  applyPdfColumnHide,
+  restorePdfColumnDisplay,
+} from "./_helpers/pdf-print";
 
 type Tenant = { id: string; name: string };
 
@@ -371,17 +375,12 @@ export default function AttendanceReportPage() {
 
   const handlePrintPdf = () => {
     if (!tableRef.current) return;
-    // 非選択カラムを一時非表示
-    const hidden: HTMLElement[] = [];
-    for (const col of COLUMNS) {
-      if (!pdfColumns.has(col.key)) {
-        const els = tableRef.current.querySelectorAll<HTMLElement>(`[data-col="${col.key}"]`);
-        els.forEach((el) => {
-          el.style.display = "none";
-          hidden.push(el);
-        });
-      }
-    }
+    // 非選択カラムを一時非表示 (DOM 操作は helper に委譲して unit test 可能化)
+    const hidden = applyPdfColumnHide(
+      tableRef.current,
+      COLUMNS.map((c) => c.key),
+      pdfColumns,
+    );
     setPdfDialogOpen(false);
     // 次のフレームで印刷（ダイアログが閉じてから）
     requestAnimationFrame(() => {
@@ -389,7 +388,7 @@ export default function AttendanceReportPage() {
       const restore = () => {
         if (restored) return;
         restored = true;
-        hidden.forEach((el) => { el.style.display = ""; });
+        restorePdfColumnDisplay(hidden);
         window.removeEventListener("afterprint", restore);
       };
       window.addEventListener("afterprint", restore);
