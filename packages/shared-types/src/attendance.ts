@@ -58,6 +58,7 @@ export interface SuperAttendanceRecord {
   quizScore: number | null;
   quizPassed: boolean | null;
   quizSubmittedAt: string | null;
+  isSynthetic: boolean;
 }
 
 export interface SuperAttendanceResponse {
