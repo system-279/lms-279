@@ -8,7 +8,7 @@
  *     Firestore fake で検証。AC2.1〜AC2.11 を網羅。
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   type AttemptInfo,
   type BackfillTarget,
@@ -21,6 +21,7 @@ import {
   findBackfillTargets,
   parseArgs,
   resolveSessionDurationMs,
+  runMain,
   sanitizeForWrite,
   validateExpectedCount,
   validateReadback,
@@ -691,6 +692,7 @@ describe("findBackfillTargets [integration]", () => {
       status: string;
     }>;
     lessonExists?: boolean;
+    videoExists?: boolean;
     videoId?: string;
   }) {
     const lessonId = "lesson-1";
@@ -729,9 +731,14 @@ describe("findBackfillTargets [integration]", () => {
       [`tenants/${opts.tenantId}/quizzes`]: {
         [quizId]: { lessonId, courseId },
       },
+      // lesson 存在確認用 (videoId field は読まない、canonical は videos.lessonId)
       [`tenants/${opts.tenantId}/lessons`]: opts.lessonExists === false
         ? {}
-        : { [lessonId]: { videoId } },
+        : { [lessonId]: { title: "test lesson" } },
+      // videoId 解決用 (Phase 1 helper と同じ videos.lessonId where 検索)
+      [`tenants/${opts.tenantId}/videos`]: opts.videoExists === false
+        ? {}
+        : { [videoId]: { lessonId, title: "test video" } },
       [`tenants/${opts.tenantId}/lesson_sessions`]: sessions,
     };
 
@@ -811,6 +818,19 @@ describe("findBackfillTargets [integration]", () => {
       attemptStatus: "submitted",
       isPassed: true,
       lessonExists: false,
+    });
+    const { targets, auditOnly } = await findBackfillTargets(db, ["t1"]);
+    expect(targets.length).toBe(0);
+    expect(auditOnly.length).toBe(0);
+  });
+
+  it("video 未紐付け (videos に lessonId 該当なし) → skip + warn (review-pr C1 反映)", async () => {
+    const db = setupTenantWithAttempt({
+      tenantId: "t1",
+      attemptId: "a1",
+      attemptStatus: "submitted",
+      isPassed: true,
+      videoExists: false,
     });
     const { targets, auditOnly } = await findBackfillTargets(db, ["t1"]);
     expect(targets.length).toBe(0);
@@ -926,6 +946,227 @@ describe("applyBackfill [integration]", () => {
 });
 
 // ============================================================
+// ALREADY_EXISTS race condition (review-pr C2 反映)
+// ============================================================
+
+describe("applyBackfill: ALREADY_EXISTS race [integration]", () => {
+  /**
+   * tx.get で exists=false の後、tx.create で race により ALREADY_EXISTS が throw された
+   * ケースを模擬する。実 Firestore admin SDK では並行 process 間で発生する。
+   * runTransaction は ABORTED を retry するが、permanent error の場合は catch に到達する。
+   */
+  function createFakeWithRaceError(
+    errorCode: number | string
+  ): Firestore {
+    const fakeRef = { _path: "tenants/t1/lesson_sessions", id: "synthetic_a1" };
+    return {
+      collection: (_path: string) => ({
+        doc: (_id: string) => fakeRef,
+      }),
+      runTransaction: async <T>(
+        fn: (tx: {
+          get: (ref: typeof fakeRef) => Promise<{ exists: boolean; data: () => undefined }>;
+          create: (ref: typeof fakeRef, data: unknown) => void;
+        }) => Promise<T>
+      ): Promise<T> => {
+        return await fn({
+          get: async () => ({ exists: false, data: () => undefined }),
+          create: () => {
+            const e = new Error("simulated race ALREADY_EXISTS") as Error & {
+              code: number | string;
+            };
+            e.code = errorCode;
+            throw e;
+          },
+        });
+      },
+    } as unknown as Firestore;
+  }
+
+  function makeTarget(attemptId: string): BackfillTarget {
+    return {
+      tenantId: "t1",
+      attempt: {
+        id: attemptId,
+        status: "submitted",
+        isPassed: true,
+        startedAt: "2026-01-09T10:00:00.000Z",
+        submittedAt: "2026-01-09T10:30:00.000Z",
+        quizId: "quiz-1",
+        userId: "user-1",
+        attemptNumber: 1,
+        score: 80,
+      },
+      lessonId: "lesson-1",
+      courseId: "course-1",
+      videoId: "video-1",
+      relatedSessions: [],
+    };
+  }
+
+  it("gRPC code=6 → skipped 扱い", async () => {
+    const db = createFakeWithRaceError(6);
+    const result = await applyBackfill(db, [makeTarget("a1")]);
+    expect(result.skipped).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(result.created).toBe(0);
+  });
+
+  it("admin SDK 文字列 'ALREADY_EXISTS' → skipped 扱い", async () => {
+    const db = createFakeWithRaceError("ALREADY_EXISTS");
+    const result = await applyBackfill(db, [makeTarget("a1")]);
+    expect(result.skipped).toBe(1);
+    expect(result.failed).toBe(0);
+  });
+
+  it("Web SDK 文字列 'already-exists' (lower-case) → skipped 扱い (review-pr 反映)", async () => {
+    const db = createFakeWithRaceError("already-exists");
+    const result = await applyBackfill(db, [makeTarget("a1")]);
+    expect(result.skipped).toBe(1);
+    expect(result.failed).toBe(0);
+  });
+
+  it("ALREADY_EXISTS 以外の error code → failed 扱い", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = createFakeWithRaceError(13); // gRPC INTERNAL
+    const result = await applyBackfill(db, [makeTarget("a1")]);
+    expect(result.failed).toBe(1);
+    expect(result.skipped).toBe(0);
+    errorSpy.mockRestore();
+  });
+});
+
+// ============================================================
+// runMain integration (review-pr C3 / I5 反映)
+// ============================================================
+
+describe("runMain [integration]", () => {
+  function withProcessExitMock(): {
+    exitSpy: ReturnType<typeof vi.spyOn>;
+    errorSpy: ReturnType<typeof vi.spyOn>;
+    logSpy: ReturnType<typeof vi.spyOn>;
+    restore: () => void;
+  } {
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((code?: string | number | null | undefined) => {
+        throw new Error(`exit:${code ?? 0}`);
+      });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    return {
+      exitSpy,
+      errorSpy,
+      logSpy,
+      restore: () => {
+        exitSpy.mockRestore();
+        errorSpy.mockRestore();
+        logSpy.mockRestore();
+      },
+    };
+  }
+
+  function setupDbWithTargets(count: number): Firestore {
+    const attempts: Record<string, Record<string, unknown>> = {};
+    for (let i = 0; i < count; i++) {
+      attempts[`a${i}`] = {
+        quizId: "quiz-1",
+        userId: "user-1",
+        attemptNumber: 1,
+        status: "submitted",
+        isPassed: true,
+        score: 80,
+        startedAt: "2026-01-09T10:00:00.000Z",
+        submittedAt: "2026-01-09T10:30:00.000Z",
+      };
+    }
+    return createFakeFirestore({
+      tenants: ["t1"],
+      data: {
+        "tenants/t1/quiz_attempts": attempts,
+        "tenants/t1/quizzes": {
+          "quiz-1": { lessonId: "lesson-1", courseId: "course-1" },
+        },
+        "tenants/t1/lessons": { "lesson-1": { title: "lesson" } },
+        "tenants/t1/videos": {
+          "video-1": { lessonId: "lesson-1", title: "video" },
+        },
+      },
+    });
+  }
+
+  it("--execute && --no-backup → exit(1) (review-pr C3 反映、destructive guard)", async () => {
+    const { restore, errorSpy } = withProcessExitMock();
+    const db = setupDbWithTargets(1);
+
+    await expect(
+      runMain(db, {
+        execute: true,
+        noBackup: true,
+        maxTargets: 100,
+      })
+    ).rejects.toThrow("exit:1");
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("--execute と --no-backup")
+    );
+    restore();
+  });
+
+  it("targets.length > max_targets → exit(1) (review-pr I5 反映)", async () => {
+    const { restore, errorSpy } = withProcessExitMock();
+    const db = setupDbWithTargets(5);
+
+    await expect(
+      runMain(db, {
+        execute: false,
+        noBackup: true,
+        maxTargets: 3,
+      })
+    ).rejects.toThrow("exit:1");
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("backfill 対象が 3 件を超えています (5 件)")
+    );
+    restore();
+  });
+
+  it("expected_count 不一致 → exit(1)", async () => {
+    const { restore, errorSpy } = withProcessExitMock();
+    const db = setupDbWithTargets(2);
+
+    await expect(
+      runMain(db, {
+        execute: false,
+        noBackup: true,
+        maxTargets: 100,
+        expectedCount: 3,
+      })
+    ).rejects.toThrow("exit:1");
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("expected_count=3")
+    );
+    restore();
+  });
+
+  it("targets ゼロ件 + expected_count=0 → 正常終了 (空振り検証)", async () => {
+    const { restore } = withProcessExitMock();
+    const db = setupDbWithTargets(0);
+
+    await expect(
+      runMain(db, {
+        execute: false,
+        noBackup: true,
+        maxTargets: 100,
+        expectedCount: 0,
+      })
+    ).resolves.toBeUndefined();
+    restore();
+  });
+});
+
+// ============================================================
 // End-to-end (audit → dry-run → apply → idempotency)
 // ============================================================
 
@@ -950,7 +1191,10 @@ describe("E2E [audit → dry-run → apply → idempotency]", () => {
           "quiz-1": { lessonId: "lesson-1", courseId: "course-1" },
         },
         "tenants/t-nagaono/lessons": {
-          "lesson-1": { videoId: "video-1" },
+          "lesson-1": { title: "lesson" },
+        },
+        "tenants/t-nagaono/videos": {
+          "video-1": { lessonId: "lesson-1", title: "video" },
         },
       },
     });

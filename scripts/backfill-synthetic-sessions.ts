@@ -54,30 +54,34 @@ import {
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import { readFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
+import { parsePositiveDurationMs } from "../services/api/src/utils/env-config.js";
 
 // ============================================================
 // 定数
 // ============================================================
 
-// セッション期間 (ミリ秒)。Phase 1 helper (services/api/src/services/lesson-session.ts) は
-// env SESSION_DURATION_MS を読み、本番 Cloud Run では 10800000 (3h) で稼働。
-// completed session の deadlineAt は意味的に未使用だが、Phase 1 と値を揃えるため env を読む。
+// セッション期間 (ミリ秒)。Phase 1 helper (services/api/src/services/lesson-session.ts:16)
+// は env SESSION_DURATION_MS を parsePositiveDurationMs で読み、本番 Cloud Run では
+// 10800000 (3h) で稼働。本 script も同じ env / helper を用いて Phase 1 と完全に揃える。
+// completed session の deadlineAt は意味的に未使用だが、orderBy 等で混在しないため一致が望ましい。
 const SESSION_DURATION_MS_FALLBACK = 7_200_000;
-// 上限 24 時間 (86,400,000 ms): セッション 1 日を超える値は誤入力扱いで fallback。
-// Date 範囲外 (例: 1e20 ms ≒ 31.7 京年) で RangeError を防ぐ。
+// 24 時間上限: Date 範囲外 (例: 1e20 ms) で RangeError を防ぐ scripts 専用の安全策。
+// Phase 1 ランタイムは Cloud Run env で安定値が入るため上限不要、本 script は環境変数の typo を
+// 監視できないため上限を別途設ける。
 const SESSION_DURATION_MS_MAX = 86_400_000;
 export function resolveSessionDurationMs(envValue: string | undefined): number {
-  if (!envValue) return SESSION_DURATION_MS_FALLBACK;
-  const n = Number(envValue);
-  if (
-    !Number.isFinite(n) ||
-    !Number.isInteger(n) ||
-    n < 1 ||
-    n > SESSION_DURATION_MS_MAX
-  ) {
+  const parsed = parsePositiveDurationMs(
+    envValue,
+    SESSION_DURATION_MS_FALLBACK,
+    "SESSION_DURATION_MS"
+  );
+  if (parsed > SESSION_DURATION_MS_MAX) {
+    console.warn(
+      `[WARN] SESSION_DURATION_MS=${parsed} は 24h (${SESSION_DURATION_MS_MAX}) を超えるため fallback ${SESSION_DURATION_MS_FALLBACK} を使用`
+    );
     return SESSION_DURATION_MS_FALLBACK;
   }
-  return n;
+  return parsed;
 }
 const DEFAULT_SESSION_DURATION_MS = resolveSessionDurationMs(
   process.env.SESSION_DURATION_MS
@@ -412,7 +416,15 @@ async function runCli(): Promise<void> {
   }
 
   const db = getFirestore();
-  await runMain(db, parsed);
+  try {
+    await runMain(db, parsed);
+  } catch (err) {
+    // runMain 内部からの予期せぬエラーを raw stack trace でなく [FATAL] で報告
+    console.error(
+      `[FATAL] 予期しないエラー: ${err instanceof Error ? (err.stack ?? err.message) : err}`
+    );
+    process.exit(1);
+  }
 }
 
 export interface BackfillTarget {
@@ -577,8 +589,16 @@ export async function runMain(
       })),
       auditOnly,
     };
-    writeFileSync(backupPath, JSON.stringify(backup, null, 2));
-    console.log(`バックアップ: ${backupPath}`);
+    try {
+      writeFileSync(backupPath, JSON.stringify(backup, null, 2));
+      console.log(`バックアップ: ${backupPath}`);
+    } catch (err) {
+      // backup 書き込み失敗 → apply 中止 (raw stack trace でなく [FATAL] を出して exit)
+      console.error(
+        `[FATAL] backup 書き込み失敗、apply 中止: ${err instanceof Error ? err.message : err}`
+      );
+      process.exit(1);
+    }
   } else if (parsed.execute) {
     console.error(
       "[FATAL] --execute と --no-backup の組み合わせは禁止 (Codex AC2.9)"
@@ -706,7 +726,7 @@ export async function findBackfillTargets(
       const lessonId = quizData.lessonId as string;
       const courseId = quizData.courseId as string;
 
-      // lesson から videoId を解決
+      // lesson 存在確認 (削除済みなら skip)
       const lessonDoc = await db
         .collection(`tenants/${tid}/lessons`)
         .doc(lessonId)
@@ -718,14 +738,23 @@ export async function findBackfillTargets(
         skippedInvalid++;
         continue;
       }
-      const videoId = lessonDoc.data()!.videoId as string;
-      if (!videoId) {
+
+      // videoId 解決: Phase 1 helper (getVideoByLessonId, firestore.ts:900) と同じ
+      // canonical な videos.lessonId where 検索を使う。lessons.videoId 直接読みは
+      // Phase 1 と divergent するため不可 (一部 lesson に videoId field が無い場合に silent skip)。
+      const videosSnap = await db
+        .collection(`tenants/${tid}/videos`)
+        .where("lessonId", "==", lessonId)
+        .limit(1)
+        .get();
+      if (videosSnap.empty) {
         console.warn(
-          `[WARN] videoId 欠落: tenant=${tid} attempt=${attempt.id} lessonId=${lessonId} → skip`
+          `[WARN] video 未紐付け: tenant=${tid} attempt=${attempt.id} lessonId=${lessonId} → skip`
         );
         skippedInvalid++;
         continue;
       }
+      const videoId = videosSnap.docs[0].id;
 
       // 関連 sessions 取得 (同 user + 同 lesson)
       const sessionsSnap = await db
