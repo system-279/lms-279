@@ -561,7 +561,10 @@ function createFakeFirestore(initial: {
   }
   for (const tid of initial.tenants) {
     store["tenants"] ??= new Map();
-    store["tenants"].set(tid, { id: tid });
+    // data["tenants"] で name 等を明示指定していれば上書きしない
+    if (!store["tenants"].has(tid)) {
+      store["tenants"].set(tid, { id: tid });
+    }
   }
 
   function makeDocRef(path: string, id: string) {
@@ -1162,6 +1165,79 @@ describe("runMain [integration]", () => {
         expectedCount: 0,
       })
     ).resolves.toBeUndefined();
+    restore();
+  });
+
+  it("tenant 内訳表示 + backup metadata に tenantName/userEmail 解決 (人間判読性向上)", async () => {
+    const { restore, logSpy } = withProcessExitMock();
+    const db = createFakeFirestore({
+      tenants: ["t-A", "t-B"],
+      data: {
+        // tenant 名を明示
+        tenants: {
+          "t-A": { id: "t-A", name: "テナント A 株式会社" },
+          "t-B": { id: "t-B", name: "テナント B 有限会社" },
+        },
+        // user email
+        "tenants/t-A/users": {
+          "user-1": { email: "user1@a.example" },
+        },
+        "tenants/t-B/users": {
+          "user-1": { email: "user1@b.example" },
+        },
+        "tenants/t-A/quiz_attempts": {
+          a1: {
+            quizId: "quiz-1",
+            userId: "user-1",
+            attemptNumber: 1,
+            status: "submitted",
+            isPassed: true,
+            score: 80,
+            startedAt: "2026-01-09T10:00:00.000Z",
+            submittedAt: "2026-01-09T10:30:00.000Z",
+          },
+        },
+        "tenants/t-A/quizzes": {
+          "quiz-1": { lessonId: "lesson-1", courseId: "course-1" },
+        },
+        "tenants/t-A/lessons": { "lesson-1": { title: "lesson" } },
+        "tenants/t-A/videos": {
+          "video-1": { lessonId: "lesson-1", title: "video" },
+        },
+        "tenants/t-B/quiz_attempts": {
+          a2: {
+            quizId: "quiz-2",
+            userId: "user-1",
+            attemptNumber: 1,
+            status: "submitted",
+            isPassed: true,
+            score: 90,
+            startedAt: "2026-01-10T10:00:00.000Z",
+            submittedAt: "2026-01-10T10:30:00.000Z",
+          },
+        },
+        "tenants/t-B/quizzes": {
+          "quiz-2": { lessonId: "lesson-2", courseId: "course-2" },
+        },
+        "tenants/t-B/lessons": { "lesson-2": { title: "lesson 2" } },
+        "tenants/t-B/videos": {
+          "video-2": { lessonId: "lesson-2", title: "video 2" },
+        },
+      },
+    });
+
+    await expect(
+      runMain(db, {
+        execute: false,
+        noBackup: true, // backup ファイル書き込みは無効、ただし tenant 内訳ログは出る
+        maxTargets: 100,
+      })
+    ).resolves.toBeUndefined();
+
+    // tenant 内訳ログに name が出ること
+    const logs = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(logs).toContain("テナント A 株式会社");
+    expect(logs).toContain("テナント B 有限会社");
     restore();
   });
 });
