@@ -12,6 +12,7 @@ import {
   validateSessionDeadline,
   forceExitSession,
   completeSession,
+  createSyntheticCompletedSession,
 } from "../../services/lesson-session.js";
 import { guardQuizAccess, checkQuizAccessSoft } from "../../services/enrollment.js";
 
@@ -401,6 +402,40 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
         }
       } catch (err) {
         console.error(`Failed to complete session for attempt ${attemptId}:`, err);
+      }
+    } else if (quiz) {
+      // Issue #533: active session なしで合格提出された場合、出席レポートに痕跡を残すため合成 session を作成する。
+      // 進捗 (user_progress.quizPassed/quizBestScore) と出席 (lesson_sessions) の乖離を予防。
+      // 失敗時は提出成功 (上で updateQuizAttempt 済み) を優先し、ログのみ残す。
+      try {
+        // 型ガード: 上位 updateQuizAttempt で submittedAt: now を渡しているため実行時には string が確定だが、
+        // 型上 string|null のため defensive にチェック。null/undefined 時は throw して silent fail を防ぐ。
+        if (!updated?.submittedAt) {
+          throw new Error(`Quiz attempt ${attemptId} updated but submittedAt is missing`);
+        }
+        const video = await ds.getVideoByLessonId(quiz.lessonId);
+        if (!video) {
+          console.error(
+            `Failed to resolve videoId for synthetic session: attempt=${attemptId} lesson=${quiz.lessonId}`,
+          );
+        } else {
+          const { created } = await createSyntheticCompletedSession(ds, {
+            userId,
+            lessonId: quiz.lessonId,
+            courseId: quiz.courseId,
+            videoId: video.id,
+            quizAttemptId: updated.id,
+            startedAt: attempt.startedAt,
+            submittedAt: updated.submittedAt,
+          });
+          if (!created) {
+            console.warn(
+              `Synthetic session already exists for attempt ${attemptId}, skipping (likely retry)`,
+            );
+          }
+        }
+      } catch (err) {
+        console.error(`Failed to create synthetic session for attempt ${attemptId}:`, err);
       }
     }
   } else if (activeSession && quiz.maxAttempts > 0 && attempt.attemptNumber >= quiz.maxAttempts) {

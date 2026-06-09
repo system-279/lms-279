@@ -431,6 +431,59 @@ export async function completeSession(
 }
 
 /**
+ * Issue #533: active session なしで quiz が合格提出された場合の補完 session を作成。
+ *
+ * 背景: quiz-attempts.ts は後方互換のため activeSession=null でも提出を許可する設計
+ * (quiz-attempts.ts:292-294 コメント参照)。これにより lesson_sessions に痕跡が残らず、
+ * user_progress (quizPassed/quizBestScore) と乖離する事象が発生していた (長遊園様で 4 件)。
+ *
+ * 本関数は決定的 doc id `synthetic_{quizAttemptId}` で session を作成、冪等性を保証する。
+ * 既存があればそれを返す (リトライ・backfill 再実行で重複作成しない)。
+ *
+ * entryAt = quiz_attempt.startedAt、exitAt = quiz_attempt.submittedAt として、
+ * 出席レポートで quiz 所要時間 (滞在時間カラム #531) を意味ある値で表示する。
+ *
+ * 失敗時は呼び出し元で catch する想定。本関数自体は例外を投げる。
+ * 呼び出し元 (quiz-attempts.ts) は提出成功を優先するため、catch して logger.error に逃す。
+ */
+export async function createSyntheticCompletedSession(
+  ds: DataSource,
+  params: {
+    userId: string;
+    lessonId: string;
+    courseId: string;
+    videoId: string;
+    quizAttemptId: string;
+    startedAt: string;
+    submittedAt: string;
+  }
+): Promise<{ session: LessonSession; created: boolean }> {
+  const id = `synthetic_${params.quizAttemptId}`;
+  const startedMs = new Date(params.startedAt).getTime();
+  // 合成 session の deadlineAt は意味的に不要 (completed 状態で validate されない) が、
+  // 型は必須なので entryAt + SESSION_DURATION_MS で safe default。
+  const deadlineAt = new Date(startedMs + SESSION_DURATION_MS).toISOString();
+
+  return ds.createLessonSessionWithId(id, {
+    userId: params.userId,
+    lessonId: params.lessonId,
+    courseId: params.courseId,
+    videoId: params.videoId,
+    sessionToken: `synthetic-${params.quizAttemptId}`,
+    status: "completed",
+    entryAt: params.startedAt,
+    exitAt: params.submittedAt,
+    exitReason: "quiz_submitted",
+    deadlineAt,
+    pauseStartedAt: null,
+    longestPauseSec: 0,
+    sessionVideoCompleted: true, // 合格時点で video 完了済みと見なす (進捗ページの latest 表示で違和感ないように)
+    quizAttemptId: params.quizAttemptId,
+    isSynthetic: true,
+  });
+}
+
+/**
  * セッションが deadlineAt（= entryAt + SESSION_DURATION_MS）を過ぎていないかチェック
  */
 export function validateSessionDeadline(session: LessonSession): boolean {

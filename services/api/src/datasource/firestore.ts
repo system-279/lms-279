@@ -1495,6 +1495,37 @@ export class FirestoreDataSource implements DataSource {
     return this.toLessonSession(doc.id, doc.data()!);
   }
 
+  /**
+   * Issue #533: 決定的 doc id を指定して LessonSession を作成。冪等性保証。
+   * 既に同 id の document が存在する場合は既存を返す (`created: false`)。
+   * トランザクションで get → 存在チェック → create を atomic に行う。
+   */
+  async createLessonSessionWithId(
+    id: string,
+    data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">
+  ): Promise<{ session: LessonSession; created: boolean }> {
+    const docRef = this.collection("lesson_sessions").doc(id);
+    return this.db.runTransaction(async (tx) => {
+      const existing = await tx.get(docRef);
+      if (existing.exists) {
+        return {
+          session: this.toLessonSession(existing.id, existing.data()!),
+          created: false,
+        };
+      }
+      const now = new Date();
+      const sanitized = Object.fromEntries(
+        Object.entries(data).map(([k, v]) => [k, v ?? null])
+      );
+      // tx.create は同 id が存在すると例外 → get 直後に race で作られた場合に検知できる
+      tx.create(docRef, { ...sanitized, createdAt: now, updatedAt: now });
+      return {
+        session: this.toLessonSession(id, { ...sanitized, createdAt: now, updatedAt: now }),
+        created: true,
+      };
+    });
+  }
+
   async getOrCreateLessonSession(
     userId: string, lessonId: string,
     data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">
@@ -1731,6 +1762,8 @@ export class FirestoreDataSource implements DataSource {
       longestPauseSec: data.longestPauseSec ?? 0,
       sessionVideoCompleted: data.sessionVideoCompleted ?? false,
       quizAttemptId: data.quizAttemptId ?? null,
+      // Issue #533: 通常 session は field 自体なし (undefined)、合成 session のみ true を持つ。
+      ...(data.isSynthetic === true ? { isSynthetic: true } : {}),
       createdAt: toISOStrict(data.createdAt, "LessonSession.createdAt"),
       updatedAt: toISOStrict(data.updatedAt, "LessonSession.updatedAt"),
     };

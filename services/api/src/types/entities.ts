@@ -320,6 +320,11 @@ export interface LessonSession {
   longestPauseSec: number;
   sessionVideoCompleted: boolean;
   quizAttemptId: string | null;
+  // Issue #533: active session なしで quiz が提出された場合に補完作成された session であることを示す provenance flag。
+  // true の場合、リアルタイム入退室イベントは存在せず、entryAt/exitAt は quiz_attempt の startedAt/submittedAt から
+  // 復元されている。出席レポート UI でバッジ表示し、backfill rollback の対象識別にも使う。
+  // 通常 (実 session 経由) 作成時は undefined / false。
+  isSynthetic?: boolean;
   createdAt: string;
   updatedAt: string;
 }
