@@ -39,11 +39,16 @@ import {
   EXIT_REASON_NONE_VALUE,
   matchesExitReasonFilter,
 } from "./_helpers/exit-reason-filter";
+import {
+  calculateStayDurationMs,
+  formatStayDuration,
+} from "./_helpers/stay-duration";
 
 type Tenant = { id: string; name: string };
 
 type SortDir = "asc" | "desc" | null;
-type SortKey = keyof SuperAttendanceRecord;
+// stayDuration は SuperAttendanceRecord 由来ではなく FE 算出フィールド (entryAt/exitAt から計算)。
+type SortKey = keyof SuperAttendanceRecord | "stayDuration";
 
 function formatTime(iso: string | null): string {
   if (!iso) return "—";
@@ -102,6 +107,7 @@ const COLUMNS: Column[] = [
   { key: "date", label: "日付", className: "whitespace-nowrap" },
   { key: "entryAt", label: "入室", className: "whitespace-nowrap" },
   { key: "exitAt", label: "退室", className: "whitespace-nowrap" },
+  { key: "stayDuration", label: "滞在時間", className: "whitespace-nowrap" },
   { key: "exitReason", label: "退室理由" },
   { key: "quizScore", label: "テスト点数" },
   { key: "quizPassed", label: "合否" },
@@ -277,6 +283,15 @@ export default function AttendanceReportPage() {
     if (sortKey && sortDir) {
       const dir = sortDir === "asc" ? 1 : -1;
       records = [...records].sort((a, b) => {
+        // stayDuration は計算フィールド: ms 数値で比較 (null は末尾)
+        if (sortKey === "stayDuration") {
+          const av = calculateStayDurationMs(a.entryAt, a.exitAt);
+          const bv = calculateStayDurationMs(b.entryAt, b.exitAt);
+          if (av === null && bv === null) return 0;
+          if (av === null) return 1;
+          if (bv === null) return -1;
+          return (av - bv) * dir;
+        }
         const av = a[sortKey];
         const bv = b[sortKey];
         if (av === null && bv === null) return 0;
@@ -506,6 +521,9 @@ export default function AttendanceReportPage() {
                       <TableCell data-col="date" className="whitespace-nowrap text-sm">{formatDate(r.entryAt)}</TableCell>
                       <TableCell data-col="entryAt" className="whitespace-nowrap text-sm">{formatTime(r.entryAt)}</TableCell>
                       <TableCell data-col="exitAt" className="whitespace-nowrap text-sm">{formatTime(r.exitAt)}</TableCell>
+                      <TableCell data-col="stayDuration" className="whitespace-nowrap text-sm">
+                        {formatStayDuration(calculateStayDurationMs(r.entryAt, r.exitAt))}
+                      </TableCell>
                       <TableCell data-col="exitReason" className="text-sm">
                         {r.exitReason ? (EXIT_REASON_LABELS[r.exitReason] ?? r.exitReason) : "—"}
                       </TableCell>
