@@ -15,6 +15,7 @@ import {
   createSyntheticCompletedSession,
 } from "../../services/lesson-session.js";
 import { guardQuizAccess, checkQuizAccessSoft } from "../../services/enrollment.js";
+import { logger } from "../../utils/logger.js";
 
 const router = Router();
 
@@ -406,18 +407,29 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
     } else if (quiz) {
       // Issue #533: active session なしで合格提出された場合、出席レポートに痕跡を残すため合成 session を作成する。
       // 進捗 (user_progress.quizPassed/quizBestScore) と出席 (lesson_sessions) の乖離を予防。
-      // 失敗時は提出成功 (上で updateQuizAttempt 済み) を優先し、ログのみ残す。
+      // 失敗時は提出成功 (上で updateQuizAttempt 済み) を優先し、structured log で監視可能にする
+      // (Issue #533 の根本問題は「乖離の検知手段がなかった」ことのため、ここで silent にしない)。
       try {
         // 型ガード: 上位 updateQuizAttempt で submittedAt: now を渡しているため実行時には string が確定だが、
         // 型上 string|null のため defensive にチェック。null/undefined 時は throw して silent fail を防ぐ。
         if (!updated?.submittedAt) {
           throw new Error(`Quiz attempt ${attemptId} updated but submittedAt is missing`);
         }
+        // attempt.startedAt も同様: 型上は string だが API/DB 不整合での null/undefined を防御。
+        if (!attempt.startedAt) {
+          throw new Error(`Quiz attempt ${attemptId} has missing startedAt`);
+        }
         const video = await ds.getVideoByLessonId(quiz.lessonId);
         if (!video) {
-          console.error(
-            `Failed to resolve videoId for synthetic session: attempt=${attemptId} lesson=${quiz.lessonId}`,
-          );
+          // hasVideo=true の lesson で video が消失/未登録のケースを区別可能にする。
+          // hasVideo=false の lesson は INFO (運用上は別レッスン定義の問題)。
+          logger.error("Synthetic session skipped: video not found for lesson", {
+            eventType: "quiz_synthetic_session_video_missing",
+            attemptId,
+            lessonId: quiz.lessonId,
+            courseId: quiz.courseId,
+            userId,
+          });
         } else {
           const { created } = await createSyntheticCompletedSession(ds, {
             userId,
@@ -429,13 +441,27 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
             submittedAt: updated.submittedAt,
           });
           if (!created) {
-            console.warn(
-              `Synthetic session already exists for attempt ${attemptId}, skipping (likely retry)`,
-            );
+            // 既存ヒット = 冪等性が機能した状態。retry / backfill 競合 / attemptId 衝突など複数原因あり得るため
+            // 原因推定はせず info で記録する。
+            logger.info("Synthetic session already exists, skipping (idempotency hit)", {
+              eventType: "quiz_synthetic_session_already_exists",
+              attemptId,
+              lessonId: quiz.lessonId,
+              userId,
+            });
           }
         }
       } catch (err) {
-        console.error(`Failed to create synthetic session for attempt ${attemptId}:`, err);
+        logger.error("Failed to create synthetic session", {
+          eventType: "quiz_synthetic_session_failed",
+          attemptId,
+          lessonId: quiz.lessonId,
+          courseId: quiz.courseId,
+          userId,
+          error: err instanceof Error
+            ? { name: err.name, message: err.message, stack: err.stack }
+            : String(err),
+        });
       }
     }
   } else if (activeSession && quiz.maxAttempts > 0 && attempt.attemptNumber >= quiz.maxAttempts) {
