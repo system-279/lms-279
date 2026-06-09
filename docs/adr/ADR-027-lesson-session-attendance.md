@@ -4,7 +4,7 @@
 承認済み（2026-06-09 改訂: isSynthetic provenance flag 追加 #533 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
 
 ## 改訂履歴
-- **2026-06-09**: **動機**: `activeSession=null` 時のテスト合格提出（ケース D、後方互換性ケース）で `lesson_sessions` ドキュメントが作成されず、「受講状況管理」では合格扱い・100% 進捗だが「出席・テスト結果レポート」では出席ログが見つからない不整合が発生（#533）。本番運用で 2 テナント計 17 件確認（社会福祉法人 莞爾会 長遊園 様 12 件 / 福の種 株式会社様 ③ 5 件、2026-05-11 〜 2026-06-09 期間）。
+- **2026-06-09**: **動機**: `activeSession=null` 時のテスト合格提出（ケース D、後方互換性ケース）で `lesson_sessions` ドキュメントが作成されず、「受講状況管理」では合格扱い・100% 進捗だが「出席・テスト結果レポート」では出席ログが見つからない不整合が発生（#533）。本番運用で 2 テナント計 17 件確認（2026-05-11 〜 2026-06-09 期間、テナント別内訳は 2026-06-09 時点の handoff（Session 70）参照）。
 
   **変更内容 (Phase 1, PR #537)**: `lesson_sessions` に **`isSynthetic: boolean`** フィールドを追加（`packages/shared-types/src/lesson-session.ts`）。`createSyntheticCompletedSession` ヘルパー（`services/api/src/services/lesson-session.ts`）を追加し、`activeSession=null` の合格提出時に quiz 提出時刻ベースで合成 session を作成（`entryAt=startedAt` / `exitAt=submittedAt` / `status='completed'` / `exitReason='quiz_submitted'` / `isSynthetic=true`）。これにより新規発生分は API 層で自動補完される。
 
