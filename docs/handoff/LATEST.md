@@ -10,9 +10,14 @@
 | 再 audit (run 27200744211、idempotency 検証) | ✅ backfill 対象 0 件 / audit_only 142 件 (125+17 整合) |
 | PII artifact 削除 (2 件) | ✅ 7505309504 / 7504819097 削除完了 |
 | 現場連絡文案ドラフト | ✅ `docs/handoff/drafts/site-comm-2026-06-09-phase2-backfill.md` |
+| ADR-027 改訂履歴 追記 (PR #544) | ✅ merged |
+| data-model.md isSynthetic 追記 (PR #545) | ✅ merged |
+| #533 Issue コメント追加 (Phase 1/2 完了報告) | ✅ issuecomment-4659398843 |
+| Phase 1 test カバレッジ確認 | ✅ AC1.1〜AC1.5 5 ケース、追加 test 不要 |
+| architecture.md 整合性確認 | ✅ high-level のみで更新不要 |
 
 - **Issue Net**: 変化なし (新規起票 0、Close 0)
-- **本セッション PR**: 0 件 (Session 69 までで 3 PR 完了済、本セッションは workflow 実行 + クリーンアップのみ)
+- **本セッション merged PR**: 3 件 (#543 handoff / #544 ADR / #545 data-model)
 - **本番 Firestore 書き込み**: 17 件 (Phase 2 apply)
 - **本番影響**: 17 件の出席ログを `synthetic_{attemptId}` doc id で補正 (PR #537 helper と同一構造)
 
@@ -112,6 +117,32 @@ for id in $TARGETS; do gh api -X DELETE "repos/system-279/lms-279/actions/artifa
 
 開発者が編集 / 承認 / 送付判断。
 
+### 5. ADR-027 改訂履歴追記 (PR #544)
+
+`docs/adr/ADR-027-lesson-session-attendance.md`:
+- 2026-06-09 entry 追加 (Phase 1/2 完了記録)
+- isSynthetic provenance flag 採用根拠
+- ケース D (`activeSession=null` 後方互換性ケース) 維持 + 合成 session で不変条件回復の設計判断
+- ステータス行に改訂日リスト追加
+- 法人名は除去 (中立性、件数+期間のみ)
+
+### 6. ドキュメント整合性追補
+
+- **data-model.md (PR #545)**: `lesson_sessions` テーブルに `isSynthetic: boolean?` 追記 (CLAUDE.md「ドキュメント更新ルール」MUST 対応、Phase 1/2 で Firestore スキーマ変更があったが公式ドキュメント反映漏れがあったため)
+- **architecture.md 確認**: high-level 構成のみで `lesson_sessions` 詳細は含まれず、更新不要
+- **shared-types 確認**: `SuperAttendanceRecord` に `isSynthetic` は未露出。Phase 3 で追加予定通り、現状は MUST「API境界の変更 → 対向側 (FE↔BE) を必ず確認・更新」違反なし (Firestore スキーマ変更は API 境界変更ではない)
+- **Phase 1 test (PR #537) カバレッジ確認**: `services/api/src/__tests__/integration/quiz-attempt-synthetic-session.test.ts` の AC1.1〜AC1.5 で正常系/ガード/冪等性/video 不在/不合格を網羅、追加 test 不要
+
+### 7. #533 Issue コメント追加
+
+`issuecomment-4659398843`:
+- Phase 1/2 完了状況サマリー
+- 関連 PR (#537/#539/#541/#540/#544/#545)
+- Phase 3 残作業 (設計のみ完了、実装は別 Issue 起票が前提)
+- 本 Issue close 判断は開発者領分と明示
+
+Issue body は意図保全のため未変更 (コメント追加で進捗記録のみ)。
+
 ---
 
 ## 次のアクション
@@ -146,6 +177,15 @@ for id in $TARGETS; do gh api -X DELETE "repos/system-279/lms-279/actions/artifa
 |-----|------|------|
 | 27200193182 | Phase 2 apply (execute=true, expected=17) | ✅ success (9m51s, 17/17 readback verified) |
 | 27200744211 | 再 audit (idempotency 検証) | ✅ success (~2 分, backfill 対象 0 件) |
+
+### 本セッション merged PR
+
+| PR | 種類 | 状態 |
+|----|------|------|
+| #543 | docs(handoff) Session 70 | ✅ merged (a57dec7) |
+| #544 | docs(adr) ADR-027 改訂履歴追記 | ✅ merged (bffeb22) |
+| #545 | docs(data-model) isSynthetic 追記 | ✅ merged (514d924) |
+| (本 PR) | docs(handoff) Session 70 追補 | ⏳ 作成予定 |
 
 ---
 
