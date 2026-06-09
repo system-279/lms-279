@@ -159,6 +159,7 @@ questions配列の各要素:
 | longestPauseSec | number | セッション中の最長一時停止秒数 |
 | sessionVideoCompleted | boolean | セッション内で動画完了したか |
 | quizAttemptId | string? | 完了時のテストattempt ID |
+| isSynthetic | boolean? | provenance flag。`true` の場合、`activeSession=null` の合格提出時にシステムが自動補完した合成 session であることを示す（ADR-027 §改訂履歴 2026-06-09 / #533 Phase 1/2）。doc id 規約: 合成は `synthetic_{attemptId}`、実 session は Firestore 自動採番 |
 | createdAt | Timestamp | 作成日時 |
 | updatedAt | Timestamp | 更新日時 |
 
