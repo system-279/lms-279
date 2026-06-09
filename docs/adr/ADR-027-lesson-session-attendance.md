@@ -1,9 +1,19 @@
 # ADR-027: レッスンセッション出席管理
 
 ## ステータス
-承認済み（2026-05-16 改訂: セッション上限を環境変数化）
+承認済み（2026-06-09 改訂: isSynthetic provenance flag 追加 #533 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
 
 ## 改訂履歴
+- **2026-06-09**: **動機**: `activeSession=null` 時のテスト合格提出（ケース D、後方互換性ケース）で `lesson_sessions` ドキュメントが作成されず、「受講状況管理」では合格扱い・100% 進捗だが「出席・テスト結果レポート」では出席ログが見つからない不整合が発生（#533）。本番運用で 2 テナント計 17 件確認（社会福祉法人 莞爾会 長遊園 様 12 件 / 福の種 株式会社様 ③ 5 件、2026-05-11 〜 2026-06-09 期間）。
+
+  **変更内容 (Phase 1, PR #537)**: `lesson_sessions` に **`isSynthetic: boolean`** フィールドを追加（`packages/shared-types/src/lesson-session.ts`）。`createSyntheticCompletedSession` ヘルパー（`services/api/src/services/lesson-session.ts`）を追加し、`activeSession=null` の合格提出時に quiz 提出時刻ベースで合成 session を作成（`entryAt=startedAt` / `exitAt=submittedAt` / `status='completed'` / `exitReason='quiz_submitted'` / `isSynthetic=true`）。これにより新規発生分は API 層で自動補完される。
+
+  **過去分の遡及補正 (Phase 2, PR #539/#541)**: `scripts/backfill-synthetic-sessions.ts` を追加し、`synthetic_{attemptId}` doc id で transaction `create`（race-safe）により過去 17 件を遡及作成。GitHub Actions workflow（`.github/workflows/backfill-synthetic-sessions.yml`）で workflow_dispatch + WIF + production environment + expected_count 完全一致ガードで本番投入。2026-06-09 apply 完了（workflow run 27200193182、created=17 / readback verified=17）、idempotency 検証 OK（再 audit で対象 0 件）。
+
+  **provenance flag (isSynthetic) の意義**: 実 session（動画再生から自然発生）と合成 session（システム補完）を識別可能にすることで、(a) 監査時に補正済みデータを特定可能、(b) 出席レポート UI で視覚的に区別可能（Phase 3 設計仕様書 `docs/specs/2026-06-09-phase3-synthetic-session-badge-design.md` 参照、未実装）、(c) 将来の分析・データ品質メトリクスで合成データを除外可能。
+
+  **設計上の判断**: ケース D（`activeSession=null` 後方互換性ケース、2026-05-21 entry 参照）は撤廃せず後方互換性を維持。代わりに合成 session を作成することで「合格提出された quiz_attempt には必ず対応する lesson_session が存在する」不変条件を回復。これによりケース D 経由のテスト提出も全件 `lesson_sessions` に記録される状態を担保する。
+
 - **2026-05-21**: **動機**: PR #407 の 3h 延長後の Phase A 測定（`audit-session-force-exits.yml`）でケース E 発火は 0 件だが、再視聴中の完了経験者が `time_limit` / `pause_timeout` に該当する将来エッジケースを根本対応する。2026-05-20 で却下した「E のリセット廃止」とは異なり、本変更は初回視聴中の E は全リセット維持し、**再視聴中の永続完了経験者のみ救済する部分的拡張（新ケース E' を追加）**である。
 
   **変更内容**: `forceExitSession` のリセット skip 条件に **「現在 lesson の video に対する永続 `video_analytics.isComplete=true`」** を追加（`hasPersistentVideoCompletion` ヘルパー、`services/api/src/services/lesson-session.ts`）。これにより、過去にレッスンを完了済みのユーザーが再受験時に動画を再視聴して時間切れ／一時停止超過に陥っても、既存学習データ（`video_analytics` / `video_events` / `quiz_attempts` / `user_progress`）は保護される。救済対象 reason は `time_limit` / `pause_timeout` のみで、`max_attempts_failed` は受験規律破りのため永続フラグに関わらず全リセット維持（ケース F semantics）。
