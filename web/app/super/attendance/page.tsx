@@ -34,6 +34,11 @@ import type {
   SuperAttendanceRecord,
   SuperAttendanceResponse,
 } from "@lms-279/shared-types";
+import {
+  EXIT_REASON_NONE_LABEL,
+  EXIT_REASON_NONE_VALUE,
+  matchesExitReasonFilter,
+} from "./_helpers/exit-reason-filter";
 
 type Tenant = { id: string; name: string };
 
@@ -231,7 +236,10 @@ export default function AttendanceReportPage() {
     return Array.from(map, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label, "ja"));
   }, [report]);
 
-  const exitReasonOptions: FilterOption[] = Object.entries(EXIT_REASON_LABELS).map(([value, label]) => ({ value, label }));
+  const exitReasonOptions: FilterOption[] = [
+    ...Object.entries(EXIT_REASON_LABELS).map(([value, label]) => ({ value, label })),
+    { value: EXIT_REASON_NONE_VALUE, label: EXIT_REASON_NONE_LABEL },
+  ];
   const quizPassedOptions: FilterOption[] = [
     { value: "passed", label: "合格" },
     { value: "failed", label: "不合格" },
@@ -254,7 +262,7 @@ export default function AttendanceReportPage() {
       records = records.filter((r) => filterLessons.has(r.lessonId));
     }
     if (filterExitReasons.size > 0) {
-      records = records.filter((r) => r.exitReason !== null && filterExitReasons.has(r.exitReason));
+      records = records.filter((r) => matchesExitReasonFilter(r.exitReason, filterExitReasons));
     }
     if (filterQuizPassed.size > 0) {
       records = records.filter((r) => {
