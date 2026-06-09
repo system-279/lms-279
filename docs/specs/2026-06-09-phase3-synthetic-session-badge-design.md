@@ -32,9 +32,14 @@
 ### 成功基準
 1. 出席レポートで synthetic session に「自動補完」バッジが表示される
 2. バッジにツールチップで「このセッションは合格提出から自動補完されました (#533 Phase 1/2)」と説明
-3. フィルタで「自動補完のみ / 除外」を切り替え可能
-4. CSV エクスポートに `isSynthetic` 列が含まれる
-5. Playwright E2E で表示・フィルタ・CSV を検証
+3. 「session 種別」フィルタで「すべて / 自動補完のみ / 実 session のみ」を切り替え可能
+4. PDF 出力 (`window.print()`) でもバッジが印字される
+5. Playwright E2E で表示・フィルタ・PDF 印字を検証
+
+### スコープ外 (本 Phase 3 では扱わない)
+- **CSV エクスポート**: 現行 super attendance は CSV 機能未実装 (PDF のみ)。将来 CSV 機能が追加される際に `is_synthetic` 列を含める設計とし、本 PR では対応しない (codex 指摘で訂正)
+- **admin 側出席画面** (`/admin/analytics/attendance/courses/:courseId`): 別系統 API (`AdminAttendanceRecord`)。本 Phase 3 は super 側に限定、admin 側は非ゴール
+- **検索・分析・テナント設定**: サーバ側 `isSynthetic` query を行わない限り Firestore index 不要
 
 ---
 
@@ -44,8 +49,8 @@
 |---------|---------|---------|
 | 共有型 | `packages/shared-types/src/attendance.ts` | `SuperAttendanceRecord` に `isSynthetic: boolean` 追加 |
 | API | `services/api/src/routes/super-admin.ts:1040-1059` | response record builder で `isSynthetic: data.isSynthetic === true` を追加 |
-| FE 表示 | `web/app/super/attendance/page.tsx` | バッジコンポーネント追加、フィルタオプション拡張、CSV ヘッダ追加 |
-| E2E | `e2e/super-attendance.spec.ts` (新規 or 拡張) | synthetic session 表示 / フィルタ / CSV 検証 |
+| FE 表示 | `web/app/super/attendance/page.tsx` | バッジコンポーネント追加、新規「session 種別」フィルタ追加 (既存「退室理由フィルタ」とは独立) |
+| E2E | `e2e/super-attendance.spec.ts` (新規 or 拡張) | synthetic session 表示 / フィルタ / PDF 印字 検証 |
 
 ---
 
@@ -66,10 +71,12 @@
        │
        ▼
 [FE: super/attendance/page.tsx]
-  ├─ COLUMNS: entryAt カラムに <SyntheticBadge> 表示条件
-  ├─ exitReasonOptions: 「自動補完」フィルタ追加 (sentinel: __synthetic__)
-  ├─ filterMatcher: matchesIsSyntheticFilter(record, filter)
-  └─ CSV: header に "is_synthetic" 追加、行に boolean 値
+  ├─ COLUMNS: entryAt カラムに <SyntheticBadge> 表示条件 (改行なし、印刷時も保持)
+  ├─ 新規 syntheticFilter state: "all" | "synthetic_only" | "actual_only"
+  │  (既存 exitReasonOptions / 退室理由フィルタは変更しない)
+  ├─ filterMatcher: matchesIsSyntheticFilter(record, filter) — 純粋関数
+  └─ PDF (window.print()): entryAt カラム内バッジが印字対象
+     (amber-tone は印刷時に薄い灰色になる可能性、border + text で識別性確保)
 ```
 
 ### 重要設計判断
@@ -100,18 +107,20 @@
 
 ### 5.2 フィルタ拡張
 
-既存「退室理由フィルタ」とは別に **新規「session 種別」フィルタ** を追加:
+既存「退室理由フィルタ」とは別に **新規「session 種別」フィルタ** を追加 (RadioGroup / segmented 推奨、Codex 反映):
 - `all` (デフォルト): すべて
 - `synthetic_only`: 自動補完のみ
 - `actual_only`: 実 session のみ
 
-### 5.3 CSV エクスポート
+### 5.3 PDF 印字 (現行 `window.print()` のみ、CSV 未実装)
 
-ヘッダに `is_synthetic` 列追加、値は `true` / `false`。既存 CSV 仕様 (PR #535 の滞在時間列追加と同パターン) に準拠。
+- entryAt カラム内のバッジは印刷対象に含める
+- 印刷時 amber-tone (背景色) はブラウザの「背景を印刷」設定次第で出ない可能性あり
+- 対策: `border` + `text-color` で背景なしでも識別できるよう CSS 設計
 
 ### 5.4 ソート
 
-`isSynthetic` カラムはソート対象外 (boolean のソートは UX 価値が低い)。
+`isSynthetic` カラムはソート対象外 (boolean のソートは UX 価値が低い、フィルタで代替)。
 
 ---
 
@@ -125,20 +134,20 @@
 - `super-admin.ts:1040` の record builder に `isSynthetic: data.isSynthetic === true` 追加
 - 関連する integration test 更新 (response.records[].isSynthetic 検証)
 
-### M3: FE バッジ・フィルタ・CSV (中、~80 行)
-- `SyntheticBadge` コンポーネント
-- フィルタ state / UI (RadioGroup)
+### M3: FE バッジ・フィルタ (中、~60 行、CSV 不要のため M3 規模縮小)
+- `SyntheticBadge` コンポーネント (印刷耐性 CSS: border + text、背景非依存)
+- 新規「session 種別」フィルタ state / UI (RadioGroup or segmented)
 - `matchesIsSyntheticFilter` pure function (unit test 推奨)
-- CSV header / row 拡張
+- 既存 exitReasonOptions / 退室理由フィルタ は変更しない
 
 ### M4: Playwright E2E (中、~50 行)
 - fixture: tenant に synthetic session 1 件 + 実 session 1 件をセットアップ
 - 表示確認: バッジが synthetic 行のみに見える
 - フィルタ確認: synthetic_only / actual_only で表示件数変化
-- CSV 確認: ダウンロードして `is_synthetic` 列の値を検証
+- PDF 印字確認: `window.print()` でバッジが残ること (Playwright pdf() で印字結果検証)
 
 ### M5: ドキュメント
-- ADR 起票: 「合成 session の可視化方針」(短文 ADR、Phase 1/2 設計と整合性)
+- ADR-027 (lesson_sessions) に **追記** (Codex 推奨): Phase 1/2 の provenance flag 採用理由に併せて Phase 3 可視化方針を記述。新規 ADR より追跡性が高い
 - handoff 更新
 
 ---
@@ -178,22 +187,33 @@
 | 退室理由列に「自動補完」を sentinel として表示 | ❌ exitReason は実意味 (quiz_submitted) を持つ。上書きしない |
 | ツールチップのみ (バッジなし) | ❌ 視覚的に発見不能、運用補助価値が下がる |
 
-### 8.3 Open Questions
-1. バッジ表示位置: `entryAt` 横 vs `status` 横 vs 独立列 → ADR で確定
-2. フィルタ UI: RadioGroup vs Checkbox 3 状態 → 既存パターンに合わせる
-3. ADR 起票: 既存 ADR-027 (lesson_sessions) に追記 vs 新規 ADR → 影響範囲広いので新規 ADR 推奨
+### 8.3 Open Questions (Codex 推奨方向反映)
+
+| # | 質問 | 推奨方向 | 根拠 |
+|---|------|---------|------|
+| OQ1 | バッジ表示位置 | **`entryAt` 横** | 時刻が復元由来であることを示す位置として自然、独立列は過剰 |
+| OQ2 | フィルタ UI | **RadioGroup or segmented** (`all` / `synthetic_only` / `actual_only`) | Checkbox 3 状態より状態が明確 |
+| OQ3 | ADR 形式 | **ADR-027 追記** | 新規 ADR にするほど新しい意思決定ではない、Phase 1/2 の provenance flag 採用理由に追記する方が追跡しやすい |
+
+実装着手時、上記方向で進めて開発者確認を受ける。代替案が必要な場合は別途協議。
 
 ---
 
 ## 9. 着手条件
 
-以下すべてを満たした時に M1 着手:
+以下すべてを満たした時に M1 着手 (Codex 反映: 着手ゲートと品質ゲートの分離):
 
-- ✅ Phase 1 (PR #537) 本番動作確認 OK
-- ✅ Phase 2 (PR #539) 本番 apply 完了
+### 必須ゲート (Phase 3 着手の前提)
+- ✅ Phase 2 (PR #539) 本番 apply 完了 (synthetic doc が本番に存在する → 表示確認に必要)
 - ✅ Phase 2 完了後の内部画面確認 OK (長遊園 4 件補正済み)
 - ✅ 開発者から「Phase 3 着手」明示指示
 - ✅ Phase 3 別 Issue 起票 (#533 Phase 3 として lock-in)
+
+### 品質確認ゲート (推奨、必須ではない)
+- ⚠️ Phase 1 (PR #537) 本番動作確認 OK
+  - Phase 3 自体は Phase 1/2 の挙動を信頼するだけで、独自実装は表示層のみ
+  - ただし Phase 1 動作確認が未済のままだと Phase 3 表示確認時に「これは Phase 1 由来か Phase 2 由来か」の切り分けが困難
+  - → 推奨だが、必須ではない
 
 ---
 
@@ -214,6 +234,6 @@
 - [ ] vitest + Playwright 全 PASS
 - [ ] manual 確認: 長遊園 4 件にバッジ表示
 - [ ] manual 確認: 新規テスト提出で synthetic 生成 + バッジ表示
-- [ ] CSV ダウンロードで `is_synthetic` 列が正しく出力
-- [ ] ADR 起票完了
+- [ ] manual 確認: `window.print()` (PDF 出力) でバッジが印字される
+- [ ] ADR-027 追記完了
 - [ ] handoff 更新
