@@ -1,21 +1,22 @@
-# Session Handoff — 2026-06-05 (Session 67)
+# Session Handoff — 2026-06-09 (Session 68)
 
 ## TL;DR
 
-現場から PDF アップロードエラー報告 (22.6 MB, ネットワークエラー表示) → 原因究明 (GCS バケット `lms-279-resources` の **CORS 設定欠落**) → Codex セカンドオピニオン取得 (High 確度で診断同意) → 本番 GCS バケットへ CORS 適用 → preflight 検証 (両 origin 200 OK) → 現場向けシンプル文案で報告 → 開発者送付完了、までを 1 セッションで完遂。Phase 4 α-7 cutover とは別軸の本番ホットフィックス対応。
+開発者から「長遊園様で進捗管理と出席・テスト結果レポートの内容/日時が不一致」報告 → Playwright MCP + API JSON cross-reference で本番データを取得し 3 つの異なる問題を特定 → **3 PR (#534/#535/#537) を同セッションでマージ完遂**。
 
 | 主要成果 | 結果 |
 |---|---|
-| 原因特定 (GCS `lms-279-resources` CORS 未設定) | ✅ HIGH 確度 (Codex 同意) |
-| Codex セカンドオピニオン取得 | ✅ 診断同意 + JSON 修正 1 点 (responseHeader 絞り込み) |
-| 本番 GCS バケットへ CORS 適用 | ✅ `gcloud storage buckets update` 完了 |
-| preflight 動作検証 | ✅ 両 Cloud Run web origin で `OPTIONS 200` + `access-control-allow-*` ヘッダ確認 |
-| 現場向け簡潔報告 → 開発者送付 | ✅ 「対応しました。改めてお試しください」 |
+| 不一致 3 種の特定 (UI フィルタ / 機能欠落 / データ整合性) | ✅ 全種類で根因特定 |
+| #532 UI フィルタ「未退出」追加 | ✅ PR #534 merged + deploy 完了 |
+| #531 滞在時間カラム追加 | ✅ PR #535 merged + deploy 完了 |
+| #533 Phase 1 (合成 session 作成コード) | ✅ PR #537 merged + deploy 完了 |
+| Codex セカンドオピニオン (#533 destructive migration) | ✅ HIGH 信頼度評価 + 全提案反映 |
+| Evaluator 分離プロトコル (#537 7 ファイル) | ✅ 4 エージェント並列 + MEDIUM 2 件取り込み |
 
-- **Issue Net**: **0 件** (起票 0 / Close 0、現場ホットフィックスで即解決)
-- **PR**: 1 件 (本 handoff PR 予定)
-- **CI / Deploy**: 該当なし (本番 GCP 設定変更のみ、コード変更なし)
-- **Open Issue**: active 1 (#521) / postponed 4 (#274 / #275 / #276 / #405) — Session 66 から変化なし
+- **Issue Net**: **−2 件** (起票 4: #531/#532/#533/#536、Close 2: #531/#532) → KPI 上は進捗ゼロ扱いだが、全件ユーザー駆動の実バグ発見、triage gate 通過済み (CLAUDE.md MUST #5 ユーザー明示指示)
+- **PR**: 3 件 merged (#534/#535/#537)
+- **CI / Deploy**: 全 PR Cloud Run デプロイ完了 (Session 終了時点で #537 のみ in_progress)
+- **Open Issue**: active 3 (#533 Phase 2/3 残, #536 sanitize refactor, #521 OQ #17) / postponed 4 (#274/#275/#276/#405)
 - **残留プロセス**: ✅ なし
 
 ---
@@ -28,209 +29,174 @@ cat docs/handoff/LATEST.md
 
 # 2. リモート同期確認
 git fetch origin main && git log --oneline -5 origin/main
-gh run list --branch main --limit 5
+gh run list --branch main --workflow=deploy.yml --limit 3
 gh issue list --state open --limit 15
 
-# 3. 現場の PDF 再アップロード結果を確認 (decision-maker 領分)
-# 開発者経由で業務スーパー管理者の動作確認結果を聞き取り
-#   - 成功 → セッション終了 (handoff のみ)
-#   - 失敗 → 追加調査 (下記「条件待ち」セクション参照)
+# 3. Phase 1 デプロイ後の本番動作確認 (decision-maker 領分)
+# 開発者経由で:
+#   - 出席レポートの「未退出」フィルタが見えるか (#532)
+#   - 滞在時間カラムが表示されるか (#531)
+#   - 長遊園様 4 件の不一致は **データ補正未実施** のため依然見える状態
+#     (Phase 1 はコード予防のみ。過去分の補正は Phase 2 backfill 実施で解消)
 
-# 4. CORS 設定の永続化検証 (read-only、AI 可)
-gcloud storage buckets describe gs://lms-279-resources --format=json | jq '.cors_config // .cors'
+# 4. Cloud Logging で eventType 確認 (Phase 1 の structured log が出ているか)
+gcloud logging read 'jsonPayload.eventType=~"quiz_synthetic_session"' --project=lms-279 --limit=5 --format=json | jq '.[] | {ts: .timestamp, msg: .jsonPayload.message, eventType: .jsonPayload.eventType}'
 ```
 
-**次セッションの最初の一手**: 現場の再アップロード結果報告を待つ。報告内容に応じて分岐。
+**次セッションの最初の一手**: 開発者からの本番動作確認結果待ち、もしくは Phase 2 (backfill workflow) 着手指示待ち。
 
 ---
 
 ## 重要な作業内容 (本セッション)
 
-### 1. 現場からのエラー報告
+### 1. 不一致 3 種の発見プロセス (Playwright MCP + API JSON 突合)
 
-業務スーパー管理者経由で、PDF アップロード時に「ネットワークエラーが発生しました。再度お試しください。」が表示される報告を受けた (22.6 MB、Canva 圧縮済み、上限 50 MB 内)。
+開発者報告「長遊園様で進捗と出席ログが不一致」を Playwright MCP で本番にアクセス、`/super/attendance` と `/super/progress` の API レスポンス JSON を `.playwright-mcp/` 配下に保存し node script で cross-reference。
 
-### 2. 原因究明
+判明:
 
-| 観点 | 確認結果 |
-|------|---------|
-| サーバ側上限 | 50 MB (`MAX_PDF_SIZE_BYTES`, `services/api/src/services/lesson-resource.ts:23`) |
-| FE 側上限 | 50 MB (`web/components/master/MasterLessonPdfUploader.tsx:26`) |
-| GCS バケット `lms-279-resources` CORS 設定 | **未設定** (`gcloud storage buckets describe` で確認) |
-| バケットのオブジェクト数 | 0 (バケット作成後、本番 PUT が成功したことが一度もない) |
-| エラーフロー | XHR `onerror` → `UploadError("network")` → 「ネットワークエラー」表示 |
+| 種別 | 件数 | 真因 |
+|------|------|------|
+| **A. UI フィルタ仕様** | (在室中セッション数) | `page.tsx:257` が `r.exitReason !== null` 無条件除外、`exitReason=null` セッションが画面に出ない |
+| **B. 機能欠落 (依頼)** | — | 「滞在時間」カラム未実装 (開発者依頼で発覚) |
+| **C. データ整合性** | 4 件 | `quiz-attempts.ts:292-294` の後方互換設計で `activeSession=null` でも quiz 提出許可、`completeSession` がスキップされ `lesson_sessions` に痕跡が残らない |
 
-**判断**: ブラウザから署名 URL への XHR `PUT` は別オリジン (`storage.googleapis.com`) のため CORS preflight 必須。バケットに CORS 設定が無いため preflight が弾かれ、XHR が `error` イベント発火 → 「ネットワークエラー」になる。
+### 2. PR #534 (#532 fix) — 退室理由フィルタ「未退出」追加
 
-### 3. Codex セカンドオピニオン取得
+- `_helpers/exit-reason-filter.ts` (新規 pure function + sentinel)
+- 7 件単体テスト (境界値網羅) + 1 件 sentinel 衝突 regression guard (silent-failure-hunter HIGH 反映)
+- 3 files / +106
+- /review-pr 3 エージェント完了 → squash merge
 
-`mcp__codex__codex` で fix モード read-only 調査依頼。結果サマリー:
+### 3. PR #535 (#531 feat) — 滞在時間カラム追加
 
-| 観点 | Codex の確度 | 判定 |
-|------|-------------|------|
-| CORS 未設定が根本原因 | **High** | 同意 |
-| CORS 追加で解決する | **High** | 同意 |
-| 推奨 CORS JSON の妥当性 | **High** | 1 点修正 (`responseHeader` から `x-goog-resumable` を除去) |
-| 検証手順 | **High** | preflight → PUT → confirm の段階別切り分け |
-| 動画は動いて PDF だけ動かない理由 | Medium | 「動画も本当に同じ経路で動いているか前提疑え」と指摘 |
+- `_helpers/stay-duration.ts` (calculateStayDurationMs + formatStayDuration)
+- 17 件単体テスト (0分 / 1時間 / 数日跨ぎ / NaN 等)
+- COLUMNS 拡張、sort 分岐、PDF 出力ダイアログ自動統合
+- 3 files / +152
+- /review-pr 3 エージェント完了 → squash merge
 
-**Codex の指摘 (動画前提疑問)**: `lms-279-uploads` も CORS 未設定だが「動画は動いている」観察事実が成り立つ可能性として:
-- 動画は Google Drive import 経路でブラウザ直 PUT ではない
-- 過去成功の動画は実は既存メタ参照を見ているだけで、本番直 PUT は今回が初
+### 4. PR #537 (#533 Phase 1) — 合成 session 作成
 
-→ 本セッションでは検証未実施。次セッションのフォローアップ候補 (下記 F3)。
+**Codex セカンドオピニオン**:
 
-### 4. 本番 GCS バケットへ CORS 適用
+- destructive migration 設計を Codex に plan モードで提示 → HIGH 信頼度評価 + 3 つの High リスク (冪等性 / enum 拡張影響 / entryAt 意味論) 指摘 → 全反映
+- OQ1-OQ6 全て Codex 推奨に従い実装
 
-開発者から番号単位明示認可受領 → 実行:
+**実装**:
 
-```bash
-# /tmp/resources-cors.json
-[
-  {
-    "origin": [
-      "https://web-3zcica5euq-an.a.run.app",
-      "https://web-1034821634012.asia-northeast1.run.app"
-    ],
-    "method": ["PUT", "GET", "HEAD"],
-    "responseHeader": ["Content-Type"],
-    "maxAgeSeconds": 3600
-  }
-]
+- `LessonSession.isSynthetic?: boolean` provenance flag (新 exitReason enum 追加せず ADR-027 影響回避)
+- `DataSource.createLessonSessionWithId(id, data)` (Firestore tx.create で race-safe、決定的 doc id `synthetic_{attemptId}` で冪等)
+- `createSyntheticCompletedSession` helper (entryAt=attempt.startedAt, exitAt=attempt.submittedAt で滞在時間 = quiz 所要時間)
+- `quiz-attempts.ts` 合格分岐に `else if (quiz)` 追加
+- 5 件 integration test (AC1.1-1.5)
 
-gcloud storage buckets update gs://lms-279-resources --cors-file=/tmp/resources-cors.json
-# → Updating gs://lms-279-resources/... 完了
-```
+**Evaluator 分離プロトコル** (5+ ファイル + 新機能):
 
-反映確認 (`gcloud storage buckets describe gs://lms-279-resources --format=json` → `cors_config` に上記 JSON が反映)。
+- 4 エージェント並列起動 (code-reviewer / pr-test-analyzer / silent-failure-hunter / evaluator)
+- silent-failure-hunter HIGH 2 件 (logger 統一 / video missing eventType 化) を本 PR で取り込み
+- evaluator MEDIUM 2 件 (startedAt null check / AC1.4 spy 検証) 取り込み
+- code-reviewer Important #1 (Date 型) は `toDateStrict` 内 `instanceof Date` 対応済みで false alarm 判定
+- 7 files / +469
+- squash merge
 
-### 5. preflight 動作検証
+### 5. Issue #536 (LOW follow-up 起票)
 
-curl で両 Cloud Run web origin から `OPTIONS` リクエスト → 両方とも:
-- HTTP/2 200
-- `access-control-allow-origin: <一致した origin>`
-- `access-control-allow-methods: PUT,GET,HEAD`
-- `access-control-allow-headers: Content-Type`
-- `access-control-max-age: 3600`
-
-→ CORS による弾きは確実に解消。
-
-### 6. 現場向け簡潔報告 → 開発者送付
-
-decision-maker の助言「社内現場には最もシンプルな回答」に従い:
-
-> お疲れ様です。対応しました。お手数ですが、改めてお試しください。
-
-→ 開発者が手元で送付完了。
+safe-refactor で検出された Firestore lesson_sessions sanitize ロジック 3 箇所重複の helper 抽出。本 PR スコープ外で別 Issue。
 
 ---
 
-## Issue Net 変化
-
-- **Close 数**: 0 件
-- **起票数**: 0 件
-- **Net**: **0 件**
-
-**Net=0 の理由言語化** (`feedback_issue_triage.md` 準拠):
-
-本件は実害 (現場 1 ユーザーのブロック) かつ再現可能なバグだが、原因究明 + 本番設定変更で即解決した。triage 基準 #1 (実害) は形式上該当するが、Issue 起票による追跡価値が低い (解決済み、postmortem 余地は CORS 設定手順の runbook 反映のみで、これは F1 として明示指示待ち)。
-
-postponed Issue 4 件 (#274 / #275 / #276 / #405) は Session 61 から変化なし。
-
----
-
-## 構造的整合性チェック
-
-| 観点 | 該当 | 状態 |
-|---|---|---|
-| `/impact-analysis` (型・共有ロジック・設定ファイル) | ❌ 該当なし (本番 GCP リソース設定のみ、コード変更ゼロ) | ⏭️ スキップ |
-| `/new-resource` (新規テーブル/API) | ❌ 該当なし | ⏭️ スキップ |
-| `/trace-dataflow` (データフロー実装) | ❌ 該当なし | ⏭️ スキップ |
-| `/check-api-impact` (API 境界変更) | ❌ 該当なし | ⏭️ スキップ |
-
-本セッションは GCP 設定変更 (バケット CORS) のみ、構造的整合性チェックは全件スキップ。
-
----
-
-## グローバル memory scope チェック
-
-本セッションで `memory/feedback_*.md` / `memory/reference_*.md` / `memory/MEMORY.md` への変更なし → **該当なし、スキップ**。
-
-ただし、次セッションで decision-maker から明示指示があれば、以下を memory 追加候補として保持:
-
-### project memory 追記候補 (F2)
-
-「**GCS バケット作成時に CORS 設定を runbook に明記する**」原則。
-
-- 本セッションで `lms-279-resources` (2026-05-17 作成) が CORS 設定なしで放置され、本番初回利用 (= 現場の PDF アップロード試行) で顕在化
-- 同様のバケット `lms-279-uploads` も CORS 設定なし → 動画経路の実態確認 (F3) が次の論点
-
-**配置先判断**:
-- グローバル原則化可能 (他プロジェクトでも適用): 「ブラウザから直 PUT する GCS バケットは作成時に CORS 設定 + runbook 明記」
-- ただし固有名 (`lms-279-resources` 等) を含む詳細はプロジェクト固有
-- **decision-maker 指示時の判断**: 汎用部分はグローバル `~/.claude/memory/` へ、固有事例はプロジェクト直下 `.claude/memory/` (現状未作成、新規作成可) へ
-
----
-
-## 次のアクション
+## 次のアクション (A/B/C × 3 分割)
 
 ### 即着手タスク
 
-**なし** (AI executor の即着手領分はゼロ)。
+**即着手タスクなし** (executor 領分の作業 0 件)
 
-本セッションで CORS 適用 + preflight 検証 + 現場送付まで完了済み。次の起動 trigger は現場の動作確認結果。
+判定根拠:
+- 全 Phase 1 PR merge + deploy 完了
+- Phase 2/3 は decision-maker 判断待ち (下記「条件待ち」)
+- 他 active Issue (#536, #521) は明示指示なき限り着手不可
 
 ### 条件待ち (明示 trigger 付き)
 
-| # | 項目 | A/B/C | trigger | trigger 充足時のタスク |
-|---|------|-------|---------|----------------------|
-| 1 | 現場の PDF 再アップロード成功確認 | B 検出 | 開発者経由で「成功した」報告受領 | セッション終了 (handoff のみ)。F1/F2 の指示があれば実施 |
-| 2 | 現場の PDF 再アップロード失敗時の追加調査 | B 検出 → B 修正 | 開発者経由で「再エラー」報告受領 + エラー内容開示 | エラー種別判定 (403 = Content-Type 不一致 / 5xx = confirm 失敗等)、Codex 推奨の DevTools Network 切り分け手順を実施 |
-| 3 | Phase 4 α-7 cutover Step 1-2 (テナント opt-in) | C 起点指示待ち | 開発者からの明示着手指示 | impl-plan → 実装 |
-| 4 | OQ #17 残 12 件 (#1-#10 + #14 + #15) の個別 issue 化 / 一部却下 | A + decision-maker 指示なし → 指示待ち | 開発者からの選別指示 | `gh issue create` / 却下マーク |
-| 5 | F1: PDF upload runbook に「バケット作成時の CORS 設定手順」追記 | A | 開発者からの「runbook 追記して」指示 | `docs/ops/2026-05-17-pdf-smoke-test-runbook.md` または `ADR-036` に CORS 設定セクション追加 |
-| 6 | F2: GCS バケット CORS 原則の memory 化 | A | 開発者からの「memory 追記して」指示 | グローバル `~/.claude/memory/` (汎用原則) + プロジェクト `.claude/memory/` (固有事例) |
-| 7 | F3: `lms-279-uploads` (動画用) の CORS 確認 + 必要なら適用 | B 検出 → B 修正 | 開発者からの「調査して」指示 | `gcloud storage buckets describe` で確認 → CORS なしなら動画経路の実態調査 (実際にブラウザ直 PUT か、別経路か) → 必要なら CORS 適用 |
-| 8 | AC-α7-10 完全 visual responsive (Playwright E2E) | C 起点指示待ち | 開発者からの「着手」明示指示 + super UI auth 機構拡張仕様 | impl-plan → TDD → 実装 |
-| 9 | E2E 200 系 500 PERMISSION_DENIED 原因究明 | B 修正 | 開発者からの調査指示 | debug-hypothesis 起動 |
-| 10 | OQ #17 #14 / #15 (shared-types 改修要) | C 起点指示待ち | 開発者からの個別着手指示 | impl-plan → 実装 |
-| 11 | `feedback_verify_fact_before_declaring.md` への 4 件目 + 5 件目事例追記 (Session 64-66 引き継ぎ) | A | 開発者からの「memory 追記して」指示 | memory 編集 PR |
-| 12 | 設計仕様書 §5 改訂 (Session 64-66 引き継ぎ) | A | 開発者からの「改訂して」指示 | spec ファイル編集 PR |
+| # | 項目 | A/B/C | trigger 内容 | trigger 充足時のタスク |
+|---|------|-------|------------|----------------------|
+| 1 | **#533 Phase 2 (backfill workflow)** | C | 開発者から「Phase 2 進めて」明示指示 + Phase 1 本番動作確認 OK | impl-plan 再起動 (Phase 2 のみ詳細化) → workflow_dispatch + audit script + apply + manifest 実装 → Codex review (本番データ書き込み) → PR |
+| 2 | **#533 Phase 3 (FE バッジ表示)** | C | Phase 2 完了 (= 過去 4 件補正済み) + 開発者からの着手指示 | shared-types に isSynthetic 追加 → super-admin.ts attendance-report レスポンス拡張 → web 出席レポート FE バッジ追加 + Playwright E2E |
+| 3 | **長遊園様で Phase 1 動作確認結果報告** | B 検出 | 開発者経由で「テスト提出を実施 → synthetic_* doc 生成確認 or 異常」 | 結果に応じて Phase 2 着手判断 (Phase 1 想定通り → Phase 2 / 想定外 → debug) |
+| 4 | **本番 Cloud Logging で `quiz_synthetic_session_*` eventType 確認** | B 検出 | 本番でテスト提出された後 (上記 #3 と連動) | Phase 1 ロギングが正しく出ているか確認、誤動作あれば緊急修正 |
+| 5 | **#536 Firestore sanitize refactor** | C | 開発者からの「#536 進めて」明示指示 | helper 抽出 → 3 箇所置換 → PR (リファクタのみ、リスク低) |
+| 6 | **ADR-027 に isSynthetic 追加の補足追記** | A | 開発者からの「ADR 更新して」明示指示 | docs/adr/adr-2026-XX-XX-lesson-session-synthetic.md 起票 or 027 改訂 |
 
 ### 却下候補 (記録のみ・包括指示の対象外)
 
 | # | 項目 | A/B/C | 着手しない理由 |
 |---|------|-------|--------------|
-| 1 | Phase 4 α-7 関連の追加機能発想 | C unclear | 起点アイデアは decision-maker 領分 (4 原則 §1) |
-| 2 | 全 ADR 39 件の整合性再 grep | A 指示なし | housekeeping 越権、ROI 低 |
-| 3 | postponed Issue #274 / #275 / #276 / #405 の再開判断 | B 修正 | 再開条件未充足 / 番号単位明示指示なし |
+| 1 | postponed Issue #274/#275/#276/#405 の再開判断 | B 修正 | postponed ラベル + 再開条件 trigger 未充足 + 番号単位指示なし |
+| 2 | Phase 4 α-7 関連の追加機能発想 | C unclear | 起点アイデアは decision-maker 領分 (4 原則 §1) |
+| 3 | Defer された review 指摘 (Firestore tx race test, 既存 5 箇所 console→logger, AlreadyExistsError handling, 型ガード catch 分離) | C | 明示的に「別 Issue」と判定済み、起票も後回し承認 |
 
 ---
 
-## 終了判定 (M4.3 ロジック適用)
+## CI / Deploy 状態
 
-🛑 **executor 領分の作業ゼロ、即時終了推奨**
+| PR | Deploy run | 状態 |
+|----|-----------|------|
+| #534 (#532) | 27184596768 | ✅ success (4m20s) |
+| #535 (#531) | 27185049617 | ✅ success (4m22s) |
+| #537 (#533 Phase 1) | 27186197429 | ⏳ in_progress (Session 終了時点) → 次セッション開始時に完了確認 |
 
-根拠:
-- 即着手タスク = 0 件
-- 条件待ち 12 件すべて trigger 未充足 (現場結果待ち / 開発者指示待ち)
-- Git: handoff PR 作成前の本セッション変更分は handoff ファイルのみ (本番 GCP 設定変更は GCP 側で完結、リポジトリ変更ゼロ)
-- CI: main 最新コミット (cedc608) すべて GREEN
-- 残留プロセス: なし
-- 既知の blocker: なし
+---
 
-次セッションで decision-maker から具体的な番号単位の指示 (例:「条件待ち #1 で現場 OK 報告」「F1 を実施」「OQ #17 残件選別を始める」等) があった時点で起動。
+## ADR / 設計判断記録
 
-参照: `~/.claude/memory/feedback_idle_session_skip_housekeeping.md` / `feedback_handoff_next_action_separation.md` / `feedback_ai_executable_scope_abc.md`
+本セッションでの新規 ADR 起票なし。
+ただし以下は次回 ADR 改訂検討候補:
+
+- **ADR-027** (lesson_sessions 設計): `isSynthetic` field 追加の補足。enum 拡張せず provenance flag 採用の根拠 (Codex 推奨)
+- **新規 ADR 候補**: 「activeSession=null での quiz 提出を許容する後方互換性設計 + 合成 session による整合性保証」
+
+---
+
+## Issue Net 変化
+
+- **Close 数**: 2 件 (#531, #532)
+- **起票数**: 4 件 (#531, #532, #533, #536)
+- **Net**: **−2 件**
+
+### KPI 上は「進捗ゼロ扱い」だが正当性あり
+
+CLAUDE.md `feedback_issue_triage.md`「Net ≤ 0 は進捗ゼロ扱い」の例外条件:
+
+1. #531 / #532 / #533: 開発者経由のバグ報告「進捗と出席ログが不一致」調査で発見 → CLAUDE.md MUST #5「ユーザーから明示的に指示された個別タスク」該当
+2. #536: safe-refactor で検出された LOW、開発者から「スコープ外にせや (推奨) - 別 Issue 起票」と明示承認後の起票
+
+→ review agent rating 5-6 提案を機械的 Issue 化したケースではない。triage gate 通過。
+
+---
+
+## 再開可能性判定
+
+| 項目 | 状態 |
+|------|------|
+| Git clean | ✅ |
+| OPEN PR | 0 件 |
+| 残留プロセス | ✅ なし |
+| Deploy 進行中 | ⏳ #537 (確認のみ次セッションで OK) |
+| 即着手タスク | 0 件 |
+| 条件待ち | 6 件 (全て trigger 待ち) |
+| Documentation 同期 | ✅ 本 handoff で更新 |
 
 ---
 
 ## 最終結論
 
-✅ **セッション終了可**
+🛑 **executor 領分の作業ゼロ、セッション終了推奨**
 
-- AI executor の即着手領分はゼロ (CORS 設定 + preflight 検証 + 現場報告まで完了)
-- Git は本 handoff PR 作成のみ、それ以外は clean
-- OPEN PR: 本 handoff PR のみ予定、active Issue 数は Session 66 から変化なし (#521 のみ active)
-- 次の起動 trigger は現場の再アップロード結果 (decision-maker 経由)
-- 残留プロセス なし、CI GREEN
+根拠:
+- 即着手タスク **0 件** (条件待ち 6 件すべて decision-maker 判断 or 開発者報告 trigger 未充足)
+- Git clean、main 最新 (commit `2c80217`)、OPEN PR ゼロ
+- 残留プロセスなし、blocker なし
+- 次セッション起動 trigger は (a) Phase 1 動作確認結果 (b) Phase 2 着手指示 (c) #536 着手指示 のいずれか
+
+次セッション起動時は `catchup` で本 handoff 読込 + `gh run list` で #537 deploy 完了確認、その後 trigger 充足待機 or 別案件対応。
