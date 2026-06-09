@@ -526,9 +526,43 @@ export async function runMain(
     scopedUserId
   );
 
+  // tenant 名 + user_email 解決 (本番運用時の人間判読性向上、Phase 2 後送り対応)
+  // backfill 件数が想定と divergent な時にテナント名と user_email で内訳特定する用途。
+  // findBackfillTargets には触らず、本ループのみで cache 化して resolve する。
+  const tenantNameCache = new Map<string, string>();
+  const userEmailCache = new Map<string, string>(); // key: tid:uid
+  async function resolveTenantName(tid: string): Promise<string> {
+    if (tenantNameCache.has(tid)) return tenantNameCache.get(tid)!;
+    const td = await db.collection("tenants").doc(tid).get();
+    const name = (td.data()?.name as string | undefined) ?? tid;
+    tenantNameCache.set(tid, name);
+    return name;
+  }
+  async function resolveUserEmail(tid: string, uid: string): Promise<string> {
+    const key = `${tid}:${uid}`;
+    if (userEmailCache.has(key)) return userEmailCache.get(key)!;
+    const ud = await db.collection(`tenants/${tid}/users`).doc(uid).get();
+    const email = (ud.data()?.email as string | undefined) ?? "";
+    userEmailCache.set(key, email);
+    return email;
+  }
+
   console.log("=== 抽出結果 ===");
   console.log(`backfill 対象: ${targets.length} 件`);
   console.log(`audit_only (apply 対象外): ${auditOnly.length} 件`);
+
+  // tenant 単位の内訳表示 (Phase 2 後送り: 想定外スコープ時の即座把握用)
+  if (targets.length > 0) {
+    const tenantBreakdown = new Map<string, number>();
+    for (const t of targets) {
+      tenantBreakdown.set(t.tenantId, (tenantBreakdown.get(t.tenantId) ?? 0) + 1);
+    }
+    console.log("\n=== backfill 対象 tenant 内訳 ===");
+    for (const [tid, count] of tenantBreakdown) {
+      const name = await resolveTenantName(tid);
+      console.log(`  tenant=${tid} (${name}): ${count} 件`);
+    }
+  }
 
   // expected_count 完全一致ガード (Codex M2)
   const validation = validateExpectedCount(targets.length, parsed.expectedCount);
@@ -573,8 +607,10 @@ export async function runMain(
       projectId: process.env.GOOGLE_CLOUD_PROJECT ?? "(unknown)",
       mode: parsed.execute ? "execute" : "dry-run",
       generatedAt: new Date().toISOString(),
-      targets: targets.map((t) => ({
+      targets: await Promise.all(targets.map(async (t) => ({
         tenantId: t.tenantId,
+        tenantName: await resolveTenantName(t.tenantId),
+        userEmail: await resolveUserEmail(t.tenantId, t.attempt.userId),
         attempt: t.attempt,
         lessonId: t.lessonId,
         courseId: t.courseId,
@@ -586,8 +622,12 @@ export async function runMain(
           t.courseId,
           t.videoId
         ),
-      })),
-      auditOnly,
+      }))),
+      auditOnly: await Promise.all(auditOnly.map(async (a) => ({
+        ...a,
+        tenantName: await resolveTenantName(a.tenantId),
+        userEmail: await resolveUserEmail(a.tenantId, a.attempt.userId),
+      }))),
     };
     try {
       writeFileSync(backupPath, JSON.stringify(backup, null, 2));
