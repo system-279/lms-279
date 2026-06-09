@@ -1,0 +1,126 @@
+name: Backfill Synthetic Lesson Sessions
+
+# Issue #533 Phase 2: 過去の合格 quiz_attempt のうち lesson_sessions に痕跡が残っていないもの
+# (activeSession=null での提出) について、Phase 1 createSyntheticCompletedSession 相当の
+# synthetic_{attemptId} doc を遡及作成する admin workflow。
+#
+# Phase 1 (PR #537) で新規発生は予防済み。本 workflow は過去発生分の整合性回復用。
+#
+# 実行方法:
+#   GitHub Actions UI > Backfill Synthetic Lesson Sessions > Run workflow
+#   インプット未指定で dry-run (全テナント横断、件数 + サンプル表示のみ)
+#   execute=true で実際に書き込み (環境 protection 必須)
+#
+# 安全機構:
+#   - dry-run 既定
+#   - main ブランチでのみ実行可
+#   - execute=true は environment: production で approval 必須
+#   - expected_count 完全一致ガード (本番 apply で必須運用)
+#   - 件数アサーション (max_targets)
+#   - スコープ絞り込み (tenant_id / user_email / user_id)
+#   - 更新前バックアップ artifact (commit SHA / run id / actor / 関連 session snapshot)
+#   - tx.create で race-safe + 冪等
+#   - 書き込み後の読み戻し検証
+#
+# セキュリティ: workflow_dispatch 入力はすべて env 経由で受け、run: 内で直接補間しない
+# (https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/)
+
+on:
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: '実書き込みモード (false=dry-run / true=apply)。true 時は environment approval 必須'
+        type: boolean
+        default: false
+      tenant_id:
+        description: 'テナント ID で絞り込み (空 = 全テナント横断)'
+        required: false
+        type: string
+      user_email:
+        description: 'ユーザー email で絞り込み (user_id と排他)'
+        required: false
+        type: string
+      user_id:
+        description: 'ユーザー ID で絞り込み (user_email と排他)'
+        required: false
+        type: string
+      max_targets:
+        description: 'backfill 対象の上限件数 (既定 100、超えると中断)'
+        required: false
+        default: '100'
+        type: string
+      expected_count:
+        description: '対象件数の完全一致ガード (本番 apply で必須運用、不一致時 fail)'
+        required: false
+        type: string
+
+jobs:
+  backfill:
+    name: Backfill
+    # main branch でのみ実行可 (Codex M3 反映)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # execute=true 時のみ environment approval を要求 (Codex M3 反映)
+    environment: ${{ inputs.execute && 'production' || 'dev' }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FIREBASE_PROJECT_ID: lms-279
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
+
+      - name: Run backfill script
+        env:
+          GOOGLE_CLOUD_PROJECT: lms-279
+          EXECUTE: ${{ inputs.execute }}
+          TENANT_ID: ${{ inputs.tenant_id }}
+          USER_EMAIL: ${{ inputs.user_email }}
+          USER_ID: ${{ inputs.user_id }}
+          MAX_TARGETS: ${{ inputs.max_targets }}
+          EXPECTED_COUNT: ${{ inputs.expected_count }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          # execute=true には expected_count 必須 (件数ガード強制、Codex M2 反映)。
+          # 空のまま apply されると validateExpectedCount がスキップされ防護が外れる。
+          if [ "$EXECUTE" = "true" ] && [ -z "$EXPECTED_COUNT" ]; then
+            echo "[FATAL] execute=true には expected_count 入力必須 (件数完全一致ガード)" >&2
+            exit 1
+          fi
+          FLAGS=()
+          if [ "$EXECUTE" = "true" ]; then FLAGS+=("--execute"); fi
+          if [ -n "$TENANT_ID" ]; then FLAGS+=("--tenant-id=$TENANT_ID"); fi
+          if [ -n "$USER_EMAIL" ]; then FLAGS+=("--user-email=$USER_EMAIL"); fi
+          if [ -n "$USER_ID" ]; then FLAGS+=("--user-id=$USER_ID"); fi
+          if [ -n "$MAX_TARGETS" ]; then FLAGS+=("--max-targets=$MAX_TARGETS"); fi
+          if [ -n "$EXPECTED_COUNT" ]; then FLAGS+=("--expected-count=$EXPECTED_COUNT"); fi
+          echo "Running with flags: ${FLAGS[*]:-(none)}"
+          npx tsx scripts/backfill-synthetic-sessions.ts "${FLAGS[@]}"
+
+      - name: Upload backup artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backfill-synthetic-backup-${{ github.run_id }}
+          path: backfill-synthetic-backup-*.json
+          if-no-files-found: ignore
+          retention-days: 30
