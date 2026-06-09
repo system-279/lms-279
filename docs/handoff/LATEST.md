@@ -1,21 +1,20 @@
-# Session Handoff — 2026-06-09 (Session 69)
+# Session Handoff — 2026-06-09 (Session 70)
 
 ## TL;DR
 
-#533 (進捗 vs 出席ログ不一致) **Phase 2 backfill workflow を merge し、本番 audit で想定外スコープ (17 件、2 テナント) を発見**。tenant 名 + user_email 解決機能を緊急追加 (PR #541) で詳細特定し、apply 直前で停止 (expected_count=4 → 17 への再認可待ち)。
+#533 (進捗 vs 出席ログ不一致) **Phase 2 本番 apply 完了 + idempotency 検証 OK + PII artifact 削除完了**。17 件全件補正済 (長遊園 12 / 福の種 ③ 5)。残作業は開発者手元の **画面確認** と **現場連絡** (文案ドラフト作成済)。
 
 | 主要成果 | 結果 |
 |---|---|
-| PR #540 (Phase 3 設計仕様書) | ✅ merged + Codex review 反映済 |
-| PR #539 (Phase 2 backfill workflow) | ✅ merged + deploy 完了 |
-| PR #541 (tenant 名 + user_email 解決) | ✅ merged + deploy 完了 |
-| 本番 audit (全テナント横断) | ✅ 完了 (17 件検出、内訳特定済) |
-| **本番 apply** | 🛑 **未実行、`expected_count=17` への再認可待ち** |
+| Phase 2 本番 apply (run 27200193182) | ✅ created=17 / skipped=0 / failed=0 / readback=17 |
+| 再 audit (run 27200744211、idempotency 検証) | ✅ backfill 対象 0 件 / audit_only 142 件 (125+17 整合) |
+| PII artifact 削除 (2 件) | ✅ 7505309504 / 7504819097 削除完了 |
+| 現場連絡文案ドラフト | ✅ `docs/handoff/drafts/site-comm-2026-06-09-phase2-backfill.md` |
 
 - **Issue Net**: 変化なし (新規起票 0、Close 0)
-- **PR**: 3 件 merged (#539, #540, #541)
-- **deploy**: 全 3 PR 完了
-- **本番 Firestore 書き込み**: ゼロ (audit のみ実施)
+- **本セッション PR**: 0 件 (Session 69 までで 3 PR 完了済、本セッションは workflow 実行 + クリーンアップのみ)
+- **本番 Firestore 書き込み**: 17 件 (Phase 2 apply)
+- **本番影響**: 17 件の出席ログを `synthetic_{attemptId}` doc id で補正 (PR #537 helper と同一構造)
 
 ---
 
@@ -28,92 +27,90 @@ cat docs/handoff/LATEST.md
 # 2. リモート同期 + 状態確認
 git fetch origin main && git log --oneline -5 origin/main
 gh pr list --state open
-gh run list --branch main --workflow=backfill-synthetic-sessions.yml --limit 5
+gh issue list --state open
 
-# 3. 17 件の詳細を確認 (下記「本番 audit 結果詳細」参照)
+# 3. 残作業の trigger 待ち状態を確認 (下記「次のアクション」参照)
+```
 
-# 4. 開発者から下記認可を得たら apply 実行 (本セッション中断時の最終ステップ)
-#    認可フォーマット: "workflow_dispatch with execute=true expected_count=17 を実行してよい"
+**次セッションの最初の一手**: 開発者手元の画面確認結果報告、または Phase 3 実装着手指示、または別案件。
+
+---
+
+## 重要な作業内容 (本セッション = Session 70)
+
+### 1. Phase 2 本番 apply 実行 (workflow run 27200193182)
+
+開発者から番号単位明示認可受領:
+> 「workflow_dispatch with execute=true expected_count=17 を実行してよい」
+
+実行:
+```bash
 gh workflow run backfill-synthetic-sessions.yml --ref main \
   -f execute=true -f expected_count=17
 ```
 
-**次セッションの最初の一手**: 開発者からの `expected_count=17` 明示認可待ち、または別案件への切替判断。
+結果 (9m51s):
+```
+=== 抽出結果 ===
+backfill 対象: 17 件
+audit_only (apply 対象外): 125 件
 
----
+=== backfill 対象 tenant 内訳 ===
+  tenant=8vexhzpc (社会福祉法人 莞爾会 長遊園 様): 12 件
+  tenant=atali82i (福の種 株式会社様 ③): 5 件
 
-## 重要な作業内容 (本セッション)
+=== 完了 ===
+  created: 17
+  skipped: 0
+  failed:  0
+  readback verified: 17
+```
 
-### 1. プラン策定 — Codex セカンドオピニオン併用
+### 2. 再 audit (idempotency 検証、run 27200744211)
 
-Phase 1〜3 の全体解決プランを Codex に相談し、以下を確定:
-- Track A (dev rehearsal) / Track B (Phase 1 本番動作確認) / Track C (Phase 3 設計) の 3 トラック並行
-- **dev 環境が存在しない事実発覚** → Track A は「本番 audit + dry-run (書き込みなし)」に修正
-- ゲート 3 条件: ① Track A 完了 ② Track B 完了 ③ 番号単位明示認可
-- 「完了」を 2 段階定義: **最低限完了** (Phase 2 まで) / **プロジェクト完了** (Phase 3 含む)
-- 現場連絡は内部画面確認後
+```bash
+gh workflow run backfill-synthetic-sessions.yml --ref main
+```
 
-### 2. PR #540 (docs/spec) — Phase 3 設計仕様書
+結果 (~2 分):
+```
+=== 抽出結果 ===
+backfill 対象: 0 件
+audit_only (apply 対象外): 142 件   # 125 + 17 = 142 整合
+backfill 対象なし
+```
 
-`docs/specs/2026-06-09-phase3-synthetic-session-badge-design.md` 作成 → Codex 簡略 review 反映:
-- HIGH: §4 と §5.2 の filter 仕様矛盾 → 新規「session 種別」フィルタに統一
-- HIGH: **CSV 機能は未実装** (`window.print()` のみ) → CSV をスコープ外化、PDF 印字に変更
-- HIGH: CSV 列名統一 (`is_synthetic`)
-- MED: admin 側出席画面 (別系統) を非ゴール明示
-- OQ 推奨方向: バッジ位置 entryAt 横 / フィルタ RadioGroup / ADR-027 追記
+→ idempotency 確認 OK、重複作成なし。
 
-squash merge 完了。
+### 3. PII artifact 削除 (Codex 推奨対応)
 
-### 3. PR #539 (feat/backfill) — Phase 2 backfill workflow
+PR #541 deploy 後 (user_email 含む artifact) を削除:
 
-Draft → ready → squash merge 完了。/review-pr 累計 28 件反映済。
+| ID | run | 内容 | 状態 |
+|----|-----|------|------|
+| 7505309504 | 27200193182 (apply) | targets + audit_only + user_email | ✅ 削除済 |
+| 7504819097 | 27199409860 (audit run 3) | audit_only + user_email | ✅ 削除済 |
+| 7503396684 | 27196040433 (audit run 2) | tenant 絞り込み、user_email なし | 30 days 自動削除に任せる |
+| 7503291779 | 27195778589 (audit run 1) | 全テナント、user_email なし | 30 days 自動削除に任せる |
 
-### 4. 本番 audit 実行 → 想定外スコープ発覚
+削除コマンド (CLAUDE.md MUST: 件数アサーション付き):
+```bash
+TARGETS="7505309504 7504819097"
+COUNT=$(echo "$TARGETS" | wc -w | tr -d ' ')
+[ "$COUNT" -ne 2 ] && { echo "FATAL"; exit 1; }
+for id in $TARGETS; do gh api -X DELETE "repos/system-279/lms-279/actions/artifacts/$id"; done
+```
 
-`workflow_dispatch` で execute=false (audit モード) 実行:
-- **backfill 対象 17 件** (想定 4 件と divergent)
-- **audit_only 124 件** (apply 対象外、quizAttemptId 一致 session で整合済)
-- tenant 内訳 unclear (id のみで人間判読不可)
+### 4. 現場連絡文案ドラフト作成
 
-apply 即停止判断: ユーザー認可は `expected_count=4` 前提のため、実態 17 件への変更は再認可必要。
+`docs/handoff/drafts/site-comm-2026-06-09-phase2-backfill.md`:
+- 送付対象 2 法人 (長遊園 + 福の種 ③)
+- 置換テンプレート (件数 / 期間別)
+- 送付前チェックリスト
+- 文案の設計意図
+- 内部メモ (送付しない、技術的詳細)
 
-### 5. PR #541 (fix/backfill) — tenant 名 + user_email 解決機能
-
-緊急追加 (core ロジック不変、observational metadata 拡張のみ):
-- `runMain` 内に `resolveTenantName` / `resolveUserEmail` cache 付き helper
-- backfill 対象の tenant 内訳ログ (件数集計 + tenant 名)
-- backup JSON の targets / auditOnly に `tenantName` + `userEmail` 追加
-
-Codex 簡略 review: **Go (条件付き) / 信頼度 High**。Medium: PII (user_email artifact 30 days 保持) → 対応後 artifact 削除推奨。
-
-squash merge + deploy 完了 + 再 audit 実行。
-
-### 6. 本番 audit 結果詳細 (artifact run #27199409860)
-
-| テナント | 件数 | 期間 | ユーザー数 |
-|---------|------|------|----------|
-| 社会福祉法人 莞爾会 長遊園 様 (`8vexhzpc`) | 12 件 | 2026-05-11 〜 06-04 | 6 名 |
-| 福の種 株式会社様 ③ (`atali82i`) | 5 件 | 2026-05-21 〜 06-09 | 5 名 |
-| **合計** | **17 件** | — | **11 名** |
-
-**全件 Phase 1 deploy (2026-06-09T05:37) 前**。最新は福の種 t-ootuka@fuku-no-tane.com の 06-09T02:17 提出 (deploy 3 時間前)。
-
-**長遊園 12 件の対象ユーザー**:
-- kent-otokata@kanjikai.or.jp (5 件)
-- sayori-maeda@kanjikai.or.jp (2 件)
-- miki-nagatomo@kanjikai.or.jp (2 件)
-- seina-nishikawa@kanjikai.or.jp (1 件)
-- akihito-imamura@kanjikai.or.jp (1 件)
-- hiroaki-kushima@kanjikai.or.jp (1 件)
-
-**福の種 5 件の対象ユーザー**:
-- k-adachi / y-maeda / k-komatsubara / a-miyake / t-ootuka @fuku-no-tane.com (各 1 件)
-
-### 7. Phase 1 動作確認の間接証拠
-
-- 全 17 件すべて Phase 1 deploy 前の提出
-- Phase 1 deploy 後 (2026-06-09T05:37 〜 本セッション終了) の **新規発生ゼロ**
-- → Phase 1 (PR #537) は正しく動いていると推定可 (ただし「実際にテスト提出して synthetic doc 生成を直接確認」は未実施)
+開発者が編集 / 承認 / 送付判断。
 
 ---
 
@@ -123,56 +120,32 @@ squash merge + deploy 完了 + 再 audit 実行。
 
 **即着手タスクなし** (executor 領分の作業 0 件)
 
-判定根拠:
-- 本番 apply は **decision-maker (開発者) からの再認可待ち**
-- 残作業はすべてユーザー認可後の executor 領分
-
 ### 条件待ち (明示 trigger 付き)
 
 | # | 項目 | trigger | trigger 充足時のタスク |
 |---|------|---------|---------------------|
-| 1 | **Phase 2 本番 apply** | 開発者から `workflow_dispatch with execute=true expected_count=17 を実行してよい` 等の番号単位明示認可 | `gh workflow run backfill-synthetic-sessions.yml --ref main -f execute=true -f expected_count=17` → 結果確認 |
-| 2 | **段階 apply 判断** | 開発者から「まず長遊園のみ」等の判断 | tenant_id 指定で apply (`-f tenant_id=8vexhzpc -f expected_count=12` または `-f tenant_id=atali82i -f expected_count=5`) |
-| 3 | **本番 再 audit (idempotency)** | apply 完了後 | `gh workflow run backfill-synthetic-sessions.yml --ref main` で対象 0 件確認 |
-| 4 | **画面確認 (Playwright MCP)** | 再 audit 0 件確認後 | 本番出席レポートで 17 件が整合表示されることを確認 |
-| 5 | **現場連絡** | 画面確認 OK 後 | 開発者経由で「17 件の表示が整合する状態に補正済み、ご確認ください」 |
-| 6 | **artifact 削除 (PII 対応)** | apply 完了後 | Codex 推奨: `gh api -X DELETE /repos/system-279/lms-279/actions/artifacts/{id}` で audit artifact (user_email 含む) 削除 |
-| 7 | **Phase 3 (FE バッジ) 実装着手** | Phase 2 完了 + 内部画面確認 OK + 開発者明示指示 + 別 Issue 起票 | `docs/specs/2026-06-09-phase3-synthetic-session-badge-design.md` ベースで実装 |
-| 8 | **ADR-027 追記** | Phase 3 完了タイミング | isSynthetic provenance flag 採用根拠 + 可視化方針を併記 |
-| 9 | **Phase 1 本番動作確認** (品質確認ゲート) | 長遊園/福の種 で新規テスト提出 → synthetic_* doc 生成確認 | 結果次第で Phase 1 修正判断 (現状は間接証拠あり) |
+| 1 | **画面確認 (本番 super 出席レポート)** | 開発者が手元のブラウザで確認 (super 権限ログイン必要) | 17 件が補正後の状態で見えることを確認 (該当ユーザー / 該当期間で「出席・テスト結果レポート」を開く) |
+| 2 | **現場連絡** | 開発者が文案ドラフトを編集 / 承認 / 送付 | `docs/handoff/drafts/site-comm-2026-06-09-phase2-backfill.md` を編集 → Google Chat 送付 |
+| 3 | **Phase 3 (FE バッジ) 実装** | 開発者明示指示 + 別 Issue 起票 | `docs/specs/2026-06-09-phase3-synthetic-session-badge-design.md` ベースで M1-M5 実装 |
+| 4 | **ADR-027 追記** | Phase 3 完了タイミング | isSynthetic provenance flag 採用根拠 + 可視化方針 |
+| 5 | **Phase 1 本番動作確認** (品質確認ゲート、推奨) | 長遊園 / 福の種で新規テスト提出 → synthetic_* doc 生成確認 | 結果次第で Phase 1 修正判断 (現状は間接証拠で正常推定) |
 
 ### 却下候補 (記録のみ・包括指示の対象外)
 
 | # | 項目 | 着手しない理由 |
 |---|------|--------------|
-| 1 | 17 件以外のテナントへの予防的 audit | 全テナント audit は本セッション実施済、追加調査不要 |
-| 2 | audit_only 125 件の個別調査 | quizAttemptId 一致 session で整合済、apply 対象外で既知の正常状態 |
-| 3 | Phase 1 動作確認の明示テスト依頼 (開発者経由で長遊園/福の種にテスト提出依頼) | 間接証拠 (新規発生ゼロ) で代替済、能動的依頼は AI 越権 (CLAUDE.md `feedback_deploy_proactive_verification.md`) |
+| 1 | audit_only 142 件の個別調査 | quizAttemptId 一致 session で整合済、apply 対象外で既知の正常状態 |
+| 2 | Phase 1 動作確認の能動的テスト依頼 | CLAUDE.md `feedback_deploy_proactive_verification.md` AI 越権、間接証拠 (新規発生ゼロ) で代替済 |
+| 3 | 残 2 件 artifact (PII なし) の手動削除 | 30 days 自動削除に任せる、追加クリーンアップ不要 |
 
 ---
 
-## CI / Deploy 状態
+## CI / Deploy 状態 (本セッション)
 
-| PR | Deploy run | 状態 |
-|----|-----------|------|
-| #540 | 27195497618 | ✅ success |
-| #539 | 27195509712 | ✅ success |
-| #541 | 27199156166 | ✅ success |
-| audit run 1 (全テナント、tenant 名なし) | 27195778589 | ✅ success (17 件検出) |
-| audit run 2 (tenant 8vexhzpc 絞り込み) | 27196040433 | ✅ success (12 件確定) |
-| audit run 3 (全テナント、tenant 名つき) | 27199409860 | ✅ success (内訳判明) |
-
----
-
-## レビュー実績 (累計、本セッション分含む)
-
-| PR | Codex | code-review high | review-pr (6 agent) | safe-refactor |
-|----|-------|------------------|---------------------|---------------|
-| #539 | 2 回 | 1 回 (7 件反映) | 1 回 (8 件反映) | 1 回 (3 件反映) |
-| #540 | 1 回 (HIGH 3 + Med 3 反映) | — | — | — |
-| #541 | 1 回 (簡略 High 判定) | — (緊急対応、core 不変) | — (CLAUDE.md MUST 例外、Codex のみで代替) | — |
-
-**合計反映**: 32 件
+| run | 種類 | 状態 |
+|-----|------|------|
+| 27200193182 | Phase 2 apply (execute=true, expected=17) | ✅ success (9m51s, 17/17 readback verified) |
+| 27200744211 | 再 audit (idempotency 検証) | ✅ success (~2 分, backfill 対象 0 件) |
 
 ---
 
@@ -180,7 +153,7 @@ squash merge + deploy 完了 + 再 audit 実行。
 
 ### 本セッションで起票なし
 
-次セッション以降の起票候補:
+次セッション以降の起票候補 (Session 69 から継続):
 - **ADR-027 (lesson_sessions) 追記候補**: isSynthetic provenance flag 採用根拠 (Phase 1/2) + 出席レポート可視化方針 (Phase 3)
 - **新規 ADR 候補**: 「activeSession=null での quiz 提出を許容する後方互換性設計 + 合成 session による整合性保証」
 
@@ -192,7 +165,7 @@ squash merge + deploy 完了 + 再 audit 実行。
 - **起票数**: 0 件
 - **Net**: 変化なし
 
-開発者経由の問題報告 (#533) に対する 3 PR (#539/#540/#541) で対応中。Net 変化は次セッションで Phase 2 apply 完了 + Phase 3 別 Issue 起票時に発生予定。
+#533 自体は **本番補正完了** + **予防対応完了** で実質クローズ可能な状態だが、Phase 3 (任意の可視化改善) を残しているため、open のまま継続判断。Phase 3 着手 or 別 Issue 化判断は開発者領分。
 
 ---
 
@@ -202,37 +175,47 @@ squash merge + deploy 完了 + 再 audit 実行。
 |------|------|
 | Git clean | ✅ (本ハンドオフ commit 前) |
 | OPEN PR | 0 件 (本ハンドオフ commit 後 PR 作成予定) |
-| 残留プロセス | ✅ なし |
-| 本番 Firestore 書き込み | ✅ ゼロ (audit のみ) |
+| 残留プロセス | ✅ なし (バックグラウンド watch は完了済) |
+| 本番 Firestore 書き込み | ✅ 完了 (17 件、readback verified) |
+| 本番データ整合 | ✅ 再 audit で 0 件 (idempotent) |
 | 即着手タスク | 0 件 |
-| 条件待ち | 9 件 (全て decision-maker 認可 or 別段階 trigger 待ち) |
+| 条件待ち | 5 件 (全て decision-maker 領分の trigger 待ち) |
 | Documentation 同期 | ✅ 本ハンドオフで更新中 |
-| artifact (PII 含む) | ⚠️ run 27195778589 / 27199409860 に user_email 含む、30 days retention。apply 完了後の削除を Codex 推奨済 |
+| PII artifact | ✅ 削除完了 (Codex 推奨対応) |
 
 ---
 
 ## 最終結論
 
-🛑 **本セッションは executor 領分 0 件、apply 認可待ちでセッション終了**
+✅ **Phase 2 本番補正は技術的に完了**。executor 領分の残作業ゼロでセッション終了。
 
 根拠:
-- 即着手タスク **0 件**
-- 残作業の中核 (Phase 2 本番 apply) は **`expected_count=17` への番号単位明示認可待ち** (decision-maker 領分、AI 側で勝手に進めない)
+- Phase 2 apply 成功 (17/17 readback verified)
+- idempotency 確認 OK (再 audit で 0 件)
+- PII artifact 削除完了 (Codex 推奨対応)
+- 現場連絡文案ドラフト作成完了 (開発者承認用)
 - Git clean、main 最新、OPEN PR ゼロ
-- 本番 Firestore は audit のみで書き込みゼロ → ロールバック不要
-- 次セッション再開 trigger は (a) **`workflow_dispatch with execute=true expected_count=17 を実行してよい`** 等の明示認可、または (b) 段階 apply 指示 ((`tenant_id=8vexhzpc expected_count=12` 等)、または (c) 別案件
+- 本番データ整合性確認済
 
 ### 次セッションの最小手順
 
 1. `cat docs/handoff/LATEST.md` で本ファイル参照
-2. 開発者から認可受領
-3. `gh workflow run backfill-synthetic-sessions.yml --ref main -f execute=true -f expected_count=17`
-4. 結果確認 → 再 audit (idempotency) → 画面確認 → 現場連絡
-5. artifact 削除 (PII 対応)
-6. Phase 3 実装 (or 別 Issue 化判断)
+2. 開発者から次の指示受領 (画面確認結果 / 現場連絡完了報告 / Phase 3 着手指示 / 別案件)
+3. 指示内容に応じて executor 領分のタスクを実行
 
-### 想定リスクシナリオ (再認可後)
+### 想定リスクシナリオ (補正後の異常検知)
 
-- **`expected_count=17` で apply 失敗時**: backup artifact から手動修正 + 原因調査 (race / sanitize 差異)
-- **readback 不一致**: backup と diff 確認、必要なら手動 Firestore 修正
-- **apply 後の画面確認で不整合発見**: Phase 1 helper 動作と divergent なフィールドを特定 → 緊急修正 PR
+- **画面確認で 17 件のうち見えないものがある**: doc 個別 Read で `synthetic_{attemptId}` を直接確認、API 側のフィルタロジック調査
+- **新規テスト提出で synthetic doc 生成されない**: Phase 1 helper の動作不全、PR #537 のロジック再レビュー
+- **長遊園 / 福の種で似た現象が再発**: Phase 1 helper でカバーしきれない別の条件が存在、新規 Issue 起票 + 再調査
+
+---
+
+## 関連ドキュメント
+
+- 本セッション現場連絡 draft: `docs/handoff/drafts/site-comm-2026-06-09-phase2-backfill.md`
+- Phase 3 設計仕様書: `docs/specs/2026-06-09-phase3-synthetic-session-badge-design.md`
+- 前セッション handoff: `docs/handoff/archive/2026-06-09-session-69.md`
+- backfill script: `scripts/backfill-synthetic-sessions.ts`
+- backfill workflow: `.github/workflows/backfill-synthetic-sessions.yml`
+- ADR-027 (lesson_sessions, 追記候補): `docs/adr/adr-2025-12-13-lesson-sessions.md`
