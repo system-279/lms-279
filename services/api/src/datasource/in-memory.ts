@@ -1169,6 +1169,27 @@ export class InMemoryDataSource implements DataSource {
     return session;
   }
 
+  /** Issue #533: 決定的 doc id を指定。既存があれば返す (冪等)。 */
+  async createLessonSessionWithId(
+    id: string,
+    data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">
+  ): Promise<{ session: LessonSession; created: boolean }> {
+    this.throwIfReadOnly();
+    const existing = this.lessonSessions.find((s) => s.id === id);
+    if (existing) {
+      return { session: existing, created: false };
+    }
+    const now = new Date().toISOString();
+    const session: LessonSession = {
+      ...data,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.lessonSessions.push(session);
+    return { session, created: true };
+  }
+
   async getOrCreateLessonSession(
     userId: string, lessonId: string,
     data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">

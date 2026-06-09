@@ -299,6 +299,16 @@ export interface DataSource {
   // Lesson Sessions (Attendance)
   createLessonSession(data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">): Promise<LessonSession>;
   /**
+   * 決定的な doc id を指定して LessonSession を作成（冪等保証）。
+   * Issue #533: 合成 session を `synthetic_{quizAttemptId}` 等の決定的 id で作る場合に使う。
+   * 既に同 id の document が存在する場合は **既存を返す**（重複作成しない、retry や backfill 再実行で安全）。
+   * 返り値の `created: false` で既存ヒットを通知。
+   */
+  createLessonSessionWithId(
+    id: string,
+    data: Omit<LessonSession, "id" | "createdAt" | "updatedAt">
+  ): Promise<{ session: LessonSession; created: boolean }>;
+  /**
    * アクティブセッション取得または作成（アトミック操作）
    * 同一userId+lessonIdに対する並行呼び出しで重複activeセッションが作成されないことを保証する。
    * トランザクション失敗時はエラーをスローする。
