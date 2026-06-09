@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -43,6 +44,11 @@ import {
   calculateStayDurationMs,
   formatStayDuration,
 } from "./_helpers/stay-duration";
+import {
+  matchesIsSyntheticFilter,
+  SYNTHETIC_KIND_OPTIONS,
+  type SyntheticKind,
+} from "./_helpers/synthetic-filter";
 
 type Tenant = { id: string; name: string };
 
@@ -134,6 +140,7 @@ export default function AttendanceReportPage() {
   const [filterLessons, setFilterLessons] = useState<Set<string>>(new Set());
   const [filterExitReasons, setFilterExitReasons] = useState<Set<string>>(new Set());
   const [filterQuizPassed, setFilterQuizPassed] = useState<Set<string>>(new Set());
+  const [filterSyntheticKind, setFilterSyntheticKind] = useState<SyntheticKind>("all");
 
   // ソート
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
@@ -189,6 +196,7 @@ export default function AttendanceReportPage() {
       setFilterLessons(new Set());
       setFilterExitReasons(new Set());
       setFilterQuizPassed(new Set());
+      setFilterSyntheticKind("all");
       setSortKey(null);
       setSortDir(null);
     } else {
@@ -278,6 +286,9 @@ export default function AttendanceReportPage() {
         return false;
       });
     }
+    if (filterSyntheticKind !== "all") {
+      records = records.filter((r) => matchesIsSyntheticFilter(r.isSynthetic, filterSyntheticKind));
+    }
 
     // ソート
     if (sortKey && sortDir) {
@@ -304,7 +315,7 @@ export default function AttendanceReportPage() {
     }
 
     return records;
-  }, [report, filterUsers, filterCourses, filterLessons, filterExitReasons, filterQuizPassed, sortKey, sortDir]);
+  }, [report, filterUsers, filterCourses, filterLessons, filterExitReasons, filterQuizPassed, filterSyntheticKind, sortKey, sortDir]);
 
   const openEdit = (record: SuperAttendanceRecord) => {
     setEditRecord(record);
@@ -468,7 +479,7 @@ export default function AttendanceReportPage() {
               selected={filterQuizPassed}
               onChange={setFilterQuizPassed}
             />
-            {(filterUsers.size > 0 || filterCourses.size > 0 || filterLessons.size > 0 || filterExitReasons.size > 0 || filterQuizPassed.size > 0) && (
+            {(filterUsers.size > 0 || filterCourses.size > 0 || filterLessons.size > 0 || filterExitReasons.size > 0 || filterQuizPassed.size > 0 || filterSyntheticKind !== "all") && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -479,11 +490,44 @@ export default function AttendanceReportPage() {
                   setFilterLessons(new Set());
                   setFilterExitReasons(new Set());
                   setFilterQuizPassed(new Set());
+                  setFilterSyntheticKind("all");
                 }}
               >
                 フィルタ解除
               </Button>
             )}
+          </div>
+
+          {/* session 種別フィルタ (#533 Phase 3 / #551): 既存「退室理由」フィルタとは独立 */}
+          <div className="flex flex-wrap items-center gap-2 mb-3 print:hidden">
+            <span className="text-xs text-muted-foreground">session 種別:</span>
+            <div
+              role="radiogroup"
+              aria-label="session 種別"
+              className="inline-flex rounded-md border"
+            >
+              {SYNTHETIC_KIND_OPTIONS.map((opt, i) => {
+                const active = filterSyntheticKind === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => setFilterSyntheticKind(opt.value)}
+                    className={`px-3 py-1 text-xs transition-colors ${
+                      active
+                        ? "bg-secondary text-secondary-foreground"
+                        : "hover:bg-muted/50"
+                    } ${i === 0 ? "rounded-l-md" : ""} ${
+                      i === SYNTHETIC_KIND_OPTIONS.length - 1 ? "rounded-r-md" : ""
+                    } ${i > 0 ? "border-l" : ""}`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {filteredRecords.length === 0 ? (
@@ -519,7 +563,18 @@ export default function AttendanceReportPage() {
                       <TableCell data-col="courseName" className="text-sm">{r.courseName}</TableCell>
                       <TableCell data-col="lessonTitle" className="max-w-[200px] truncate text-sm">{r.lessonTitle}</TableCell>
                       <TableCell data-col="date" className="whitespace-nowrap text-sm">{formatDate(r.entryAt)}</TableCell>
-                      <TableCell data-col="entryAt" className="whitespace-nowrap text-sm">{formatTime(r.entryAt)}</TableCell>
+                      <TableCell data-col="entryAt" className="whitespace-nowrap text-sm">
+                        {formatTime(r.entryAt)}
+                        {r.isSynthetic && (
+                          <Badge
+                            variant="outline"
+                            className="ml-1 border-amber-400 text-amber-700 print:border-black print:text-black"
+                            title="このセッションは合格提出から自動補完されました (#533 Phase 1/2)"
+                          >
+                            自動補完
+                          </Badge>
+                        )}
+                      </TableCell>
                       <TableCell data-col="exitAt" className="whitespace-nowrap text-sm">{formatTime(r.exitAt)}</TableCell>
                       <TableCell data-col="stayDuration" className="whitespace-nowrap text-sm">
                         {formatStayDuration(calculateStayDurationMs(r.entryAt, r.exitAt))}

@@ -1056,6 +1056,7 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
       quizScore: attempt?.score ?? data.quizScore ?? null,
       quizPassed: attempt?.isPassed ?? data.quizPassed ?? null,
       quizSubmittedAt: attempt?.submittedAt ?? null,
+      isSynthetic: data.isSynthetic === true,
     };
   });
 
