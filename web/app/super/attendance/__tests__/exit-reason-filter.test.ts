@@ -4,6 +4,28 @@ import {
   matchesExitReasonFilter,
 } from "../_helpers/exit-reason-filter";
 
+// ADR-027 で定義された退室理由 enum 値。本 sentinel が将来追加される値と衝突しないことを保証する。
+// page.tsx 内 EXIT_REASON_LABELS と同期して保守する。
+const SERVER_EXIT_REASON_KEYS = [
+  "quiz_submitted",
+  "pause_timeout",
+  "time_limit",
+  "browser_close",
+  "max_attempts_failed",
+] as const;
+
+describe("EXIT_REASON_NONE_VALUE sentinel", () => {
+  it("既存の退室理由 enum 値と衝突しない (silent failure regression guard)", () => {
+    // 将来 ADR-027 に新しい退室理由値が追加された際、sentinel と同名にしないこと。
+    // 衝突すると null セッションと「その新理由」が誤マッチする silent failure になる。
+    expect(SERVER_EXIT_REASON_KEYS as readonly string[]).not.toContain(EXIT_REASON_NONE_VALUE);
+  });
+
+  it("__ プレフィックスで明確に内部 sentinel と識別できる", () => {
+    expect(EXIT_REASON_NONE_VALUE.startsWith("__")).toBe(true);
+  });
+});
+
 describe("matchesExitReasonFilter", () => {
   describe("退室理由が確定しているレコード", () => {
     it("選択された退室理由にマッチする", () => {
