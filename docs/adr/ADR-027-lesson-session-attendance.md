@@ -1,9 +1,17 @@
 # ADR-027: レッスンセッション出席管理
 
 ## ステータス
-承認済み（2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
+承認済み（2026-06-10 改訂: PDF 印字時バッジ非表示化 #533 follow-up / 2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
 
 ## 改訂履歴
+- **2026-06-10 (Phase 3 follow-up, #533)**: **動機**: Phase 3 で導入した「自動補完」バッジが PDF 出力 (`window.print()`) 時にも印字されることが、外部 (行政等) への提出資料として用いる際に「補正データである」ことを過剰に明示してしまい、提出物の正当性に疑念を生じさせる懸念が判明（補正データは実際にテスト合格した受講者の正規記録だが、PDF 上で「自動補完」と注記されると行政側に「実際の入室記録ではない」と誤解される可能性）。
+
+  **変更内容**: バッジ className に Tailwind `print:hidden` を追加し、`@media print` 時にバッジ要素全体を `display: none` にする。画面表示時 (内部監査・運用補助) は引き続きバッジ表示を維持。`print:border-black` / `print:text-black` (Phase 3 で追加した PDF 印字耐性スタイル) は不要となるため削除しシンプル化。
+
+  **判断根拠**: 内部監査時の透明性 (画面表示) と外部提出時の中立性 (PDF) のトレードオフは、画面/印刷で表示を切り替える単一 className 修正で両立可能（B 案: PDF 出力ダイアログでバッジ ON/OFF 選択可能化、C 案: 「実 session のみ」フィルタ運用、を検討した結果、最小工数で要件を満たす A 案を採用）。
+
+  **テスト**: 既存 unit test (synthetic-filter / pdf-print) は className 変更に影響なし。本番動作確認 (Playwright MCP) で画面表示時バッジ表示 + print emulate 時バッジ非表示を再確認。
+
 - **2026-06-09 (Phase 3, #551)**: **動機**: Phase 1/2 で投入された `isSynthetic` provenance flag を運用補助・監査性の観点で出席レポート UI に露出する（設計仕様書 `docs/specs/2026-06-09-phase3-synthetic-session-badge-design.md`）。
 
   **変更内容**: スーパー管理「出席・テスト結果レポート」(`/super/attendance`) で `isSynthetic=true` の session に「自動補完」バッジ（amber-tone、`entryAt` セル横、`print:` で border + text に切替えて PDF 印字耐性確保）を表示。新規「session 種別」segmented filter（`all` / `synthetic_only` / `actual_only`）を既存「退室理由」フィルタと独立に追加。`SuperAttendanceRecord.isSynthetic: boolean` を `@lms-279/shared-types` で公開し、API layer (`services/api/src/routes/super-admin.ts`) で `data.isSynthetic === true` 比較により Phase 1/2 投入前の既存 doc（フィールド欠落）も `false` に正規化（防御的マッピング）。

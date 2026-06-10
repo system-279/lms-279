@@ -567,7 +567,7 @@ export default function AttendanceReportPage() {
                         {r.isSynthetic && (
                           <Badge
                             variant="outline"
-                            className="ml-1 border-amber-400 text-amber-700 print:border-black print:text-black"
+                            className="ml-1 border-amber-400 text-amber-700 print:hidden"
                             title="このセッションは合格提出から自動補完されました (#533 Phase 1/2)"
                           >
                             自動補完
