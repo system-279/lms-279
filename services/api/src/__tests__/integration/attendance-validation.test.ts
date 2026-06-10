@@ -10,8 +10,16 @@ import supertest from "supertest";
 import express from "express";
 
 // Firebase Admin SDKのモック（super-admin.tsがimport時にgetFirestore()を使うため）
+// Issue #556 Codex review 反映で PATCH を runTransaction 化したため、transaction 内の tx.get も対応する
 vi.mock("firebase-admin/firestore", () => ({
   getFirestore: vi.fn(() => ({
+    runTransaction: vi.fn(async (callback: (tx: { get: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> }) => Promise<void>) => {
+      const tx = {
+        get: vi.fn(() => Promise.resolve({ exists: false, data: () => ({}) })),
+        update: vi.fn(),
+      };
+      await callback(tx);
+    }),
     collection: vi.fn(() => ({
       doc: vi.fn(() => ({
         get: vi.fn(() => Promise.resolve({ exists: false })),
