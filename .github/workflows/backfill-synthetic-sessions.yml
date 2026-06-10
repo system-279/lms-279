@@ -119,6 +119,13 @@ jobs:
             echo "[FATAL] execute=true には expected_count 入力必須 (件数完全一致ガード)" >&2
             exit 1
           fi
+          # execute=true + update-existing には expected_count_tenant 必須
+          # (Codex 6 ラウンド目: tenant breakdown 不一致を operator error から保護)。
+          if [ "$EXECUTE" = "true" ] && [ "$MODE" = "update-existing" ] && [ -z "$EXPECTED_COUNT_TENANT" ]; then
+            echo "[FATAL] execute=true + mode=update-existing には expected_count_tenant 入力必須" >&2
+            echo "  (例: \"<tid_nagaono>:12,<tid_fukunotane>:5\")" >&2
+            exit 1
+          fi
           FLAGS=()
           if [ -n "$MODE" ]; then FLAGS+=("--mode=$MODE"); fi
           if [ "$EXECUTE" = "true" ]; then FLAGS+=("--execute"); fi
