@@ -35,3 +35,62 @@ export function formatStayDuration(ms: number | null): string {
   const minutes = totalMinutes % 60;
   return hours > 0 ? `${hours}時間${minutes}分` : `${minutes}分`;
 }
+
+/** 自動補完 session の滞在時間カラム表示文字列。Firestore 一次データは維持し表示層のみで分離する。 */
+export const SYNTHETIC_STAY_DURATION_LABEL = "— (テストのみ)";
+
+/**
+ * record 単位の滞在時間表示。
+ * `isSynthetic=true` は quiz 開始〜提出の所要時間 (= 1〜2 分) が記録されているが、実滞在時間ではないため
+ * `SYNTHETIC_STAY_DURATION_LABEL` で表示し、通常 session と数値カラムを混在させない。
+ * Phase 3 follow-up #3 (#533): entryAt 書き換え案 (B) は Codex No-Go 判定により表示層分離 (A) を採用。
+ *
+ * 例外: `entryAt/exitAt` が実際に編集されている場合 (`original` snapshot との差分検知、PR #557) は
+ * 管理者が確認した実時刻のため通常計算で表示する。`editedAt` 単独では quizScore/quizPassed のみの
+ * 編集でも付与されるため判定材料に使えない (HIGH 指摘反映)。
+ * provenance としての `isSynthetic` バッジは UI 側で表示維持されるが、滞在時間は編集後の値を反映する。
+ */
+export function formatRecordStayDuration(record: {
+  isSynthetic: boolean;
+  entryAt: string | null;
+  exitAt: string | null;
+  original?: {
+    entryAt: string | null;
+    exitAt: string | null;
+  };
+}): string {
+  if (record.isSynthetic && !isStayTimeEdited(record)) return SYNTHETIC_STAY_DURATION_LABEL;
+  return formatStayDuration(calculateStayDurationMs(record.entryAt, record.exitAt));
+}
+
+/**
+ * `entryAt/exitAt` が初回値 (`original` snapshot) から実際に変更されたか判定。
+ * `original` が undefined (PR #557 投入前データ) や entryAt/exitAt が初回値と一致の場合は false。
+ * ソート判定にも使うため export。
+ */
+export function isStayTimeEdited(record: {
+  entryAt: string | null;
+  exitAt: string | null;
+  original?: { entryAt: string | null; exitAt: string | null };
+}): boolean {
+  if (!record.original) return false;
+  return (
+    record.entryAt !== record.original.entryAt ||
+    record.exitAt !== record.original.exitAt
+  );
+}
+
+/**
+ * ソート用の滞在時間値 (ms)。`isSynthetic=true` かつ未編集なら null (= 末尾配置)、
+ * それ以外は通常の `calculateStayDurationMs` 結果。
+ * Phase 3 follow-up #3 (#533): 編集済 synthetic は実時刻として通常順序に戻す。
+ */
+export function stayDurationSortValue(record: {
+  isSynthetic: boolean;
+  entryAt: string | null;
+  exitAt: string | null;
+  original?: { entryAt: string | null; exitAt: string | null };
+}): number | null {
+  if (record.isSynthetic && !isStayTimeEdited(record)) return null;
+  return calculateStayDurationMs(record.entryAt, record.exitAt);
+}
