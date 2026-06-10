@@ -4,6 +4,7 @@ import {
   formatStayDuration,
   formatRecordStayDuration,
   isStayTimeEdited,
+  stayDurationSortValue,
   SYNTHETIC_STAY_DURATION_LABEL,
 } from "../_helpers/stay-duration";
 
@@ -272,5 +273,92 @@ describe("isStayTimeEdited", () => {
         original: { entryAt: null, exitAt: null },
       }),
     ).toBe(false);
+  });
+});
+
+describe("stayDurationSortValue", () => {
+  it("isSynthetic=true + 未編集 (original なし) → null (= 末尾配置)", () => {
+    expect(
+      stayDurationSortValue({
+        isSynthetic: true,
+        entryAt: "2026-05-30T01:14:10.258Z",
+        exitAt: "2026-05-30T01:15:10.258Z",
+      }),
+    ).toBeNull();
+  });
+
+  it("isSynthetic=true + original 同値 (quizScore のみ編集) → null (= 末尾配置、HIGH 指摘反映)", () => {
+    expect(
+      stayDurationSortValue({
+        isSynthetic: true,
+        entryAt: "2026-05-30T01:14:10.258Z",
+        exitAt: "2026-05-30T01:15:10.258Z",
+        original: {
+          entryAt: "2026-05-30T01:14:10.258Z",
+          exitAt: "2026-05-30T01:15:10.258Z",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("isSynthetic=true + original 差分あり (時刻編集済) → ms 値 (通常順序)", () => {
+    expect(
+      stayDurationSortValue({
+        isSynthetic: true,
+        entryAt: "2026-05-30T01:14:10.258Z",
+        exitAt: "2026-05-30T02:36:29.496Z",
+        original: {
+          entryAt: "2026-05-30T02:35:00.000Z",
+          exitAt: "2026-05-30T02:36:29.496Z",
+        },
+      }),
+    ).toBeGreaterThan(0);
+  });
+
+  it("isSynthetic=false → ms 値 (通常 session、calculateStayDurationMs の生の ms 差分)", () => {
+    // entry: 2026-05-30T01:14:10.258Z, exit: 2026-05-30T02:36:29.496Z → 4939238 ms (約 82 分)
+    expect(
+      stayDurationSortValue({
+        isSynthetic: false,
+        entryAt: "2026-05-30T01:14:10.258Z",
+        exitAt: "2026-05-30T02:36:29.496Z",
+      }),
+    ).toBe(4939238);
+  });
+
+  it("isSynthetic=false + entryAt/exitAt null → null (異常データは末尾)", () => {
+    expect(
+      stayDurationSortValue({
+        isSynthetic: false,
+        entryAt: null,
+        exitAt: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("ソート挙動: 未編集 synthetic は実 session 後ろ、編集済 synthetic は通常順序に混在", () => {
+    const records = [
+      // 編集済 synthetic 1h22m
+      { isSynthetic: true, entryAt: "2026-05-30T01:14:10.258Z", exitAt: "2026-05-30T02:36:29.496Z",
+        original: { entryAt: "2026-05-30T02:35:00.000Z", exitAt: "2026-05-30T02:36:29.496Z" } },
+      // 未編集 synthetic
+      { isSynthetic: true, entryAt: "2026-05-30T08:41:00.000Z", exitAt: "2026-05-30T08:42:00.000Z" },
+      // 通常 session 30 分
+      { isSynthetic: false, entryAt: "2026-05-30T10:00:00.000Z", exitAt: "2026-05-30T10:30:00.000Z" },
+    ];
+    const sorted = [...records].sort((a, b) => {
+      const av = stayDurationSortValue(a);
+      const bv = stayDurationSortValue(b);
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      return av - bv;
+    });
+    // 順序: 通常 30 分 → 編集済 synthetic 1h22m → 未編集 synthetic (末尾)
+    expect(sorted[0].isSynthetic).toBe(false);
+    expect(sorted[1].isSynthetic).toBe(true);
+    expect(sorted[1].original).toBeDefined();
+    expect(sorted[2].isSynthetic).toBe(true);
+    expect(sorted[2].original).toBeUndefined();
   });
 });

@@ -18,7 +18,7 @@
 
   **設計仕様書**: `docs/specs/2026-06-10-phase3-synthetic-stay-duration-display.md`
 
-  **テスト**: FE unit test 6 ケース追加 (formatRecordStayDuration: isSynthetic=true / true+null / false 1h22m / false null / false 異常時刻 / ラベル定数固定)。本番動作確認 (Playwright MCP) で前田さよりさんレッスン 2 含む画面確認予定。
+  **テスト**: FE unit test 多数追加 — `formatRecordStayDuration` 9 ケース (isSynthetic / editedAt / original 差分マトリクス)、`isStayTimeEdited` 5 ケース、`stayDurationSortValue` 6 ケース (ソート挙動、編集済 synthetic を通常順序に混在させる検証含む)、`buildEditPatchBody` 11 ケース (dirty 判定、quizScore のみ編集時に entryAt/exitAt 不含、score=0 を未編集と混同しない 等、Codex BLOCK MERGE 反映)。本番動作確認 (Playwright MCP) で前田さよりさんレッスン 2 含む画面確認予定。
 
 - **2026-06-10 (Phase 3 follow-up #2, #556)**: **動機**: 出席・テスト結果レポートを行政提出資料として PDF 出力する運用において、不自然な滞在時間（補正データの 0 分、`time_limit` 強制退出の数十時間等）を手動編集する需要が判明。既存の編集機能 (`PATCH /super/tenants/:tenantId/attendance-report/:sessionId`) は実装済みだが、編集後は元の値が完全に上書きされ、データの真実性追跡が失われる課題があった。
 

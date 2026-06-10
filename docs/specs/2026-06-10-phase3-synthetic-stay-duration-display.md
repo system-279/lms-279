@@ -126,18 +126,20 @@ export function isStayTimeEdited(record: {
 
 ### 5.3 ソート対応
 
-該当箇所 (`page.tsx:305-313`):
+`stayDurationSortValue` ヘルパーで isSynthetic + 編集判定を内包。該当箇所:
+
 ```typescript
 if (sortKey === "stayDuration") {
-  // isSynthetic=true は実滞在時間ではないため末尾 (null と同等扱い)
-  const av = a.isSynthetic ? null : calculateStayDurationMs(a.entryAt, a.exitAt);
-  const bv = b.isSynthetic ? null : calculateStayDurationMs(b.entryAt, b.exitAt);
+  const av = stayDurationSortValue(a);
+  const bv = stayDurationSortValue(b);
   if (av === null && bv === null) return 0;
   if (av === null) return 1;
   if (bv === null) return -1;
   return (av - bv) * dir;
 }
 ```
+
+`stayDurationSortValue` は `isSynthetic && !isStayTimeEdited` の場合 null (= 末尾)、それ以外は `calculateStayDurationMs` 結果を返す。これにより編集済 synthetic は通常順序に混在し、未編集 synthetic のみ末尾配置される。
 
 ### 5.4 PDF 出力
 
@@ -156,8 +158,9 @@ PR #554 で導入された `applyPdfColumnHide` (`_helpers/pdf-print.ts`) は da
 | AC5 | Firestore データ変更ゼロ (本番含め一切書き込まない) | grep / コードレビュー |
 | AC6 | 過去 17 件 + 今後の自動補完すべてに自動適用 (条件分岐なし) | Playwright MCP 本番確認 |
 | AC7 | `formatRecordStayDuration` 関数の境界値テスト (isSynthetic=true/false × entryAt/exitAt null/非 null の組み合わせ) | unit test |
-| AC8 | 編集済 synthetic (isSynthetic=true + editedAt あり) は通常計算で表示される (Evaluator 指摘反映) | unit test |
-| AC9 | 編集済 synthetic はソート時も末尾配置から外れ、通常 session と同じ順序で並ぶ | page.tsx ロジックレビュー + Playwright MCP |
+| AC8 | 編集済 synthetic (`isSynthetic=true` + `original` snapshot との entryAt/exitAt 差分あり) は通常計算で表示される (Evaluator 第 2 ラウンド HIGH 指摘反映) | unit test |
+| AC9 | 編集済 synthetic はソート時も末尾配置から外れ、通常 session と同じ順序で並ぶ | `stayDurationSortValue` unit test + Playwright MCP |
+| AC10 | 編集ダイアログで quizScore のみ編集した場合、entryAt/exitAt は PATCH body に含まれない (Codex BLOCK MERGE 指摘反映、`buildEditPatchBody` の dirty 判定) | `edit-patch.test.ts` unit test |
 
 ---
 

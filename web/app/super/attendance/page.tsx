@@ -41,10 +41,10 @@ import {
   matchesExitReasonFilter,
 } from "./_helpers/exit-reason-filter";
 import {
-  calculateStayDurationMs,
   formatRecordStayDuration,
-  isStayTimeEdited,
+  stayDurationSortValue,
 } from "./_helpers/stay-duration";
+import { buildEditPatchBody } from "./_helpers/edit-patch";
 import {
   matchesIsSyntheticFilter,
   SYNTHETIC_KIND_OPTIONS,
@@ -98,12 +98,6 @@ function isoToTimeJST(iso: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-/** 日付(yyyy-MM-dd) + 時刻(HH:mm) をJSTとしてISO UTC文字列に変換 */
-function dateTimeJSTtoISO(date: string, time: string): string {
-  // JSTオフセット (+09:00) を付与して正しいUTCに変換
-  return new Date(`${date}T${time}:00+09:00`).toISOString();
 }
 
 const EXIT_REASON_LABELS: Record<string, string> = {
@@ -161,6 +155,12 @@ export default function AttendanceReportPage() {
   const [editDate, setEditDate] = useState("");
   const [editEntryTime, setEditEntryTime] = useState("");
   const [editExitTime, setEditExitTime] = useState("");
+  // dirty 判定用: openEdit 時の初期値 snapshot (時刻フィールド未変更時に PATCH body 送信を抑止)。
+  // Phase 3 follow-up #3 (#533): dateTimeJSTtoISO が秒を `:00` に丸めるため、未編集でも
+  // 元 ISO と新 ISO が「秒精度」で差分発生し isStayTimeEdited=true になる回帰を防ぐ。
+  const [initialEditDate, setInitialEditDate] = useState("");
+  const [initialEditEntryTime, setInitialEditEntryTime] = useState("");
+  const [initialEditExitTime, setInitialEditExitTime] = useState("");
   const [editScore, setEditScore] = useState("");
   const [editPassed, setEditPassed] = useState("");
   const [editLoading, setEditLoading] = useState(false);
@@ -303,15 +303,11 @@ export default function AttendanceReportPage() {
     if (sortKey && sortDir) {
       const dir = sortDir === "asc" ? 1 : -1;
       records = [...records].sort((a, b) => {
-        // stayDuration は計算フィールド: ms 数値で比較 (null は末尾)。
-        // isSynthetic は実滞在時間ではないため null 同等で末尾配置 (Phase 3 follow-up #3)。
-        // 例外: entryAt/exitAt が編集された (original snapshot との差分あり) 場合は通常順序。
-        // editedAt 単独判定だと quizScore のみ編集でも通常順序に戻ってしまうため original を見る。
+        // stayDuration は計算フィールド: stayDurationSortValue で synthetic 末尾配置 + 編集済例外を扱う
+        // (Phase 3 follow-up #3)。null 同等で末尾固定。
         if (sortKey === "stayDuration") {
-          const aTreatAsSynthetic = a.isSynthetic && !isStayTimeEdited(a);
-          const bTreatAsSynthetic = b.isSynthetic && !isStayTimeEdited(b);
-          const av = aTreatAsSynthetic ? null : calculateStayDurationMs(a.entryAt, a.exitAt);
-          const bv = bTreatAsSynthetic ? null : calculateStayDurationMs(b.entryAt, b.exitAt);
+          const av = stayDurationSortValue(a);
+          const bv = stayDurationSortValue(b);
           if (av === null && bv === null) return 0;
           if (av === null) return 1;
           if (bv === null) return -1;
@@ -333,9 +329,15 @@ export default function AttendanceReportPage() {
 
   const openEdit = (record: SuperAttendanceRecord) => {
     setEditRecord(record);
-    setEditDate(isoToDateJST(record.entryAt));
-    setEditEntryTime(isoToTimeJST(record.entryAt));
-    setEditExitTime(isoToTimeJST(record.exitAt));
+    const dateInit = isoToDateJST(record.entryAt);
+    const entryInit = isoToTimeJST(record.entryAt);
+    const exitInit = isoToTimeJST(record.exitAt);
+    setEditDate(dateInit);
+    setEditEntryTime(entryInit);
+    setEditExitTime(exitInit);
+    setInitialEditDate(dateInit);
+    setInitialEditEntryTime(entryInit);
+    setInitialEditExitTime(exitInit);
     setEditScore(record.quizScore?.toString() ?? "");
     setEditPassed(record.quizPassed === null ? "" : record.quizPassed ? "true" : "false");
     setEditError(null);
@@ -347,17 +349,11 @@ export default function AttendanceReportPage() {
     setEditLoading(true);
     setEditError(null);
     try {
-      const body: Record<string, unknown> = {};
-      if (editDate && editEntryTime) {
-        body.entryAt = dateTimeJSTtoISO(editDate, editEntryTime);
-      }
-      if (editDate && editExitTime) {
-        body.exitAt = dateTimeJSTtoISO(editDate, editExitTime);
-      }
-      if (editScore !== "") {
-        body.quizScore = Number(editScore);
-      }
-      if (editPassed !== "") body.quizPassed = editPassed === "true";
+      const body = buildEditPatchBody({
+        editDate, editEntryTime, editExitTime,
+        initialEditDate, initialEditEntryTime, initialEditExitTime,
+        editScore, editPassed,
+      });
 
       await superFetch(
         `/api/v2/super/tenants/${selectedTenant}/attendance-report/${editRecord.id}`,

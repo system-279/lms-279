@@ -79,3 +79,18 @@ export function isStayTimeEdited(record: {
     record.exitAt !== record.original.exitAt
   );
 }
+
+/**
+ * ソート用の滞在時間値 (ms)。`isSynthetic=true` かつ未編集なら null (= 末尾配置)、
+ * それ以外は通常の `calculateStayDurationMs` 結果。
+ * Phase 3 follow-up #3 (#533): 編集済 synthetic は実時刻として通常順序に戻す。
+ */
+export function stayDurationSortValue(record: {
+  isSynthetic: boolean;
+  entryAt: string | null;
+  exitAt: string | null;
+  original?: { entryAt: string | null; exitAt: string | null };
+}): number | null {
+  if (record.isSynthetic && !isStayTimeEdited(record)) return null;
+  return calculateStayDurationMs(record.entryAt, record.exitAt);
+}
