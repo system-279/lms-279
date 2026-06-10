@@ -28,6 +28,13 @@ name: Backfill Synthetic Lesson Sessions
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: '実行モード (create-missing=Phase 2 旧 / update-existing=Phase 3 follow-up #4 D 案)'
+        type: choice
+        options:
+          - create-missing
+          - update-existing
+        default: create-missing
       execute:
         description: '実書き込みモード (false=dry-run / true=apply)。true 時は environment approval 必須'
         type: boolean
@@ -51,6 +58,10 @@ on:
         type: string
       expected_count:
         description: '対象件数の完全一致ガード (本番 apply で必須運用、不一致時 fail)'
+        required: false
+        type: string
+      expected_count_tenant:
+        description: 'tenant 別 expected count (例: "tid1:12,tid2:5") update-existing で本番 apply 時に強く推奨'
         required: false
         type: string
 
@@ -89,12 +100,14 @@ jobs:
       - name: Run backfill script
         env:
           GOOGLE_CLOUD_PROJECT: lms-279
+          MODE: ${{ inputs.mode }}
           EXECUTE: ${{ inputs.execute }}
           TENANT_ID: ${{ inputs.tenant_id }}
           USER_EMAIL: ${{ inputs.user_email }}
           USER_ID: ${{ inputs.user_id }}
           MAX_TARGETS: ${{ inputs.max_targets }}
           EXPECTED_COUNT: ${{ inputs.expected_count }}
+          EXPECTED_COUNT_TENANT: ${{ inputs.expected_count_tenant }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_ACTOR: ${{ github.actor }}
@@ -106,13 +119,22 @@ jobs:
             echo "[FATAL] execute=true には expected_count 入力必須 (件数完全一致ガード)" >&2
             exit 1
           fi
+          # execute=true + update-existing には expected_count_tenant 必須
+          # (Codex 6 ラウンド目: tenant breakdown 不一致を operator error から保護)。
+          if [ "$EXECUTE" = "true" ] && [ "$MODE" = "update-existing" ] && [ -z "$EXPECTED_COUNT_TENANT" ]; then
+            echo "[FATAL] execute=true + mode=update-existing には expected_count_tenant 入力必須" >&2
+            echo "  (例: \"<tid_nagaono>:12,<tid_fukunotane>:5\")" >&2
+            exit 1
+          fi
           FLAGS=()
+          if [ -n "$MODE" ]; then FLAGS+=("--mode=$MODE"); fi
           if [ "$EXECUTE" = "true" ]; then FLAGS+=("--execute"); fi
           if [ -n "$TENANT_ID" ]; then FLAGS+=("--tenant-id=$TENANT_ID"); fi
           if [ -n "$USER_EMAIL" ]; then FLAGS+=("--user-email=$USER_EMAIL"); fi
           if [ -n "$USER_ID" ]; then FLAGS+=("--user-id=$USER_ID"); fi
           if [ -n "$MAX_TARGETS" ]; then FLAGS+=("--max-targets=$MAX_TARGETS"); fi
           if [ -n "$EXPECTED_COUNT" ]; then FLAGS+=("--expected-count=$EXPECTED_COUNT"); fi
+          if [ -n "$EXPECTED_COUNT_TENANT" ]; then FLAGS+=("--expected-count-tenant=$EXPECTED_COUNT_TENANT"); fi
           echo "Running with flags: ${FLAGS[*]:-(none)}"
           npx tsx scripts/backfill-synthetic-sessions.ts "${FLAGS[@]}"
 

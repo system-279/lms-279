@@ -1,9 +1,21 @@
 # ADR-027: レッスンセッション出席管理
 
 ## ステータス
-承認済み（2026-06-10 改訂: 自動補完 session 滞在時間カラム表示分離 #533 follow-up #3 / 2026-06-10 改訂: 編集前 original snapshot 保持 #556 / 2026-06-10 改訂: PDF 印字時バッジ非表示化 #533 follow-up / 2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
+承認済み（2026-06-10 改訂: D 案 動画長+テスト時間の換算退室時刻 #533 follow-up #4 (PR #559 #533 follow-up #3 撤回) / 2026-06-10 改訂: 自動補完 session 滞在時間カラム表示分離 #533 follow-up #3 / 2026-06-10 改訂: 編集前 original snapshot 保持 #556 / 2026-06-10 改訂: PDF 印字時バッジ非表示化 #533 follow-up / 2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
 
 ## 改訂履歴
+- **2026-06-10 (Phase 3 follow-up #4, #533) — PR #559 (follow-up #3) 撤回 + D 案採用**: **動機**: 前 follow-up #3 (PR #559) は UI 表示分離 (A 案 `"— (テストのみ)"`) で問題回避していたが、開発者から「Firestore データ自体を業務的に正しい値で記録したい」要望。業務ロジック整理 (ADR-019 動画完了ゲートにより自動補完対象は必ず過去に動画視聴完了済) を踏まえ、**滞在時間 = 動画長 + テスト時間** とする D 案に転換。
+
+  **変更内容**: `createSyntheticCompletedSession` で **`entryAt = quiz.startedAt` 維持 / `exitAt = startedAt + video.durationSec*1000 + quizDurationMs` (換算退室時刻)** に変更。過去 17 件 (長遊園 12 + 福の種 5) も backfill `update-existing` モードで一括 exitAt 上書き。PR #559 の UI 表示分離コード (`formatRecordStayDuration` / `SYNTHETIC_STAY_DURATION_LABEL` / `stayDurationSortValue`) は削除し `formatStayDuration` 直接利用に復帰。「自動補完」バッジ (#552) / 「編集済」バッジ (#557) / `buildEditPatchBody` / `isStayTimeEdited` は維持。
+
+  **D 案が B 案 (follow-up #3 検討時に Codex No-Go) を回避できる根拠**: `video.durationSec` は **lesson 固有の客観値** (要件定義の一部) であり、B 案の `SESSION_DURATION_MS` (runtime config = 任意の運用上限値) と異なる。「動画見てテスト受験して合格」業務フローの忠実な時間表現で、行政提出時に説明可能。
+
+  **残るリスクと緩和** (Codex 4 ラウンド目指摘反映): `exitAt` が `quiz.submittedAt` から乖離し「テスト後に動画」順序に読まれる余地 → 仕様書 + 「自動補完」バッジ tooltip + 本 ADR で **「換算退室時刻 (出席時間として動画長を合算する処理、実打刻ではない)」** と明記。`video.durationSec ≤ 0 / NaN` の hard guard を実装、`Number.isFinite && > 0` 必須。backfill は transaction 内で `original/editedAt なし + 旧 exitAt === quiz.submittedAt + entryAt === quiz.startedAt` 再検証 + tenant 別 expected count 検証で保護。
+
+  **設計仕様書**: `docs/specs/2026-06-10-phase3-synthetic-session-d-plan-design.md`
+
+  **テスト**: AC 20 件カバー、API integration 10 ケース (createSyntheticCompletedSession の D 案算出 / videoDurationSec guard 4 ケース) + script unit 19 ケース (categorizeAttemptForUpdate 10 / buildUpdatedExitAt 8 / validateTenantBreakdown 5 / parseArgs mode 4) + FE は formatRecordStayDuration 系テスト撤回 (D 案で表示は通常計算)。全 workspace 2001 tests passed。
+
 - **2026-06-10 (Phase 3 follow-up #3, #533)**: **動機**: 現場から「合格のみで抽出した PDF」に **自動補完 session の滞在時間 1 分の合格行が混入** するとのフィードバック (前田さよりさん 2026/05/30 レッスン 2 等)。`createSyntheticCompletedSession` (PR #537) は `entryAt = quiz.startedAt` / `exitAt = quiz.submittedAt` で session を作成しており、quiz 解答時間 (1〜2 分) が滞在時間カラムに表示される構造的問題。行政提出資料として違和感を招く。
 
   **当初検討した案 (B 案、不採用)**: backfill 再実行で過去 17 件含め `entryAt = submittedAt - SESSION_DURATION_MS` (本番 3h) に上書きし「3 時間滞在」で統一する案。Codex セカンドオピニオン (thread 019eaf6b-6b25-7011-be78-aaaa02ced8d2) で **No-Go 判定**: (1) `entryAt - 3h` は実打刻でも quiz 開始時刻でもなく運用上限値からの逆算で「3 時間滞在」と読める値の捏造、(2) PR #555 でバッジを PDF 非表示化済のため行政提出時に provenance が伝わらない、(3) 旧 entryAt が GitHub Actions artifact (90 日) + ローカル backup JSON にしか残らず Firestore からは消える、(4) `SESSION_DURATION_MS` (runtime config) を履歴データ改変の根拠にすると将来 3h→4h 変更時に説明不能、(5) `entryAt` 3 時間前移動で日付境界をまたぐ集計に副作用。

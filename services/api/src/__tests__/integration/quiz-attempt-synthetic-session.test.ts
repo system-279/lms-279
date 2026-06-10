@@ -133,8 +133,18 @@ describe("Issue #533: 合成 session 作成 (activeSession=null 時の合格提�
     expect(synthetic!.courseId).toBe(courseId);
     expect(synthetic!.videoId).toBe(videoId);
     expect(synthetic!.quizAttemptId).toBe(attemptId);
-    expect(synthetic!.entryAt).toBeTruthy(); // attempt.startedAt
-    expect(synthetic!.exitAt).toBeTruthy(); // attempt.submittedAt
+
+    // D 案 (Phase 3 follow-up #4): entryAt = quiz.startedAt 維持、
+    // exitAt = startedAt + video.durationSec*1000 + quizDurationMs
+    const attempt = await ds.getQuizAttemptById(attemptId);
+    expect(attempt).not.toBeNull();
+    expect(synthetic!.entryAt).toBe(attempt!.startedAt);
+    const startedMs = new Date(attempt!.startedAt!).getTime();
+    const submittedMs = new Date(attempt!.submittedAt!).getTime();
+    const quizDurationMs = submittedMs - startedMs;
+    // video.durationSec = 300 (beforeEach で設定)
+    const expectedExitMs = startedMs + 300 * 1000 + quizDurationMs;
+    expect(new Date(synthetic!.exitAt!).getTime()).toBe(expectedExitMs);
   });
 
   // ============================================================
@@ -163,6 +173,7 @@ describe("Issue #533: 合成 session 作成 (activeSession=null 時の合格提�
       quizAttemptId: attemptId,
       startedAt: new Date().toISOString(),
       submittedAt: new Date().toISOString(),
+      videoDurationSec: 300,
     });
     expect(created).toBe(false); // 既存ヒット
 
@@ -282,5 +293,97 @@ describe("Issue #533: 合成 session 作成 (activeSession=null 時の合格提�
     // 合成 session は作成されない
     const synthetic = await ds.getLessonSession(`synthetic_${attemptId}`);
     expect(synthetic).toBeNull();
+  });
+
+  // ============================================================
+  // AC13: videoDurationSec hard guard (Codex 指摘 #2 反映、Phase 3 follow-up #4)
+  // ============================================================
+  it("AC13: videoDurationSec が 0 → createSyntheticCompletedSession が throw", async () => {
+    const { createSyntheticCompletedSession } = await import("../../services/lesson-session.js");
+    await expect(
+      createSyntheticCompletedSession(ds, {
+        userId: studentUserId,
+        lessonId,
+        courseId,
+        videoId,
+        quizAttemptId: "attempt_guard_zero",
+        startedAt: new Date().toISOString(),
+        submittedAt: new Date().toISOString(),
+        videoDurationSec: 0,
+      }),
+    ).rejects.toThrow(/invalid videoDurationSec/);
+  });
+
+  it("AC13: videoDurationSec が負数 → throw", async () => {
+    const { createSyntheticCompletedSession } = await import("../../services/lesson-session.js");
+    await expect(
+      createSyntheticCompletedSession(ds, {
+        userId: studentUserId,
+        lessonId,
+        courseId,
+        videoId,
+        quizAttemptId: "attempt_guard_neg",
+        startedAt: new Date().toISOString(),
+        submittedAt: new Date().toISOString(),
+        videoDurationSec: -1,
+      }),
+    ).rejects.toThrow(/invalid videoDurationSec/);
+  });
+
+  it("AC13: videoDurationSec が NaN → throw", async () => {
+    const { createSyntheticCompletedSession } = await import("../../services/lesson-session.js");
+    await expect(
+      createSyntheticCompletedSession(ds, {
+        userId: studentUserId,
+        lessonId,
+        courseId,
+        videoId,
+        quizAttemptId: "attempt_guard_nan",
+        startedAt: new Date().toISOString(),
+        submittedAt: new Date().toISOString(),
+        videoDurationSec: NaN,
+      }),
+    ).rejects.toThrow(/invalid videoDurationSec/);
+  });
+
+  it("AC13: videoDurationSec が Infinity → throw", async () => {
+    const { createSyntheticCompletedSession } = await import("../../services/lesson-session.js");
+    await expect(
+      createSyntheticCompletedSession(ds, {
+        userId: studentUserId,
+        lessonId,
+        courseId,
+        videoId,
+        quizAttemptId: "attempt_guard_inf",
+        startedAt: new Date().toISOString(),
+        submittedAt: new Date().toISOString(),
+        videoDurationSec: Infinity,
+      }),
+    ).rejects.toThrow(/invalid videoDurationSec/);
+  });
+
+  // ============================================================
+  // AC2: exitAt の正確な算出値 (動画 60 分 + テスト 5 分 → 65 分後)
+  // ============================================================
+  it("AC2: exitAt = startedAt + videoDurationSec*1000 + quizDurationMs を正確に算出", async () => {
+    const { createSyntheticCompletedSession } = await import("../../services/lesson-session.js");
+    const startedAt = "2026-05-30T01:00:00.000Z";
+    const submittedAt = "2026-05-30T01:05:00.000Z"; // quiz 5 分
+    const videoDurationSec = 60 * 60; // 60 分
+
+    const { session, created } = await createSyntheticCompletedSession(ds, {
+      userId: studentUserId,
+      lessonId,
+      courseId,
+      videoId,
+      quizAttemptId: "attempt_ac2",
+      startedAt,
+      submittedAt,
+      videoDurationSec,
+    });
+    expect(created).toBe(true);
+    expect(session.entryAt).toBe(startedAt); // 維持
+    // exitAt = startedAt + 60min (動画) + 5min (テスト) = startedAt + 65min
+    expect(session.exitAt).toBe("2026-05-30T02:05:00.000Z");
   });
 });
