@@ -42,7 +42,8 @@ import {
 } from "./_helpers/exit-reason-filter";
 import {
   calculateStayDurationMs,
-  formatStayDuration,
+  formatRecordStayDuration,
+  isStayTimeEdited,
 } from "./_helpers/stay-duration";
 import {
   matchesIsSyntheticFilter,
@@ -302,10 +303,15 @@ export default function AttendanceReportPage() {
     if (sortKey && sortDir) {
       const dir = sortDir === "asc" ? 1 : -1;
       records = [...records].sort((a, b) => {
-        // stayDuration は計算フィールド: ms 数値で比較 (null は末尾)
+        // stayDuration は計算フィールド: ms 数値で比較 (null は末尾)。
+        // isSynthetic は実滞在時間ではないため null 同等で末尾配置 (Phase 3 follow-up #3)。
+        // 例外: entryAt/exitAt が編集された (original snapshot との差分あり) 場合は通常順序。
+        // editedAt 単独判定だと quizScore のみ編集でも通常順序に戻ってしまうため original を見る。
         if (sortKey === "stayDuration") {
-          const av = calculateStayDurationMs(a.entryAt, a.exitAt);
-          const bv = calculateStayDurationMs(b.entryAt, b.exitAt);
+          const aTreatAsSynthetic = a.isSynthetic && !isStayTimeEdited(a);
+          const bTreatAsSynthetic = b.isSynthetic && !isStayTimeEdited(b);
+          const av = aTreatAsSynthetic ? null : calculateStayDurationMs(a.entryAt, a.exitAt);
+          const bv = bTreatAsSynthetic ? null : calculateStayDurationMs(b.entryAt, b.exitAt);
           if (av === null && bv === null) return 0;
           if (av === null) return 1;
           if (bv === null) return -1;
@@ -611,7 +617,7 @@ export default function AttendanceReportPage() {
                       </TableCell>
                       <TableCell data-col="exitAt" className="whitespace-nowrap text-sm">{formatTime(r.exitAt)}</TableCell>
                       <TableCell data-col="stayDuration" className="whitespace-nowrap text-sm">
-                        {formatStayDuration(calculateStayDurationMs(r.entryAt, r.exitAt))}
+                        {formatRecordStayDuration(r)}
                       </TableCell>
                       <TableCell data-col="exitReason" className="text-sm">
                         {r.exitReason ? (EXIT_REASON_LABELS[r.exitReason] ?? r.exitReason) : "—"}

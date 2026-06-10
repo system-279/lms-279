@@ -1,9 +1,25 @@
 # ADR-027: レッスンセッション出席管理
 
 ## ステータス
-承認済み（2026-06-10 改訂: 編集前 original snapshot 保持 #556 / 2026-06-10 改訂: PDF 印字時バッジ非表示化 #533 follow-up / 2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
+承認済み（2026-06-10 改訂: 自動補完 session 滞在時間カラム表示分離 #533 follow-up #3 / 2026-06-10 改訂: 編集前 original snapshot 保持 #556 / 2026-06-10 改訂: PDF 印字時バッジ非表示化 #533 follow-up / 2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
 
 ## 改訂履歴
+- **2026-06-10 (Phase 3 follow-up #3, #533)**: **動機**: 現場から「合格のみで抽出した PDF」に **自動補完 session の滞在時間 1 分の合格行が混入** するとのフィードバック (前田さよりさん 2026/05/30 レッスン 2 等)。`createSyntheticCompletedSession` (PR #537) は `entryAt = quiz.startedAt` / `exitAt = quiz.submittedAt` で session を作成しており、quiz 解答時間 (1〜2 分) が滞在時間カラムに表示される構造的問題。行政提出資料として違和感を招く。
+
+  **当初検討した案 (B 案、不採用)**: backfill 再実行で過去 17 件含め `entryAt = submittedAt - SESSION_DURATION_MS` (本番 3h) に上書きし「3 時間滞在」で統一する案。Codex セカンドオピニオン (thread 019eaf6b-6b25-7011-be78-aaaa02ced8d2) で **No-Go 判定**: (1) `entryAt - 3h` は実打刻でも quiz 開始時刻でもなく運用上限値からの逆算で「3 時間滞在」と読める値の捏造、(2) PR #555 でバッジを PDF 非表示化済のため行政提出時に provenance が伝わらない、(3) 旧 entryAt が GitHub Actions artifact (90 日) + ローカル backup JSON にしか残らず Firestore からは消える、(4) `SESSION_DURATION_MS` (runtime config) を履歴データ改変の根拠にすると将来 3h→4h 変更時に説明不能、(5) `entryAt` 3 時間前移動で日付境界をまたぐ集計に副作用。
+
+  **採用案 (A 案、本変更)**: UI 表示層のみで対応。Firestore データは一切変更せず、出席レポート (`/super/attendance`) の滞在時間カラム表示を `isSynthetic=true` 時に `"— (テストのみ)"` (定数 `SYNTHETIC_STAY_DURATION_LABEL`) に変える。ソート時は実滞在時間ではないため null 同等で末尾配置。PDF 出力は画面 DOM をそのまま印刷するため自動同期、追加変更不要。
+
+  **変更内容**: `web/app/super/attendance/_helpers/stay-duration.ts` に `formatRecordStayDuration(record)` と `SYNTHETIC_STAY_DURATION_LABEL` を追加 / `web/app/super/attendance/page.tsx` の滞在時間カラム表示で新関数利用 + ソート時 isSynthetic 末尾配置。
+
+  **編集機能 (#557) との整合性**: 編集機能で synthetic record の `entryAt/exitAt` を実時刻に修正した場合のみ通常計算で滞在時間を表示する。判定は **`original` snapshot (#556) との差分** で行う (`record.entryAt !== record.original?.entryAt || record.exitAt !== record.original?.exitAt`)。`editedAt` 単独判定は使えない理由: PATCH endpoint (`super-admin.ts:1189`) は **quizScore/quizPassed/exitReason のみの編集でも無条件に `editedAt` を付与** するため、時刻未編集でも `editedAt` が立ち、滞在時間 1 分が表示される問題が起きる (Evaluator 第 2 ラウンド HIGH 指摘反映)。`isStayTimeEdited` ヘルパーで「entryAt/exitAt の実差分」のみを判定基準とし、quizScore のみ編集ケースは `SYNTHETIC_STAY_DURATION_LABEL` 表示を維持する。`SuperAttendanceRecord.original` は既存フィールド (#556) のため BE 変更なし。
+
+  **判断根拠**: 一次データ書き換えなし = 真実性・監査証跡・env 依存・日付フィルタ副作用のリスクすべて回避。過去 17 件 + 今後の自動補完すべてに条件分岐なしで即時自動適用。「自動補完」バッジ (Phase 3 / #551) と組み合わせ、画面では内部監査可視性、PDF では中立的な `"— (テストのみ)"` 表示で行政提出資料の説明可能性を確保。
+
+  **設計仕様書**: `docs/specs/2026-06-10-phase3-synthetic-stay-duration-display.md`
+
+  **テスト**: FE unit test 6 ケース追加 (formatRecordStayDuration: isSynthetic=true / true+null / false 1h22m / false null / false 異常時刻 / ラベル定数固定)。本番動作確認 (Playwright MCP) で前田さよりさんレッスン 2 含む画面確認予定。
+
 - **2026-06-10 (Phase 3 follow-up #2, #556)**: **動機**: 出席・テスト結果レポートを行政提出資料として PDF 出力する運用において、不自然な滞在時間（補正データの 0 分、`time_limit` 強制退出の数十時間等）を手動編集する需要が判明。既存の編集機能 (`PATCH /super/tenants/:tenantId/attendance-report/:sessionId`) は実装済みだが、編集後は元の値が完全に上書きされ、データの真実性追跡が失われる課題があった。
 
   **変更内容**: `lesson_sessions` に **`original: { entryAt, exitAt, quizScore, quizPassed }`** フィールド（編集前 immutable snapshot）と **`editedAt: string`**（最後の編集時刻）を追加。初回 PATCH 時に `original` が未設定なら現在値を snapshot として保存し、以降の PATCH では `original` を変更しない（immutable）。quiz 値は session 側に書かれていないケースが多いため、`quizAttemptId` から quiz_attempts ドキュメントを fallback fetch して snapshot に含める。FE は `SuperAttendanceRecord.original?` / `editedAt?` を利用して「編集済」バッジ（sky-tone、`entryAt` セル横、「自動補完」バッジと並列表示可）を表示、tooltip で元データ（編集前の入退室時刻 / 点数 / 合否）を提示。`print:hidden` で PDF 出力時はバッジ非表示（Phase 3 follow-up と同方針、行政提出時の中立性確保）。
