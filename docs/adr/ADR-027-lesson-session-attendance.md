@@ -1,9 +1,17 @@
 # ADR-027: レッスンセッション出席管理
 
 ## ステータス
-承認済み（2026-06-10 改訂: PDF 印字時バッジ非表示化 #533 follow-up / 2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
+承認済み（2026-06-10 改訂: 編集前 original snapshot 保持 #556 / 2026-06-10 改訂: PDF 印字時バッジ非表示化 #533 follow-up / 2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
 
 ## 改訂履歴
+- **2026-06-10 (Phase 3 follow-up #2, #556)**: **動機**: 出席・テスト結果レポートを行政提出資料として PDF 出力する運用において、不自然な滞在時間（補正データの 0 分、`time_limit` 強制退出の数十時間等）を手動編集する需要が判明。既存の編集機能 (`PATCH /super/tenants/:tenantId/attendance-report/:sessionId`) は実装済みだが、編集後は元の値が完全に上書きされ、データの真実性追跡が失われる課題があった。
+
+  **変更内容**: `lesson_sessions` に **`original: { entryAt, exitAt, quizScore, quizPassed }`** フィールド（編集前 immutable snapshot）と **`editedAt: string`**（最後の編集時刻）を追加。初回 PATCH 時に `original` が未設定なら現在値を snapshot として保存し、以降の PATCH では `original` を変更しない（immutable）。quiz 値は session 側に書かれていないケースが多いため、`quizAttemptId` から quiz_attempts ドキュメントを fallback fetch して snapshot に含める。FE は `SuperAttendanceRecord.original?` / `editedAt?` を利用して「編集済」バッジ（sky-tone、`entryAt` セル横、「自動補完」バッジと並列表示可）を表示、tooltip で元データ（編集前の入退室時刻 / 点数 / 合否）を提示。`print:hidden` で PDF 出力時はバッジ非表示（Phase 3 follow-up と同方針、行政提出時の中立性確保）。
+
+  **データ保管方式の判断根拠**: A. snapshot のみ（採用）/ B. edit_log サブコレクション（将来複数管理者・コンプライアンス要件出現時に検討）/ C. A + B ハイブリッド（完全監査要件時）の 3 案を検討し、現状スーパー管理者は単一（`system@279279.net`）で複数管理者・編集理由記録の運用要件がないため、最小工数で「最初の値」を温存する A 案を採用。将来 B が必要になった際は snapshot を「最初の編集前の値」として保持しつつ edit_log を追加できる構造を維持。
+
+  **テスト**: API integration test 5 ケース（初回 snapshot 保存 / 2 回目以降 immutable / quiz_attempts fallback fetch / GET レスポンスで original + editedAt 返却 / 既存データ original 欠落時の防御マップ）+ FE unit test 8 ケース（`hasOriginalSnapshot` / `formatOriginalTooltip`、JST 時刻表示 / 不合格 / 未受験 / null 値）+ manual 確認（Playwright MCP で画面表示 + print emulate）。
+
 - **2026-06-10 (Phase 3 follow-up, #533)**: **動機**: Phase 3 で導入した「自動補完」バッジが PDF 出力 (`window.print()`) 時にも印字されることが、外部 (行政等) への提出資料として用いる際に「補正データである」ことを過剰に明示してしまい、提出物の正当性に疑念を生じさせる懸念が判明（補正データは実際にテスト合格した受講者の正規記録だが、PDF 上で「自動補完」と注記されると行政側に「実際の入室記録ではない」と誤解される可能性）。
 
   **変更内容**: バッジ className に Tailwind `print:hidden` を追加し、`@media print` 時にバッジ要素全体を `display: none` にする。画面表示時 (内部監査・運用補助) は引き続きバッジ表示を維持。`print:border-black` / `print:text-black` (Phase 3 で追加した PDF 印字耐性スタイル) は不要となるため削除しシンプル化。

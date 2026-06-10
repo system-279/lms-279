@@ -53,6 +53,10 @@ import {
   applyPdfColumnHide,
   restorePdfColumnDisplay,
 } from "./_helpers/pdf-print";
+import {
+  formatOriginalTooltip,
+  hasOriginalSnapshot,
+} from "./_helpers/edit-history";
 
 type Tenant = { id: string; name: string };
 
@@ -571,6 +575,15 @@ export default function AttendanceReportPage() {
                             title="このセッションは合格提出から自動補完されました (#533 Phase 1/2)"
                           >
                             自動補完
+                          </Badge>
+                        )}
+                        {hasOriginalSnapshot(r) && (
+                          <Badge
+                            variant="outline"
+                            className="ml-1 border-sky-400 text-sky-700 print:hidden"
+                            title={formatOriginalTooltip(r.original)}
+                          >
+                            編集済
                           </Badge>
                         )}
                       </TableCell>

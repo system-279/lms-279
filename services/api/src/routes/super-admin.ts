@@ -1057,6 +1057,9 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
       quizPassed: attempt?.isPassed ?? data.quizPassed ?? null,
       quizSubmittedAt: attempt?.submittedAt ?? null,
       isSynthetic: data.isSynthetic === true,
+      // Issue #556: 初回編集時の immutable snapshot を返却（未編集なら undefined）
+      original: data.original ?? undefined,
+      editedAt: data.editedAt?.toDate?.().toISOString?.() ?? data.editedAt ?? undefined,
     };
   });
 
@@ -1125,8 +1128,48 @@ router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Requ
     return;
   }
 
+  const sessionData = sessionDoc.data() ?? {};
+  const now = new Date().toISOString();
+
+  // 初回編集時のみ原データを original snapshot として保存（以降 immutable）。Issue #556。
+  // null + undefined 両対応 (`== null`): Firestore からの欠落と、手動で null 直書きされたケース両方を初回扱いに。
+  // quiz 値は session 側に書かれていないケースが多いため quiz_attempts から fallback fetch する。
+  const isFirstEdit = sessionData.original == null;
+  let originalSnapshot: {
+    entryAt: string | null;
+    exitAt: string | null;
+    quizScore: number | null;
+    quizPassed: boolean | null;
+  } | undefined;
+  if (isFirstEdit) {
+    let originalQuizScore: number | null = sessionData.quizScore ?? null;
+    let originalQuizPassed: boolean | null = sessionData.quizPassed ?? null;
+    // quiz_attempts fallback fetch は snapshot 取得補助のみが目的のため、エラーで PATCH 本体を巻き込まない。
+    // fetch 失敗時は quiz 値を null のまま snapshot 保存し、PATCH 本体の入退室時刻更新を継続する
+    // (rules/error-handling.md §1「各ステップを独立 try-catch で囲む」原則)。
+    if (sessionData.quizAttemptId && (originalQuizScore === null || originalQuizPassed === null)) {
+      try {
+        const attemptDoc = await db.collection(`${basePath}/quiz_attempts`).doc(sessionData.quizAttemptId).get();
+        if (attemptDoc.exists) {
+          const attemptData = attemptDoc.data();
+          if (originalQuizScore === null) originalQuizScore = attemptData?.score ?? null;
+          if (originalQuizPassed === null) originalQuizPassed = attemptData?.isPassed ?? null;
+        }
+      } catch (e) {
+        console.error("[attendance-report PATCH] quiz_attempts fallback fetch failed", { sessionId, quizAttemptId: sessionData.quizAttemptId, error: e });
+      }
+    }
+    originalSnapshot = {
+      entryAt: sessionData.entryAt?.toDate?.().toISOString?.() ?? sessionData.entryAt ?? null,
+      exitAt: sessionData.exitAt?.toDate?.().toISOString?.() ?? sessionData.exitAt ?? null,
+      quizScore: originalQuizScore,
+      quizPassed: originalQuizPassed,
+    };
+  }
+
   // セッション更新
-  const sessionUpdate: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+  const sessionUpdate: Record<string, unknown> = { updatedAt: now, editedAt: now };
+  if (originalSnapshot !== undefined) sessionUpdate.original = originalSnapshot;
   if (entryAt !== undefined) sessionUpdate.entryAt = entryAt;
   if (exitAt !== undefined) sessionUpdate.exitAt = exitAt;
   if (exitReason !== undefined) sessionUpdate.exitReason = exitReason;
