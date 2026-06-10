@@ -41,8 +41,8 @@ import {
   matchesExitReasonFilter,
 } from "./_helpers/exit-reason-filter";
 import {
-  formatRecordStayDuration,
-  stayDurationSortValue,
+  calculateStayDurationMs,
+  formatStayDuration,
 } from "./_helpers/stay-duration";
 import { buildEditPatchBody } from "./_helpers/edit-patch";
 import {
@@ -303,11 +303,12 @@ export default function AttendanceReportPage() {
     if (sortKey && sortDir) {
       const dir = sortDir === "asc" ? 1 : -1;
       records = [...records].sort((a, b) => {
-        // stayDuration は計算フィールド: stayDurationSortValue で synthetic 末尾配置 + 編集済例外を扱う
-        // (Phase 3 follow-up #3)。null 同等で末尾固定。
+        // stayDuration は計算フィールド: ms 数値で比較 (null は末尾)。
+        // D 案 (Phase 3 follow-up #4): synthetic も「動画長 + テスト時間」で正常な滞在時間が記録される
+        // ため、通常 session と同じく数値ソート対象。PR #559 の表示層分離は撤回。
         if (sortKey === "stayDuration") {
-          const av = stayDurationSortValue(a);
-          const bv = stayDurationSortValue(b);
+          const av = calculateStayDurationMs(a.entryAt, a.exitAt);
+          const bv = calculateStayDurationMs(b.entryAt, b.exitAt);
           if (av === null && bv === null) return 0;
           if (av === null) return 1;
           if (bv === null) return -1;
@@ -596,7 +597,7 @@ export default function AttendanceReportPage() {
                           <Badge
                             variant="outline"
                             className="ml-1 border-amber-400 text-amber-700 print:hidden"
-                            title="このセッションは合格提出から自動補完されました (#533 Phase 1/2)"
+                            title="このセッションは合格提出から自動補完されました。滞在時間は『動画長 + テスト時間』の換算退室時刻です (実際の退室打刻ではありません、#533 Phase 1/2/4)"
                           >
                             自動補完
                           </Badge>
@@ -613,7 +614,7 @@ export default function AttendanceReportPage() {
                       </TableCell>
                       <TableCell data-col="exitAt" className="whitespace-nowrap text-sm">{formatTime(r.exitAt)}</TableCell>
                       <TableCell data-col="stayDuration" className="whitespace-nowrap text-sm">
-                        {formatRecordStayDuration(r)}
+                        {formatStayDuration(calculateStayDurationMs(r.entryAt, r.exitAt))}
                       </TableCell>
                       <TableCell data-col="exitReason" className="text-sm">
                         {r.exitReason ? (EXIT_REASON_LABELS[r.exitReason] ?? r.exitReason) : "—"}

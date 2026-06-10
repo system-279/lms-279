@@ -138,6 +138,20 @@ export interface SyntheticSessionData {
 }
 
 /**
+ * Phase 3 follow-up #4 (D 案): 過去 synthetic doc の exitAt 上書き更新用カテゴリ。
+ * - update_target: 旧形式 synthetic doc (exitAt === quiz.submittedAt && entryAt === quiz.startedAt) + original/editedAt なし
+ * - skip_edited: original または editedAt あり (PR #557 手動編集済、保護)
+ * - skip_not_legacy: 既に新形式 or 別形式 → 更新対象外
+ * - skip_no_synthetic: synthetic doc 不在
+ */
+export type BackfillUpdateCategory =
+  | "update_target"
+  | "skip_edited"
+  | "skip_not_legacy"
+  | "skip_no_synthetic"
+  | "skip_invalid_attempt";
+
+/**
  * Firestore に書き込む完全な payload 形 (タイムスタンプを含む)。
  * Phase 1 createLessonSessionWithId と一致させるため createdAt/updatedAt は Date オブジェクト
  * (Firestore admin SDK が自動で Timestamp 型に変換、string 渡しと型が divergent するのを防ぐ)。
@@ -224,6 +238,95 @@ export function buildSyntheticSessionData(
 }
 
 /**
+ * Phase 3 follow-up #4 (D 案): update-existing モード用の判定純粋関数。
+ *
+ * 旧形式 synthetic doc (Phase 1/2 で作成された exitAt = quiz.submittedAt のもの) を
+ * D 案ロジック (exitAt = startedAt + videoDurationMs + quizDurationMs) で更新する対象を判定する。
+ *
+ * Codex セカンドオピニオン 4 ラウンド目指摘反映:
+ *   - editedAt / original 両方を判定 (PR #557 後の no-op 更新でも片方付与され得る)
+ *   - 旧形式判定は exitAt === submittedAt + entryAt === startedAt の両方を確認 (transaction 内でも再検証)
+ */
+export function categorizeAttemptForUpdate(
+  attempt: AttemptInfo,
+  relatedSessions: Array<SessionInfo & { editedAt?: string; original?: unknown }>
+): BackfillUpdateCategory {
+  if (attempt.status !== "submitted" || attempt.isPassed !== true) {
+    return "skip_invalid_attempt";
+  }
+  if (!attempt.startedAt || !attempt.submittedAt) {
+    return "skip_invalid_attempt";
+  }
+
+  const synthetic = relatedSessions.find(
+    (s) => s.id === `synthetic_${attempt.id}` && s.isSynthetic === true
+  );
+  if (!synthetic) return "skip_no_synthetic";
+
+  // PR #557 手動編集済 doc は保護
+  if (synthetic.original !== undefined && synthetic.original !== null) return "skip_edited";
+  if (synthetic.editedAt !== undefined && synthetic.editedAt !== null) return "skip_edited";
+
+  // 旧形式判定 (entryAt と exitAt 両方が attempt 値と一致)
+  if (synthetic.entryAt !== attempt.startedAt) return "skip_not_legacy";
+  if (synthetic.exitAt !== attempt.submittedAt) return "skip_not_legacy";
+
+  return "update_target";
+}
+
+/**
+ * D 案の exitAt 算出 (Phase 3 follow-up #4)。
+ * videoDurationSec hard guard (Codex 指摘 #2): Number.isFinite + > 0 を満たさない場合 throw。
+ */
+export function buildUpdatedExitAt(
+  attempt: AttemptInfo,
+  videoDurationSec: number
+): string {
+  if (!Number.isFinite(videoDurationSec) || videoDurationSec <= 0) {
+    throw new Error(
+      `buildUpdatedExitAt: invalid videoDurationSec=${videoDurationSec} for attempt ${attempt.id}`
+    );
+  }
+  if (!attempt.startedAt || !attempt.submittedAt) {
+    throw new Error(
+      `buildUpdatedExitAt: attempt ${attempt.id} に startedAt/submittedAt が欠落`
+    );
+  }
+  const startedMs = new Date(attempt.startedAt).getTime();
+  const submittedMs = new Date(attempt.submittedAt).getTime();
+  const quizDurationMs = submittedMs - startedMs;
+  return new Date(startedMs + videoDurationSec * 1000 + quizDurationMs).toISOString();
+}
+
+/**
+ * tenant 別 expected count 検証 (Codex 指摘 #4 反映)。
+ * 全体 17 + tenant 別 12/5 を両方検証することで、想定外のテナントが含まれていないか機械的に確認。
+ */
+export function validateTenantBreakdown(
+  actualBreakdown: Map<string, number>,
+  expectedBreakdown: Map<string, number>
+): { ok: boolean; reason?: string } {
+  if (expectedBreakdown.size === 0) return { ok: true };
+  const mismatches: string[] = [];
+  for (const [tid, expected] of expectedBreakdown) {
+    const actual = actualBreakdown.get(tid) ?? 0;
+    if (actual !== expected) {
+      mismatches.push(`${tid}: expected=${expected} actual=${actual}`);
+    }
+  }
+  // 想定外 tenant も検出
+  for (const [tid, actual] of actualBreakdown) {
+    if (!expectedBreakdown.has(tid)) {
+      mismatches.push(`${tid}: unexpected tenant, actual=${actual}`);
+    }
+  }
+  if (mismatches.length > 0) {
+    return { ok: false, reason: `tenant breakdown mismatch: ${mismatches.join("; ")}` };
+  }
+  return { ok: true };
+}
+
+/**
  * expected_count 完全一致ガード。
  * Codex 指摘反映: 本番 apply 時に対象件数が想定と完全一致しなければ fail させる。
  */
@@ -287,6 +390,7 @@ export function validateReadback(
 // ============================================================
 
 const KNOWN_FLAGS = [
+  "--mode=",
   "--execute",
   "--tenant-id=",
   "--user-id=",
@@ -296,6 +400,8 @@ const KNOWN_FLAGS = [
   "--no-backup",
 ];
 
+export type BackfillMode = "create-missing" | "update-existing";
+
 const isMainEntry = import.meta.url === `file://${process.argv[1]}`;
 
 if (isMainEntry) {
@@ -303,6 +409,7 @@ if (isMainEntry) {
 }
 
 interface ParsedArgs {
+  mode: BackfillMode;
   execute: boolean;
   tenantId?: string;
   userId?: string;
@@ -324,6 +431,17 @@ export function parseArgs(args: string[]): ParsedArgs {
     throw new Error(
       `未知のフラグ: ${unknownArgs.join(", ")}\n  既知のフラグ: ${KNOWN_FLAGS.join(" / ")}`
     );
+  }
+
+  const rawMode = getFlagValue(args, "--mode=");
+  let mode: BackfillMode = "create-missing";
+  if (rawMode !== undefined) {
+    if (rawMode !== "create-missing" && rawMode !== "update-existing") {
+      throw new Error(
+        `--mode は "create-missing" | "update-existing" のいずれか: 受け取った値="${rawMode}"`
+      );
+    }
+    mode = rawMode;
   }
 
   const execute = args.includes("--execute");
@@ -359,6 +477,7 @@ export function parseArgs(args: string[]): ParsedArgs {
   }
 
   return {
+    mode,
     execute,
     tenantId,
     userId,
@@ -467,7 +586,10 @@ export async function runMain(
   db: Firestore,
   parsed: ParsedArgs
 ): Promise<void> {
-  console.log("=== #533 Phase 2: 合成 session 遡及作成 ===");
+  if (parsed.mode === "update-existing") {
+    return runMainUpdateExisting(db, parsed);
+  }
+  console.log("=== #533 Phase 2: 合成 session 遡及作成 (create-missing モード) ===");
   console.log(
     `モード: ${parsed.execute ? "EXECUTE (実書き込み)" : "DRY-RUN (検出のみ)"}`
   );
@@ -958,4 +1080,372 @@ export function sanitizeForWrite<T extends Record<string, unknown>>(
   return Object.fromEntries(
     Object.entries(obj).filter(([, v]) => v !== undefined)
   ) as Partial<T>;
+}
+
+// ============================================================
+// Phase 3 follow-up #4 (D 案): update-existing モード実装
+// ============================================================
+
+export interface UpdateTarget {
+  tenantId: string;
+  attempt: AttemptInfo;
+  syntheticDocId: string;
+  videoDurationSec: number;
+  oldExitAt: string;
+  newExitAt: string;
+  existingDocSnapshot: Record<string, unknown>;
+}
+
+export interface UpdateApplyResult {
+  updated: number;
+  skipped: number;
+  failed: number;
+  readbackVerified: number;
+  readbackFailed: number;
+}
+
+interface SkipReasonEntry {
+  tenantId: string;
+  attemptId: string;
+  reason: BackfillUpdateCategory;
+}
+
+export async function findUpdateTargets(
+  db: Firestore,
+  tenantIds: string[],
+  scopedUserId?: string
+): Promise<{ targets: UpdateTarget[]; skipped: SkipReasonEntry[] }> {
+  const targets: UpdateTarget[] = [];
+  const skipped: SkipReasonEntry[] = [];
+
+  for (const tid of tenantIds) {
+    let attemptsQuery = db
+      .collection(`tenants/${tid}/quiz_attempts`)
+      .where("status", "==", "submitted")
+      .where("isPassed", "==", true);
+    if (scopedUserId) {
+      attemptsQuery = attemptsQuery.where("userId", "==", scopedUserId);
+    }
+    const attemptsSnap = await attemptsQuery.get();
+    if (attemptsSnap.empty) continue;
+
+    for (const doc of attemptsSnap.docs) {
+      const data = doc.data();
+      const attempt: AttemptInfo = {
+        id: doc.id,
+        status: data.status,
+        isPassed: data.isPassed ?? null,
+        startedAt: data.startedAt ?? null,
+        submittedAt: data.submittedAt ?? null,
+        quizId: data.quizId,
+        userId: data.userId,
+        attemptNumber: data.attemptNumber,
+        score: data.score ?? null,
+      };
+
+      // synthetic doc を直接取得
+      const syntheticDocId = `synthetic_${attempt.id}`;
+      const synSnap = await db
+        .collection(`tenants/${tid}/lesson_sessions`)
+        .doc(syntheticDocId)
+        .get();
+      if (!synSnap.exists) {
+        skipped.push({ tenantId: tid, attemptId: attempt.id, reason: "skip_no_synthetic" });
+        continue;
+      }
+      const sd = synSnap.data()!;
+      const synthetic: SessionInfo & { editedAt?: string; original?: unknown } = {
+        ...mapDataToSessionInfo(synSnap.id, sd),
+        editedAt: sd.editedAt as string | undefined,
+        original: sd.original,
+      };
+
+      const category = categorizeAttemptForUpdate(attempt, [synthetic]);
+      if (category !== "update_target") {
+        skipped.push({ tenantId: tid, attemptId: attempt.id, reason: category });
+        continue;
+      }
+
+      // quiz → lessonId / video 解決
+      const quizDoc = await db
+        .collection(`tenants/${tid}/quizzes`)
+        .doc(attempt.quizId)
+        .get();
+      if (!quizDoc.exists) {
+        skipped.push({ tenantId: tid, attemptId: attempt.id, reason: "skip_invalid_attempt" });
+        continue;
+      }
+      const lessonId = quizDoc.data()!.lessonId as string;
+
+      const videosSnap = await db
+        .collection(`tenants/${tid}/videos`)
+        .where("lessonId", "==", lessonId)
+        .limit(1)
+        .get();
+      if (videosSnap.empty) {
+        skipped.push({ tenantId: tid, attemptId: attempt.id, reason: "skip_invalid_attempt" });
+        continue;
+      }
+      const videoData = videosSnap.docs[0].data();
+      const videoDurationSec = videoData.durationSec as number;
+      if (!Number.isFinite(videoDurationSec) || videoDurationSec <= 0) {
+        console.warn(
+          `[WARN] invalid videoDurationSec: tenant=${tid} attempt=${attempt.id} videoDurationSec=${videoDurationSec} → skip`
+        );
+        skipped.push({ tenantId: tid, attemptId: attempt.id, reason: "skip_invalid_attempt" });
+        continue;
+      }
+
+      let newExitAt: string;
+      try {
+        newExitAt = buildUpdatedExitAt(attempt, videoDurationSec);
+      } catch (err) {
+        console.warn(
+          `[WARN] buildUpdatedExitAt failed: tenant=${tid} attempt=${attempt.id} err=${err instanceof Error ? err.message : err}`
+        );
+        skipped.push({ tenantId: tid, attemptId: attempt.id, reason: "skip_invalid_attempt" });
+        continue;
+      }
+
+      targets.push({
+        tenantId: tid,
+        attempt,
+        syntheticDocId,
+        videoDurationSec,
+        oldExitAt: synthetic.exitAt!,
+        newExitAt,
+        existingDocSnapshot: sd,
+      });
+    }
+  }
+
+  return { targets, skipped };
+}
+
+export async function applyBackfillUpdate(
+  db: Firestore,
+  targets: UpdateTarget[]
+): Promise<UpdateApplyResult> {
+  const result: UpdateApplyResult = {
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    readbackVerified: 0,
+    readbackFailed: 0,
+  };
+
+  for (const t of targets) {
+    const ref = db.collection(`tenants/${t.tenantId}/lesson_sessions`).doc(t.syntheticDocId);
+
+    try {
+      const updated = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists) return false;
+        const sd = snap.data()!;
+
+        // transaction 内再検証 (Codex 指摘 #4 反映)
+        if (sd.isSynthetic !== true) return false;
+        if (sd.entryAt !== t.attempt.startedAt) return false;
+        if (sd.exitAt !== t.attempt.submittedAt) return false;
+        if (sd.original !== undefined && sd.original !== null) return false;
+        if (sd.editedAt !== undefined && sd.editedAt !== null) return false;
+
+        tx.update(ref, {
+          exitAt: t.newExitAt,
+          updatedAt: new Date(),
+        });
+        return true;
+      });
+      if (updated) result.updated++;
+      else result.skipped++;
+    } catch (err) {
+      result.failed++;
+      console.error(
+        `  失敗: tenant=${t.tenantId} attempt=${t.attempt.id}: ${err instanceof Error ? err.message : err}`
+      );
+      continue;
+    }
+
+    // readback 検証 (独立 try/catch、rules/error-handling.md §1)
+    try {
+      const readback = await ref.get();
+      if (!readback.exists) {
+        result.readbackFailed++;
+        continue;
+      }
+      const data = readback.data()!;
+      const mismatches: string[] = [];
+      if (data.exitAt !== t.newExitAt) mismatches.push(`exitAt: expected=${t.newExitAt} actual=${data.exitAt}`);
+      if (data.entryAt !== t.attempt.startedAt) mismatches.push(`entryAt不変: expected=${t.attempt.startedAt} actual=${data.entryAt}`);
+      if (mismatches.length > 0) {
+        result.readbackFailed++;
+        console.error(
+          `  readback 不一致: tenant=${t.tenantId} attempt=${t.attempt.id} ${mismatches.join(", ")}`
+        );
+      } else {
+        result.readbackVerified++;
+      }
+    } catch (err) {
+      result.readbackFailed++;
+      console.error(
+        `  readback 例外: tenant=${t.tenantId} attempt=${t.attempt.id}: ${err instanceof Error ? err.message : err}`
+      );
+    }
+  }
+
+  return result;
+}
+
+async function runMainUpdateExisting(
+  db: Firestore,
+  parsed: ParsedArgs
+): Promise<void> {
+  console.log("=== #533 Phase 3 follow-up #4: D 案 exitAt 上書き (update-existing モード) ===");
+  console.log(
+    `モード: ${parsed.execute ? "EXECUTE (実書き込み)" : "DRY-RUN (検出のみ)"}`
+  );
+  console.log(
+    `スコープ: tenant=${parsed.tenantId ?? "ALL"} userId=${parsed.userId ?? "-"} userEmail=${parsed.userEmail ?? "-"}`
+  );
+  console.log(`最大対象件数: ${parsed.maxTargets}`);
+  console.log(
+    `expected_count: ${parsed.expectedCount ?? "(指定なし)"}${parsed.execute && parsed.expectedCount === undefined ? "  ⚠️  本番 apply では --expected-count 推奨" : ""}`
+  );
+  console.log(`バックアップ: ${parsed.noBackup ? "無効" : "有効"}\n`);
+
+  // ユーザー解決
+  let scopedUserId = parsed.userId;
+  let scopedTenantId = parsed.tenantId;
+  if (parsed.userEmail) {
+    const resolved = await resolveUserIdFromEmail(db, parsed.userEmail, scopedTenantId);
+    if (!resolved) {
+      console.error(`[FATAL] ユーザーが見つかりません: ${parsed.userEmail}`);
+      process.exit(1);
+    }
+    scopedUserId = resolved.userId;
+    scopedTenantId = resolved.tenantId;
+  }
+
+  const tenantsSnap = await db.collection("tenants").get();
+  if (tenantsSnap.empty) {
+    console.error("[FATAL] tenants コレクションが空です");
+    process.exit(1);
+  }
+  const tenantIds = scopedTenantId
+    ? [scopedTenantId]
+    : tenantsSnap.docs.map((d) => d.id);
+
+  const { targets, skipped } = await findUpdateTargets(db, tenantIds, scopedUserId);
+
+  console.log("=== 抽出結果 ===");
+  console.log(`update 対象: ${targets.length} 件`);
+  console.log(`skip: ${skipped.length} 件`);
+
+  // skip 理由内訳
+  if (skipped.length > 0) {
+    const reasonCounts = new Map<string, number>();
+    for (const s of skipped) {
+      reasonCounts.set(s.reason, (reasonCounts.get(s.reason) ?? 0) + 1);
+    }
+    console.log("\n=== skip 理由内訳 ===");
+    for (const [reason, count] of reasonCounts) {
+      console.log(`  ${reason}: ${count} 件`);
+    }
+  }
+
+  // tenant 別内訳
+  if (targets.length > 0) {
+    const tenantBreakdown = new Map<string, number>();
+    for (const t of targets) {
+      tenantBreakdown.set(t.tenantId, (tenantBreakdown.get(t.tenantId) ?? 0) + 1);
+    }
+    console.log("\n=== update 対象 tenant 内訳 ===");
+    for (const [tid, count] of tenantBreakdown) {
+      console.log(`  tenant=${tid}: ${count} 件`);
+    }
+  }
+
+  // expected_count 完全一致ガード
+  const validation = validateExpectedCount(targets.length, parsed.expectedCount);
+  if (!validation.ok) {
+    console.error(`[FATAL] ${validation.reason}`);
+    process.exit(1);
+  }
+
+  if (targets.length === 0) {
+    console.log("\nupdate 対象なし");
+    return;
+  }
+
+  if (targets.length > parsed.maxTargets) {
+    console.error(
+      `[FATAL] update 対象が ${parsed.maxTargets} 件を超えています (${targets.length} 件)`
+    );
+    process.exit(1);
+  }
+
+  // backup
+  if (!parsed.noBackup) {
+    const backupPath = `backfill-synthetic-backup-${Date.now()}.json`;
+    const backup = {
+      scriptVersion: "2.0.0",
+      mode: parsed.mode,
+      commitSha: process.env.GITHUB_SHA ?? "(local)",
+      githubRunId: process.env.GITHUB_RUN_ID ?? "(local)",
+      githubActor: process.env.GITHUB_ACTOR ?? "(local)",
+      projectId: process.env.GOOGLE_CLOUD_PROJECT ?? "(unknown)",
+      executeMode: parsed.execute ? "execute" : "dry-run",
+      generatedAt: new Date().toISOString(),
+      // Codex 指摘 #4: backup に旧 exitAt + 完全 doc snapshot + attempt 全体
+      targets: targets.map((t) => ({
+        tenantId: t.tenantId,
+        attempt: t.attempt,
+        syntheticDocId: t.syntheticDocId,
+        videoDurationSec: t.videoDurationSec,
+        oldExitAt: t.oldExitAt,
+        newExitAt: t.newExitAt,
+        existingDocSnapshot: t.existingDocSnapshot,
+      })),
+      skipped,
+    };
+    try {
+      writeFileSync(backupPath, JSON.stringify(backup, null, 2));
+      console.log(`\nバックアップ: ${backupPath}`);
+    } catch (err) {
+      console.error(`[FATAL] backup 書き込み失敗、apply 中止: ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  } else if (parsed.execute) {
+    console.error("[FATAL] --execute と --no-backup の組み合わせは禁止");
+    process.exit(1);
+  }
+
+  // サンプル
+  console.log("\n=== update 対象サンプル (最大 10 件) ===");
+  for (const t of targets.slice(0, 10)) {
+    console.log(
+      `  tenant=${t.tenantId} attempt=${t.attempt.id} oldExitAt=${t.oldExitAt} → newExitAt=${t.newExitAt} (videoDuration=${t.videoDurationSec}s)`
+    );
+  }
+
+  if (!parsed.execute) {
+    console.log("\nDRY-RUN: --execute で実行");
+    return;
+  }
+
+  // 実行
+  console.log("\n=== 実行 ===");
+  const result = await applyBackfillUpdate(db, targets);
+  console.log("\n=== 完了 ===");
+  console.log(`  updated: ${result.updated}`);
+  console.log(`  skipped: ${result.skipped} (transaction 内再検証で除外)`);
+  console.log(`  failed:  ${result.failed}`);
+  console.log(`  readback verified: ${result.readbackVerified}`);
+  if (result.readbackFailed > 0) {
+    console.log(`  ⚠️ readback failed: ${result.readbackFailed}`);
+  }
+
+  if (result.failed > 0 || result.readbackFailed > 0) {
+    process.exit(1);
+  }
 }

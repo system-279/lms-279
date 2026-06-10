@@ -439,6 +439,7 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
             quizAttemptId: updated.id,
             startedAt: attempt.startedAt,
             submittedAt: updated.submittedAt,
+            videoDurationSec: video.durationSec,
           });
           if (!created) {
             // 既存ヒット = 冪等性が機能した状態。retry / backfill 競合 / attemptId 衝突など複数原因あり得るため

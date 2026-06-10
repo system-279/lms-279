@@ -28,6 +28,13 @@ name: Backfill Synthetic Lesson Sessions
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: '実行モード (create-missing=Phase 2 旧 / update-existing=Phase 3 follow-up #4 D 案)'
+        type: choice
+        options:
+          - create-missing
+          - update-existing
+        default: create-missing
       execute:
         description: '実書き込みモード (false=dry-run / true=apply)。true 時は environment approval 必須'
         type: boolean
@@ -89,6 +96,7 @@ jobs:
       - name: Run backfill script
         env:
           GOOGLE_CLOUD_PROJECT: lms-279
+          MODE: ${{ inputs.mode }}
           EXECUTE: ${{ inputs.execute }}
           TENANT_ID: ${{ inputs.tenant_id }}
           USER_EMAIL: ${{ inputs.user_email }}
@@ -107,6 +115,7 @@ jobs:
             exit 1
           fi
           FLAGS=()
+          if [ -n "$MODE" ]; then FLAGS+=("--mode=$MODE"); fi
           if [ "$EXECUTE" = "true" ]; then FLAGS+=("--execute"); fi
           if [ -n "$TENANT_ID" ]; then FLAGS+=("--tenant-id=$TENANT_ID"); fi
           if [ -n "$USER_EMAIL" ]; then FLAGS+=("--user-email=$USER_EMAIL"); fi

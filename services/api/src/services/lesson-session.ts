@@ -440,8 +440,9 @@ export async function completeSession(
  * 本関数は決定的 doc id `synthetic_{quizAttemptId}` で session を作成、冪等性を保証する。
  * 既存があればそれを返す (リトライ・backfill 再実行で重複作成しない)。
  *
- * entryAt = quiz_attempt.startedAt、exitAt = quiz_attempt.submittedAt として、
- * 出席レポートで quiz 所要時間 (滞在時間カラム #531) を意味ある値で表示する。
+ * **D 案 (Phase 3 follow-up #4)**: 業務的「動画見てテスト受験して合格」のフル時間を反映するため、
+ * entryAt = quiz.startedAt (実刻維持) / exitAt = startedAt + videoDurationMs + quizDurationMs (換算退室時刻)。
+ * ADR-019 動画完了ゲートにより自動補完対象は必ず過去に動画視聴完了済 (業務的根拠)。
  *
  * 失敗時は呼び出し元で catch する想定。本関数自体は例外を投げる。
  * 呼び出し元 (quiz-attempts.ts) は提出成功を優先するため、catch して logger.error に逃す。
@@ -456,10 +457,24 @@ export async function createSyntheticCompletedSession(
     quizAttemptId: string;
     startedAt: string;
     submittedAt: string;
+    videoDurationSec: number;
   }
 ): Promise<{ session: LessonSession; created: boolean }> {
+  // video.durationSec hard guard (Codex 指摘 #2 反映)。
+  // Number.isFinite で NaN/Infinity をブロック、> 0 で 0/負数をブロック。
+  if (!Number.isFinite(params.videoDurationSec) || params.videoDurationSec <= 0) {
+    throw new Error(
+      `createSyntheticCompletedSession: invalid videoDurationSec=${params.videoDurationSec} for lesson ${params.lessonId}`
+    );
+  }
+
   const id = `synthetic_${params.quizAttemptId}`;
   const startedMs = new Date(params.startedAt).getTime();
+  const submittedMs = new Date(params.submittedAt).getTime();
+  const quizDurationMs = submittedMs - startedMs;
+  const videoDurationMs = params.videoDurationSec * 1000;
+  // D 案: 業務的「動画見てテスト受験して合格」の換算退室時刻 (実打刻ではない)。
+  const exitAt = new Date(startedMs + videoDurationMs + quizDurationMs).toISOString();
   // 合成 session の deadlineAt は意味的に不要 (completed 状態で validate されない) が、
   // 型は必須なので entryAt + SESSION_DURATION_MS で safe default。
   const deadlineAt = new Date(startedMs + SESSION_DURATION_MS).toISOString();
@@ -472,7 +487,7 @@ export async function createSyntheticCompletedSession(
     sessionToken: `synthetic-${params.quizAttemptId}`,
     status: "completed",
     entryAt: params.startedAt,
-    exitAt: params.submittedAt,
+    exitAt,
     exitReason: "quiz_submitted",
     deadlineAt,
     pauseStartedAt: null,

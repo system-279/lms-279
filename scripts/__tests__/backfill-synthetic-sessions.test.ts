@@ -16,8 +16,10 @@ import {
   type SyntheticSessionData,
   applyBackfill,
   buildSyntheticSessionData,
+  buildUpdatedExitAt,
   buildWritePayload,
   categorizeAttempt,
+  categorizeAttemptForUpdate,
   findBackfillTargets,
   parseArgs,
   resolveSessionDurationMs,
@@ -25,6 +27,7 @@ import {
   sanitizeForWrite,
   validateExpectedCount,
   validateReadback,
+  validateTenantBreakdown,
 } from "../backfill-synthetic-sessions.js";
 import type { Firestore } from "firebase-admin/firestore";
 
@@ -1289,5 +1292,233 @@ describe("E2E [audit → dry-run → apply → idempotency]", () => {
     expect(after.targets.length).toBe(0);
     expect(after.auditOnly.length).toBe(1);
     expect(after.auditOnly[0].reason).toContain("quizAttemptId 一致");
+  });
+});
+
+// ============================================================
+// Phase 3 follow-up #4 (D 案) update-existing モード
+// ============================================================
+
+describe("Phase 3 follow-up #4: categorizeAttemptForUpdate", () => {
+  const baseAttempt: AttemptInfo = {
+    id: "att-1",
+    status: "submitted",
+    isPassed: true,
+    startedAt: "2026-05-30T08:41:00.000Z",
+    submittedAt: "2026-05-30T08:42:00.000Z",
+    quizId: "q-1",
+    userId: "u-1",
+    attemptNumber: 1,
+    score: 100,
+  };
+
+  function makeSyntheticSession(overrides: Partial<SessionInfo & { editedAt?: string; original?: unknown }> = {}) {
+    return {
+      id: "synthetic_att-1",
+      userId: "u-1",
+      lessonId: "l-1",
+      courseId: "c-1",
+      videoId: "v-1",
+      status: "completed",
+      entryAt: "2026-05-30T08:41:00.000Z",
+      exitAt: "2026-05-30T08:42:00.000Z",
+      exitReason: "quiz_submitted",
+      quizAttemptId: "att-1",
+      isSynthetic: true,
+      ...overrides,
+    };
+  }
+
+  it("旧形式 synthetic doc (entryAt=startedAt, exitAt=submittedAt) + 編集なし → update_target", () => {
+    expect(categorizeAttemptForUpdate(baseAttempt, [makeSyntheticSession()])).toBe(
+      "update_target",
+    );
+  });
+
+  it("attempt.status !== submitted → skip_invalid_attempt", () => {
+    expect(
+      categorizeAttemptForUpdate({ ...baseAttempt, status: "in_progress" }, [
+        makeSyntheticSession(),
+      ]),
+    ).toBe("skip_invalid_attempt");
+  });
+
+  it("attempt.isPassed !== true → skip_invalid_attempt", () => {
+    expect(
+      categorizeAttemptForUpdate({ ...baseAttempt, isPassed: false }, [
+        makeSyntheticSession(),
+      ]),
+    ).toBe("skip_invalid_attempt");
+  });
+
+  it("attempt.startedAt 欠落 → skip_invalid_attempt", () => {
+    expect(
+      categorizeAttemptForUpdate({ ...baseAttempt, startedAt: null }, [
+        makeSyntheticSession(),
+      ]),
+    ).toBe("skip_invalid_attempt");
+  });
+
+  it("synthetic doc 不在 → skip_no_synthetic", () => {
+    expect(categorizeAttemptForUpdate(baseAttempt, [])).toBe("skip_no_synthetic");
+  });
+
+  it("synthetic.original あり → skip_edited (PR #557 保護)", () => {
+    expect(
+      categorizeAttemptForUpdate(baseAttempt, [
+        makeSyntheticSession({
+          original: { entryAt: "2026-05-30T08:41:00.000Z", exitAt: "2026-05-30T08:42:00.000Z" },
+        }),
+      ]),
+    ).toBe("skip_edited");
+  });
+
+  it("synthetic.editedAt あり → skip_edited (Codex 指摘 #5: editedAt 単独でも保護)", () => {
+    expect(
+      categorizeAttemptForUpdate(baseAttempt, [
+        makeSyntheticSession({ editedAt: "2026-06-10T12:00:00.000Z" }),
+      ]),
+    ).toBe("skip_edited");
+  });
+
+  it("synthetic.entryAt !== attempt.startedAt → skip_not_legacy", () => {
+    expect(
+      categorizeAttemptForUpdate(baseAttempt, [
+        makeSyntheticSession({ entryAt: "2026-05-30T07:00:00.000Z" }),
+      ]),
+    ).toBe("skip_not_legacy");
+  });
+
+  it("synthetic.exitAt !== attempt.submittedAt → skip_not_legacy", () => {
+    expect(
+      categorizeAttemptForUpdate(baseAttempt, [
+        makeSyntheticSession({ exitAt: "2026-05-30T10:00:00.000Z" }),
+      ]),
+    ).toBe("skip_not_legacy");
+  });
+
+  it("isSynthetic !== true → skip_no_synthetic (id が synthetic_ でも厳密判定)", () => {
+    expect(
+      categorizeAttemptForUpdate(baseAttempt, [
+        makeSyntheticSession({ isSynthetic: false }),
+      ]),
+    ).toBe("skip_no_synthetic");
+  });
+});
+
+describe("Phase 3 follow-up #4: buildUpdatedExitAt", () => {
+  const attempt: AttemptInfo = {
+    id: "att-1",
+    status: "submitted",
+    isPassed: true,
+    startedAt: "2026-05-30T08:41:00.000Z",
+    submittedAt: "2026-05-30T08:42:00.000Z", // quiz 1 分
+    quizId: "q-1",
+    userId: "u-1",
+    attemptNumber: 1,
+    score: 100,
+  };
+
+  it("動画 60 分 + テスト 1 分 → startedAt + 61 分", () => {
+    const result = buildUpdatedExitAt(attempt, 60 * 60);
+    expect(result).toBe("2026-05-30T09:42:00.000Z");
+  });
+
+  it("動画 5 分 + テスト 1 分 → startedAt + 6 分", () => {
+    const result = buildUpdatedExitAt(attempt, 5 * 60);
+    expect(result).toBe("2026-05-30T08:47:00.000Z");
+  });
+
+  it("videoDurationSec=0 → throw", () => {
+    expect(() => buildUpdatedExitAt(attempt, 0)).toThrow(/invalid videoDurationSec/);
+  });
+
+  it("videoDurationSec が負 → throw", () => {
+    expect(() => buildUpdatedExitAt(attempt, -1)).toThrow(/invalid videoDurationSec/);
+  });
+
+  it("videoDurationSec が NaN → throw", () => {
+    expect(() => buildUpdatedExitAt(attempt, NaN)).toThrow(/invalid videoDurationSec/);
+  });
+
+  it("videoDurationSec が Infinity → throw", () => {
+    expect(() => buildUpdatedExitAt(attempt, Infinity)).toThrow(/invalid videoDurationSec/);
+  });
+
+  it("attempt.startedAt 欠落 → throw", () => {
+    expect(() =>
+      buildUpdatedExitAt({ ...attempt, startedAt: null }, 60),
+    ).toThrow(/startedAt\/submittedAt が欠落/);
+  });
+
+  it("日付境界またぎ (動画 120 分、23:00 開始) → 翌日 01:01", () => {
+    const result = buildUpdatedExitAt(
+      { ...attempt, startedAt: "2026-05-30T23:00:00.000Z", submittedAt: "2026-05-30T23:01:00.000Z" },
+      120 * 60,
+    );
+    expect(result).toBe("2026-05-31T01:01:00.000Z");
+  });
+});
+
+describe("Phase 3 follow-up #4: validateTenantBreakdown", () => {
+  it("expected 空 → 検証スキップ (ok=true)", () => {
+    expect(validateTenantBreakdown(new Map([["t1", 5]]), new Map())).toEqual({ ok: true });
+  });
+
+  it("完全一致 → ok=true", () => {
+    expect(
+      validateTenantBreakdown(
+        new Map([["nagaono", 12], ["fukunotane", 5]]),
+        new Map([["nagaono", 12], ["fukunotane", 5]]),
+      ),
+    ).toEqual({ ok: true });
+  });
+
+  it("件数不一致 → ok=false", () => {
+    const result = validateTenantBreakdown(
+      new Map([["nagaono", 10], ["fukunotane", 5]]),
+      new Map([["nagaono", 12], ["fukunotane", 5]]),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("nagaono");
+  });
+
+  it("想定外 tenant あり → ok=false", () => {
+    const result = validateTenantBreakdown(
+      new Map([["nagaono", 12], ["fukunotane", 5], ["unexpected", 3]]),
+      new Map([["nagaono", 12], ["fukunotane", 5]]),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("unexpected tenant");
+  });
+
+  it("expected にあるが actual に 0 → ok=false", () => {
+    const result = validateTenantBreakdown(
+      new Map([["nagaono", 12]]),
+      new Map([["nagaono", 12], ["fukunotane", 5]]),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("fukunotane");
+  });
+});
+
+describe("Phase 3 follow-up #4: parseArgs mode フラグ", () => {
+  it("--mode= 指定なし → デフォルト 'create-missing'", () => {
+    const parsed = parseArgs([]);
+    expect(parsed.mode).toBe("create-missing");
+  });
+
+  it("--mode=update-existing → 'update-existing'", () => {
+    const parsed = parseArgs(["--mode=update-existing"]);
+    expect(parsed.mode).toBe("update-existing");
+  });
+
+  it("--mode=create-missing → 'create-missing'", () => {
+    const parsed = parseArgs(["--mode=create-missing"]);
+    expect(parsed.mode).toBe("create-missing");
+  });
+
+  it("--mode=invalid → throw", () => {
+    expect(() => parseArgs(["--mode=invalid"])).toThrow(/--mode は/);
   });
 });
