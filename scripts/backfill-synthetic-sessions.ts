@@ -397,6 +397,7 @@ const KNOWN_FLAGS = [
   "--user-email=",
   "--max-targets=",
   "--expected-count=",
+  "--expected-count-tenant=",
   "--no-backup",
 ];
 
@@ -417,6 +418,7 @@ interface ParsedArgs {
   noBackup: boolean;
   maxTargets: number;
   expectedCount?: number;
+  expectedCountTenant?: Map<string, number>;
 }
 
 function getFlagValue(args: string[], prefix: string): string | undefined {
@@ -476,6 +478,13 @@ export function parseArgs(args: string[]): ParsedArgs {
     throw new Error("--user-id と --user-email は同時指定できません");
   }
 
+  // tenant 別 expected count (Codex finding #1 反映): --expected-count-tenant=tid1:N1,tid2:N2
+  const rawTenantBreakdown = getFlagValue(args, "--expected-count-tenant=");
+  let expectedCountTenant: Map<string, number> | undefined;
+  if (rawTenantBreakdown !== undefined) {
+    expectedCountTenant = parseExpectedCountTenant(rawTenantBreakdown);
+  }
+
   return {
     mode,
     execute,
@@ -485,7 +494,33 @@ export function parseArgs(args: string[]): ParsedArgs {
     noBackup,
     maxTargets,
     expectedCount,
+    expectedCountTenant,
   };
+}
+
+/** `tid1:N1,tid2:N2` 形式の文字列を Map に変換 (Phase 3 follow-up #4)。 */
+export function parseExpectedCountTenant(raw: string): Map<string, number> {
+  const result = new Map<string, number>();
+  const entries = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  for (const entry of entries) {
+    const [tid, countStr] = entry.split(":");
+    if (!tid || countStr === undefined) {
+      throw new Error(
+        `--expected-count-tenant の形式が不正 (期待: "tid1:N1,tid2:N2"): "${entry}"`
+      );
+    }
+    const count = Number(countStr);
+    if (!Number.isFinite(count) || !Number.isInteger(count) || count < 0) {
+      throw new Error(
+        `--expected-count-tenant の count が不正 (0 以上の整数が必要): "${entry}"`
+      );
+    }
+    if (result.has(tid)) {
+      throw new Error(`--expected-count-tenant に重複した tenant id: "${tid}"`);
+    }
+    result.set(tid, count);
+  }
+  return result;
 }
 
 // ============================================================
@@ -1243,12 +1278,17 @@ export async function applyBackfillUpdate(
         if (!snap.exists) return false;
         const sd = snap.data()!;
 
-        // transaction 内再検証 (Codex 指摘 #4 反映)
+        // transaction 内再検証 (Codex 指摘 #4 + finding #3 反映)
         if (sd.isSynthetic !== true) return false;
         if (sd.entryAt !== t.attempt.startedAt) return false;
         if (sd.exitAt !== t.attempt.submittedAt) return false;
         if (sd.original !== undefined && sd.original !== null) return false;
         if (sd.editedAt !== undefined && sd.editedAt !== null) return false;
+        // Codex finding #3 反映: より厳格な再検証
+        if (sd.quizAttemptId !== t.attempt.id) return false;
+        if (sd.userId !== t.attempt.userId) return false;
+        if (sd.status !== "completed") return false;
+        if (sd.exitReason !== "quiz_submitted") return false;
 
         tx.update(ref, {
           exitAt: t.newExitAt,
@@ -1354,11 +1394,11 @@ async function runMainUpdateExisting(
   }
 
   // tenant 別内訳
+  const tenantBreakdown = new Map<string, number>();
+  for (const t of targets) {
+    tenantBreakdown.set(t.tenantId, (tenantBreakdown.get(t.tenantId) ?? 0) + 1);
+  }
   if (targets.length > 0) {
-    const tenantBreakdown = new Map<string, number>();
-    for (const t of targets) {
-      tenantBreakdown.set(t.tenantId, (tenantBreakdown.get(t.tenantId) ?? 0) + 1);
-    }
     console.log("\n=== update 対象 tenant 内訳 ===");
     for (const [tid, count] of tenantBreakdown) {
       console.log(`  tenant=${tid}: ${count} 件`);
@@ -1370,6 +1410,19 @@ async function runMainUpdateExisting(
   if (!validation.ok) {
     console.error(`[FATAL] ${validation.reason}`);
     process.exit(1);
+  }
+
+  // tenant 別 expected count 検証 (Codex finding #1 反映)
+  if (parsed.expectedCountTenant !== undefined) {
+    const tenantValidation = validateTenantBreakdown(
+      tenantBreakdown,
+      parsed.expectedCountTenant,
+    );
+    if (!tenantValidation.ok) {
+      console.error(`[FATAL] ${tenantValidation.reason}`);
+      process.exit(1);
+    }
+    console.log("\ntenant 別件数: 期待値と完全一致 ✓");
   }
 
   if (targets.length === 0) {
@@ -1445,7 +1498,25 @@ async function runMainUpdateExisting(
     console.log(`  ⚠️ readback failed: ${result.readbackFailed}`);
   }
 
+  // Codex finding #2 反映: destructive write の apply は部分成功でも non-zero exit。
+  // expected_count を通過してから 1 件 skip された場合は concurrent edit や data drift の兆候。
   if (result.failed > 0 || result.readbackFailed > 0) {
+    console.error(
+      `[FATAL] backfill 部分失敗: failed=${result.failed} readbackFailed=${result.readbackFailed}`
+    );
     process.exit(1);
   }
+  if (result.skipped > 0) {
+    console.error(
+      `[FATAL] transaction 内再検証で ${result.skipped} 件 skip (concurrent edit / data drift の可能性、要調査)`
+    );
+    process.exit(1);
+  }
+  if (result.updated !== targets.length || result.readbackVerified !== result.updated) {
+    console.error(
+      `[FATAL] 部分成功: targets=${targets.length} updated=${result.updated} readbackVerified=${result.readbackVerified}`
+    );
+    process.exit(1);
+  }
+  console.log("\n✓ 全件 update + readback verified");
 }

@@ -1522,3 +1522,44 @@ describe("Phase 3 follow-up #4: parseArgs mode フラグ", () => {
     expect(() => parseArgs(["--mode=invalid"])).toThrow(/--mode は/);
   });
 });
+
+describe("Phase 3 follow-up #4: parseExpectedCountTenant (Codex finding #1)", () => {
+  it("'tid1:12,tid2:5' → Map 2 件", async () => {
+    const { parseExpectedCountTenant } = await import("../backfill-synthetic-sessions.js");
+    const result = parseExpectedCountTenant("tid1:12,tid2:5");
+    expect(result.get("tid1")).toBe(12);
+    expect(result.get("tid2")).toBe(5);
+  });
+
+  it("空白許容", async () => {
+    const { parseExpectedCountTenant } = await import("../backfill-synthetic-sessions.js");
+    const result = parseExpectedCountTenant(" tid1:12 , tid2:5 ");
+    expect(result.size).toBe(2);
+  });
+
+  it("形式不正 (':' なし) → throw", async () => {
+    const { parseExpectedCountTenant } = await import("../backfill-synthetic-sessions.js");
+    expect(() => parseExpectedCountTenant("tid1-12,tid2:5")).toThrow(/形式が不正/);
+  });
+
+  it("count が負数 → throw", async () => {
+    const { parseExpectedCountTenant } = await import("../backfill-synthetic-sessions.js");
+    expect(() => parseExpectedCountTenant("tid1:-1")).toThrow(/0 以上の整数が必要/);
+  });
+
+  it("count が NaN → throw", async () => {
+    const { parseExpectedCountTenant } = await import("../backfill-synthetic-sessions.js");
+    expect(() => parseExpectedCountTenant("tid1:abc")).toThrow(/0 以上の整数が必要/);
+  });
+
+  it("重複 tenant id → throw", async () => {
+    const { parseExpectedCountTenant } = await import("../backfill-synthetic-sessions.js");
+    expect(() => parseExpectedCountTenant("tid1:12,tid1:5")).toThrow(/重複した tenant id/);
+  });
+
+  it("--expected-count-tenant フラグ経由で parseArgs に渡る", () => {
+    const parsed = parseArgs(["--expected-count-tenant=nagaono:12,fukunotane:5"]);
+    expect(parsed.expectedCountTenant?.get("nagaono")).toBe(12);
+    expect(parsed.expectedCountTenant?.get("fukunotane")).toBe(5);
+  });
+});

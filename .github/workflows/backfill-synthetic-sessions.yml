@@ -60,6 +60,10 @@ on:
         description: '対象件数の完全一致ガード (本番 apply で必須運用、不一致時 fail)'
         required: false
         type: string
+      expected_count_tenant:
+        description: 'tenant 別 expected count (例: "tid1:12,tid2:5") update-existing で本番 apply 時に強く推奨'
+        required: false
+        type: string
 
 jobs:
   backfill:
@@ -103,6 +107,7 @@ jobs:
           USER_ID: ${{ inputs.user_id }}
           MAX_TARGETS: ${{ inputs.max_targets }}
           EXPECTED_COUNT: ${{ inputs.expected_count }}
+          EXPECTED_COUNT_TENANT: ${{ inputs.expected_count_tenant }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_ACTOR: ${{ github.actor }}
@@ -122,6 +127,7 @@ jobs:
           if [ -n "$USER_ID" ]; then FLAGS+=("--user-id=$USER_ID"); fi
           if [ -n "$MAX_TARGETS" ]; then FLAGS+=("--max-targets=$MAX_TARGETS"); fi
           if [ -n "$EXPECTED_COUNT" ]; then FLAGS+=("--expected-count=$EXPECTED_COUNT"); fi
+          if [ -n "$EXPECTED_COUNT_TENANT" ]; then FLAGS+=("--expected-count-tenant=$EXPECTED_COUNT_TENANT"); fi
           echo "Running with flags: ${FLAGS[*]:-(none)}"
           npx tsx scripts/backfill-synthetic-sessions.ts "${FLAGS[@]}"
 
