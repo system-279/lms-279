@@ -53,6 +53,10 @@ import {
   applyPdfColumnHide,
   restorePdfColumnDisplay,
 } from "./_helpers/pdf-print";
+import {
+  formatOriginalTooltip,
+  hasOriginalSnapshot,
+} from "./_helpers/edit-history";
 
 type Tenant = { id: string; name: string };
 
@@ -431,12 +435,34 @@ export default function AttendanceReportPage() {
 
       {report && !loading && (
         <div ref={tableRef}>
-          {/* 印刷用ヘッダー */}
+          {/* 印刷用ヘッダー (#557 Codex Low: PDF 出力時に抽出条件を明示) */}
           <div className="print:block hidden mb-4">
             <h2 className="text-xl font-bold">{report.tenantName} — 出席・テスト結果レポート</h2>
             <p className="text-sm text-muted-foreground">
               出力日: {new Date().toLocaleDateString("ja-JP")}
             </p>
+            <p className="text-sm text-muted-foreground">
+              対象件数: {filteredRecords.length} 件
+              {filteredRecords.length !== report.totalRecords && ` (全 ${report.totalRecords} 件のうち抽出)`}
+            </p>
+            {(filterUsers.size > 0 || filterCourses.size > 0 || filterLessons.size > 0
+              || filterExitReasons.size > 0 || filterQuizPassed.size > 0
+              || filterSyntheticKind !== "all") && (
+              <p className="text-sm text-muted-foreground">
+                抽出条件:{" "}
+                {[
+                  filterUsers.size > 0 && `受講者 ${filterUsers.size} 名`,
+                  filterCourses.size > 0 && `コース ${filterCourses.size} 件`,
+                  filterLessons.size > 0 && `レッスン ${filterLessons.size} 件`,
+                  filterExitReasons.size > 0 && `退室理由 ${filterExitReasons.size} 件`,
+                  filterQuizPassed.size > 0 && `合否 ${filterQuizPassed.size} 件`,
+                  filterSyntheticKind === "synthetic_only" && "session 種別: 自動補完のみ",
+                  filterSyntheticKind === "actual_only" && "session 種別: 実 session のみ",
+                ]
+                  .filter(Boolean)
+                  .join(" / ")}
+              </p>
+            )}
           </div>
 
           <p className="text-sm text-muted-foreground mb-2">
@@ -571,6 +597,15 @@ export default function AttendanceReportPage() {
                             title="このセッションは合格提出から自動補完されました (#533 Phase 1/2)"
                           >
                             自動補完
+                          </Badge>
+                        )}
+                        {hasOriginalSnapshot(r) && (
+                          <Badge
+                            variant="outline"
+                            className="ml-1 border-sky-400 text-sky-700 print:hidden"
+                            title={formatOriginalTooltip(r.original)}
+                          >
+                            編集済
                           </Badge>
                         )}
                       </TableCell>

@@ -1057,6 +1057,9 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
       quizPassed: attempt?.isPassed ?? data.quizPassed ?? null,
       quizSubmittedAt: attempt?.submittedAt ?? null,
       isSynthetic: data.isSynthetic === true,
+      // Issue #556: 初回編集時の immutable snapshot を返却（未編集なら undefined）
+      original: data.original ?? undefined,
+      editedAt: data.editedAt?.toDate?.().toISOString?.() ?? data.editedAt ?? undefined,
     };
   });
 
@@ -1118,36 +1121,102 @@ router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Requ
 
   const basePath = `tenants/${tenantId}`;
   const sessionRef = db.collection(`${basePath}/lesson_sessions`).doc(sessionId);
-  const sessionDoc = await sessionRef.get();
 
-  if (!sessionDoc.exists) {
+  // Issue #556 + Codex review: 並列 PATCH での original snapshot 汚染 (race condition) を防ぐため
+  // session 読込・snapshot 作成・quiz fallback fetch・session/quiz 更新を Firestore transaction 内で一貫実行する。
+  // Firestore は内部で楽観ロック + 自動 retry を行うため、先行 PATCH が original を書いた場合は再実行で
+  // sessionData.original を読み直し、isFirstEdit=false として snapshot 上書きを回避できる。
+  const now = new Date().toISOString();
+  // closure 内で代入するため、TypeScript の type narrowing を回避するために string 型を採用
+  let txStatus: string = "ok";
+
+  await db.runTransaction(async (tx) => {
+    const sessionDoc = await tx.get(sessionRef);
+    if (!sessionDoc.exists) {
+      txStatus = "not_found";
+      return;
+    }
+
+    const sessionData = sessionDoc.data() ?? {};
+
+    // Codex Medium: PATCH 後の最終 entryAt/exitAt 整合性を検証 (片方だけ送信時も）。
+    // 既存値を JST 文字列等の Timestamp / string 混在から ISO 8601 に正規化してから比較する。
+    const currentEntryAtIso = sessionData.entryAt?.toDate?.().toISOString?.() ?? sessionData.entryAt ?? null;
+    const currentExitAtIso = sessionData.exitAt?.toDate?.().toISOString?.() ?? sessionData.exitAt ?? null;
+    const finalEntryAt = entryAt ?? currentEntryAtIso;
+    const finalExitAt = exitAt ?? currentExitAtIso;
+    if (finalEntryAt && finalExitAt && new Date(finalEntryAt as string).getTime() > new Date(finalExitAt as string).getTime()) {
+      txStatus = "invalid_time_range";
+      return;
+    }
+
+    // 初回編集時のみ原データを original snapshot として保存 (以降 immutable)。Issue #556。
+    // null + undefined 両対応 (`== null`): Firestore からの欠落と、手動で null 直書きされたケース両方を初回扱いに。
+    const isFirstEdit = sessionData.original == null;
+    let originalSnapshot: {
+      entryAt: string | null;
+      exitAt: string | null;
+      quizScore: number | null;
+      quizPassed: boolean | null;
+    } | undefined;
+    if (isFirstEdit) {
+      let originalQuizScore: number | null = sessionData.quizScore ?? null;
+      let originalQuizPassed: boolean | null = sessionData.quizPassed ?? null;
+      // quiz_attempts fallback fetch は snapshot 取得補助のみが目的のため、エラーで PATCH 本体を巻き込まない。
+      // fetch 失敗時は quiz 値を null のまま snapshot 保存し、PATCH 本体の入退室時刻更新を継続する
+      // (rules/error-handling.md §1「各ステップを独立 try-catch で囲む」原則)。
+      if (sessionData.quizAttemptId && (originalQuizScore === null || originalQuizPassed === null)) {
+        try {
+          const attemptDoc = await tx.get(db.collection(`${basePath}/quiz_attempts`).doc(sessionData.quizAttemptId));
+          if (attemptDoc.exists) {
+            const attemptData = attemptDoc.data();
+            if (originalQuizScore === null) originalQuizScore = attemptData?.score ?? null;
+            if (originalQuizPassed === null) originalQuizPassed = attemptData?.isPassed ?? null;
+          }
+        } catch (e) {
+          console.error("[attendance-report PATCH] quiz_attempts fallback fetch failed", { sessionId, quizAttemptId: sessionData.quizAttemptId, error: e });
+        }
+      }
+      originalSnapshot = {
+        entryAt: currentEntryAtIso,
+        exitAt: currentExitAtIso,
+        quizScore: originalQuizScore,
+        quizPassed: originalQuizPassed,
+      };
+    }
+
+    // セッション更新
+    const sessionUpdate: Record<string, unknown> = { updatedAt: now, editedAt: now };
+    if (originalSnapshot !== undefined) sessionUpdate.original = originalSnapshot;
+    if (entryAt !== undefined) sessionUpdate.entryAt = entryAt;
+    if (exitAt !== undefined) sessionUpdate.exitAt = exitAt;
+    if (exitReason !== undefined) sessionUpdate.exitReason = exitReason;
+
+    // テスト結果更新 (transaction 内で session/quiz_attempts を atomic に更新)
+    if (quizScore !== undefined || quizPassed !== undefined) {
+      const quizAttemptId = sessionData.quizAttemptId;
+      if (quizAttemptId) {
+        const attemptRef = db.collection(`${basePath}/quiz_attempts`).doc(quizAttemptId);
+        const attemptUpdate: Record<string, unknown> = {};
+        if (quizScore !== undefined) attemptUpdate.score = quizScore;
+        if (quizPassed !== undefined) attemptUpdate.isPassed = quizPassed;
+        tx.update(attemptRef, attemptUpdate);
+      }
+      // セッションにも直接保存 (quizAttemptId がない場合のフォールバック)
+      if (quizScore !== undefined) sessionUpdate.quizScore = quizScore;
+      if (quizPassed !== undefined) sessionUpdate.quizPassed = quizPassed;
+    }
+
+    tx.update(sessionRef, sessionUpdate);
+  });
+
+  if (txStatus === "not_found") {
     res.status(404).json({ error: "not_found", message: "Session not found" });
     return;
   }
-
-  // セッション更新
-  const sessionUpdate: Record<string, unknown> = { updatedAt: new Date().toISOString() };
-  if (entryAt !== undefined) sessionUpdate.entryAt = entryAt;
-  if (exitAt !== undefined) sessionUpdate.exitAt = exitAt;
-  if (exitReason !== undefined) sessionUpdate.exitReason = exitReason;
-  await sessionRef.update(sessionUpdate);
-
-  // テスト結果更新
-  if (quizScore !== undefined || quizPassed !== undefined) {
-    const quizAttemptId = sessionDoc.data()?.quizAttemptId;
-    if (quizAttemptId) {
-      // quiz_attemptsドキュメントを更新
-      const attemptRef = db.collection(`${basePath}/quiz_attempts`).doc(quizAttemptId);
-      const attemptUpdate: Record<string, unknown> = {};
-      if (quizScore !== undefined) attemptUpdate.score = quizScore;
-      if (quizPassed !== undefined) attemptUpdate.isPassed = quizPassed;
-      await attemptRef.update(attemptUpdate);
-    }
-    // セッションにも直接保存（quizAttemptIdがない場合のフォールバック）
-    const quizUpdate: Record<string, unknown> = {};
-    if (quizScore !== undefined) quizUpdate.quizScore = quizScore;
-    if (quizPassed !== undefined) quizUpdate.quizPassed = quizPassed;
-    await sessionRef.update(quizUpdate);
+  if (txStatus === "invalid_time_range") {
+    res.status(400).json({ error: "invalid_time_range", message: "Final entryAt must be before exitAt (considering existing values)" });
+    return;
   }
 
   res.json({ message: "updated" });

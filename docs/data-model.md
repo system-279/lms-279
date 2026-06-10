@@ -160,6 +160,8 @@ questions配列の各要素:
 | sessionVideoCompleted | boolean | セッション内で動画完了したか |
 | quizAttemptId | string? | 完了時のテストattempt ID |
 | isSynthetic | boolean? | provenance flag。`true` の場合、`activeSession=null` の合格提出時にシステムが自動補完した合成 session であることを示す（ADR-027 §改訂履歴 2026-06-09 / #533 Phase 1/2）。doc id 規約: 合成は `synthetic_{attemptId}`、実 session は Firestore 自動採番 |
+| original | object? | 編集前 immutable snapshot。初回 PATCH 時に `{ entryAt, exitAt, quizScore, quizPassed }` を記録、以降の編集では不変。未編集なら欠落。UI 上「編集済」バッジの表示判定・tooltip 元データ表示に使用（ADR-027 §改訂履歴 2026-06-10 / #556） |
+| editedAt | string? (ISO8601) | 最後の編集時刻。各 PATCH ごとに更新される。未編集なら欠落（#556） |
 | createdAt | Timestamp | 作成日時 |
 | updatedAt | Timestamp | 更新日時 |
 
