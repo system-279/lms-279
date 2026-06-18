@@ -72,7 +72,7 @@ describe("generatePdfUploadUrl", () => {
     ).rejects.toThrow(LessonResourceError);
   });
 
-  it("file_too_large: 50MB + 1 byte → エラー", async () => {
+  it("file_too_large: 150MB + 1 byte → エラー", async () => {
     const { storage } = buildMockStorage();
     await expect(
       generatePdfUploadUrl(
@@ -201,7 +201,7 @@ describe("confirmPdfUpload", () => {
     ).rejects.toMatchObject({ code: "gcs_file_missing" });
   });
 
-  it("file_too_large: 実メタデータが 50MB 超 → エラー (Codex High #2)", async () => {
+  it("file_too_large: 実メタデータが 150MB 超 → エラー (Codex High #2)", async () => {
     const { storage } = buildMockStorage({
       getMetadata: vi
         .fn()

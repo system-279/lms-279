@@ -30,8 +30,13 @@ const RESOURCE = {
 };
 
 function makePdfFile(sizeMB: number, name = "test.pdf", type = "application/pdf"): File {
-  const sizeBytes = sizeMB * 1024 * 1024;
-  return new File([new Uint8Array(sizeBytes)], name, { type });
+  // 上限が 150 MB に拡張されたため、実バイト列は最小化して size プロパティだけ偽装する
+  // (大きい Uint8Array を確保すると vitest 並列実行時にメモリ圧迫の恐れ)
+  // defineProperty は writable:false 既定のため同インスタンスで size を再定義不可。
+  // 毎回 new File を返す前提で使うこと。
+  const file = new File([new Uint8Array(1)], name, { type });
+  Object.defineProperty(file, "size", { value: sizeMB * 1024 * 1024 });
+  return file;
 }
 
 beforeEach(() => {
@@ -40,13 +45,13 @@ beforeEach(() => {
 });
 
 describe("MasterLessonPdfUploader - validation", () => {
-  it("AC-2 50MB 超過ファイル選択 → エラー表示 + API 未呼出", async () => {
+  it("AC-2 150MB 超過ファイル選択 → エラー表示 + API 未呼出", async () => {
     const onUpdated = vi.fn();
     render(
       <MasterLessonPdfUploader lessonId="L1" resource={undefined} onUpdated={onUpdated} />,
     );
     const input = screen.getByLabelText(/PDF ファイル/) as HTMLInputElement;
-    const overSizeFile = makePdfFile(51, "big.pdf");
+    const overSizeFile = makePdfFile(151, "big.pdf");
     fireEvent.change(input, { target: { files: [overSizeFile] } });
     expect(
       await screen.findByText(/ファイルサイズが上限/),
@@ -215,7 +220,7 @@ describe("MasterLessonPdfUploader - a11y (AC-16)", () => {
       <MasterLessonPdfUploader lessonId="L1" resource={undefined} onUpdated={vi.fn()} />,
     );
     const input = screen.getByLabelText(/PDF ファイル/) as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [makePdfFile(51)] } });
+    fireEvent.change(input, { target: { files: [makePdfFile(151)] } });
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/ファイルサイズが上限/);
   });

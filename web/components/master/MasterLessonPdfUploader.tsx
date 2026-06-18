@@ -23,7 +23,7 @@ import {
   type UploadProgressEvent,
 } from "@/lib/upload";
 
-const MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024;
+const MAX_PDF_SIZE_BYTES = 150 * 1024 * 1024;
 const PDF_CONTENT_TYPE = "application/pdf";
 
 interface MasterLessonPdfUploaderProps {
@@ -47,7 +47,7 @@ function formatPdfError(err: unknown): string {
       case "invalid_file_type":
         return "PDF ファイルのみアップロード可能です。";
       case "file_too_large":
-        return "ファイルサイズが上限 (50 MB) を超えています。";
+        return "ファイルサイズが上限 (150 MB) を超えています。";
       case "gcs_unavailable":
         return "一時的に取得できません。しばらくしてから再度お試しください。";
       case "lesson_not_found":
@@ -107,7 +107,7 @@ export function MasterLessonPdfUploader({
       return;
     }
     if (file.size > MAX_PDF_SIZE_BYTES) {
-      setValidationError("ファイルサイズが上限 (50 MB) を超えています。");
+      setValidationError("ファイルサイズが上限 (150 MB) を超えています。");
       setSelectedFile(null);
       if (inputRef.current) inputRef.current.value = "";
       return;
@@ -240,7 +240,7 @@ export function MasterLessonPdfUploader({
         <div className="space-y-2">
           {/* label と input は a11y / 既存テスト (getByLabelText) 互換のため sr-only で残す */}
           <label className="sr-only" htmlFor={`pdf-input-${lessonId}`}>
-            PDF ファイル (最大 50 MB)
+            PDF ファイル (最大 150 MB)
           </label>
           <input
             ref={inputRef}
@@ -261,7 +261,7 @@ export function MasterLessonPdfUploader({
                 {resource ? "別の PDF を選択" : "PDF ファイルを選択"}
               </Button>
               <span className="text-xs text-muted-foreground">
-                PDF 形式 / 最大 50 MB
+                PDF 形式 / 最大 150 MB
               </span>
             </div>
           ) : (

@@ -20,7 +20,7 @@
 
 | # | 要件 |
 |---|---|
-| F-1 | super-admin はマスターレッスンに PDF (最大 50 MB) を 1 個アップロードできる |
+| F-1 | super-admin はマスターレッスンに PDF (最大 150 MB) を 1 個アップロードできる |
 | F-2 | 受講者は当該レッスンの quiz_attempts でテスト合格 (`user_progress.quizPassed === true`) 後、PDF をダウンロードできる |
 | F-3 | ダウンロード可能期間は受講開始から `videoAccessUntil` (デフォルト +1 年) まで |
 | F-4 | マスターコースをテナントに配信 (`distributeCourseToTenant`) する際、PDF メタ情報 (gcsPath/fileName/sizeBytes/updatedAt) もディープコピーされる |
@@ -190,7 +190,7 @@ const lessonData = {
 
 制約:
 - `contentType === "application/pdf"` 限定
-- `sizeBytes <= 50 * 1024 * 1024` (50 MB)
+- `sizeBytes <= 150 * 1024 * 1024` (150 MB、2026-06-18 改訂、旧 50 MB)
 - ファイル名は basename + 安全文字のみ (path traversal 防止)
 
 **#5 GET `/:tenant/lessons/:lessonId/pdf-download`**
@@ -219,7 +219,7 @@ export async function syncResourcesToTenants(masterCourseId): Promise<{ tenantsC
 | エラー種別 | 状況 | HTTP | message | リトライ |
 |---|---|---|---|---|
 | `invalid_file_type` | contentType ≠ application/pdf | 400 | "PDF ファイルのみアップロード可能です" | permanent |
-| `file_too_large` | sizeBytes > 50 MB | 400 | "50 MB を超えるファイルはアップロードできません" | permanent |
+| `file_too_large` | sizeBytes > 150 MB | 400 | "150 MB を超えるファイルはアップロードできません" | permanent |
 | `lesson_not_found` | masterLessonId が _master に存在しない | 404 | | permanent |
 | `quiz_not_passed` | user_progress.quizPassed !== true | 403 | "テスト合格後にダウンロード可能です" | permanent |
 | `access_expired` | now >= videoAccessUntil | 403 | "受講期間が終了しています" | permanent |
@@ -281,7 +281,7 @@ logger.error("pdf_download_denied", { tenantId, lessonId, userId, reason });
 | AC-7 | DL: PDF 未添付 | pdfGcsPath 未設定 → 404 resource_not_found |
 | AC-8 | DL: 他テナント侵入 | tenant=A token で tenant=B lessonId → 404 lesson_not_found |
 | AC-9 | 削除順序 | メタ削除失敗 → throw, メタ削除成功 + GCS 削除失敗 → orphan ログのみで成功 |
-| AC-10 | サイズ上限 | sizeBytes > 50MB → 400 file_too_large |
+| AC-10 | サイズ上限 | sizeBytes > 150MB → 400 file_too_large |
 | AC-11 | MIME 制限 | contentType ≠ application/pdf → 400 invalid_file_type |
 | AC-12 | UI: 未合格時 disabled | quizPassed=false → DL ボタン disabled + ツールチップ |
 | AC-13 | UI: 期間切れ hide | now >= videoAccessUntil → DL ボタン hide |
