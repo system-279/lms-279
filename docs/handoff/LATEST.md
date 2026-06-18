@@ -1,118 +1,123 @@
-# Session Handoff — 2026-06-10 (Session 74)
+# Session Handoff — 2026-06-18 (Session 75)
 
 ## TL;DR
 
-**現場フィードバック対応の真の完結 — D 案 (動画長 + テスト時間の換算退室時刻) 実装 + 本番 17 件 Firestore データ修復完了**。前セッション (Session 73) で採用した A 案 (UI 表示分離) を撤回し、業務ロジックに沿った D 案でデータそのものを修復。Codex セカンドオピニオン 4-6 ラウンド突破、Playwright MCP で 17/17 件動作確認済。
+**現場フィードバック対応 — 講座資料 PDF アップロード上限を 50MB → 150MB に引き上げ**。Canva 出力 PDF が 50MB を超える運用課題を受け、開発者判断で 150MB に決定。コード変更 + ADR-036 改訂 + テスト + CI/CD まで完結、本番デプロイ反映済。現場連絡文案を起草、送付は decision-maker 領分。
 
 | 主要成果 | 結果 |
 |---|---|
-| 現場「データ修復」要望対応 | ✅ D 案実装 + PR #561 merged + Cloud Run deploy success |
-| PR #559 (A 案 UI 表示分離) 撤回 | ✅ `formatRecordStayDuration` / `SYNTHETIC_STAY_DURATION_LABEL` 等削除 |
-| backfill `update-existing` モード追加 | ✅ tenant 別 expected count + transaction 再検証 + 部分成功検知 |
-| 本番 17 件 backfill | ✅ 長遊園 12 + 福の種 5 すべて exitAt 修復、failed/skipped 0、readback verified 17 |
-| Codex セカンドオピニオン (4-6 ラウンド) | ✅ 全 Go 取得 (impl-plan / PR review / final) |
-| Playwright MCP 本番確認 | ✅ 17/17 件動作確認、旧形式 (1分 / — (テストのみ)) 残存ゼロ |
+| PDF アップロード上限引き上げ (50 → 150 MB) | ✅ PR #574 merged + Cloud Run deploy success |
+| ADR-036 / spec / smoke runbook 改訂 | ✅ 改訂日 2026-06-18 + 旧上限併記 |
+| サーバー / クライアント / テスト 同期 | ✅ 定数 + エラー文言 + 表示文言 + 境界値テスト |
+| 品質ゲート | ✅ CI 5 件 PASS / code-reviewer 0 件 / 全 1672 tests PASS |
+| ローカル dry test 試行 | ⚠ super-admin UI は Firebase Auth 固定で実機 UI 検証不可、コンポーネントテストで境界値担保 |
+| 現場連絡文案起草 | ✅ 起草済 (反映済前提)、送付は decision-maker |
 
-- **Issue Net (本セッション)**: Close 0 + 起票 0 = **Net 0** (現場フィードバック対応として直接 PR + backfill 実行、新規 Issue 化せず)
-- **本セッション merged PR**: 1 件 (#561)
-- **本セッション workflow_dispatch**: 1 件 (本番 17 件 destructive write、番号単位認可受領済)
+- **Issue Net (本セッション)**: Close 0 + 起票 0 = **Net 0** (現場フィードバック対応は PR で直接対応、新規 Issue 化せず)
+- **本セッション merged PR**: 1 件 (#574)
+- **本セッション workflow_dispatch**: 0 件
 
 ---
 
 ## 🚀 次セッション開始時の必読手順
 
 ```bash
-# 1. 状況復元
 cat docs/handoff/LATEST.md
-
-# 2. リモート同期 + 状態確認
 git fetch origin main && git log --oneline -5 origin/main
 gh pr list --state open
 gh issue list --state open
 ```
 
-**次セッションの最初の一手**: なし (即着手タスクゼロ、条件待ち項目のみ)
+**次セッションの最初の一手**: なし (即着手タスク 0 件、条件待ち項目のみ)
 
 ---
 
-## 重要な作業内容 (本セッション = Session 74)
+## 重要な作業内容 (本セッション = Session 75)
 
-### 1. 前 Session 73 からの方針転換
+### 1. 現場フィードバック受領 — Canva 圧縮済み PDF が 50MB 超
 
-前 session (Session 73) で PR #559 (A 案 UI 表示分離 `"— (テストのみ)"`) を merged + 本番動作確認完了したが、**「Firestore データ自体を修復したい」とのユーザー (decision-maker) 要望**を受領。
+現場 (スーパー管理者) から `super-admin > マスターコース > レッスン編集` 画面の PDF アップロード時に以下メッセージが発生する旨報告。
 
-業務ロジック再確認:
-- ADR-019 `checkVideoCompletionGate`: `quiz.requireVideoCompletion=true` の場合、`video_analytics.isComplete=true` が必須
-- → **自動補完 session の対象は必ず過去に動画視聴完了済** (= 「動画 + テスト」のフル業務フローを既に経ている)
-- → 滞在時間に「動画長 + テスト時間」を含めるのが業務的に正しい
+> `PDF 形式 / 最大 50 MB`
+> `ファイルサイズが上限 (50 MB) を超えています。`
 
-### 2. 案の整理と Codex セカンドオピニオン 6 ラウンド
+> 「canva から PDF 圧縮で DL しておりますがそれでも 50MB 以上になってしまっております」
 
-| 案 | 内容 | 結果 |
-|----|------|------|
-| A (前採用、PR #559) | UI 表示分離 `"— (テストのみ)"` | 撤回 (データ自体修復を望む) |
-| B | `entryAt = submittedAt - SESSION_DURATION_MS (3h)` | Codex 1 ラウンド目 No-Go (真実性リスク) |
-| **D (本採用)** | `exitAt = startedAt + video.durationSec*1000 + quizDurationMs` | Codex 4-6 ラウンド Go |
-| E | 自動補完を作らない | Issue #533 根本目的を否定、却下 |
+### 2. 上限値の決定
 
-**D 案が B 案 No-Go を回避できる根拠**: `video.durationSec` は **lesson 固有の客観値** (要件定義の一部)、SESSION_DURATION_MS の任意性とは異なる。「動画見てテスト受験して合格」業務フローの忠実な時間表現で、行政提出時に説明可能。
+| 選択肢 | 評価 |
+|--------|------|
+| 100 MB | Canva 標準圧縮 + 一般資料サイズに余裕、最も保守的 |
+| **150 MB (採用)** | 中規模写真資料も対応、署名 URL 有効期限内 DL 現実的 |
+| 200 MB | 大規模資料対応、低速回線 DL リスク↑ |
 
-Codex 4 ラウンド目 (impl-plan レビュー):
-- 条件付き Go + 5 緩和策提示 (#1 換算退室時刻明記 / #2 video.durationSec hard guard / #3 日付境界 / #4 backfill 安全性 / #5 edit skip 両方判定)
+開発者判断で **150 MB** 採用。
 
-Codex 5 ラウンド目 (PR review):
-- 条件付き Go + 3 finding (tenant 検証未接続 / skip non-zero exit / transaction 再検証薄い)
+### 3. PR #574 実装内容
 
-Codex 6 ラウンド目 (PR final):
-- **Go 判定** + 追加硬化 1 件 (execute=true && update-existing で expected_count_tenant 必須 shell guard)
+#### 変更ファイル (7 件、+28/-23)
 
-### 3. PR #561 実装
+| ファイル | 内容 |
+|----------|------|
+| `services/api/src/services/lesson-resource.ts` | `MAX_PDF_SIZE_BYTES = 150 * 1024 * 1024` + エラーメッセージ 2 箇所 |
+| `web/components/master/MasterLessonPdfUploader.tsx` | クライアント側 pre-check 定数 + 表示文言 / a11y label 4 箇所 |
+| `services/api/src/services/__tests__/lesson-resource.test.ts` | テストタイトル 2 箇所 (50MB → 150MB) |
+| `web/components/master/__tests__/MasterLessonPdfUploader.test.tsx` | 境界値 51 → 151 MB、`makePdfFile` を `Object.defineProperty(file, "size", ...)` の size 偽装方式に変更 (vitest 並列実行時のメモリ圧迫予防) |
+| `docs/adr/ADR-036-course-resource-pdf-distribution.md` | ステータス行に改訂日 (2026-06-18) と引き上げ理由を追記 |
+| `docs/specs/2026-05-17-course-pdf-download-design.md` | 仕様書 4 箇所 (F-1 / 制約 / エラー表 / AC-10) |
+| `docs/ops/2026-05-17-pdf-smoke-test-runbook.md` | smoke runbook 実装挙動説明を更新 |
 
-#### 主要変更ファイル (12 件、+1338/-263)
-- `services/api/src/services/lesson-session.ts`: `createSyntheticCompletedSession` D 案算出 + videoDurationSec hard guard
-- `services/api/src/routes/shared/quiz-attempts.ts`: video.durationSec を helper に渡す
-- `scripts/backfill-synthetic-sessions.ts`: `update-existing` モード + 純粋関数群 (`categorizeAttemptForUpdate` / `buildUpdatedExitAt` / `validateTenantBreakdown` / `parseExpectedCountTenant`) + `findUpdateTargets` / `applyBackfillUpdate` (transaction 内再検証)
-- `.github/workflows/backfill-synthetic-sessions.yml`: mode 入力追加 + expected_count_tenant 必須 shell guard
-- `web/app/super/attendance/_helpers/stay-duration.ts`: PR #559 関連削除 (`formatRecordStayDuration` / `SYNTHETIC_STAY_DURATION_LABEL` / `stayDurationSortValue`)、`isStayTimeEdited` 維持
-- `web/app/super/attendance/page.tsx`: `formatStayDuration` 直接利用に復帰、「自動補完」バッジ tooltip に「換算退室時刻」明記
-- `docs/adr/ADR-027-lesson-session-attendance.md`: follow-up #4 entry
-- `docs/specs/2026-06-10-phase3-synthetic-session-d-plan-design.md`: 新規仕様書 (AC 20 件)
+#### 影響範囲
 
-#### テスト統計
-- API integration: 10 ケース (D 案算出 + videoDurationSec guard 4 種)
-- script unit: 26 ケース (categorizeAttemptForUpdate 10 / buildUpdatedExitAt 8 / validateTenantBreakdown 5 / parseArgs mode 4 / parseExpectedCountTenant 7)
-- 全 workspace 2008 tests passed
-- 型チェック / lint 全 PASS
+- ✅ サーバー側 (`MAX_PDF_SIZE_BYTES`) とクライアント側 pre-check が一致 (150 MB)
+- ✅ `confirmPdfUpload` の GCS 実メタデータ再検証も 150 MB を参照、バイパス経路なし
+- ✅ GCS 直接 PUT 方式のため Cloud Run body 上限への影響なし
+- ⚠️ GCS 署名 URL 有効期限 (upload 1 時間 / download 15 分) は据え置き
+- ⚠️ GCS storage cost は素直に増加 (ファイル数 × 増分)、軽微
 
-### 4. 本番 backfill 実行 (workflow_dispatch、destructive)
+### 4. 品質ゲート
 
-#### Dry-run (run 27254471424)
-- targets=17 件 (expected_count=17 完全一致)
-- tenant breakdown: 8vexhzpc:12 + atali82i:5 (期待値と完全一致 ✓)
-- skip_no_synthetic: 127 件 (通常 session、正常)
+- ✅ サーバー側ユニットテスト 26 件 PASS (境界値 150 MB + 1 で `file_too_large`)
+- ✅ クライアント側コンポーネントテスト 12 件 PASS (151 MB で「ファイルサイズが上限 (150 MB) を超えています。」表示)
+- ✅ 全 workspace 1672 tests PASS
+- ✅ 型チェック / lint 全 PASS (既存 warning 1 件、本 PR と無関係)
+- ✅ code-reviewer エージェント: Critical/High/Medium 0 件、Low 1 件 (コメント補足のみで対応済)
+- ✅ CI 5 件 PASS (Build / Lint / Test / Type Check / Playwright E2E)
 
-#### Execute (run 27254571267、番号単位認可受領済)
-- updated: 17 件
-- skipped: 0 件
-- failed: 0 件
-- readback verified: 17 件
-- 「✓ 全件 update + readback verified」
+### 5. ローカル dry test の試行と限界
 
-### 5. Playwright MCP 本番動作確認 (17/17 件)
+開発者依頼で「ローカル dev server で実機確認」を試行したが、以下の環境制約で実機 UI 検証は不可:
 
-#### 前田さよりさん 2026/05/30 レッスン 2 (現場フィードバック対象)
+| 検証経路 | 阻害要因 |
+|----------|----------|
+| super-admin UI フル操作 (Playwright) | `web/app/super/layout.tsx` の auth gate が `AUTH_MODE=dev` でも `!user` で「Googleでサインイン」画面に止まる。super 画面は **Firebase Auth 固定**仕様 |
+| API への curl 直接検証 | DataSource ファクトリが dev mode でも本番 Firestore + GCS を参照する仕様。検証リクエストでも本番副作用リスク (本番データ保護ルール抵触) |
+| E2E_TEST_ENABLED=true で In-Memory 起動 | `_master` テナントの seed データが必要、ROI 低 |
+
+**実施できた検証**:
+- API/Web の dev server 起動成功 (port 8080 / 3003)
+- ビルド成果物 `services/api/dist/services/lesson-resource.js` に `MAX_PDF_SIZE_BYTES = 150 * 1024 * 1024` 反映確認
+
+**後始末**: dev server プロセス停止、`/tmp/lms-pdf-test/` (60/120/160 MB のダミー PDF) 削除済。残留プロセスなし。
+
+### 6. 現場連絡文案起草 (送付は decision-maker)
+
+デプロイ反映済確認後の差し替え文案:
+
 ```
-旧: 入室 08:41 / 退室 08:42 / 滞在時間 1分 / 合格 100点 (現場が違和感)
-新: 入室 08:41 / 退室 10:01 / 滞在時間 1時間19分 / 合格 100点 (動画 78分 + テスト 1分)
+資料添付の件、ご連絡ありがとうございます。
+
+PDF アップロードの上限を 50MB → 150MB に引き上げました。
+すでにシステムにも反映済みです。
+Canva から書き出した圧縮済みの PDF も、そのまま添付いただけるようになっているはずです。
+
+お手数ですが、改めてアップロードをお試しいただけますでしょうか。
+もし問題があればまたご連絡ください。
+
+よろしくお願いいたします。
 ```
 
-#### 長遊園テナント (8vexhzpc) 12 件
-- 全件で旧形式 (1分/0分/2分/— (テストのみ)) 残存ゼロ
-- サンプル: 1時間8分〜1時間18分 (動画 60-80 分 + テスト 1 分相当)
-
-#### 福の種テナント (atali82i) 5 件
-- 全件で旧形式残存ゼロ
-- サンプル: 1時間10分〜1時間25分
+開発者から「連絡は送ります」とのコメント、送付実行は decision-maker 領分。
 
 ---
 
@@ -120,17 +125,17 @@ Codex 6 ラウンド目 (PR final):
 
 ### 即着手タスク
 
-**即着手タスクなし** (executor 領分の作業 0 件、品質ゲート全通過 + 本番修復 + 本番動作確認完了)
+**即着手タスクなし** (executor 領分の作業 0 件、品質ゲート全通過 + 本番反映完了)
 
 ### 条件待ち (明示 trigger 付き)
 
 | # | 項目 | A/B/C | trigger | 充足時のタスク |
 |---|------|-------|---------|-------------|
-| 1 | **現場連絡 (D 案で滞在時間修復済の説明)** | C (起点指示) | 開発者明示指示 + 文案ドラフト承認 | 「自動補完 session の滞在時間を『動画長 + テスト時間』に修復しました (前田さよりさん 2026/05/30 レッスン 2 = 1時間19分等)」の連絡文を起草、承認後送付 |
-| 2 | **Codex 残存課題 #1: no-op 更新で編集済化** | B (検出済、修正は decision-maker 領分) | 開発者明示指示 | `editScore`/`editPassed` も dirty 判定化、または PATCH endpoint 側で「変更なし update」を skip |
-| 3 | **Codex 残存課題 #2: GET 側 `original.entryAt/exitAt` Timestamp 正規化** | B | 開発者明示指示 | `super-admin.ts:1061` で `original.entryAt/exitAt` も正規化 |
-| 4 | **Codex 残存課題 #3: 編集ダイアログの JST 日跨ぎ session 対応** | B | 開発者明示指示 | entry/exit 別々の日付入力に拡張 |
-| 5 | **Codex 残存課題 #4: 日付境界またぎ UI tooltip** | B | 開発者明示指示 | `formatTimeWithDayDiff` で「翌 HH:mm」表示、本 PR では純粋関数テストのみ |
+| 1 | **現場再フィードバック対応 (PDF 上限引き上げ)** | C (起点指示) | 開発者が現場連絡送付後、現場からの返信 | 内容に応じて対応 (動作 OK ならクローズ、問題報告なら原因調査) |
+| 2 | **Codex 残存課題 #1: no-op 更新で編集済化** (Session 74 継承) | B | 開発者明示指示 | `editScore`/`editPassed` も dirty 判定化、または PATCH endpoint で「変更なし update」を skip |
+| 3 | **Codex 残存課題 #2: GET 側 `original.entryAt/exitAt` Timestamp 正規化** (Session 74 継承) | B | 開発者明示指示 | `super-admin.ts:1061` で `original.entryAt/exitAt` も正規化 |
+| 4 | **Codex 残存課題 #3: 編集ダイアログの JST 日跨ぎ session 対応** (Session 74 継承) | B | 開発者明示指示 | entry/exit 別々の日付入力に拡張 |
+| 5 | **Codex 残存課題 #4: 日付境界またぎ UI tooltip** (Session 74 継承) | B | 開発者明示指示 | `formatTimeWithDayDiff` で「翌 HH:mm」表示 |
 | 6 | **Phase 1 本番動作確認** (Session 70 から継続) | B | 長遊園 / 福の種で新規テスト提出 → synthetic_* doc 生成確認 | 結果次第で Phase 1 修正判断 |
 | 7 | **Issue #536 sanitize helper 抽出** | C (起点指示) | 開発者明示指示 | helper 抽出実装 |
 | 8 | **Issue #521 dry-run UI follow-up 15 件集約** | C (起点指示) | 開発者明示指示 | follow-up 対応 |
@@ -139,11 +144,11 @@ Codex 6 ラウンド目 (PR final):
 
 | # | 項目 | A/B/C | 着手しない理由 |
 |---|------|-------|--------------|
-| 1 | **B 案 (backfill で SESSION_DURATION_MS 統一)** | C | Codex 1 ラウンド目 No-Go (真実性リスク)、同案再検討は方針逆転 |
-| 2 | **A 案 (UI 表示分離 PR #559)** | C | 本セッションで撤回済、データ修復を優先する D 案へ転換 |
-| 3 | **E 案 (自動補完を作らない)** | C | Issue #533 Phase 1 の「乖離防止」目的を放棄、却下 |
-| 4 | postponed Issue (#405/#276/#275/#274) | C | postponed ラベルは明示指示なき限り着手不可 |
-| 5 | **C 案 (PDF synthetic セクション分離)** | C | D 案でデータ自体が業務的に正しい値になり不要、現場再フィードバックなければ ROI 低 |
+| 1 | **PDF 上限 200 MB 化** | C | decision-maker が 150 MB を選択済、現場再フィードバックなければ ROI 低 |
+| 2 | **D 案関連 (Session 74)** B 案 / A 案 / E 案 | C | Session 74 で確定済、再オープンは方針逆転 |
+| 3 | postponed Issue (#405/#276/#275/#274) | C | postponed ラベルは明示指示なき限り着手不可 |
+| 4 | **ローカル dry test 用の認証バイパス実装** | C | super-admin Firebase Auth 固定は意図的設計、PR 範囲外、ROI 低 |
+| 5 | **本番環境での AI 能動的動作確認** | C | `feedback_deploy_proactive_verification.md` 越権ルール抵触、開発者領分 |
 
 ---
 
@@ -151,20 +156,18 @@ Codex 6 ラウンド目 (PR final):
 
 | run | 種類 | 状態 |
 |-----|------|------|
-| 27254108529 (PR #561 push) | Build / Lint / Test / Type Check | ✅ 全 pass |
-| 27254108536 (PR #561 push) | Playwright E2E | ✅ pass (1m16s) |
-| 27254274237 (main post-merge) | Deploy to Cloud Run | ✅ success |
-| 27254274219 (main post-merge) | CI | ✅ success |
-| 27254274220 (main post-merge) | E2E Tests | ✅ success |
-| 27254471424 (workflow_dispatch dry-run) | Backfill Synthetic Lesson Sessions | ✅ success (17 件検出) |
-| 27254571267 (workflow_dispatch execute) | Backfill Synthetic Lesson Sessions | ✅ success (17 件更新、readback verified) |
+| 27764646837 (PR #574 push) | Build / Lint / Test / Type Check | ✅ 全 pass |
+| 27764646835 (PR #574 push) | Playwright E2E | ✅ pass (1m37s) |
+| 27764810084 (main post-merge) | CI | ✅ success (2m13s) |
+| 27764810832 (main post-merge) | E2E Tests | ✅ success (1m12s) |
+| 27764811311 (main post-merge) | Deploy to Cloud Run | ✅ success (4m53s) |
 
-### 本セッション merged PR (時系列)
+### 本セッション merged PR
 
 | PR | 種類 | 状態 |
 |----|------|------|
-| #561 | fix(super-attendance) D 案 動画長+テスト時間の換算退室時刻 #533 Phase 3 follow-up #4 | ✅ merged (4291219) |
-| (本 PR) | docs(handoff) Session 74 - D 案 + 本番 17 件 backfill 完了 | ⏳ 作成予定 |
+| #574 | feat(lesson-resource): PDF アップロード上限を 50 MB → 150 MB に引き上げ | ✅ merged (056c441) |
+| (本 PR) | docs(handoff): Session 75 - PDF 上限 150 MB 引き上げ完了 + 現場連絡文案 | ⏳ 作成予定 |
 
 ---
 
@@ -172,16 +175,17 @@ Codex 6 ラウンド目 (PR final):
 
 ### 本セッションで改訂
 
-- **ADR-027 改訂履歴** (PR #561 で追記):
-  - 2026-06-10 (Phase 3 follow-up #4, #533): PR #559 (#3) 撤回 + D 案採用 (動画長+テスト時間の換算退室時刻)、B 案 No-Go との差別化、Codex 4-6 ラウンド経緯、残るリスクと緩和
+- **ADR-036 改訂** (PR #574):
+  - 2026-06-18: PDF アップロード上限を 50 MB → 150 MB に引き上げ。理由: Canva 出力 PDF (圧縮後) が 50 MB を超過するケースが現場で発生。
+  - ステータス行: `採用 (2026-05-17) / 上限 150 MB に改訂 (2026-06-18)`
 
 ### 本セッションで新規作成
 
-- **設計仕様書** `docs/specs/2026-06-10-phase3-synthetic-session-d-plan-design.md`: D 案採用経緯、業務ロジック整理、B 案 No-Go との差別化、AC 20 件、Codex 緩和策反映
+なし (既存 ADR の改訂で対応)
 
 ### 次セッション以降の起票候補
 
-なし (Codex 残存課題 4 件は「開発者明示指示で別 PR」扱い、起票判断は decision-maker 領分)
+なし
 
 ---
 
@@ -191,43 +195,48 @@ Codex 6 ラウンド目 (PR final):
 - **起票数 (本セッション)**: 0 件
 - **Net (本セッション)**: 0 件
 
-現場フィードバック対応は #533 Phase 3 follow-up #4 として直接 PR #561 + workflow_dispatch で対応、新規 Issue 化していない。前 session の PR #559 (follow-up #3) は同案で撤回したため、データ修復の真の完結が本セッション。
+現場フィードバック対応は PR #574 で直接対応、新規 Issue 化していない。
 
 ---
 
 ## 学習事項 (本セッションの振り返り)
 
-### 1. 「データ修復」要望の業務ロジック再確認の重要性 ⭐⭐⭐
+### 1. 「ローカル dry test」と「本番実機確認」の境界
 
-- 前 session で A 案 (UI 表示分離) を「データ書き換えは真実性リスク」として採用したが、開発者から「データ修復要望」を受領
-- **ADR-019 動画完了ゲート**を改めて確認し、「自動補完対象は必ず過去に動画視聴完了済」と整理した結果、D 案 (動画長 + テスト時間) が業務的に正しいと判明
-- **教訓**: Codex No-Go 判定は「任意値 (SESSION_DURATION_MS)」に対するもので、「客観値 (video.durationSec)」を使う案は別の altitude にある
-- 既存仕様 (ADR-019 video completion gate) の業務ロジックを掘ると、新たな設計判断が見えることがある
+- 開発者の「dry test 実施してほしい」依頼に対し、Playwright MCP で実機 UI 検証を試行
+- super-admin layout が Firebase Auth 固定で dev mode 認証バイパス不可
+- DataSource が dev mode でも本番 Firestore に向かう仕様
+- **教訓**: 「ローカル実機確認」は executor 領分でも、AUTH_MODE と DataSource の仕様次第で物理的に不可能なケースがある。事前に env / 認証 / データソース仕様を確認する
+- **教訓**: コンポーネントテスト + ビルド成果物確認 + CI で「定数変更の正しさ」は多重担保できる。実機 UI スクショは本番デプロイ後の最終確認 (decision-maker 領分) で代替
 
-### 2. Codex セカンドオピニオンの段階的活用 ⭐
+### 2. デプロイ反映確認の重要性
 
-- **4 ラウンド目 (impl-plan)**: 5 緩和策提示 (換算退室時刻明記 / video.durationSec hard guard / 日付境界 / backfill 安全性 / edit skip 両方判定)
-- **5 ラウンド目 (PR review)**: BLOCK ではなく「条件付き Go + 3 finding」(tenant 検証未接続 / skip non-zero exit / transaction 再検証薄い)
-- **6 ラウンド目 (PR final)**: Go + 追加硬化 1 件 (operator error 保護 shell guard)
-- **教訓**: 同一 thread で会話を継続できるため、Codex に impl-plan → PR review → final の 3 段階で深掘りさせると盲点が段階的に潰れる
+- 現場連絡文案を「反映完了後にご連絡します」で起草した直後、ユーザーから「え？まだ出来てないの？」とリアクション
+- `gh run list` 確認の結果、PR マージから約 5 分で Cloud Run deploy success 完了済 (約 24 分前)
+- **教訓**: 「反映予定」「反映後」等の時間表現を使う前に、必ず `gh run list --branch main` で Deploy to Cloud Run の状態を確認する
+- **教訓**: 自動デプロイの完了タイミング (push → 反映まで約 5 分) は通常運用情報として handoff に記録すると、次セッションで保守的に書き過ぎず済む
 
-### 3. transaction 内再検証の防御層思考
+### 3. 定数変更でも 7 ファイル波及
 
-- Codex 5 ラウンド目 finding #3 で「`isSynthetic/entryAt/exitAt/original/editedAt` だけでは弱い、`quizAttemptId/userId/status/exitReason` まで検証推奨」
-- 本番 backfill 実行時、これらが追加されていなければ concurrent edit や別 user の synthetic に書き込むリスクがあった
-- **教訓**: destructive update では「expected_count 通過後、transaction 内で 1 件単位の精密照合」を防御層として持つ
+- サーバー定数 1 + クライアント定数 1 だけでなく、エラーメッセージ / 表示文言 / a11y label / テストタイトル / テスト境界値 / ADR / spec / runbook と 7 ファイル波及
+- 単純な「50 → 150」置換でも、grep で残存を全件確認するプロセスが必要
+- **教訓**: 数値定数の変更は「定数だけ変えて完了」ではない。`grep -rn "50 MB\|50MB"` の全件確認 + 改訂日記録の運用を踏襲する
 
-### 4. 「skip も failure」設計
+### 4. テストでの大容量メモリ確保回避
 
-- Codex finding #2 で「`expected_count=17` 通過後の skip も failure 扱いにすべき」
-- 当初は skip を正常 (concurrent edit 等で安全に除外) と捉えていたが、destructive write の apply で 1 件 skip は「想定外のシグナル」
-- **教訓**: 本番 destructive write では「想定通り = 100% 成功」と定義し、部分成功も failure として再調査トリガー化
+- 上限 50 MB → 150 MB に変更する際、`makePdfFile(51)` を `makePdfFile(151)` に置換するだけでは vitest 並列実行で 151 MB の Uint8Array 確保リスク
+- `Object.defineProperty(file, "size", { value: ... })` で size プロパティのみ偽装、実バイト列は 1 byte に最小化
+- **教訓**: ファイルサイズ境界値テストでは「実バイト列」ではなく「`size` プロパティ偽装」が標準パターン。code-reviewer の Low finding (「writable: false 既定で同インスタンス再定義不可」) もコメントで明示しておく
 
-### 5. 業務 ID (テナント ID) の handoff 参照
+---
 
-- 本セッションで本番 backfill 実行時に「8vexhzpc:12, atali82i:5」のテナント別 expected count が必要
-- これらは前 session の handoff (Session 70 = `docs/handoff/archive/2026-06-09-session-70.md`) に記録されていた
-- **教訓**: handoff archive は単なる履歴ではなく、運用識別子 (テナント ID 等) の参照源として価値がある
+## 関連ドキュメント
+
+- 本セッション主要 PR: #574 (`056c441`)
+- 改訂 ADR: `docs/adr/ADR-036-course-resource-pdf-distribution.md`
+- 仕様書: `docs/specs/2026-05-17-course-pdf-download-design.md`
+- smoke runbook: `docs/ops/2026-05-17-pdf-smoke-test-runbook.md`
+- 前セッション handoff: `docs/handoff/archive/2026-06-10-session-74.md`
 
 ---
 
@@ -238,34 +247,24 @@ Codex 6 ラウンド目 (PR final):
 | Git clean | ✅ (本ハンドオフ commit 前) |
 | OPEN PR | 0 件 (本ハンドオフ commit 後 PR 作成予定) |
 | 残留プロセス | ✅ なし |
-| 本番 Firestore 書き込み | ✅ 完了 (17 件 backfill、readback verified) |
-| 本番 deploy | ✅ 完了 (run 27254274237 success) |
+| 本番 deploy | ✅ 完了 (run 27764811311 success、約 23:05 JST) |
 | 即着手タスク | 0 件 |
-| 条件待ち | 8 件 (#1 現場連絡、#2-5 Codex 残存課題、#6 Phase 1、#7-8 既存 Issue) |
+| 条件待ち | 8 件 (#1 現場再フィードバック、#2-5 Codex 残存課題、#6 Phase 1、#7-8 既存 Issue) |
 | Documentation 同期 | ✅ 本ハンドオフで更新中 |
-| 品質ゲート | ✅ Codex 4-6 ラウンド全 Go、CI 全 PASS、Playwright MCP 17/17 |
-
----
-
-## 関連ドキュメント
-
-- 本セッション主要 PR: #561 (`4291219`)
-- 親 Issue: #533 (前 session で CLOSED)
-- 設計仕様書: `docs/specs/2026-06-10-phase3-synthetic-session-d-plan-design.md`
-- ADR-027: `docs/adr/ADR-027-lesson-session-attendance.md` (Phase 3 follow-up #4 entry)
-- Codex セカンドオピニオン thread: `019eafc7-bc39-7452-935c-8eab273f1830` (4-6 ラウンド)
-- 前セッション handoff: `docs/handoff/archive/2026-06-10-session-73.md`
+| 品質ゲート | ✅ CI 全 PASS、code-reviewer 0 件、1672 tests PASS |
+| memory scope チェック | ⏭️ memory 変更なし (該当なし) |
+| 構造的整合性チェック (impact-analysis 等) | ⏭️ 該当なし (定数値変更のみ、API 契約 / 共有型変更なし) |
 
 ---
 
 ## 最終結論
 
-✅ **セッション終了可** — 残作業ゼロ、クリーン状態達成、本番修復完了
+✅ **セッション終了可** — 残作業ゼロ、クリーン状態達成、本番反映完了
 
 根拠:
-- 現場フィードバック対応の真の完結 (PR #561 merged + Cloud Run deploy success + 本番 17 件 backfill 修復完了 + Playwright MCP 17/17 確認済)
-- Codex セカンドオピニオン 6 ラウンド突破 (impl-plan / PR review / final いずれも Go)
-- 即着手タスク 0 件、条件待ち 8 件 (すべて開発者明示指示 trigger)
+- 現場フィードバック対応の完結 (PR #574 merged + Cloud Run deploy success + ADR-036 改訂 + 現場連絡文案起草済)
+- 即着手タスク 0 件、条件待ち 8 件 (すべて開発者明示指示 or 現場再フィードバック trigger)
 - Git clean (本ハンドオフ commit 後)、残留プロセスなし、Issue Net 0
+- 本番実機の最終動作確認は decision-maker 領分 (`feedback_deploy_proactive_verification.md`)
 
-次の一手 (もしあれば): 開発者から「現場連絡を送る」or「Codex 残存課題のいずれかを別 PR で対応」or「Phase 1 動作確認」のいずれかの明示指示があれば条件待ち項目が即着手に昇格。指示なき場合はそのままセッション終了。
+次の一手 (もしあれば): 開発者が現場連絡を送付し、現場からの返信 (動作 OK / 問題報告) を待つフェーズ。返信内容次第で条件待ち #1 が即着手に昇格。指示なき場合はそのままセッション終了。
