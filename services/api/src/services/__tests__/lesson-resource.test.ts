@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { Storage } from "@google-cloud/storage";
 import { InMemoryDataSource } from "../../datasource/in-memory.js";
 import {
@@ -119,6 +119,83 @@ describe("generatePdfUploadUrl", () => {
     await expect(
       generatePdfUploadUrl(ds, storage, MASTER_LESSON_ID, "x.exe", PDF_MIME_TYPE, 1024),
     ).rejects.toMatchObject({ code: "invalid_file_type" });
+  });
+});
+
+// -----------------------------------------------
+// 2026-06-19 本番障害回帰テスト:
+// IAM Credentials API `signBlob` が `Premature close` で失敗するケース。
+// 旧 withGcsErrorMapping は `timeout|ECONNRESET` のみ判定でこれを素通りさせ、
+// Express errorHandler 経由で FE に `[object Object]` を表示させた。
+// 新実装は bounded retry → 最終的に gcs_unavailable に変換する。
+// -----------------------------------------------
+describe("generatePdfUploadUrl — transient retry", () => {
+  let ds: InMemoryDataSource;
+  beforeEach(() => {
+    ds = new InMemoryDataSource({ readOnly: false });
+    vi.useFakeTimers();
+    // jitter を確定値に固定 (factor 1.0 相当)
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("Premature close (1 回) → リトライで成功し署名 URL を返す", async () => {
+    const getSignedUrl = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Premature close"))
+      .mockResolvedValueOnce(["https://signed.example.com/recovered"]);
+    const { storage } = buildMockStorage({ getSignedUrl });
+
+    const promise = generatePdfUploadUrl(
+      ds,
+      storage,
+      MASTER_LESSON_ID,
+      "資料.pdf",
+      PDF_MIME_TYPE,
+      1024,
+    );
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.uploadUrl).toBe("https://signed.example.com/recovered");
+    expect(getSignedUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it("Premature close (連続失敗) → gcs_unavailable に変換", async () => {
+    const getSignedUrl = vi.fn(() => Promise.reject(new Error("Premature close")));
+    const { storage } = buildMockStorage({ getSignedUrl });
+
+    const promise = generatePdfUploadUrl(
+      ds,
+      storage,
+      MASTER_LESSON_ID,
+      "資料.pdf",
+      PDF_MIME_TYPE,
+      1024,
+    );
+    const assertion = expect(promise).rejects.toMatchObject({
+      name: "LessonResourceError",
+      code: "gcs_unavailable",
+    });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    expect(getSignedUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it("permanent エラー (Error message が transient パターンに合致しない) は即時 throw", async () => {
+    const permanentErr = new Error("invalid_request");
+    const getSignedUrl = vi.fn(() => Promise.reject(permanentErr));
+    const { storage } = buildMockStorage({ getSignedUrl });
+
+    await expect(
+      generatePdfUploadUrl(ds, storage, MASTER_LESSON_ID, "資料.pdf", PDF_MIME_TYPE, 1024),
+    ).rejects.toBe(permanentErr);
+
+    expect(getSignedUrl).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -349,6 +426,84 @@ describe("generatePdfDownloadUrl", () => {
     await expect(
       generatePdfDownloadUrl(ds, storage, "demo-lesson-2", USER_ID),
     ).rejects.toMatchObject({ code: "resource_not_found" });
+  });
+});
+
+// silent-failure-hunter H2: confirmPdfUpload 内の getMetadata も transient retry 対象に
+// しないと本番障害の再発条件が残存する。
+describe("confirmPdfUpload — getMetadata transient retry", () => {
+  let ds: InMemoryDataSource;
+  beforeEach(() => {
+    ds = new InMemoryDataSource({ readOnly: false });
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("getMetadata の Premature close は retry されて confirm 成功", async () => {
+    const getMetadata = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Premature close"))
+      .mockResolvedValueOnce([{ size: "100", contentType: "application/pdf" }]);
+    const { storage } = buildMockStorage({ getMetadata });
+
+    const promise = confirmPdfUpload(
+      ds,
+      storage,
+      MASTER_LESSON_ID,
+      `lessons/${MASTER_LESSON_ID}/x.pdf`,
+      "資料.pdf",
+      100,
+    );
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.pdfFileName).toBe("資料.pdf");
+    expect(getMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("getMetadata の Premature close が連続 → gcs_unavailable に変換", async () => {
+    const getMetadata = vi.fn(() => Promise.reject(new Error("Premature close")));
+    const { storage } = buildMockStorage({ getMetadata });
+
+    const promise = confirmPdfUpload(
+      ds,
+      storage,
+      MASTER_LESSON_ID,
+      `lessons/${MASTER_LESSON_ID}/x.pdf`,
+      "資料.pdf",
+      100,
+    );
+    const assertion = expect(promise).rejects.toMatchObject({
+      name: "LessonResourceError",
+      code: "gcs_unavailable",
+    });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    expect(getMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("getMetadata の 404 は retry されず gcs_file_missing に変換", async () => {
+    const notFound = Object.assign(new Error("Not Found"), { code: 404 });
+    const getMetadata = vi.fn(() => Promise.reject(notFound));
+    const { storage } = buildMockStorage({ getMetadata });
+
+    await expect(
+      confirmPdfUpload(
+        ds,
+        storage,
+        MASTER_LESSON_ID,
+        `lessons/${MASTER_LESSON_ID}/x.pdf`,
+        "資料.pdf",
+        100,
+      ),
+    ).rejects.toMatchObject({ code: "gcs_file_missing" });
+
+    expect(getMetadata).toHaveBeenCalledTimes(1);
   });
 });
 
