@@ -18,6 +18,7 @@ import type {
   LessonPdfUploadUrlResponse,
 } from "@lms-279/shared-types";
 import { logger } from "../utils/logger.js";
+import { isTransientError, retryOnTransient } from "../utils/transient-error.js";
 
 export const PDF_MIME_TYPE = "application/pdf";
 export const MAX_PDF_SIZE_BYTES = 300 * 1024 * 1024; // 300 MB
@@ -57,17 +58,34 @@ function sanitizeFileName(fileName: string): string {
 }
 
 /**
- * GCS API 呼び出しを安全に包む。一時的エラー (503/429/timeout) は gcs_unavailable に変換。
+ * GCS / IAM Credentials API 呼び出しを transient リトライで包む。
+ *
+ * - transient (HTTP 429/500/502/503/504 + transport code + `Premature close` 等の
+ *   message パターン) は bounded retry (最大 2 attempts) → それでも失敗したら
+ *   `gcs_unavailable` に変換。
+ * - permanent エラーは即時 throw (上位で LessonResourceError 等の判別に進む)。
+ *
+ * 2026-06-19 本番障害: IAM Credentials API `signBlob` が `Premature close` で失敗し、
+ * 旧実装は `timeout|ECONNRESET` のみ判定でこれを素通りさせていた。
+ * `services/api/src/utils/transient-error.ts` の `isTransientError` で一元判定する。
+ *
+ * 副作用なし / idempotent な op (署名 URL 生成、メタデータ取得) にのみ使う。
  */
 async function withGcsErrorMapping<T>(op: () => Promise<T>, context: string): Promise<T> {
   try {
-    return await op();
+    return await retryOnTransient(op, {
+      maxAttempts: 2,
+      baseDelayMs: 150,
+      onRetry: ({ attempt, error, delayMs }) => {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn("gcs_transient_retry", { context, attempt, delayMs, message });
+      },
+    });
   } catch (e) {
-    const error = e as { code?: number; message?: string };
-    const status = typeof error.code === "number" ? error.code : 0;
-    if (status === 429 || status === 503 || /timeout|ECONNRESET/i.test(error.message ?? "")) {
-      logger.error("gcs_transient_error", { context, status, message: error.message });
-      throw new LessonResourceError("gcs_unavailable", "一時的に取得できません");
+    if (isTransientError(e)) {
+      const message = e instanceof Error ? e.message : String(e);
+      logger.error("gcs_transient_error", { context, message });
+      throw new LessonResourceError("gcs_unavailable", "一時的に処理できません。再度お試しください");
     }
     throw e;
   }
