@@ -1,4 +1,8 @@
-FROM node:24-slim
+# Node 24.17.0 の http.Agent keep-alive regression (Premature close, nodejs/node#63989) 回避のため
+# パッチ固定。floating tag `node:24-slim` は再ビルド時に最新 24.x を引き込み、gaxios 経由の
+# IAM signBlob が壊れて GCS 署名 URL 生成 (動画再生 / PDF) が 500 になる本番障害を起こした
+# (Session 76/78/79 で再発、root cause)。修正版 Node リリース後に追従すること。
+FROM node:24.16.0-slim
 
 WORKDIR /app
 
