@@ -182,7 +182,7 @@ curl -X POST "$API_BASE/super/master/lessons/$SMOKE_LESSON_ID/pdf" \
 {"resource":{"pdfFileName":"smoke-test-2026-05-17.pdf","pdfSizeBytes":<実サイズ>,"pdfUpdatedAt":"..."}}
 ```
 
-> **実装挙動 (Codex High #2 対策)**: サーバーは GCS metadata の actual size を信頼して `pdfSizeBytes` に保存する。actual size が 150 MB (2026-06-18 改訂、旧 50 MB) を超える、または contentType が `application/pdf` でない場合のみ拒否 (`file_too_large` / `invalid_file_type`)。request の `sizeBytes` 値と実 GCS metadata の差異自体は reject 条件ではない。
+> **実装挙動 (Codex High #2 対策)**: サーバーは GCS metadata の actual size を信頼して `pdfSizeBytes` に保存する。actual size が 300 MB (2026-06-19 改訂、旧 150 MB / 2026-06-18 改訂で 50 MB → 150 MB) を超える、または contentType が `application/pdf` でない場合のみ拒否 (`file_too_large` / `invalid_file_type`)。request の `sizeBytes` 値と実 GCS metadata の差異自体は reject 条件ではない。
 
 ### Step 7: マスターコース公開
 

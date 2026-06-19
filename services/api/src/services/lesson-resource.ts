@@ -20,7 +20,7 @@ import type {
 import { logger } from "../utils/logger.js";
 
 export const PDF_MIME_TYPE = "application/pdf";
-export const MAX_PDF_SIZE_BYTES = 150 * 1024 * 1024; // 150 MB
+export const MAX_PDF_SIZE_BYTES = 300 * 1024 * 1024; // 300 MB
 const UPLOAD_URL_EXPIRES_MS = 60 * 60 * 1000; // 1 時間
 const DOWNLOAD_URL_EXPIRES_MS = 15 * 60 * 1000; // 15 分
 
@@ -90,7 +90,7 @@ export async function generatePdfUploadUrl(
     throw new LessonResourceError("invalid_file_type", "PDF ファイルのみアップロード可能です");
   }
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0 || sizeBytes > MAX_PDF_SIZE_BYTES) {
-    throw new LessonResourceError("file_too_large", "150 MB を超えるファイルはアップロードできません");
+    throw new LessonResourceError("file_too_large", "300 MB を超えるファイルはアップロードできません");
   }
 
   const lesson = await ds.getLessonById(masterLessonId);
@@ -142,7 +142,7 @@ export async function confirmPdfUpload(
   }
   // sizeBytes の再検証 (Evaluator 指摘、upload-url と confirm 間で乖離する可能性)
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0 || sizeBytes > MAX_PDF_SIZE_BYTES) {
-    throw new LessonResourceError("file_too_large", "150 MB を超えるファイルはアップロードできません");
+    throw new LessonResourceError("file_too_large", "300 MB を超えるファイルはアップロードできません");
   }
 
   const lesson = await ds.getLessonById(masterLessonId);
@@ -151,7 +151,7 @@ export async function confirmPdfUpload(
   }
 
   // GCS object の実メタデータを検証 (Codex 指摘: クライアント値だけでは不足)。
-  // 漏洩した署名 URL や誤操作で 150 MB 超 / 非 PDF を upload しても、ここで弾く。
+  // 漏洩した署名 URL や誤操作で 300 MB 超 / 非 PDF を upload しても、ここで弾く。
   const file = storage.bucket(RESOURCE_BUCKET()).file(gcsPath);
   let metadata: { size?: string | number; contentType?: string };
   try {
