@@ -130,4 +130,60 @@ describe("retryOnTransient", () => {
       delayMs: expect.any(Number),
     });
   });
+
+  // pr-test-analyzer H1: exponential backoff factor 検証
+  it("baseDelayMs * 2^(attempt-1) で exponential backoff (factor 検証)", async () => {
+    const onRetry = vi.fn();
+    const op = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Premature close"))
+      .mockRejectedValueOnce(new Error("Premature close"))
+      .mockResolvedValueOnce("ok");
+    const promise = retryOnTransient(op, { maxAttempts: 3, baseDelayMs: 100, onRetry });
+    await vi.runAllTimersAsync();
+    await promise;
+    // jitter = 0.8 + 0.5 * 0.4 = 1.0 (Math.random mock により)
+    // attempt 1 → 100 * 2^0 * 1.0 = 100
+    // attempt 2 → 100 * 2^1 * 1.0 = 200
+    expect(onRetry.mock.calls[0][0].delayMs).toBe(100);
+    expect(onRetry.mock.calls[1][0].delayMs).toBe(200);
+  });
+
+  // pr-test-analyzer H3: maxAttempts 境界条件
+  it("maxAttempts: 1 では絶対にリトライしない (初回失敗で即時 throw)", async () => {
+    const err = new Error("Premature close");
+    const op = vi.fn(() => Promise.reject(err));
+    await expect(retryOnTransient(op, { maxAttempts: 1 })).rejects.toBe(err);
+    expect(op).toHaveBeenCalledTimes(1);
+  });
+
+  it("maxAttempts: 3 で 2 回失敗 → 3 回目成功", async () => {
+    const econnreset = Object.assign(new Error("network error"), { code: "ECONNRESET" });
+    let attempt = 0;
+    const op = vi.fn(() => {
+      attempt += 1;
+      if (attempt === 1) return Promise.reject(new Error("Premature close"));
+      if (attempt === 2) return Promise.reject(econnreset);
+      return Promise.resolve("ok");
+    });
+    const promise = retryOnTransient(op, { maxAttempts: 3, baseDelayMs: 50 });
+    await vi.runAllTimersAsync();
+    expect(await promise).toBe("ok");
+    expect(op).toHaveBeenCalledTimes(3);
+  });
+
+  // pr-test-analyzer M2: onRetry throw 耐性 (rules/error-handling.md §1)
+  it("onRetry が throw してもリトライ自体は継続する (logger 破損耐性)", async () => {
+    const onRetry = vi.fn(() => {
+      throw new Error("logger broken");
+    });
+    const op = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Premature close"))
+      .mockResolvedValueOnce("ok");
+    const promise = retryOnTransient(op, { maxAttempts: 2, baseDelayMs: 100, onRetry });
+    await vi.runAllTimersAsync();
+    expect(await promise).toBe("ok");
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
 });

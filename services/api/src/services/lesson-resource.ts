@@ -173,7 +173,13 @@ export async function confirmPdfUpload(
   const file = storage.bucket(RESOURCE_BUCKET()).file(gcsPath);
   let metadata: { size?: string | number; contentType?: string };
   try {
-    const [m] = await file.getMetadata();
+    // 2026-06-19 本番障害の再発条件残存対策 (silent-failure-hunter H2):
+    // getMetadata も Premature close 等の transient で失敗しうるため retry 対象に含める。
+    // 404 は permanent として LessonResourceError("gcs_file_missing") に変換。
+    const [m] = await withGcsErrorMapping(
+      () => file.getMetadata(),
+      "confirmPdfUpload.getMetadata",
+    );
     metadata = m;
   } catch (e) {
     const error = e as { code?: number };

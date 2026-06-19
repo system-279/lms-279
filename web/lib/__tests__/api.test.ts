@@ -42,10 +42,22 @@ describe("ApiError constructor — runtime defense", () => {
     expect(err.message).toBe("not_found");
   });
 
-  it("code も空 / message も空なら HTTP fallback", () => {
+  it("code も空 / message も空なら HTTP fallback (5xx)", () => {
     const err = new ApiError(500, "", "");
     expect(err.message).toBe("サーバーエラー (HTTP 500)。再度お試しください。");
     expect(err.message).not.toContain("[object Object]");
+  });
+
+  // pr-test-analyzer M4: 4xx は「サーバーエラー」だと誤誘導 → 専用文言
+  it("4xx で code/message 空ならクライアントエラー文言を使う", () => {
+    const err = new ApiError(400, "", "");
+    expect(err.message).toBe("リクエストエラー (HTTP 400)。");
+    expect(err.message).not.toContain("サーバーエラー");
+  });
+
+  it("status=0 (fetch 自体失敗) は通信エラー文言を使う", () => {
+    const err = new ApiError(0, "", "");
+    expect(err.message).toBe("通信エラーが発生しました。再度お試しください。");
   });
 });
 
@@ -139,6 +151,27 @@ describe("apiFetch — error body normalization", () => {
     const apiErr = captured as ApiError;
     expect(apiErr.code).toBe("not_found");
     expect(apiErr.message).toBe("not_found");
+  });
+
+  // code-reviewer H1: nested 形式の details も拾う
+  it("nested 形式 { error: { code, message, details } } で details を保持する", async () => {
+    mockFetchResponse(422, {
+      error: {
+        code: "validation_failed",
+        message: "Invalid input",
+        details: { field: "fileName" },
+      },
+    });
+    let captured: unknown;
+    try {
+      await apiFetch("/test", {});
+    } catch (e) {
+      captured = e;
+    }
+    const apiErr = captured as ApiError;
+    expect(apiErr.code).toBe("validation_failed");
+    expect(apiErr.message).toBe("Invalid input");
+    expect(apiErr.details).toEqual({ field: "fileName" });
   });
 
   it("details が record 形式なら保持、それ以外は undefined", async () => {

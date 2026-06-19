@@ -48,6 +48,8 @@ function extractErrorMessage(body: unknown, status: number): string | undefined 
     if (nested) return nested;
   }
   // 500/502/503/504 等のサーバー側障害は専用文言で fallback
+  // 5xx は専用文言、4xx は constructor の code → fallback 連鎖に委ねる
+  // (4xx で「サーバーエラー」は誤誘導 — pr-test-analyzer M4)
   if (status >= 500) return `サーバーエラー (HTTP ${status})。再度お試しください。`;
   return undefined;
 }
@@ -55,6 +57,9 @@ function extractErrorMessage(body: unknown, status: number): string | undefined 
 function extractErrorDetails(body: unknown): Record<string, unknown> | undefined {
   if (!isRecord(body)) return undefined;
   if (isRecord(body.details)) return body.details;
+  // nested 形式 `{ error: { code, message, details } }` (ADR-0025 互換) からも拾う。
+  // code-reviewer H1: code/message と一貫して details も nested 対応必須
+  if (isRecord(body.error) && isRecord(body.error.details)) return body.error.details;
   return undefined;
 }
 
@@ -68,12 +73,19 @@ export class ApiError extends Error {
     // 2026-06-19 本番障害: BE 側 errorHandler (nested) と apiFetch (flat) の形式
     // 不整合により body.message が非文字列で渡り、Error の super() で `[object Object]`
     // 化していた。constructor 側で runtime 防御し、表示用 fallback を強制する。
+    // pr-test-analyzer M4: 4xx で「サーバーエラー」は誤誘導なので分岐する。
+    const fallback =
+      status >= 500
+        ? `サーバーエラー (HTTP ${status})。再度お試しください。`
+        : status > 0
+          ? `リクエストエラー (HTTP ${status})。`
+          : "通信エラーが発生しました。再度お試しください。";
     const safeMessage =
       typeof message === "string" && message.trim()
         ? message
         : typeof code === "string" && code.trim()
           ? code
-          : `サーバーエラー (HTTP ${status})。再度お試しください。`;
+          : fallback;
     super(safeMessage);
     this.name = "ApiError";
   }

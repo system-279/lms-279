@@ -117,7 +117,13 @@ export async function retryOnTransient<T>(
       const factor = 2 ** (attempt - 1);
       const jitter = 0.8 + Math.random() * 0.4;
       const delayMs = Math.round(baseDelayMs * factor * jitter);
-      opts.onRetry?.({ attempt, error: e, delayMs });
+      // onRetry が throw してもリトライ自体は止めない (logger 破損耐性、
+      // rules/error-handling.md §1 と整合 — pr-test-analyzer M2)
+      try {
+        opts.onRetry?.({ attempt, error: e, delayMs });
+      } catch {
+        // observer 失敗はリトライ継続より優先しない
+      }
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
