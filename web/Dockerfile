@@ -1,4 +1,7 @@
-FROM node:24-slim AS builder
+# Node 24.17.0 の http.Agent keep-alive regression (Premature close, nodejs/node#63989) 回避のため
+# パッチ固定。floating tag は再ビルド時に最新 24.x を引き込むため、全サービスで固定を揃える。
+# 修正版 Node リリース後に追従すること。
+FROM node:24.16.0-slim AS builder
 
 WORKDIR /app
 
@@ -34,7 +37,7 @@ ENV NEXT_PUBLIC_USER_ROLE=$NEXT_PUBLIC_USER_ROLE
 
 RUN npm run build -w @lms-279/web
 
-FROM node:24-slim AS runner
+FROM node:24.16.0-slim AS runner
 
 WORKDIR /app
 
