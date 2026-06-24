@@ -46,18 +46,18 @@ export function ScreenshotViewer({
       </div>
 
       <Dialog open={open !== null} onOpenChange={() => setOpen(null)}>
-        <DialogContent className="max-w-4xl p-2">
+        <DialogContent className="!max-w-[min(95vw,1400px)] p-2 sm:p-3">
           <DialogTitle className="sr-only">
             スクリーンショット
           </DialogTitle>
           {open && (
-            <div className="relative aspect-video w-full">
+            <div className="relative aspect-video w-full max-h-[85vh]">
               <Image
                 src={open}
                 alt="スクリーンショット拡大"
                 fill
                 className="rounded object-contain"
-                sizes="90vw"
+                sizes="(max-width: 1400px) 95vw, 1400px"
                 unoptimized
               />
             </div>
