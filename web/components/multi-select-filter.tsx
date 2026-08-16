@@ -45,8 +45,10 @@ export function MultiSelectFilter({
   };
 
   const clearAll = () => onChange(new Set());
+  const selectAllFiltered = () => onChange(new Set([...selected, ...filtered.map((o) => o.value)]));
 
   const count = selected.size;
+  const hasUnselectedFiltered = filtered.some((o) => !selected.has(o.value));
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -93,16 +95,28 @@ export function MultiSelectFilter({
             ))
           )}
         </div>
-        {count > 0 && (
-          <div className="border-t mt-2 pt-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full h-7 text-xs"
-              onClick={clearAll}
-            >
-              選択をクリア
-            </Button>
+        {(hasUnselectedFiltered || count > 0) && (
+          <div className="border-t mt-2 pt-2 flex gap-1">
+            {hasUnselectedFiltered && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="flex-1 h-7 text-xs"
+                onClick={selectAllFiltered}
+              >
+                全選択
+              </Button>
+            )}
+            {count > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="flex-1 h-7 text-xs"
+                onClick={clearAll}
+              >
+                選択をクリア
+              </Button>
+            )}
           </div>
         )}
       </PopoverContent>
