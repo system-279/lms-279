@@ -45,6 +45,7 @@ import {
   formatStayDuration,
 } from "./_helpers/stay-duration";
 import { buildEditPatchBody } from "./_helpers/edit-patch";
+import { compareStringsNaturally, sortFilterOptionsByLabel } from "./_helpers/filter-options";
 import {
   matchesIsSyntheticFilter,
   SYNTHETIC_KIND_OPTIONS,
@@ -234,7 +235,7 @@ export default function AttendanceReportPage() {
         map.set(r.userId, r.userName ?? r.userEmail ?? r.userId);
       }
     }
-    return Array.from(map, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label, "ja"));
+    return sortFilterOptionsByLabel(Array.from(map, ([value, label]) => ({ value, label })));
   }, [report]);
 
   const courseOptions: FilterOption[] = useMemo(() => {
@@ -245,7 +246,7 @@ export default function AttendanceReportPage() {
         map.set(r.courseId, r.courseName || r.courseId);
       }
     }
-    return Array.from(map, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label, "ja"));
+    return sortFilterOptionsByLabel(Array.from(map, ([value, label]) => ({ value, label })));
   }, [report]);
 
   const lessonOptions: FilterOption[] = useMemo(() => {
@@ -256,7 +257,7 @@ export default function AttendanceReportPage() {
         map.set(r.lessonId, r.lessonTitle || r.lessonId);
       }
     }
-    return Array.from(map, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label, "ja"));
+    return sortFilterOptionsByLabel(Array.from(map, ([value, label]) => ({ value, label })));
   }, [report]);
 
   const exitReasonOptions: FilterOption[] = [
@@ -321,7 +322,7 @@ export default function AttendanceReportPage() {
         if (bv === null) return -1;
         if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
         if (typeof av === "boolean" && typeof bv === "boolean") return (Number(av) - Number(bv)) * dir;
-        return String(av).localeCompare(String(bv), "ja") * dir;
+        return compareStringsNaturally(String(av), String(bv)) * dir;
       });
     }
 
