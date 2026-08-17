@@ -224,6 +224,7 @@ export async function buildProgressPdfData(
         videoCompleted: up?.videoCompleted ?? false,
         quizPassed: up?.quizPassed ?? false,
         quizBestScore: up?.quizBestScore ?? null,
+        quizSkipped: up?.quizSkipped ?? false,
         lessonCompleted: up?.lessonCompleted ?? false,
         videoDurationSec,
         videoWatchedSec,

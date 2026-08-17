@@ -282,6 +282,8 @@ export interface UserProgress {
   videoCompleted: boolean;
   quizPassed: boolean;
   quizBestScore: number | null;
+  quizSkipped: boolean;        // テスト任意化: 受講者が意図的にテストをスキップした（quizPassedとは独立、上書きしない）
+  quizSkippedAt: string | null; // スキップが初めて確定した時刻（ISO文字列）。以後の更新で保持される
   lessonCompleted: boolean;
   updatedAt: string;
 }
@@ -302,7 +304,7 @@ export interface CourseProgress {
 // ========================================
 
 export type LessonSessionStatus = "active" | "completed" | "force_exited" | "abandoned";
-export type SessionExitReason = "quiz_submitted" | "pause_timeout" | "time_limit" | "browser_close" | "max_attempts_failed";
+export type SessionExitReason = "quiz_submitted" | "pause_timeout" | "time_limit" | "browser_close" | "max_attempts_failed" | "quiz_skipped";
 
 export interface LessonSession {
   id: string;

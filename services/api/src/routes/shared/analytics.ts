@@ -110,6 +110,7 @@ router.get(
               lessonTitle: lesson?.title ?? null,
               videoCompleted: lp.videoCompleted,
               quizPassed: lp.quizPassed,
+              quizSkipped: lp.quizSkipped,
               lessonCompleted: lp.lessonCompleted,
             };
           })

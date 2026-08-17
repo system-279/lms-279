@@ -1100,6 +1100,8 @@ export class InMemoryDataSource implements DataSource {
       videoCompleted: data.videoCompleted ?? existing?.videoCompleted ?? false,
       quizPassed: data.quizPassed ?? existing?.quizPassed ?? false,
       quizBestScore: data.quizBestScore !== undefined ? data.quizBestScore : (existing?.quizBestScore ?? null),
+      quizSkipped: data.quizSkipped ?? existing?.quizSkipped ?? false,
+      quizSkippedAt: data.quizSkippedAt !== undefined ? data.quizSkippedAt : (existing?.quizSkippedAt ?? null),
       lessonCompleted: data.lessonCompleted ?? existing?.lessonCompleted ?? false,
       updatedAt: new Date().toISOString(),
     };

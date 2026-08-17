@@ -1387,6 +1387,8 @@ export class FirestoreDataSource implements DataSource {
         videoCompleted: data.videoCompleted ?? false,
         quizPassed: data.quizPassed ?? false,
         quizBestScore: data.quizBestScore ?? null,
+        quizSkipped: data.quizSkipped ?? false,
+        quizSkippedAt: data.quizSkippedAt ?? null,
         lessonCompleted: data.lessonCompleted ?? false,
         ...data,
         updatedAt: new Date(),
@@ -1407,6 +1409,8 @@ export class FirestoreDataSource implements DataSource {
       videoCompleted: data.videoCompleted ?? false,
       quizPassed: data.quizPassed ?? false,
       quizBestScore: data.quizBestScore ?? null,
+      quizSkipped: data.quizSkipped ?? false,
+      quizSkippedAt: data.quizSkippedAt ?? null,
       lessonCompleted: data.lessonCompleted ?? false,
       updatedAt: toISOStrict(data.updatedAt, "UserProgress.updatedAt"),
     };

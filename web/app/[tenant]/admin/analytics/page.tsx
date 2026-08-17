@@ -72,6 +72,7 @@ const EXIT_REASON_LABELS: Record<SessionExitReason, string> = {
   time_limit: "時間超過",
   browser_close: "ブラウザ終了",
   max_attempts_failed: "受験上限(不合格)",
+  quiz_skipped: "テストスキップ",
 };
 
 // ─── 汎用コンポーネント ──────────────────────────────────────────
@@ -472,10 +473,10 @@ function UserProgressTab() {
                               動画{lesson.videoCompleted ? "完了" : "未完了"}
                             </Badge>
                             <Badge
-                              variant={lesson.quizPassed ? "default" : "outline"}
+                              variant={lesson.quizPassed ? "default" : lesson.quizSkipped ? "secondary" : "outline"}
                               className="text-xs"
                             >
-                              テスト{lesson.quizPassed ? "合格" : "未合格"}
+                              テスト{lesson.quizPassed ? "合格" : lesson.quizSkipped ? "スキップ" : "未合格"}
                             </Badge>
                           </div>
                         </TableCell>

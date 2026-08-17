@@ -37,6 +37,7 @@ export interface SuperLessonRecord {
   videoCompleted: boolean;
   quizPassed: boolean;
   quizBestScore: number | null;
+  quizSkipped: boolean;
   lessonCompleted: boolean;
   latestSessionId: string | null;
   latestEntryAt: string | null;

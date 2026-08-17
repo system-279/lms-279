@@ -109,6 +109,86 @@ describe("updateLessonProgress", () => {
     expect(courseProgress).not.toBeNull();
     expect(courseProgress!.completedLessons).toBe(1);
   });
+
+  // -----------------------------------------------
+  // quizSkipped（テスト任意化）
+  // -----------------------------------------------
+
+  it("videoCompleted=true, quizSkipped=true → lessonCompleted=true（スキップも完了扱い）", async () => {
+    await updateLessonProgress(ds, USER_ID, LESSON_ID, COURSE_ID, {
+      videoCompleted: true,
+      quizSkipped: true,
+    });
+
+    const progress = await ds.getUserProgress(USER_ID, LESSON_ID);
+    expect(progress!.quizSkipped).toBe(true);
+    expect(progress!.lessonCompleted).toBe(true);
+  });
+
+  it("videoCompleted=false, quizSkipped=true → lessonCompleted=false（動画視聴は任意化しない）", async () => {
+    await updateLessonProgress(ds, USER_ID, LESSON_ID, COURSE_ID, {
+      quizSkipped: true,
+    });
+
+    const progress = await ds.getUserProgress(USER_ID, LESSON_ID);
+    expect(progress!.videoCompleted).toBe(false);
+    expect(progress!.quizSkipped).toBe(true);
+    expect(progress!.lessonCompleted).toBe(false);
+  });
+
+  it("quizSkipped=true でも quizPassed は変更されない（合流させない設計）", async () => {
+    await updateLessonProgress(ds, USER_ID, LESSON_ID, COURSE_ID, {
+      videoCompleted: true,
+      quizSkipped: true,
+    });
+
+    const progress = await ds.getUserProgress(USER_ID, LESSON_ID);
+    expect(progress!.quizPassed).toBe(false);
+  });
+
+  it("quizSkippedAt: 初回スキップ時に設定され、以後の更新で保持される", async () => {
+    await updateLessonProgress(ds, USER_ID, LESSON_ID, COURSE_ID, {
+      videoCompleted: true,
+      quizSkipped: true,
+    });
+
+    const first = await ds.getUserProgress(USER_ID, LESSON_ID);
+    expect(first!.quizSkippedAt).not.toBeNull();
+    const firstSkippedAt = first!.quizSkippedAt;
+
+    // 別の更新（quizBestScore等）が入っても quizSkippedAt は変わらない
+    await updateLessonProgress(ds, USER_ID, LESSON_ID, COURSE_ID, {
+      quizBestScore: 50,
+    });
+
+    const second = await ds.getUserProgress(USER_ID, LESSON_ID);
+    expect(second!.quizSkippedAt).toBe(firstSkippedAt);
+  });
+
+  it("quizSkippedを指定しない更新では、既存のquizSkipped状態が保持される", async () => {
+    await updateLessonProgress(ds, USER_ID, LESSON_ID, COURSE_ID, {
+      videoCompleted: true,
+      quizSkipped: true,
+    });
+
+    // quizSkippedを指定しない別の更新
+    await updateLessonProgress(ds, USER_ID, LESSON_ID, COURSE_ID, {
+      quizBestScore: 50,
+    });
+
+    const progress = await ds.getUserProgress(USER_ID, LESSON_ID);
+    expect(progress!.quizSkipped).toBe(true);
+  });
+
+  it("新規作成: quizSkippedを指定しない場合はfalse、quizSkippedAtはnull", async () => {
+    await updateLessonProgress(ds, USER_ID, LESSON_ID, COURSE_ID, {
+      videoCompleted: true,
+    });
+
+    const progress = await ds.getUserProgress(USER_ID, LESSON_ID);
+    expect(progress!.quizSkipped).toBe(false);
+    expect(progress!.quizSkippedAt).toBeNull();
+  });
 });
 
 // -----------------------------------------------
