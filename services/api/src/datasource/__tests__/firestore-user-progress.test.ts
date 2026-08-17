@@ -29,9 +29,14 @@ const ALL_USER_PROGRESS_KEYS: Array<keyof UserProgress> = [
 /**
  * dispatch-storage テストと同型の、doc単位の状態を保持する簡易 Firestore モック。
  * 新規doc(exists:false)から set() → get() の往復を再現する。
+ * seed を渡すと、upsertUserProgress を経由せず「既にFirestoreに存在するdoc」を
+ * 直接シード出来る（本PR以前に作成された、新フィールドを持たないレガシーdocの再現用）。
  */
-function buildMockDb() {
+function buildMockDb(seed?: Record<string, unknown>) {
   const docState = new Map<string, { exists: boolean; data: () => Record<string, unknown> }>();
+  if (seed) {
+    docState.set("user_progress", { exists: true, data: () => seed });
+  }
 
   const docRef = {
     get: vi.fn(async () => docState.get("user_progress") ?? { exists: false, data: () => ({}) }),
@@ -92,5 +97,27 @@ describe("FirestoreDataSource.upsertUserProgress / toUserProgress", () => {
       expect(result).toHaveProperty(key);
       expect(result[key]).not.toBeUndefined();
     }
+  });
+
+  it("本PR以前に作成されたレガシーdoc（quizSkipped/quizSkippedAtキーが存在しない）を読んでも false/null にフォールバックする", async () => {
+    const { db } = buildMockDb({
+      userId: "user-1",
+      lessonId: "lesson-1",
+      courseId: "course-1",
+      videoCompleted: true,
+      quizPassed: true,
+      quizBestScore: 90,
+      lessonCompleted: true,
+      updatedAt: "2026-06-01T00:00:00.000Z",
+      // quizSkipped / quizSkippedAt キー自体が存在しない（本PR以前のdoc）
+    });
+    const ds = new FirestoreDataSource(db, "acme");
+
+    const result = await ds.getUserProgress("user-1", "lesson-1");
+
+    expect(result).not.toBeNull();
+    expect(result!.quizPassed).toBe(true);
+    expect(result!.quizSkipped).toBe(false);
+    expect(result!.quizSkippedAt).toBeNull();
   });
 });

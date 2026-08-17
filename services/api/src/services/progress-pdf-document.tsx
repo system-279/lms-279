@@ -276,16 +276,25 @@ export function computeLessonDetail(l: {
   return detail;
 }
 
-/** テスト成績セクションの1行分（達成マーク+スコア/合否ラベル）を計算する純粋関数。 */
+/**
+ * テスト成績セクションの1行分（達成マーク+スコア/合否ラベル）を計算する純粋関数。
+ * quizPassed と quizSkipped は独立フラグのため理論上同時にtrueになりうる
+ * （例: 一度スキップした後、後日実際にテストを受けて合格した場合）。
+ * その場合は quizPassed を優先し、実際の得点を隠さない
+ * （codex review指摘: 優先順位がないと「―(スキップ) 合格」という矛盾表示になる）。
+ */
 export function computeQuizScoreRow(l: {
   quizBestScore: number | null;
   quizPassed: boolean;
   quizSkipped: boolean;
 }): { mark: "✓" | "―" | "□"; meta: string } {
-  const mark = l.quizPassed ? "✓" : l.quizSkipped ? "―" : "□";
-  const scoreLabel = l.quizSkipped ? "―(スキップ)" : l.quizBestScore != null ? `${l.quizBestScore}点` : "未受験";
-  const meta = scoreLabel + (l.quizPassed ? " 合格" : "");
-  return { mark, meta };
+  if (l.quizPassed) {
+    return { mark: "✓", meta: `${l.quizBestScore != null ? `${l.quizBestScore}点` : ""} 合格`.trim() };
+  }
+  if (l.quizSkipped) {
+    return { mark: "―", meta: "―(スキップ)" };
+  }
+  return { mark: "□", meta: l.quizBestScore != null ? `${l.quizBestScore}点` : "未受験" };
 }
 
 function LessonChecklistSection({ courses }: { courses: ProgressPdfCourseRecord[] }) {

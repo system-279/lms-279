@@ -105,4 +105,12 @@ describe("computeQuizScoreRow", () => {
     expect(row.mark).toBe("□");
     expect(row.meta).toBe("未受験");
   });
+
+  it("一度スキップした後に実際に合格した場合（両フラグtrue）はquizPassedを優先し、得点を隠さない (3系統レビュー指摘の回帰テスト)", () => {
+    const row = computeQuizScoreRow({ quizBestScore: 85, quizPassed: true, quizSkipped: true });
+    expect(row.mark).toBe("✓");
+    expect(row.meta).toBe("85点 合格");
+    // 「―(スキップ) 合格」のような矛盾表示にならないこと
+    expect(row.meta).not.toContain("スキップ");
+  });
 });

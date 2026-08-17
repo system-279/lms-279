@@ -180,6 +180,23 @@ describe("updateLessonProgress", () => {
     expect(progress!.quizSkipped).toBe(true);
   });
 
+  it("quizSkipped=falseへの巻き戻し（誤スキップの取り消し）でquizSkippedAtがnullにリセットされる", async () => {
+    await updateLessonProgress(ds, USER_ID, LESSON_ID, COURSE_ID, {
+      videoCompleted: true,
+      quizSkipped: true,
+    });
+    const skipped = await ds.getUserProgress(USER_ID, LESSON_ID);
+    expect(skipped!.quizSkippedAt).not.toBeNull();
+
+    await updateLessonProgress(ds, USER_ID, LESSON_ID, COURSE_ID, {
+      quizSkipped: false,
+    });
+
+    const unskipped = await ds.getUserProgress(USER_ID, LESSON_ID);
+    expect(unskipped!.quizSkipped).toBe(false);
+    expect(unskipped!.quizSkippedAt).toBeNull();
+  });
+
   it("新規作成: quizSkippedを指定しない場合はfalse、quizSkippedAtはnull", async () => {
     await updateLessonProgress(ds, USER_ID, LESSON_ID, COURSE_ID, {
       videoCompleted: true,

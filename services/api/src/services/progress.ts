@@ -50,8 +50,11 @@ export async function updateLessonProgress(
   const quizSkipped = update.quizSkipped ?? current?.quizSkipped ?? false;
   // quizSkippedAt は「初めてスキップが確定した時刻」のみを記録し、以後の更新では保持する。
   // 呼び出し元に時刻責務を持たせない（サーバ側の現在時刻を単一の真実とする）。
-  const quizSkippedAt =
-    current?.quizSkipped !== true && quizSkipped === true
+  // quizSkipped が false に巻き戻された場合（例: 誤スキップの取り消し）は、
+  // 古いタイムスタンプが残らないよう null にリセットする（Evaluator指摘）。
+  const quizSkippedAt = !quizSkipped
+    ? null
+    : current?.quizSkipped !== true
       ? new Date().toISOString()
       : current?.quizSkippedAt ?? null;
 
