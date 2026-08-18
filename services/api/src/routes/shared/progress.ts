@@ -43,6 +43,7 @@ router.get("/courses/:courseId/progress", requireUser, async (req: Request, res:
         lessonId: p.lessonId,
         videoCompleted: p.videoCompleted,
         quizPassed: p.quizPassed,
+        quizSkipped: p.quizSkipped,
         lessonCompleted: p.lessonCompleted,
       };
     }
@@ -53,6 +54,7 @@ router.get("/courses/:courseId/progress", requireUser, async (req: Request, res:
       lessonId,
       videoCompleted: false,
       quizPassed: false,
+      quizSkipped: false,
       lessonCompleted: autoCompleted,
     };
   });
@@ -99,6 +101,7 @@ router.get(
           videoCompleted: false,
           quizPassed: false,
           quizBestScore: null,
+          quizSkipped: false,
           lessonCompleted: false,
           updatedAt: null,
         },
@@ -114,6 +117,7 @@ router.get(
         videoCompleted: progress.videoCompleted,
         quizPassed: progress.quizPassed,
         quizBestScore: progress.quizBestScore,
+        quizSkipped: progress.quizSkipped,
         lessonCompleted: progress.lessonCompleted,
         updatedAt: progress.updatedAt,
       },

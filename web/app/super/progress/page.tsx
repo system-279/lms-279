@@ -386,8 +386,8 @@ export default function StudentProgressPage() {
                                   </span>
                                 </TableCell>
                                 <TableCell>
-                                  <span className={lesson.quizPassed ? "text-green-600" : "text-muted-foreground"}>
-                                    テスト: {lesson.quizPassed ? "合格" : "未合格"}
+                                  <span className={lesson.quizPassed ? "text-green-600" : lesson.quizSkipped ? "text-amber-600" : "text-muted-foreground"}>
+                                    テスト: {lesson.quizPassed ? "合格" : lesson.quizSkipped ? "スキップ" : "未合格"}
                                   </span>
                                   {lesson.quizBestScore !== null && (
                                     <span className="text-xs ml-1">({lesson.quizBestScore}点)</span>

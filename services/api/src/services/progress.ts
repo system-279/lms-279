@@ -6,6 +6,24 @@
 import type { DataSource } from "../datasource/index.js";
 
 /**
+ * レッスン完了判定の唯一の定義。
+ * 動画視聴(videoCompleted)は常に必須。テストは「合格」または「スキップ」のいずれかで足りる
+ * （テスト任意化: quizSkippedはquizPassedを上書きしない独立フラグ）。
+ * テストなしレッスンは呼び出し元で quizPassed=true を渡す。
+ *
+ * services/routes/super-admin.ts の student-progress 手動編集APIは、
+ * この式を再計算せず operator 指定の lessonCompleted をそのまま書く設計のため、
+ * ここでの変更が自動で波及するのは updateCourseProgress 経由の集計のみ。
+ */
+export function computeLessonCompleted(p: {
+  videoCompleted: boolean;
+  quizPassed: boolean;
+  quizSkipped: boolean;
+}): boolean {
+  return p.videoCompleted && (p.quizPassed || p.quizSkipped);
+}
+
+/**
  * レッスン進捗を更新し、コース進捗も連動更新
  */
 export async function updateLessonProgress(
@@ -13,7 +31,12 @@ export async function updateLessonProgress(
   userId: string,
   lessonId: string,
   courseId: string,
-  update: { videoCompleted?: boolean; quizPassed?: boolean; quizBestScore?: number }
+  update: {
+    videoCompleted?: boolean;
+    quizPassed?: boolean;
+    quizBestScore?: number;
+    quizSkipped?: boolean;
+  }
 ): Promise<void> {
   // 1. 現在のuser_progress取得
   const current = await ds.getUserProgress(userId, lessonId);
@@ -24,10 +47,19 @@ export async function updateLessonProgress(
   const quizBestScore = update.quizBestScore !== undefined
     ? Math.max(update.quizBestScore, current?.quizBestScore ?? 0)
     : current?.quizBestScore ?? null;
+  const quizSkipped = update.quizSkipped ?? current?.quizSkipped ?? false;
+  // quizSkippedAt は「初めてスキップが確定した時刻」のみを記録し、以後の更新では保持する。
+  // 呼び出し元に時刻責務を持たせない（サーバ側の現在時刻を単一の真実とする）。
+  // quizSkipped が false に巻き戻された場合（例: 誤スキップの取り消し）は、
+  // 古いタイムスタンプが残らないよう null にリセットする（Evaluator指摘）。
+  const quizSkippedAt = !quizSkipped
+    ? null
+    : current?.quizSkipped !== true
+      ? new Date().toISOString()
+      : current?.quizSkippedAt ?? null;
 
-  // 3. レッスン完了判定: videoCompleted && quizPassed
-  //    テストなしレッスンは呼び出し元で quizPassed=true を渡す
-  const lessonCompleted = videoCompleted && quizPassed;
+  // 3. レッスン完了判定
+  const lessonCompleted = computeLessonCompleted({ videoCompleted, quizPassed, quizSkipped });
 
   // 4. user_progress upsert
   await ds.upsertUserProgress(userId, lessonId, {
@@ -35,6 +67,8 @@ export async function updateLessonProgress(
     videoCompleted,
     quizPassed,
     quizBestScore,
+    quizSkipped,
+    quizSkippedAt,
     lessonCompleted,
   });
 

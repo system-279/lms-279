@@ -38,6 +38,7 @@ export interface UserLessonProgress {
   lessonTitle: string | null;
   videoCompleted: boolean;
   quizPassed: boolean;
+  quizSkipped: boolean;
   lessonCompleted: boolean;
 }
 

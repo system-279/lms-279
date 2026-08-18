@@ -60,6 +60,7 @@ export interface ProgressPdfLessonRecord {
   videoCompleted: boolean;
   quizPassed: boolean;
   quizBestScore: number | null;
+  quizSkipped: boolean;
   lessonCompleted: boolean;
   /** 動画の総再生時間 (秒)。動画なしレッスンは null */
   videoDurationSec: number | null;

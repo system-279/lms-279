@@ -1231,7 +1231,7 @@ type ProgressData = {
   usersSnapshot: FirebaseFirestore.QuerySnapshot;
   coursesSnapshot: FirebaseFirestore.DocumentSnapshot[];
   lessonsMap: Map<string, { title: string; hasVideo: boolean; hasQuiz: boolean }>;
-  progressMap: Map<string, { videoCompleted: boolean; quizPassed: boolean; quizBestScore: number | null; lessonCompleted: boolean }>;
+  progressMap: Map<string, { videoCompleted: boolean; quizPassed: boolean; quizBestScore: number | null; quizSkipped: boolean; lessonCompleted: boolean }>;
   courseProgressMap: Map<string, { completedLessons: number; totalLessons: number; progressRatio: number; isCompleted: boolean }>;
   sessionsMap: Map<string, { sessionId: string; entryAt: string | null; exitAt: string | null; exitReason: string | null }>;
 };
@@ -1266,10 +1266,10 @@ async function fetchStudentProgressData(
     lessonsMap.set(doc.id, { title: data.title ?? doc.id, hasVideo: data.hasVideo ?? false, hasQuiz: data.hasQuiz ?? false });
   }
 
-  const progressMap = new Map<string, { videoCompleted: boolean; quizPassed: boolean; quizBestScore: number | null; lessonCompleted: boolean }>();
+  const progressMap = new Map<string, { videoCompleted: boolean; quizPassed: boolean; quizBestScore: number | null; quizSkipped: boolean; lessonCompleted: boolean }>();
   for (const doc of progressSnap.docs) {
     const d = doc.data();
-    progressMap.set(doc.id, { videoCompleted: d.videoCompleted ?? false, quizPassed: d.quizPassed ?? false, quizBestScore: d.quizBestScore ?? null, lessonCompleted: d.lessonCompleted ?? false });
+    progressMap.set(doc.id, { videoCompleted: d.videoCompleted ?? false, quizPassed: d.quizPassed ?? false, quizBestScore: d.quizBestScore ?? null, quizSkipped: d.quizSkipped ?? false, lessonCompleted: d.lessonCompleted ?? false });
   }
 
   const courseProgressMap = new Map<string, { completedLessons: number; totalLessons: number; progressRatio: number; isCompleted: boolean }>();
@@ -1338,6 +1338,7 @@ router.get("/tenants/:tenantId/student-progress", async (req: Request, res: Resp
           videoCompleted: up?.videoCompleted ?? false,
           quizPassed: up?.quizPassed ?? false,
           quizBestScore: up?.quizBestScore ?? null,
+          quizSkipped: up?.quizSkipped ?? false,
           lessonCompleted: up?.lessonCompleted ?? false,
           latestSessionId: session?.sessionId ?? null,
           latestEntryAt: session?.entryAt ?? null,
@@ -1570,7 +1571,7 @@ router.post("/tenants/:tenantId/student-progress/export-sheets", async (req: Req
           cp?.isCompleted ? "完了" : "未完了",
           lessonInfo?.title ?? lessonId,
           up?.videoCompleted ? "完了" : "未完了",
-          up?.quizPassed ? "合格" : "未合格",
+          up?.quizPassed ? "合格" : up?.quizSkipped ? "スキップ" : "未合格",
           up?.quizBestScore !== null && up?.quizBestScore !== undefined ? String(up.quizBestScore) : "",
           up?.lessonCompleted ? "完了" : "未完了",
         ]);

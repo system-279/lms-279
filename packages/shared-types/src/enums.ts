@@ -13,7 +13,8 @@ export type SessionExitReason =
   | "pause_timeout"
   | "time_limit"
   | "browser_close"
-  | "max_attempts_failed";
+  | "max_attempts_failed"
+  | "quiz_skipped";
 export type SuspiciousFlag =
   | "excessive_seeks"
   | "no_pauses_long_session"

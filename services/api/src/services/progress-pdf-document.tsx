@@ -247,6 +247,56 @@ function SummarySection({ courses }: { courses: ProgressPdfCourseRecord[] }) {
   );
 }
 
+/**
+ * レッスン別チェックリストの1行分（達成マーク+詳細ラベル）を計算する純粋関数。
+ * テストなしレッスンの合格(quizPassed)とスキップ(quizSkipped)は独立フラグのため、
+ * 表示ロジックでもこの2つを混同しない（quizSkippedはquizPassedの上書きではない）。
+ */
+export function computeLessonCheckMark(l: {
+  lessonCompleted: boolean;
+  videoCompleted: boolean;
+  quizPassed: boolean;
+  quizSkipped: boolean;
+}): "✓" | "△" | "□" {
+  if (l.lessonCompleted) return "✓";
+  if (l.videoCompleted || l.quizPassed || l.quizSkipped) return "△";
+  return "□";
+}
+
+export function computeLessonDetail(l: {
+  hasVideo: boolean;
+  hasQuiz: boolean;
+  videoCompleted: boolean;
+  quizPassed: boolean;
+  quizSkipped: boolean;
+}): string[] {
+  const detail: string[] = [];
+  if (l.hasVideo) detail.push(l.videoCompleted ? "動画✓" : "動画□");
+  if (l.hasQuiz) detail.push(l.quizPassed ? "テスト✓" : l.quizSkipped ? "テスト―(スキップ)" : "テスト□");
+  return detail;
+}
+
+/**
+ * テスト成績セクションの1行分（達成マーク+スコア/合否ラベル）を計算する純粋関数。
+ * quizPassed と quizSkipped は独立フラグのため理論上同時にtrueになりうる
+ * （例: 一度スキップした後、後日実際にテストを受けて合格した場合）。
+ * その場合は quizPassed を優先し、実際の得点を隠さない
+ * （codex review指摘: 優先順位がないと「―(スキップ) 合格」という矛盾表示になる）。
+ */
+export function computeQuizScoreRow(l: {
+  quizBestScore: number | null;
+  quizPassed: boolean;
+  quizSkipped: boolean;
+}): { mark: "✓" | "―" | "□"; meta: string } {
+  if (l.quizPassed) {
+    return { mark: "✓", meta: `${l.quizBestScore != null ? `${l.quizBestScore}点` : ""} 合格`.trim() };
+  }
+  if (l.quizSkipped) {
+    return { mark: "―", meta: "―(スキップ)" };
+  }
+  return { mark: "□", meta: l.quizBestScore != null ? `${l.quizBestScore}点` : "未受験" };
+}
+
 function LessonChecklistSection({ courses }: { courses: ProgressPdfCourseRecord[] }) {
   return (
     <View style={styles.section}>
@@ -259,14 +309,8 @@ function LessonChecklistSection({ courses }: { courses: ProgressPdfCourseRecord[
             <Text style={styles.courseHeader}>{c.courseName}</Text>
           </View>
           {c.lessons.map((l) => {
-            const mark = l.lessonCompleted
-              ? "✓"
-              : l.videoCompleted || l.quizPassed
-              ? "△"
-              : "□";
-            const detail: string[] = [];
-            if (l.hasVideo) detail.push(l.videoCompleted ? "動画✓" : "動画□");
-            if (l.hasQuiz) detail.push(l.quizPassed ? "テスト✓" : "テスト□");
+            const mark = computeLessonCheckMark(l);
+            const detail = computeLessonDetail(l);
             return (
               <View key={l.lessonId} style={styles.lessonRow} wrap={false}>
                 <Text style={styles.lessonCheck}>{mark}</Text>
@@ -285,7 +329,7 @@ function QuizScoresSection({ courses }: { courses: ProgressPdfCourseRecord[] }) 
   const rows = courses.flatMap((c) =>
     c.lessons
       .filter((l) => l.hasQuiz)
-      .map((l) => ({ courseName: c.courseName, lessonTitle: l.lessonTitle, score: l.quizBestScore, passed: l.quizPassed })),
+      .map((l) => ({ courseName: c.courseName, lessonTitle: l.lessonTitle, ...computeQuizScoreRow(l) })),
   );
   if (rows.length === 0) {
     return (
@@ -300,12 +344,9 @@ function QuizScoresSection({ courses }: { courses: ProgressPdfCourseRecord[] }) 
       <Text style={styles.h2}>テスト成績</Text>
       {rows.map((r, idx) => (
         <View key={`${r.courseName}-${idx}`} style={styles.lessonRow}>
-          <Text style={styles.lessonCheck}>{r.passed ? "✓" : "□"}</Text>
+          <Text style={styles.lessonCheck}>{r.mark}</Text>
           <Text style={styles.lessonTitle}>{r.courseName} / {r.lessonTitle}</Text>
-          <Text style={styles.lessonMeta}>
-            {r.score != null ? `${r.score}点` : "未受験"}
-            {r.passed ? " 合格" : ""}
-          </Text>
+          <Text style={styles.lessonMeta}>{r.meta}</Text>
         </View>
       ))}
     </View>
