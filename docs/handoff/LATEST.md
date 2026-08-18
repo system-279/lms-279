@@ -1,170 +1,115 @@
-# Session Handoff — 2026-06-24 (Session 80)
+# Session Handoff — 2026-08-18 (Session 81)
 
 ## TL;DR
 
-**現場相談起点でスーパー管理者ヘルプの「配信済みテナント資料反映」セクションを追加 + スクリーンショット skill の運用ミスを構造的に防ぐ MUST 追加**。マスター講座への資料 PDF 後追い添付について現場担当者から「配信済みテナントには紐づかないのでは?」と質問あり。ADR-024 / ADR-036 通り後追い反映 API + UI ボタンは既存だが、ヘルプマニュアル未掲載で発見できなかった事案。スクショ付き解説を追加した過程で、AI が `screenshot` skill を invoke せず `browser_take_screenshot` を直接呼んだため Next.js dev indicator (N マーク) が画像に焼き付くインシデント発生。skill 強化 + global CLAUDE.md CRITICAL に MUST 追加で再発防止。
+**現場の出席レポート不整合報告(①-⑦)を起点に調査 → 決裁者から「テスト任意化」への方針転換指示を受け、6段階実装計画をplan mode設計・承認 → Stage 1(データモデル+進捗ロジック)をTDDで実装し、3系統レビュー(codex strict/high + セカンドオピニオンagent + Evaluator)を経てPR #594をmainにマージ**。Stage 1は全レコード`quizSkipped=false`のため本番挙動は無変化な土台のみ。GOAL.mdを新規作成し、Stage 2〜6への引き継ぎをセッション横断で維持できるようにした。
 
 | 主要成果 | 結果 |
 |---|---|
-| PR #588 マージ (スーパー管理者ヘルプに「配信済みテナント資料反映」セクション追加) | ✅ merged + 本番反映完了、N マーク版で初版公開 |
-| PR #589 マージ (N マーク除去版で画像差し替え) | ✅ merged + 本番反映完了 (`last-modified: 2026-06-24 04:22 GMT`) |
-| PR #590 マージ (スクショ拡大ダイアログを 95vw / 上限 1400px に拡張) | ✅ merged + 本番デプロイ完了 |
-| global skill PR #308 (yasushi-honda/claude-code-config) | ⏳ 別レポでオープン、decision-maker レビュー & マージ待ち |
-| ~/.claude/CLAUDE.md CRITICAL に MUST 追加 (browser_take_screenshot 直接呼び禁止条件) | ✅ decision-maker 側で追記済み |
-| ~/.claude/skills/screenshot/SKILL.md 起動条件強化 | ✅ decision-maker 側で追記済み |
-| 現場担当者への案内 (マスター→配信済みテナントへの資料反映手順) | ✅ コピペ用文案 + 本番リンク (`/help/super#super-sync-resources`) 共有済み |
+| 現場報告①-⑦の原因調査(Issue #533 / ADR-027「ケースD」への接続) | ✅ html-brief 2版で文書化・現場共有可能な形に整理 |
+| 決裁者指示「テスト任意化」の6段階実装計画をplan modeで設計・承認 | ✅ `~/.claude/plans/synchronous-nibbling-crescent.md` |
+| PR #594マージ (Stage 1: `quizSkipped`/`quizSkippedAt`データモデル+`computeLessonCompleted`) | ✅ merged (`31609c2`)、18 files, +438/-29 |
+| codex review 2回(medium→strict-config/high) + セカンドオピニオン(pr-review-toolkit:code-reviewer) + Evaluator(quality-gate-evaluator) | ✅ 3系統が`quizPassed`/`quizSkipped`同時trueの表示矛盾に独立収束、全修正+回帰テスト追加済み |
+| grip自己レビュー文書のMarkdown記法混入バグ修正・再生成 | ✅ `.section-body`が実HTMLタグでレンダリングされることを実機確認済み |
+| `docs/handoff/GOAL.md`新規作成(6段階計画の引き継ぎ) | ✅ decision-maker確認済み、Stage 1のみ`[x]` |
 
-- **Issue Net (本セッション)**: Close 0 + 起票 0 = **Net 0** (triage 基準を満たす新規 Issue なし、本セッションは現場相談起点の ad-hoc ドキュメント追加で完結)
-- **本セッション merged PR**: 3 件 (#588, #589, #590) + 別レポ 1 件 (#308)
-- **本セッション本番 destructive 操作**: 0 件 (PR は全て docs / UI 微調整、Firestore / GCS 書き込み一切なし)
+- **Issue Net (本セッション)**: Close 0 + 起票 0 = **Net 0**（triage基準を満たす新規バグ発見なし。起点となったIssue #533は既に前セッションでclose済み、本セッションはその後継の新規機能開発）
+- **本セッションmerged PR**: 1件 (#594)
+- **本セッション本番destructive操作**: 0件（Stage 1は全レコード`quizSkipped=false`固定のため、Firestore書き込み経路自体が未実装。挙動変化ゼロ）
 
 ---
 
 ## 🚀 次セッション開始時の必読手順
 
 ```bash
-cat docs/handoff/LATEST.md
+cat docs/handoff/GOAL.md   # 6段階計画のミッション・進捗
 git fetch origin main && git log --oneline -5 origin/main
 gh pr list --state open
 gh issue list --state open
-# global skill PR #308 (yasushi-honda/claude-code-config) の状態確認
-# 本案件のヘルプセクションを現場が活用できているかフィードバック確認
 ```
 
 ---
 
-## 本セッションでの変更要旨
+## ドキュメント整合性
 
-| 層 | 変更内容 |
-|---|---|
-| `web/app/help/_data/super-sections.ts` | 新セクション `super-sync-resources` 追加 (super-distribute の直後、5 step + 4 callout + 5 FAQ) |
-| `web/public/help/screenshots/super-sync-resources-button.png` (新規) | マスターコース詳細画面のボタン、N マーク除去版 (1280x720) |
-| `web/public/help/screenshots/super-sync-resources-dialog.png` (新規) | 確認ダイアログ、N マーク除去版 (1280x720) |
-| `web/app/help/_components/ScreenshotViewer.tsx` | 拡大ダイアログ `max-w-4xl` → `!max-w-[min(95vw,1400px)]` + `max-h-[85vh]` + `sizes` 更新 |
+| 項目 | 状態 | 備考 |
+|------|------|------|
+| CLAUDE.md ↔ 実装 | ✅ | Stage 1は既存ADR-018/019/020と矛盾なし。新規ADRはStage 6予定(計画通り、現時点で不要) |
+| CLAUDE.md ↔ メモリ | ✅ | 本セッションでのグローバルmemory書き込みなし |
+| 完了ステータス一致 | ✅ | GOAL.mdのStage 1のみ`[x]`、Stage 2-6は`[ ]`で実態と一致 |
+| E2Eテスト件数 | ⏭️ | Stage 1はデータモデル層のみでE2E対象UIフローなし。Stage 3以降で追加予定(計画記載済み) |
+| リンク切れ | ✅ | 未確認事項なし(新規外部リンク追加なし) |
+| ADR整合性 | ✅ | 新規ADR不要(Stage 6で計画済み、計画ファイルにも明記) |
 
-詳細: PR #588 / #589 / #590 description
-
-別レポ:
-- `~/.claude/skills/screenshot/SKILL.md`: 起動条件強化 + Step 5.5 自己診断 + 撮影後 PNG 目視確認 MUST 化 (PR #308)
-- `~/.claude/CLAUDE.md`: CRITICAL に「git 管理 PNG 出力先パスへの `browser_take_screenshot` 直接呼びを禁止し `/screenshot` 経由必須」MUST 追加 (decision-maker 側で実施)
-
----
-
-## 構造的再発防止 (本セッションの恒久対策)
-
-| 層 | 対策 |
-|---|------|
-| skill 本体 | Step 5.5 自己診断 (style_injected / nextjs_portal_visible / suspicious_fixed_bottom_left) と撮影後 PNG 目視確認を MUST 化 |
-| skill description | コミット対象スクショ撮影時は明示依頼なくても起動 MUST と明示 |
-| global CLAUDE.md CRITICAL | `browser_take_screenshot` を呼ぶ前に filename 判定を要求、git 管理 PNG パスなら `/screenshot` 経由必須 |
-| 運用ルール | `.playwright-mcp/` 等 gitignored の動作確認スクショは対象外、判定基準を明文化 |
-
-これにより「動作確認のついでにマニュアルにも流用」事故パターンが構造的に止まる。
-
----
-
-## 次のアクション
-
-### 即着手タスク
-
-**なし** — 本セッション主目的 (現場ヘルプ追加 + 構造的再発防止) 完了、Git clean、main 同期 (`21437c8`)、CI 全 pass、本番デプロイ完了。executor 領分の作業ゼロ。
-
-### 条件待ち (明示 trigger 付き)
-
-| # | 項目 | trigger | 充足時のタスク |
-|---|------|---------|--------------|
-| 1 | 本案件のヘルプセクションを現場が活用できているか | 現場担当者からのフィードバック (「見つけられた」「分かりやすかった」「△△が分からない」等) | 反応に応じて step / callouts / FAQ の文言調整 |
-| 2 | global skill PR #308 (yasushi-honda/claude-code-config) のマージ | decision-maker のレビュー & マージ判断 | 反映後、本リポジトリ次セッションで自動適用される (本リポジトリ側のタスクなし) |
-| 3 | Issue #584 (Phase 4 α-7 Playwright E2E) | decision-maker から cutover Step 6 スケジュール確定 or 番号単位の明示指示 | impl-plan → tdd → e2e 実装 |
-| 4 | Cleanup Orphan Auth Users scheduled job 失敗 (2026-06-22) の原因調査 | decision-maker から「失敗原因を調べて」の明示指示 (Issue #276 が postponed のため自動修正は不可、孤児 Auth 設計判断が絡む) | gh run view で log 確認 → 原因切り分け → 修正方針を decision-maker へ報告 |
-
-### 却下候補 (記録のみ)
-
-| # | 項目 | 理由 |
-|---|------|-----|
-| 1 | postponed Issue #521 / #405 / #276 / #275 / #274 の再開 | postponed ラベル + 再開条件未確認、明示指示必須。catchup でも自動除外対象 |
-| 2 | ヘルプセクションの他ロール (admin / student) 全般のスクショ追加 | 本セッションのスコープ外。ScreenshotViewer 拡張 (#590) の効果で既存スクショも見やすくなったため当面急を要さず、decision-maker 起点の指示があれば対応 |
-| 3 | dependabot PR の連続マージ | A カテゴリ housekeeping、decision-maker 明示指示なき限り保留 |
-| 4 | `/screenshot` 関連の自動化 (起動忘れ検知 hook 等) | global CLAUDE.md MUST 追加で対症は完了。さらなる hook 自動化は AI 起点では越権、必要性が確認できてから decision-maker 起点で検討 |
-
----
-
-## 構造的整合性チェック
-
-| 項目 | 実施可否 | 備考 |
-|---|---|---|
-| `/impact-analysis` (型・共有ロジック変更) | ⏭️ スキップ | 本セッション PR は静的データ (help section) + UI 微調整 (Tailwind class) のみ、共有型 / API 契約変更なし |
-| `/new-resource` (新規テーブル / API) | ⏭️ スキップ | 既存 API (sync-resources) のヘルプ追加のみ、新規 API なし |
-| `/trace-dataflow` (データフロー) | ⏭️ スキップ | データフロー変更なし |
-
----
-
-## § 4.6 同根再発スキャン結果
-
-| 項目 | 結果 |
-|---|---|
-| 本セッション内修正 PR (`fix:` プレフィックス) | 1 件 (PR #589 N マーク除去) |
-| 本セッション内の同根候補 (共有 util / 共通ライブラリ / 同 ADR) | 0 件 (#589 は global skill 運用ミス、#588/#590 は別系統) |
-| 過去 7 日 archive 内 `screenshot` / `N マーク` / `nextjs-portal` keyword ヒット | 0 件 (本セッションが本リポジトリでの初検出) |
-| 過去 PR title 内 `screenshot` / `スクショ` / `スクリーンショット` ヒット | 本セッション PR (#589 / #590) のみ、過去なし |
-| 同根判定 | **過去事案なし、本セッションが起点**。global skill 強化 + CLAUDE.md MUST 追加で同根再発を構造的に阻止、§ 8 最終結論 判定継続 |
-
----
-
-## § 4.7 対症療法判定結果
-
-| 判定基準 | 該当 | 説明 |
-|---|---|---|
-| 1. retry / fallback / エラー文言修正のみで調査ログなし | ❌ 該当なし | 画像差し替えだけでなく、global skill 強化 + CLAUDE.md MUST 追加で根本原因 (skill invoke スキップ運用ミス) に対処 |
-| 2. 「なぜそれが今起きたか」の調査ログなし | ❌ 該当なし | 原因明確: AI executor が skill 起動条件を判定せず browser_take_screenshot を直接呼んだ運用ミス。skill 本体には N マーク除去 CSS 注入ロジックは既に組み込み済み |
-| 3. 同症状の修正 PR が過去 30 日に 1 件以上 | ❌ 該当なし | 過去 PR / handoff archive grep で同症状ヒット 0 件 |
-| 4. 修正後の動作確認が単体テスト / smoke のみ | ❌ 該当なし | 本番デプロイ後の PNG hash 確認 + decision-maker による実機確認で OK 判定取得済み |
-| **総合判定** | **対症療法疑い 0 件** | 通常通り § 8 へ |
-
----
-
-## § 4.5 グローバル memory scope チェック
-
-| 項目 | 結果 |
-|---|---|
-| 本セッション内で `memory/feedback_*.md` / `memory/reference_*.md` / `memory/MEMORY.md` の変更 | なし (本セッションは global skill 本体と CLAUDE.md の変更で、memory ファイルは触っていない) |
-| 判定 | ⏭️ スキップ |
-
----
-
-## Issue Net 変化
-
-- Close 数: 0 件
-- 起票数: 0 件
-- **Net: 0 件**
-- **言語化**: 本セッションは現場相談起点の ad-hoc ドキュメント追加 + スクリーンショット運用ミスの構造的再発防止で完結。triage 基準 (実害 / 再現バグ / CI 破壊 / rating≥7 / 明示指示) を満たす追加課題なし。Issue Net 0 だが、ヘルプセクション追加で現場の自己解決経路が 1 つ増えた + 同種のスクショ運用事故を CLAUDE.md MUST 追加で構造的に阻止という実質進捗あり
-
----
-
-## 残留プロセス
-
-✅ 残留 Node プロセスなし
-
----
-
-## 再開可能性判定
+## Git状態
 
 | 項目 | 状態 |
 |------|------|
-| Git clean | ✅ (本 handoff PR 作成前) |
-| main 同期済 | ✅ (`21437c8` まで) |
-| 本セッション merged PR | ✅ #588, #589, #590 (3 件すべて本番反映完了) |
-| 別レポ open PR | ⏳ #308 (yasushi-honda/claude-code-config, decision-maker 領分) |
-| 本番デプロイ影響 | ✅ ヘルプセクション追加 / UI 微調整、destructive ゼロ |
-| OPEN PR (本リポジトリ) | 0 件 (本 handoff PR は別) |
-| 残留プロセス | ✅ なし |
-| 即着手タスク | 0 件 |
-| 条件待ち | 4 件 (全て外部 trigger 待ち or decision-maker 領分) |
-| § 4.6 同根再発スキャン | 過去事案 0 件 (本セッションが起点) |
-| § 4.7 対症療法判定 | 該当 0 件 |
+| 未コミット変更 | なし（`docs/handoff/GOAL.md`新規作成分は本handoffコミットに含める） |
+| 未プッシュコミット | なし（`main`は`origin/main`と同期、`31609c2`） |
+| CI/CD | ✅成功（PR #594 マージ後のDeploy to Cloud Runワークフロー成功、4m36s） |
+
+## 品質ゲート
+
+| 項目 | 状態 |
+|------|------|
+| codex review (medium→strict-config/high) | ✅実行済み（2回、指摘は全修正） |
+| セカンドオピニオン (pr-review-toolkit:code-reviewer) | ✅実行済み（large tier gate、指摘1件修正済み） |
+| Evaluator (quality-gate-evaluator) | ✅実行済み（APPROVE / AC_SUFFICIENT、MEDIUM 1件・LOW 2件、MEDIUMは修正済み） |
+| 構造的整合性チェック (/impact-analysis) | ⚠️未実行 | shared-types 3ファイル変更に該当するが専用skill未実行。全ワークスペースtype-check PASS + 3系統コードレビューで同等範囲はカバー済みと判断 |
+| 最終テスト実行 | ✅実行済み（API 1723件・web 353件 全PASS、lint 0 errors、type-check全ワークスペースPASS） |
+
+## ADR状態
+
+| 項目 | 状態 |
+|------|------|
+| ADR数 | 39件（ADR-001〜ADR-039） |
+| 今セッションで作成 | なし |
+| 要ADR判断 | なし（計画上Stage 6でADR-040新規+既存4件改訂予定、現時点では時期尚早） |
+
+## ドキュメント品質
+
+| 項目 | 状態 |
+|------|------|
+| 冗長性 | ✅問題なし |
+| 最新性 | ✅反映済み（GOAL.md新規、LATEST.md本セッションで更新） |
+
+## 同根再発スキャン（§4.6） / 対症療法判定（§4.7）
+
+- 本セッションのPR #594は`feat:`プレフィックス（レビュー対応の`fix:`コミット2件を含むが、いずれもインシデント復旧ではなく通常のレビュー指摘対応）のため、§4.6/§4.7の発動条件（修正PR = fix:/hotfix:またはIssue/障害復旧目的）に該当せず。スキャン対象外。
+
+## 次のアクション（3分割構造）
+
+#### 即着手タスク
+即着手タスクなし（Stage 2着手は本セッションで明示的に「次回持ち越し」と決裁者判断済みのため、条件待ちに分類）
+
+#### 条件待ち（明示trigger付き）
+
+| # | 項目 | trigger（充足条件） | 充足時のタスク | 充足確認方法 |
+|---|------|------------------|--------------|------------|
+| 1 | [GOAL.md] Stage 2: テナント設定(既定OFF)実装 | 次セッション開始・decision-makerからの続行指示 | `TenantQuizPolicy`型+Firestore/InMemory実装+API+`TenantQuizPolicyEditor`をTDDで実装。計画: `~/.claude/plans/synchronous-nibbling-crescent.md`「変更グループ」A/E該当箇所 | `cat docs/handoff/GOAL.md`でStage 1が`[x]`・Stage 2が`[ ]`であることを確認 |
+
+#### 却下候補（記録のみ）
+
+| # | 項目 | 検討経緯 | 着手しない理由 | 参照条件 |
+|---|------|---------|--------------|---------|
+| 1 | `toUserProgress()`ホワイトリスト方式の型ベース自動強制化(`satisfies Record<keyof UserProgress, true>`等) | grip自己レビュー(AIの自白)でリスク上位1として指摘。フィールドパリティテストは追加したが対症療法 | Stage 1スコープ外の一般的テスト基盤改善、機能追加と独立した技術的負債 | decision-makerからの明示指示時のみ |
+| 2 | `quizPassed`と`quizSkipped`同時trueを禁止するサーバ側ガード実装 | 3系統レビューで表示矛盾は修正したが、入力自体を禁止するガードは未実装 | Stage 1では到達不可能な状態、Stage 3のスキップAPI設計が固まってから実装すべき（架空入力への防御コードになるリスク） | Stage 3設計時に再検討 |
+| 3 | post-commitフックの`findRelatedTests`workspace跨ぎバグ修正 | 本セッション中、コミットのたびに誤警告が発生することを確認・decision-maker合意で「このまま進める」判断済み | 共有ハーネス設定であり本PRのスコープ外の既存問題 | decision-makerからの明示指示時のみ |
+| 4 | dependabot自動PR群（#592, #585, #573等、依存バージョン更新） | 本セッションで触れていない、事前取得データで検出したのみ | 本セッションの作業スコープ外、triage基準の対象外housekeeping | decision-makerからの明示指示時のみ |
+
+> ⚠️ 「優先順にすすめて」等の包括指示で次セッションが動けるのは即着手タスクのみ（本セッションは0件）。条件待ち・却下候補は包括指示の対象外。
+
+## Issue Net 変化
+- Close 数: 0 件
+- 起票数: 0 件
+- Net: 0 件
+
+## 再開可能性判定
+✅ **再開可能** - `docs/handoff/GOAL.md`とPR #594のマージ履歴から開発再開できます
 
 ---
 
 ## 最終結論
 
-✅ **セッション終了可** — 現場相談起点のヘルプ追加 (PR #588) + N マーク除去 (PR #589) + 拡大ダイアログ UX 改善 (PR #590) すべて本番反映完了。global skill 強化 + CLAUDE.md CRITICAL MUST 追加で同種スクショ運用事故の構造的再発防止を確立。executor 領分の作業ゼロ、Git clean、main 同期 (`21437c8`)、残留プロセスなし、同根再発スキャン (§ 4.6) / 対症療法判定 (§ 4.7) いずれも該当なし。条件待ち 4 件はすべて外部 trigger 待ちで次セッション以降の対応。
+✅ **セッション終了可** — PR #594マージ完了・mainクリーン・CI成功・残留プロセスなし。即着手タスク0件（Stage 2着手は決裁者判断で次回持ち越し）、条件待ち1件(Stage 2、trigger=次セッション開始)。同根再発スキャン(§4.6)/対症療法判定(§4.7)いずれも該当なし(該当PRなし)。GOAL.md新規作成によりStage 2〜6への引き継ぎ経路を確立済み。
