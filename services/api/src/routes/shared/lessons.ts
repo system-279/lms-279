@@ -7,33 +7,15 @@ import { Router, Request, Response } from "express";
 import { Storage } from "@google-cloud/storage";
 import { requireAdmin, requireUser } from "../../middleware/auth.js";
 import {
-  LessonResourceError,
   evaluatePdfDownloadEligibility,
   generatePdfDownloadUrl,
+  mapLessonResourceError,
   toLessonResource,
 } from "../../services/lesson-resource.js";
 import { resolveTenantQuizPolicy } from "../../services/quiz-policy.js";
 
 const router = Router();
 const storage = new Storage();
-
-/** lesson-resource エラーを HTTP レスポンスにマップする */
-function mapLessonResourceError(res: Response, err: unknown): boolean {
-  if (!(err instanceof LessonResourceError)) return false;
-  const statusMap: Record<LessonResourceError["code"], number> = {
-    invalid_file_type: 400,
-    file_too_large: 400,
-    lesson_not_found: 404,
-    quiz_not_passed: 403,
-    pdf_not_allowed_for_skipped: 403,
-    access_expired: 403,
-    resource_not_found: 404,
-    gcs_unavailable: 503,
-    gcs_file_missing: 500,
-  };
-  res.status(statusMap[err.code]).json({ error: err.code, message: err.message });
-  return true;
-}
 
 // ============================================================
 // 管理者向けエンドポイント（全て requireAdmin）

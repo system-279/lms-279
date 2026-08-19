@@ -13,10 +13,10 @@ import { distributeCourseToTenant } from "../services/course-distributor.js";
 import { generateUploadUrl, generatePlaybackUrl } from "../services/gcs.js";
 import { Storage } from "@google-cloud/storage";
 import {
-  LessonResourceError,
   confirmPdfUpload,
   deletePdfResource,
   generatePdfUploadUrl,
+  mapLessonResourceError,
 } from "../services/lesson-resource.js";
 import { isWorkspaceIntegrationAvailable } from "../services/google-auth.js";
 import {
@@ -58,24 +58,6 @@ function serializeLesson(lesson: Lesson) {
     createdAt: lesson.createdAt,
     updatedAt: lesson.updatedAt,
   };
-}
-
-/** lesson-resource エラーを HTTP レスポンスにマップする */
-function mapLessonResourceError(res: Response, err: unknown): boolean {
-  if (!(err instanceof LessonResourceError)) return false;
-  const statusMap: Record<LessonResourceError["code"], number> = {
-    invalid_file_type: 400,
-    file_too_large: 400,
-    lesson_not_found: 404,
-    quiz_not_passed: 403,
-    pdf_not_allowed_for_skipped: 403,
-    access_expired: 403,
-    resource_not_found: 404,
-    gcs_unavailable: 503,
-    gcs_file_missing: 500,
-  };
-  res.status(statusMap[err.code]).json({ error: err.code, message: err.message });
-  return true;
 }
 
 const storage = new Storage();

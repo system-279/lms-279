@@ -18,11 +18,19 @@ export interface LessonResource {
  * - allowed: ダウンロード可能（合格 OR (スキップ済み AND テナントが許可)）
  * - needs_quiz_pass: テスト未受験・未合格（かつ未スキップ）
  * - blocked_by_skip: スキップ済みだが、このテナントではスキップ者への PDF ダウンロードを許可していない
+ *
+ * スコープ注意: この型はテスト受験状態のみに基づく判定であり、受講期間切れ
+ * (`videoAccessUntil` 経過) は含まない。受講期間切れの表示制御は別軸の
+ * `videoAccessExpired` (boolean) と組み合わせて判定すること
+ * (`LessonPdfButton` は resource 未添付・期間切れを本型より先に判定する)。
  */
 export type PdfDownloadEligibility = "allowed" | "needs_quiz_pass" | "blocked_by_skip";
 
 /**
  * GET /:tenant/lessons/:lessonId のレスポンス（受講者向け）。
+ * `lesson` は services/api の `Lesson` entity のうち受講者向けに安全なフィールドのみを
+ * 抜粋したもの（`pdfGcsPath` 等の内部専用フィールドは意図的に除外）。
+ * entity にフィールドを追加した場合はこちらの対応要否も確認すること。
  */
 export interface StudentLessonDetailResponse {
   lesson: {

@@ -10,6 +10,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { Storage } from "@google-cloud/storage";
+import type { Response } from "express";
 import type { DataSource } from "../datasource/interface.js";
 import type { Lesson, TenantQuizPolicy } from "../types/entities.js";
 import type {
@@ -44,6 +45,30 @@ export class LessonResourceError extends Error {
     super(message);
     this.name = "LessonResourceError";
   }
+}
+
+/**
+ * LessonResourceError を HTTP レスポンスにマップする。
+ * `routes/shared/lessons.ts` と `routes/super-admin-master.ts` の両方から共用する
+ * (以前は2箇所に同一実装が複製されており、片方だけへの追記漏れで500になるリスクがあった)。
+ * `Record<LessonResourceError["code"], number>` により、code union への追加時に
+ * このマップの更新漏れをコンパイル時に検出する。
+ */
+export function mapLessonResourceError(res: Response, err: unknown): boolean {
+  if (!(err instanceof LessonResourceError)) return false;
+  const statusMap: Record<LessonResourceError["code"], number> = {
+    invalid_file_type: 400,
+    file_too_large: 400,
+    lesson_not_found: 404,
+    quiz_not_passed: 403,
+    pdf_not_allowed_for_skipped: 403,
+    access_expired: 403,
+    resource_not_found: 404,
+    gcs_unavailable: 503,
+    gcs_file_missing: 500,
+  };
+  res.status(statusMap[err.code]).json({ error: err.code, message: err.message });
+  return true;
 }
 
 /**
