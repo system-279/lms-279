@@ -41,6 +41,7 @@ import type {
   CourseProgress,
   LessonSession,
   TenantEnrollmentSetting,
+  TenantQuizPolicy,
 } from "../types/entities.js";
 import { countEffectiveAttempts } from "../services/quiz-attempt-utils.js";
 
@@ -1720,6 +1721,47 @@ export class FirestoreDataSource implements DataSource {
 
   async deleteTenantEnrollmentSetting(): Promise<void> {
     await this.collection("enrollment_setting").doc("_config").delete();
+  }
+
+  // Tenant Quiz Policy (テナント単位のテスト任意化設定)
+
+  async getTenantQuizPolicy(): Promise<TenantQuizPolicy | null> {
+    const doc = await this.collection("quiz_policy").doc("_config").get();
+    if (!doc.exists) return null;
+    return this.toTenantQuizPolicy(doc.id, doc.data()!);
+  }
+
+  async upsertTenantQuizPolicy(data: Omit<TenantQuizPolicy, "id" | "updatedAt">): Promise<TenantQuizPolicy> {
+    const docRef = this.collection("quiz_policy").doc("_config");
+    await docRef.set({ ...data, updatedAt: new Date() }, { merge: true });
+    const updated = await docRef.get();
+    return this.toTenantQuizPolicy(updated.id, updated.data()!);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private toTenantQuizPolicy(id: string, data: any): TenantQuizPolicy {
+    // fail-closed: 欠損・不正型の boolean は false に倒す（業務上重要な ON/OFF フラグで
+    // 壊れた値が ON として読まれることを避ける）。無言にすると設定破損に気付けないため warn を残す
+    // (codex plan review 指摘対応)。
+    const quizSkipEnabled = data.quizSkipEnabled === true;
+    const pdfDownloadAllowedForSkipped = data.pdfDownloadAllowedForSkipped === true;
+    if (
+      (data.quizSkipEnabled !== undefined && typeof data.quizSkipEnabled !== "boolean") ||
+      (data.pdfDownloadAllowedForSkipped !== undefined && typeof data.pdfDownloadAllowedForSkipped !== "boolean")
+    ) {
+      logger.warn("TenantQuizPolicy: 不正な型の値を検出し false へフォールバックしました", {
+        errorType: "tenant_quiz_policy_invalid_field_type",
+        tenantId: this.tenantId,
+        documentId: id,
+      });
+    }
+    return {
+      id,
+      quizSkipEnabled,
+      pdfDownloadAllowedForSkipped,
+      updatedBy: typeof data.updatedBy === "string" ? data.updatedBy : "",
+      updatedAt: toDateStrict(data.updatedAt, "updatedAt").toISOString(),
+    };
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

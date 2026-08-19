@@ -27,6 +27,7 @@ import type { TenantMetadata, TenantStatus } from "../types/tenant.js";
 import { masterRouter } from "./super-admin-master.js";
 import { progressPdfRouter } from "./super/progress-pdf.js";
 import { progressPdfDraftRouter } from "./super/progress-pdf-draft.js";
+import { tenantQuizPolicyRouter } from "./super/tenant-quiz-policy.js";
 import { calculateDefaultDeadlines, validateEnrollmentSettingPayload } from "../services/enrollment.js";
 import { generateTenantId, normalizeEmail, parseTenantGcipFields } from "../utils/tenant-id.js";
 import { logger } from "../utils/logger.js";
@@ -49,6 +50,9 @@ router.use(progressPdfRouter);
 
 // 受講者進捗 PDF Gmail 下書き作成ルート (ADR-034 Phase 2)
 router.use(progressPdfDraftRouter);
+
+// テスト任意化（テナント単位スキップ）設定ルート (Stage 2)
+router.use(tenantQuizPolicyRouter);
 
 /**
  * テナント一覧のレスポンス型

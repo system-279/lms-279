@@ -39,6 +39,7 @@ import type {
   CourseProgress,
   LessonSession,
   TenantEnrollmentSetting,
+  TenantQuizPolicy,
 } from "../types/entities.js";
 import { countEffectiveAttempts } from "../services/quiz-attempt-utils.js";
 
@@ -209,6 +210,7 @@ export class InMemoryDataSource implements DataSource {
   private courseProgress: Map<string, CourseProgress> = new Map();
   private lessonSessions: LessonSession[] = [];
   private tenantEnrollmentSetting: TenantEnrollmentSetting | null = null;
+  private tenantQuizPolicy: TenantQuizPolicy | null = null;
 
   private readonly readOnly: boolean;
 
@@ -1281,5 +1283,22 @@ export class InMemoryDataSource implements DataSource {
   async deleteTenantEnrollmentSetting(): Promise<void> {
     this.throwIfReadOnly();
     this.tenantEnrollmentSetting = null;
+  }
+
+  // Tenant Quiz Policy (テナント単位のテスト任意化設定)
+
+  async getTenantQuizPolicy(): Promise<TenantQuizPolicy | null> {
+    return this.tenantQuizPolicy;
+  }
+
+  async upsertTenantQuizPolicy(data: Omit<TenantQuizPolicy, "id" | "updatedAt">): Promise<TenantQuizPolicy> {
+    this.throwIfReadOnly();
+    const policy: TenantQuizPolicy = {
+      ...data,
+      id: "_config",
+      updatedAt: new Date().toISOString(),
+    };
+    this.tenantQuizPolicy = policy;
+    return policy;
   }
 }

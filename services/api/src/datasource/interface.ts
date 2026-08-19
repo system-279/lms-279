@@ -26,6 +26,7 @@ import type {
   CourseProgress,
   LessonSession,
   TenantEnrollmentSetting,
+  TenantQuizPolicy,
 } from "../types/entities.js";
 
 export type { CourseFilter, LessonFilter, Video, VideoEvent, VideoAnalytics, VideoFilter, VideoEventFilter, WatchedRange, SuspiciousFlag } from "../types/entities.js";
@@ -33,6 +34,7 @@ export type { Quiz, QuizAttempt, QuizFilter, QuizAttemptFilter, QuizQuestion, Qu
 export type { UserProgress, CourseProgress } from "../types/entities.js";
 export type { LessonSession, LessonSessionFilter, LessonSessionStatus, SessionExitReason } from "../types/entities.js";
 export type { TenantEnrollmentSetting } from "../types/entities.js";
+export type { TenantQuizPolicy } from "../types/entities.js";
 
 export interface NotificationPolicyFilter {
   scope?: "global" | "course" | "user";
@@ -329,6 +331,10 @@ export interface DataSource {
   getTenantEnrollmentSetting(): Promise<TenantEnrollmentSetting | null>;
   upsertTenantEnrollmentSetting(data: Omit<TenantEnrollmentSetting, "id" | "updatedAt">): Promise<TenantEnrollmentSetting>;
   deleteTenantEnrollmentSetting(): Promise<void>;
+
+  // Tenant Quiz Policy (テナント単位のテスト任意化設定)
+  getTenantQuizPolicy(): Promise<TenantQuizPolicy | null>;
+  upsertTenantQuizPolicy(data: Omit<TenantQuizPolicy, "id" | "updatedAt">): Promise<TenantQuizPolicy>;
 }
 
 /**

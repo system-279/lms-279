@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-18
+updated: 2026-08-19
 ---
 
 ## 現在のミッション
@@ -22,4 +22,4 @@ updated: 2026-08-18
 - [ ] Stage 6: ADR-040新規+ADR-019/027/036/020改訂+ドキュメント更新+既存重複synthetic行の整理スクリプト
 
 ## 🔄 中断点（in-flight）
-なし（Stage 1は完了・マージ済み、Stage 2は未着手のため部分着手中のタスクなし）
+Stage 2 実装完了・ローカル feature ブランチ `feat/quiz-optional-stage2-tenant-policy`（commit `3f071f7`）にコミット済み、**未 push・未 PR**。plan mode 承認済み計画（`~/.claude/plans/imperative-bubbling-dijkstra.md`）に基づき実装、Codex plan review（MCP, effort=high）でセカンドオピニオン取得済み、`codex review --base main`（effort=medium）で findings 0 件。新規テスト27件（API 20 + UIコンポーネント7）含め lint/type-check/test 全ワークスペースPASS。次アクション: push → PR作成 → 決裁者へのPRマージ認可依頼（番号単位）。AC-4は当初想定のPlaywright実機ウォークスルーが `/super/*` のFirebase実認証ゲートにより不可能と判明したため、コンポーネントテストで代替した（詳細は計画ファイル参照）。
