@@ -60,6 +60,9 @@ export function SessionRulesNotice({ session, quizSkipEnabled }: SessionRulesNot
         <li>
           入室から{durationLabel}以内にテストに合格してください。超過すると強制退室となり、動画視聴・テスト回答がリセットされます（最初からやり直しです）
         </li>
+        <li>
+          テストの受験には有効なレッスンセッションが必要です。セッションが切れている場合は、動画を再生し直してから受験してください
+        </li>
       </ul>
       {session && (
         <p className="font-medium text-foreground">

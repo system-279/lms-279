@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import supertest from "supertest";
 import { createTestApp } from "../helpers/create-app.js";
+import { createActiveSessionViaHttp } from "../helpers/create-active-session.js";
 import type { InMemoryDataSource } from "../../datasource/in-memory.js";
 
 const testQuestions = [
@@ -166,6 +167,8 @@ describe("Enrollment Access Control (integration)", () => {
   describe("POST /quizzes/:quizId/attempts", () => {
     it("期限内 → 201 attempt 作成", async () => {
       await setEnrollment(FUTURE, FUTURE);
+      // テスト任意化 Stage 5(ケースD厳格化): 有効セッションが必須のため事前に開始する
+      await createActiveSessionViaHttp(studentRequest, { lessonId, videoId });
       const res = await studentRequest.post(`/quizzes/${quizId}/attempts`);
       expect(res.status).toBe(201);
       expect(res.body.attempt).toBeDefined();
@@ -183,6 +186,8 @@ describe("Enrollment Access Control (integration)", () => {
     it("期限切れ → 403 quiz_access_expired（提出時の期限跨ぎ）", async () => {
       // 1. 期限内で attempt 作成
       await setEnrollment(FUTURE, FUTURE);
+      // テスト任意化 Stage 5(ケースD厳格化): 有効セッションが必須のため事前に開始する
+      await createActiveSessionViaHttp(studentRequest, { lessonId, videoId });
       const createRes = await studentRequest.post(`/quizzes/${quizId}/attempts`);
       expect(createRes.status).toBe(201);
       const attemptId = createRes.body.attempt.id;

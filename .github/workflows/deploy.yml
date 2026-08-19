@@ -109,7 +109,11 @@ jobs:
           # (web-3zcica5euq-an.a.run.app) と新形式 (web-1034821634012.asia-northeast1.run.app)
           # の 2 種類の URL を並列提供している。どちらの origin からアクセスされても
           # CORS preflight が通るよう両方を許可する (2026-05-23 Phase 8 cutover で発覚)。
-          ENV_VARS="^|^NODE_ENV=production|DEMO_ENABLED=true|AUTH_MODE=firebase|CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,https://web-1034821634012.asia-northeast1.run.app|GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net|SESSION_DURATION_MS=10800000|GCS_RESOURCE_BUCKET=lms-279-resources|DXCOLLEGE_DISPATCH_SUBJECT=system@279279.net|DXCOLLEGE_SENDER_EMAIL=dxcollege@279279.net"
+          # QUIZ_REQUIRE_ACTIVE_SESSION=false: テスト任意化 Stage 5(ケースD厳格化) の
+          # 2段階ロールアウト。コード側デフォルトは true (有効セッション必須) だが、
+          # 本番投入は挙動不変のまま先行させ (=false)、監視後に別PRで true へ切替える
+          # (単独リリース必須、Stage 3/4 と同一リリースにしない設計判断)。
+          ENV_VARS="^|^NODE_ENV=production|DEMO_ENABLED=true|AUTH_MODE=firebase|CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,https://web-1034821634012.asia-northeast1.run.app|GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net|SESSION_DURATION_MS=10800000|GCS_RESOURCE_BUCKET=lms-279-resources|DXCOLLEGE_DISPATCH_SUBJECT=system@279279.net|DXCOLLEGE_SENDER_EMAIL=dxcollege@279279.net|QUIZ_REQUIRE_ACTIVE_SESSION=false"
           if [ -n "${{ secrets.SUPER_ADMIN_EMAILS }}" ]; then
             ENV_VARS="${ENV_VARS}|SUPER_ADMIN_EMAILS=${{ secrets.SUPER_ADMIN_EMAILS }}"
           fi

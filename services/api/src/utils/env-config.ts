@@ -1,5 +1,22 @@
 import { logger } from "./logger.js";
 
+export function parseBooleanEnv(
+  raw: string | undefined,
+  defaultValue: boolean,
+  envName: string
+): boolean {
+  if (raw === undefined || raw.trim() === "") return defaultValue;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  logger.error("Invalid env boolean, falling back to default", {
+    envName,
+    rawValue: raw,
+    defaultValue,
+    errorId: "ENV_BOOLEAN_INVALID",
+  });
+  return defaultValue;
+}
+
 export function parsePositiveDurationMs(
   raw: string | undefined,
   defaultMs: number,

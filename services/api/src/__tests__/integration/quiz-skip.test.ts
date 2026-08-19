@@ -15,6 +15,7 @@ import cors from "cors";
 import { InMemoryDataSource } from "../../datasource/in-memory.js";
 import { createSharedRouter } from "../../routes/shared/index.js";
 import { logger } from "../../utils/logger.js";
+import { createActiveSessionViaHttp } from "../helpers/create-active-session.js";
 
 const testQuestions = [
   {
@@ -274,6 +275,8 @@ describe("テスト任意化 Stage 3: POST /quizzes/:quizId/skip", () => {
   it("既に合格済みなら409 quiz_already_passed", async () => {
     await enableSkipPolicy();
     await completeVideo();
+    // テスト任意化 Stage 5(ケースD厳格化): 有効セッションが必須のため事前に開始する
+    await createActiveSessionViaHttp(studentRequest, { lessonId, videoId });
 
     const attemptRes = await studentRequest.post(`/quizzes/${quizId}/attempts`).send({});
     const attemptId = attemptRes.body.attempt.id;
@@ -290,6 +293,8 @@ describe("テスト任意化 Stage 3: POST /quizzes/:quizId/skip", () => {
   it("in_progress attemptがあれば409 attempt_in_progress", async () => {
     await enableSkipPolicy();
     await completeVideo();
+    // テスト任意化 Stage 5(ケースD厳格化): 有効セッションが必須のため事前に開始する
+    await createActiveSessionViaHttp(studentRequest, { lessonId, videoId });
 
     await studentRequest.post(`/quizzes/${quizId}/attempts`).send({});
 
@@ -360,6 +365,11 @@ describe("テスト任意化 Stage 3: POST /quizzes/:quizId/skip", () => {
 
     const skipRes = await studentRequest.post(`/quizzes/${quizId}/skip`).send({});
     expect(skipRes.status).toBe(200);
+
+    // テスト任意化 Stage 5(ケースD厳格化): スキップ後に残るセッションは completed/synthetic の
+    // いずれも active ではないため、受験には動画を再生してセッションを再開する必要がある
+    // （動画を見直せば受験可能＝ケースD厳格化の趣旨と整合）
+    await createActiveSessionViaHttp(studentRequest, { lessonId, videoId });
 
     const attemptRes = await studentRequest.post(`/quizzes/${quizId}/attempts`).send({});
     expect(attemptRes.status).toBe(201);

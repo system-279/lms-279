@@ -112,6 +112,13 @@ describe("SessionRulesNotice", () => {
     ).toBeInTheDocument();
   });
 
+  it("テスト任意化 Stage 5(ケースD厳格化): 有効セッション必須の注意書きが表示される", () => {
+    render(<SessionRulesNotice session={null} />);
+    expect(
+      screen.getByText(/テストの受験には有効なレッスンセッションが必要です/)
+    ).toBeInTheDocument();
+  });
+
   it("quizSkipEnabled=trueではスキップ経路を含む文言に差し替わる", () => {
     render(<SessionRulesNotice session={null} quizSkipEnabled={true} />);
     expect(

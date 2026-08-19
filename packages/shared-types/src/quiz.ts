@@ -19,6 +19,10 @@ export interface QuizByLessonResponse {
   quizSkipped: boolean;
   /** テナントがスキップ者への資料PDFダウンロードを許可しているか。Stage 3のUIでは文言に使わない(Stage 4で確定表示に使用予定) */
   pdfDownloadAllowedForSkipped: boolean;
+  /** テスト任意化 Stage 5(ケースD厳格化): 既に合格済みのため再受験不可か */
+  retakeBlocked: boolean;
+  /** テスト任意化 Stage 5(ケースD厳格化): QUIZ_REQUIRE_ACTIVE_SESSION=true かつ動画ありレッスンで、受験に有効なレッスンセッションが必要か */
+  sessionRequired: boolean;
 }
 
 // ============================================================

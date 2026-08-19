@@ -149,6 +149,8 @@ function QuizSection({
   // テスト任意化 Stage 3
   const [skipAvailable, setSkipAvailable] = useState(false);
   const [quizSkipped, setQuizSkipped] = useState(false);
+  // テスト任意化 Stage 5(ケースD厳格化)
+  const [retakeBlocked, setRetakeBlocked] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const answersRef = useRef(answers);
   answersRef.current = answers;
@@ -170,6 +172,7 @@ function QuizSection({
       // API ロールバック等で旧レスポンス形状(フィールド欠損)になった場合も例外にしない
       setSkipAvailable(data.skipAvailable ?? false);
       setQuizSkipped(data.quizSkipped ?? false);
+      setRetakeBlocked(data.retakeBlocked ?? false);
     } catch (e) {
       setQuizError(e instanceof Error ? e.message : "テスト情報の取得に失敗しました");
     } finally {
@@ -237,6 +240,13 @@ function QuizSection({
     } catch (e) {
       if (e instanceof ApiError && (e.code === "quiz_access_expired" || e.code === "invalid_deadline_data")) {
         setQuizAccessExpired(true);
+      } else if (e instanceof ApiError && e.code === "session_required") {
+        // テスト任意化 Stage 5(ケースD厳格化): 有効セッションが必要
+        setQuizError("動画を再生してレッスンセッションを開始してから受験してください");
+      } else if (e instanceof ApiError && e.code === "quiz_already_passed") {
+        // テスト任意化 Stage 5(ケースD厳格化): 合格済みのため再受験不可
+        setRetakeBlocked(true);
+        setQuizError("既に合格しているため再受験できません");
       } else {
         setQuizError(e instanceof Error ? e.message : "テストの開始に失敗しました");
       }
@@ -289,7 +299,20 @@ function QuizSection({
       // 合格状態は資料PDFダウンロード可否 (親が保持) にも影響するため親へ再取得を促す
       onQuizStatusChanged?.();
     } catch (e) {
-      setQuizError(e instanceof Error ? e.message : "テストの提出に失敗しました");
+      if (e instanceof ApiError && e.code === "session_required") {
+        // テスト任意化 Stage 5(ケースD厳格化): 提出直前にセッションが失効し、
+        // 提出中の attempt は timed_out 化されている。再度「提出する」を押しても
+        // attempt_not_in_progress になるだけなのでデッドエンドを避けて idle へ戻す。
+        setQuizState("idle");
+        setActiveAttempt(null);
+        setAnswers({});
+        setResult(null);
+        setRemainingSec(null);
+        setQuizError("セッションが終了したため提出できませんでした。動画を再生してレッスンセッションを開始してから受験してください");
+        await fetchQuiz();
+      } else {
+        setQuizError(e instanceof Error ? e.message : "テストの提出に失敗しました");
+      }
     } finally {
       setLoadingSubmit(false);
     }
@@ -368,7 +391,12 @@ function QuizSection({
           <p className="text-sm text-destructive">{quizError}</p>
         )}
 
-        {!quizAccessExpired && remainingAttempts > 0 ? (
+        {/* テスト任意化 Stage 5(ケースD厳格化): 合格済みなら再受験不可 */}
+        {retakeBlocked ? (
+          <p className="text-sm text-muted-foreground">
+            既に合格しているため再受験はできません。
+          </p>
+        ) : !quizAccessExpired && remainingAttempts > 0 ? (
           <button
             onClick={handleStart}
             disabled={loadingStart}
@@ -671,7 +699,12 @@ function QuizSection({
             <p className="text-sm text-destructive">{quizError}</p>
           )}
           <div />
-          {remainingAttempts > 0 ? (
+          {/* テスト任意化 Stage 5(ケースD厳格化): 合格済みなら再受験不可 */}
+          {retakeBlocked ? (
+            <span className="text-sm text-muted-foreground">
+              既に合格しているため再受験はできません
+            </span>
+          ) : remainingAttempts > 0 ? (
             <button
               onClick={handleRetry}
               className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-secondary"

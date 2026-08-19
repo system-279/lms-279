@@ -105,7 +105,7 @@
   | A | 不合格 + セッション内（time_limit 未到達）+ maxAttempts 未到達 | セッション継続 | ✅ 即時再受験 | `quiz-attempts.ts` の合格/上限到達 fall-through |
   | B | `reason=time_limit` + `sessionVideoCompleted=true` | `forceExitSession` でリセット skip、in_progress attempt のみ `timed_out` 化 | ✅ 新セッションでテスト再受験 | `lesson-session.ts#forceExitSession`（PR #134 + Issue #422） |
   | C | `reason=browser_close`（abandoned） | リセットせず、in_progress attempt のみ `timed_out` 化 | ✅ 新セッションで再受験 | `lesson-session.ts#abandonSession`（Issue #422） |
-  | D | セッション未作成（後方互換） | `activeSession=null` でセッション制約スキップ | ✅ 受講期間内なら受験可 | `quiz-attempts.ts` PATCH ハンドラ（コメント明示） |
+  | D | セッション未作成（後方互換） | `activeSession=null` でセッション制約スキップ（**テスト任意化 Stage 5 で厳格化、`QUIZ_REQUIRE_ACTIVE_SESSION`（default: true）で切替可。true では本ケース自体が発生しない**） | ✅ 受講期間内なら受験可（`=false` 時のみ） | `quiz-attempts.ts` PATCH ハンドラ（コメント明示） |
   | E | `reason=time_limit` + `sessionVideoCompleted=false` | `resetLessonDataForUser` で全リセット（**2026-05-21 改訂で永続 `isComplete=false` 限定に変更**） | ❌ 動画から見直し | `lesson-session.ts#forceExitSession` reset 分岐 |
   | F | `reason=max_attempts_failed`（`maxAttempts > 0 && attemptNumber >= maxAttempts`） | 同上、全リセット | ❌ 動画から見直し（本番 maxAttempts=0 では発火しない） | `quiz-attempts.ts` の max_attempts_failed 分岐 |
 

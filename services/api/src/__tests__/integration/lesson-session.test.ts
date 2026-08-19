@@ -8,6 +8,7 @@ import {
   completeSession,
   validateSessionDeadline,
   handleStaleSession,
+  resolveActiveSessionForQuiz,
 } from "../../services/lesson-session.js";
 
 describe("lesson-session service", () => {
@@ -685,6 +686,45 @@ describe("lesson-session service", () => {
       };
 
       expect(validateSessionDeadline(session)).toBe(false);
+    });
+  });
+
+  describe("resolveActiveSessionForQuiz", () => {
+    it("returns kind=none when no active session exists", async () => {
+      const { lesson } = await setupLesson();
+      const result = await resolveActiveSessionForQuiz(ds, "user1", lesson.id);
+      expect(result.kind).toBe("none");
+    });
+
+    it("returns kind=active when session is active and within deadline", async () => {
+      const { lesson, video } = await setupLesson();
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+      const result = await resolveActiveSessionForQuiz(ds, "user1", lesson.id);
+      expect(result.kind).toBe("active");
+      if (result.kind === "active") {
+        expect(result.session.id).toBe(session.id);
+      }
+    });
+
+    it("returns kind=expired when session is active but past deadline", async () => {
+      const { lesson, video } = await setupLesson();
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+      await ds.updateLessonSession(session.id, {
+        deadlineAt: new Date(Date.now() - 1000).toISOString(),
+      });
+      const result = await resolveActiveSessionForQuiz(ds, "user1", lesson.id);
+      expect(result.kind).toBe("expired");
+      if (result.kind === "expired") {
+        expect(result.session.id).toBe(session.id);
+      }
+    });
+
+    it("returns kind=none after session is completed", async () => {
+      const { lesson, video } = await setupLesson();
+      const session = await createSession(ds, "user1", lesson.id, lesson.courseId, video.id, "token-1");
+      await completeSession(ds, session.id, "attempt-1");
+      const result = await resolveActiveSessionForQuiz(ds, "user1", lesson.id);
+      expect(result.kind).toBe("none");
     });
   });
 
