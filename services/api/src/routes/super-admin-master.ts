@@ -68,6 +68,7 @@ function mapLessonResourceError(res: Response, err: unknown): boolean {
     file_too_large: 400,
     lesson_not_found: 404,
     quiz_not_passed: 403,
+    pdf_not_allowed_for_skipped: 403,
     access_expired: 403,
     resource_not_found: 404,
     gcs_unavailable: 503,

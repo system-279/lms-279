@@ -5,13 +5,17 @@ import { Button } from "../ui/button";
 import type {
   LessonResource,
   LessonPdfDownloadResponse,
+  PdfDownloadEligibility,
 } from "@lms-279/shared-types";
 
 interface LessonPdfButtonProps {
   /** バックエンドから受け取った PDF メタ。未添付時は undefined。 */
   resource: LessonResource | undefined;
-  /** 受講者の合格状態。当該レッスンの user_progress.quizPassed。 */
-  quizPassed: boolean;
+  /**
+   * ダウンロード可否（サーバー権威、テスト任意化 Stage 4）。
+   * FE では再判定しない。GET /lessons/:lessonId の pdfDownloadEligibility をそのまま渡す。
+   */
+  downloadEligibility: PdfDownloadEligibility;
   /** 受講期間切れフラグ (videoAccessUntil 経過時)。 */
   videoAccessExpired?: boolean;
   /**
@@ -24,15 +28,16 @@ interface LessonPdfButtonProps {
 /**
  * 講座資料スライド PDF のダウンロードボタン。
  *
- * 表示ルール (ADR-036 / docs/specs/2026-05-17-course-pdf-download-design.md):
+ * 表示ルール (ADR-036 / docs/specs/2026-05-17-course-pdf-download-design.md、Stage 4 で3状態化):
  * - resource undefined: 何も表示しない (PDF 未添付レッスン)
  * - videoAccessExpired: 何も表示しない (受講期間終了後)
- * - quizPassed=false: disabled + 説明テキスト ("テスト合格後にダウンロード可能")
- * - quizPassed=true: enabled、クリックで署名 URL を取得し新タブで開く
+ * - downloadEligibility="needs_quiz_pass": disabled + 説明テキスト ("テスト合格後にダウンロード可能")
+ * - downloadEligibility="blocked_by_skip": disabled + 説明テキスト (スキップ者向け、テナント許可なし)
+ * - downloadEligibility="allowed": enabled、クリックで署名 URL を取得し新タブで開く
  */
 export function LessonPdfButton({
   resource,
-  quizPassed,
+  downloadEligibility,
   videoAccessExpired,
   fetchDownloadUrl,
 }: LessonPdfButtonProps): React.ReactElement | null {
@@ -59,6 +64,7 @@ export function LessonPdfButton({
   };
 
   const sizeMb = (resource.pdfSizeBytes / (1024 * 1024)).toFixed(1);
+  const isAllowed = downloadEligibility === "allowed";
 
   return (
     <div className="space-y-2 rounded-lg border bg-card p-4">
@@ -71,17 +77,22 @@ export function LessonPdfButton({
         </div>
         <Button
           type="button"
-          variant={quizPassed ? "default" : "outline"}
-          disabled={!quizPassed || loading}
+          variant={isAllowed ? "default" : "outline"}
+          disabled={!isAllowed || loading}
           onClick={onClick}
           aria-label="講座資料 PDF をダウンロード"
         >
           {loading ? "取得中..." : "資料をダウンロード"}
         </Button>
       </div>
-      {!quizPassed && (
+      {downloadEligibility === "needs_quiz_pass" && (
         <p className="text-xs text-muted-foreground">
           テスト合格後にダウンロードできます。
+        </p>
+      )}
+      {downloadEligibility === "blocked_by_skip" && (
+        <p className="text-xs text-muted-foreground">
+          テストをスキップしたため、このレッスンの資料はダウンロードできません。
         </p>
       )}
       {error && <p className="text-xs text-destructive">{error}</p>}

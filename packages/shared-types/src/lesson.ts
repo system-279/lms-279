@@ -14,6 +14,34 @@ export interface LessonResource {
 }
 
 /**
+ * 講座資料PDFのダウンロード可否（テスト任意化 Stage 4）。
+ * - allowed: ダウンロード可能（合格 OR (スキップ済み AND テナントが許可)）
+ * - needs_quiz_pass: テスト未受験・未合格（かつ未スキップ）
+ * - blocked_by_skip: スキップ済みだが、このテナントではスキップ者への PDF ダウンロードを許可していない
+ */
+export type PdfDownloadEligibility = "allowed" | "needs_quiz_pass" | "blocked_by_skip";
+
+/**
+ * GET /:tenant/lessons/:lessonId のレスポンス（受講者向け）。
+ */
+export interface StudentLessonDetailResponse {
+  lesson: {
+    id: string;
+    courseId: string;
+    title: string;
+    order: number;
+    hasVideo: boolean;
+    hasQuiz: boolean;
+    videoUnlocksPrior: boolean;
+    createdAt: string;
+    updatedAt: string;
+  };
+  resource?: LessonResource;
+  quizSkipEnabled: boolean;
+  pdfDownloadEligibility: PdfDownloadEligibility;
+}
+
+/**
  * GET /:tenant/lessons/:lessonId/pdf-download のレスポンス。
  * 短期署名 URL (15 分有効) を含む。
  */

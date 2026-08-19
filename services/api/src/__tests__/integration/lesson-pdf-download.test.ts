@@ -132,4 +132,59 @@ describe("Lesson PDF Download (integration)", () => {
     expect(res.status).toBe(200);
     expect(res.body.resource).toBeUndefined();
   });
+
+  it("AC-14 スキップ済み+テナントポリシー未設定 → 403 pdf_not_allowed_for_skipped", async () => {
+    await ds.upsertUserProgress(STUDENT_ID, LESSON_ID, {
+      courseId: COURSE_ID,
+      quizPassed: false,
+      quizSkipped: true,
+    });
+    const res = await request.get(`/lessons/${LESSON_ID}/pdf-download`);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("pdf_not_allowed_for_skipped");
+  });
+
+  it("AC-14 スキップ済み+テナントがマスターON+サブON許可 → 200 + url", async () => {
+    await ds.upsertUserProgress(STUDENT_ID, LESSON_ID, {
+      courseId: COURSE_ID,
+      quizPassed: false,
+      quizSkipped: true,
+    });
+    await ds.upsertTenantQuizPolicy({
+      quizSkipEnabled: true,
+      pdfDownloadAllowedForSkipped: true,
+      updatedBy: "admin@test.com",
+    });
+    const res = await request.get(`/lessons/${LESSON_ID}/pdf-download`);
+    expect(res.status).toBe(200);
+    expect(res.body.url).toBe("https://signed.example.com/foo");
+  });
+
+  it("GET /lessons/:lessonId: pdfDownloadEligibility が3状態を正しく返す", async () => {
+    // 未受験 → needs_quiz_pass (beforeEach の quizPassed=true を上書き)
+    await ds.upsertUserProgress(STUDENT_ID, LESSON_ID, {
+      courseId: COURSE_ID,
+      quizPassed: false,
+    });
+    const resNeedsQuizPass = await request.get(`/lessons/${LESSON_ID}`);
+    expect(resNeedsQuizPass.body.pdfDownloadEligibility).toBe("needs_quiz_pass");
+
+    // スキップ済み+ポリシー未設定 → blocked_by_skip
+    await ds.upsertUserProgress(STUDENT_ID, LESSON_ID, {
+      courseId: COURSE_ID,
+      quizPassed: false,
+      quizSkipped: true,
+    });
+    const resBlocked = await request.get(`/lessons/${LESSON_ID}`);
+    expect(resBlocked.body.pdfDownloadEligibility).toBe("blocked_by_skip");
+
+    // スキップ済み+マスターON+サブON → allowed
+    await ds.upsertTenantQuizPolicy({
+      quizSkipEnabled: true,
+      pdfDownloadAllowedForSkipped: true,
+      updatedBy: "admin@test.com",
+    });
+    const resAllowed = await request.get(`/lessons/${LESSON_ID}`);
+    expect(resAllowed.body.pdfDownloadEligibility).toBe("allowed");
+  });
 });

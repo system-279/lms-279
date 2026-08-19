@@ -8,6 +8,7 @@ import { Storage } from "@google-cloud/storage";
 import { requireAdmin, requireUser } from "../../middleware/auth.js";
 import {
   LessonResourceError,
+  evaluatePdfDownloadEligibility,
   generatePdfDownloadUrl,
   toLessonResource,
 } from "../../services/lesson-resource.js";
@@ -24,6 +25,7 @@ function mapLessonResourceError(res: Response, err: unknown): boolean {
     file_too_large: 400,
     lesson_not_found: 404,
     quiz_not_passed: 403,
+    pdf_not_allowed_for_skipped: 403,
     access_expired: 403,
     resource_not_found: 404,
     gcs_unavailable: 503,
@@ -330,6 +332,11 @@ router.delete(
  */
 router.get("/lessons/:lessonId", requireUser, async (req: Request, res: Response) => {
   const ds = req.dataSource!;
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ error: "unauthenticated", message: "認証されていません" });
+    return;
+  }
   const lessonId = req.params.lessonId as string;
 
   const lesson = await ds.getLessonById(lessonId);
@@ -343,6 +350,13 @@ router.get("/lessons/:lessonId", requireUser, async (req: Request, res: Response
   // (受講者個別の合成値)ではなく、テナント単位の生の quizSkipEnabled をここで返す。
   const tenantQuizPolicy = await ds.getTenantQuizPolicy();
   const { quizSkipEnabled } = resolveTenantQuizPolicy(tenantQuizPolicy);
+
+  // テスト任意化 Stage 4: PDF ダウンロードボタンの3状態表示用（サーバー権威、FE では再判定しない）
+  const progress = await ds.getUserProgress(userId, lessonId);
+  const pdfDownloadEligibility = evaluatePdfDownloadEligibility(
+    progress ? { quizPassed: progress.quizPassed === true, quizSkipped: progress.quizSkipped === true } : null,
+    tenantQuizPolicy,
+  );
 
   res.json({
     lesson: {
@@ -358,6 +372,7 @@ router.get("/lessons/:lessonId", requireUser, async (req: Request, res: Response
     },
     resource: toLessonResource(lesson),
     quizSkipEnabled,
+    pdfDownloadEligibility,
   });
 });
 

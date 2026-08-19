@@ -11,14 +11,16 @@
 import { randomUUID } from "node:crypto";
 import type { Storage } from "@google-cloud/storage";
 import type { DataSource } from "../datasource/interface.js";
-import type { Lesson } from "../types/entities.js";
+import type { Lesson, TenantQuizPolicy } from "../types/entities.js";
 import type {
   LessonResource,
   LessonPdfDownloadResponse,
   LessonPdfUploadUrlResponse,
+  PdfDownloadEligibility,
 } from "@lms-279/shared-types";
 import { logger } from "../utils/logger.js";
 import { isTransientError, retryOnTransient } from "../utils/transient-error.js";
+import { canDownloadPdfAfterQuizSkip } from "./quiz-policy.js";
 
 export const PDF_MIME_TYPE = "application/pdf";
 export const MAX_PDF_SIZE_BYTES = 300 * 1024 * 1024; // 300 MB
@@ -32,6 +34,7 @@ export class LessonResourceError extends Error {
       | "file_too_large"
       | "lesson_not_found"
       | "quiz_not_passed"
+      | "pdf_not_allowed_for_skipped"
       | "access_expired"
       | "resource_not_found"
       | "gcs_unavailable"
@@ -41,6 +44,19 @@ export class LessonResourceError extends Error {
     super(message);
     this.name = "LessonResourceError";
   }
+}
+
+/**
+ * 講座資料PDFのダウンロード可否を判定する（Stage 4、テスト任意化対応）。
+ * quizPassed が最優先。それ以外はスキップ状態とテナントポリシーで判定する。
+ */
+export function evaluatePdfDownloadEligibility(
+  progress: { quizPassed: boolean; quizSkipped: boolean } | null,
+  policy: TenantQuizPolicy | null,
+): PdfDownloadEligibility {
+  if (progress?.quizPassed === true) return "allowed";
+  if (progress?.quizSkipped !== true) return "needs_quiz_pass";
+  return canDownloadPdfAfterQuizSkip(policy) ? "allowed" : "blocked_by_skip";
 }
 
 const RESOURCE_BUCKET = (): string =>
@@ -262,8 +278,8 @@ export async function deletePdfResource(
  * 受講者向け DL URL を生成する。認可チェックを内包する。
  *
  * テナント別の DataSource を渡すこと。
- * 認可順序: lesson 存在確認 → quizPassed 確認 → videoAccessUntil 確認 → pdf 添付確認。
- * すべて pass したら 15 分有効の署名 URL を返す。
+ * 認可順序: lesson 存在確認 → PDF ダウンロード可否判定（合格 OR (スキップ AND テナント許可)）
+ * → videoAccessUntil 確認 → pdf 添付確認。すべて pass したら 15 分有効の署名 URL を返す。
  *
  * 列挙攻撃対策: lesson 不在は 404、それ以外は具体的なコードを返す (上位ルートが整形)。
  */
@@ -288,8 +304,23 @@ export async function generatePdfDownloadUrl(
   }
 
   const progress = await ds.getUserProgress(userId, lessonId);
-  if (!progress || progress.quizPassed !== true) {
+  const hasPassed = progress?.quizPassed === true;
+  const hasSkipped = progress?.quizSkipped === true;
+  // 合格済み/未受験の場合はテナントポリシーの評価が不要なため、スキップ済みの場合のみ読みに行く
+  // (Firestore 読み取りコスト削減)
+  const policy = !hasPassed && hasSkipped ? await ds.getTenantQuizPolicy() : null;
+  const eligibility = evaluatePdfDownloadEligibility(
+    progress ? { quizPassed: hasPassed, quizSkipped: hasSkipped } : null,
+    policy,
+  );
+  if (eligibility === "needs_quiz_pass") {
     throw new LessonResourceError("quiz_not_passed", "テスト合格後にダウンロード可能です");
+  }
+  if (eligibility === "blocked_by_skip") {
+    throw new LessonResourceError(
+      "pdf_not_allowed_for_skipped",
+      "テストをスキップした場合、このテナントでは資料ダウンロードが許可されていません",
+    );
   }
 
   const setting = await ds.getTenantEnrollmentSetting();

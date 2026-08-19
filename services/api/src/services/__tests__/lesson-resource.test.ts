@@ -7,10 +7,12 @@ import {
   PDF_MIME_TYPE,
   confirmPdfUpload,
   deletePdfResource,
+  evaluatePdfDownloadEligibility,
   generatePdfDownloadUrl,
   generatePdfUploadUrl,
   toLessonResource,
 } from "../lesson-resource.js";
+import type { TenantQuizPolicy } from "../../types/entities.js";
 
 // -----------------------------------------------
 // vi.mock 用の Storage ファクトリ
@@ -426,6 +428,130 @@ describe("generatePdfDownloadUrl", () => {
     await expect(
       generatePdfDownloadUrl(ds, storage, "demo-lesson-2", USER_ID),
     ).rejects.toMatchObject({ code: "resource_not_found" });
+  });
+
+  it("正常系: 合格済みはテナントポリシー未設定でも成功する (回帰、合格が優先)", async () => {
+    // beforeEach で quizPassed=true 済み、テナントポリシーは未設定のまま
+    const { storage } = buildMockStorage();
+    const result = await generatePdfDownloadUrl(ds, storage, MASTER_LESSON_ID, USER_ID);
+    expect(result.url).toBe("https://signed.example.com/foo");
+  });
+
+  it("pdf_not_allowed_for_skipped: スキップ済み + テナントポリシー未設定 → エラー", async () => {
+    await ds.upsertUserProgress(USER_ID, MASTER_LESSON_ID, {
+      courseId: COURSE_ID,
+      quizPassed: false,
+      quizSkipped: true,
+    });
+    const { storage } = buildMockStorage();
+    await expect(
+      generatePdfDownloadUrl(ds, storage, MASTER_LESSON_ID, USER_ID),
+    ).rejects.toMatchObject({ code: "pdf_not_allowed_for_skipped" });
+  });
+
+  it("pdf_not_allowed_for_skipped: スキップ済み + マスターOFF(quizSkipEnabled=false)+サブON → エラー", async () => {
+    await ds.upsertUserProgress(USER_ID, MASTER_LESSON_ID, {
+      courseId: COURSE_ID,
+      quizPassed: false,
+      quizSkipped: true,
+    });
+    await ds.upsertTenantQuizPolicy({
+      quizSkipEnabled: false,
+      pdfDownloadAllowedForSkipped: true,
+      updatedBy: "admin@example.com",
+    });
+    const { storage } = buildMockStorage();
+    await expect(
+      generatePdfDownloadUrl(ds, storage, MASTER_LESSON_ID, USER_ID),
+    ).rejects.toMatchObject({ code: "pdf_not_allowed_for_skipped" });
+  });
+
+  it("pdf_not_allowed_for_skipped: スキップ済み + マスターON+サブOFF(pdfDownloadAllowedForSkipped=false) → エラー", async () => {
+    await ds.upsertUserProgress(USER_ID, MASTER_LESSON_ID, {
+      courseId: COURSE_ID,
+      quizPassed: false,
+      quizSkipped: true,
+    });
+    await ds.upsertTenantQuizPolicy({
+      quizSkipEnabled: true,
+      pdfDownloadAllowedForSkipped: false,
+      updatedBy: "admin@example.com",
+    });
+    const { storage } = buildMockStorage();
+    await expect(
+      generatePdfDownloadUrl(ds, storage, MASTER_LESSON_ID, USER_ID),
+    ).rejects.toMatchObject({ code: "pdf_not_allowed_for_skipped" });
+  });
+
+  it("正常系: スキップ済み + マスターON+サブON → 署名URLを返す", async () => {
+    await ds.upsertUserProgress(USER_ID, MASTER_LESSON_ID, {
+      courseId: COURSE_ID,
+      quizPassed: false,
+      quizSkipped: true,
+    });
+    await ds.upsertTenantQuizPolicy({
+      quizSkipEnabled: true,
+      pdfDownloadAllowedForSkipped: true,
+      updatedBy: "admin@example.com",
+    });
+    const { storage } = buildMockStorage();
+    const result = await generatePdfDownloadUrl(ds, storage, MASTER_LESSON_ID, USER_ID);
+    expect(result.url).toBe("https://signed.example.com/foo");
+  });
+});
+
+describe("evaluatePdfDownloadEligibility", () => {
+  function policyWith(quizSkipEnabled: boolean, pdfDownloadAllowedForSkipped: boolean): TenantQuizPolicy {
+    return {
+      id: "_config",
+      quizSkipEnabled,
+      pdfDownloadAllowedForSkipped,
+      updatedBy: "admin@example.com",
+      updatedAt: "2026-08-18T00:00:00.000Z",
+    };
+  }
+
+  it("progress が null のとき needs_quiz_pass を返す", () => {
+    expect(evaluatePdfDownloadEligibility(null, null)).toBe("needs_quiz_pass");
+  });
+
+  it("quizPassed=true のとき、ポリシーに関係なく allowed を返す", () => {
+    expect(
+      evaluatePdfDownloadEligibility({ quizPassed: true, quizSkipped: false }, null),
+    ).toBe("allowed");
+    expect(
+      evaluatePdfDownloadEligibility({ quizPassed: true, quizSkipped: true }, policyWith(false, false)),
+    ).toBe("allowed");
+  });
+
+  it("quizPassed=false かつ quizSkipped=false のとき needs_quiz_pass を返す", () => {
+    expect(
+      evaluatePdfDownloadEligibility({ quizPassed: false, quizSkipped: false }, policyWith(true, true)),
+    ).toBe("needs_quiz_pass");
+  });
+
+  it("quizSkipped=true だがポリシーが null のとき blocked_by_skip を返す", () => {
+    expect(
+      evaluatePdfDownloadEligibility({ quizPassed: false, quizSkipped: true }, null),
+    ).toBe("blocked_by_skip");
+  });
+
+  it("quizSkipped=true かつ quizSkipEnabled/pdfDownloadAllowedForSkipped 双方 true のとき allowed を返す", () => {
+    expect(
+      evaluatePdfDownloadEligibility({ quizPassed: false, quizSkipped: true }, policyWith(true, true)),
+    ).toBe("allowed");
+  });
+
+  it("quizSkipped=true かつ quizSkipEnabled=false のとき blocked_by_skip を返す", () => {
+    expect(
+      evaluatePdfDownloadEligibility({ quizPassed: false, quizSkipped: true }, policyWith(false, true)),
+    ).toBe("blocked_by_skip");
+  });
+
+  it("quizSkipped=true かつ pdfDownloadAllowedForSkipped=false のとき blocked_by_skip を返す", () => {
+    expect(
+      evaluatePdfDownloadEligibility({ quizPassed: false, quizSkipped: true }, policyWith(true, false)),
+    ).toBe("blocked_by_skip");
   });
 });
 
