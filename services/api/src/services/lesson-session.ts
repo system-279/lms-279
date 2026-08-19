@@ -389,7 +389,7 @@ export async function abandonSession(
 }
 
 /**
- * セッションをテスト送信で完了（退室打刻）
+ * セッションを指定の exitReason で完了（退室打刻）
  *
  * Issue #424 (Codex Medium 88): TOCTOU 縮小のため updateLessonSession 直前に status を再確認する。
  * 並行 abandonSession / forceExitSession で active でなくなっていた場合は skip (null を返す)。
@@ -397,22 +397,27 @@ export async function abandonSession(
  * 完全な atomicity (transaction レベル) は DataSource インターフェースに条件付き更新
  * (transitionLessonSessionToCompleted 等) を追加する必要があり、scope 拡大のため follow-up 候補。
  * 本実装は再確認 → 更新の間の race window を最小化する best-effort 改善。
+ *
+ * テスト任意化 Stage 3: `completeSession`（合格提出用、exitReason 固定）と
+ * `completeSessionAsQuizSkipped`（スキップ用）の共通実装として export せず内部利用する。
  */
-export async function completeSession(
+async function completeSessionWithReason(
   ds: DataSource,
   sessionId: string,
-  quizAttemptId: string
+  reason: SessionExitReason,
+  quizAttemptId: string | null
 ): Promise<LessonSession | null> {
   const current = await ds.getLessonSession(sessionId);
   if (!current) {
     throw new Error(`Session ${sessionId} not found`);
   }
   if (current.status !== "active") {
-    // 並行 abandon / forceExit で active でなくなった → 完了処理 skip
-    logger.warn("completeSession: session is no longer active, skipping", {
+    // 並行 abandon / forceExit / 別経路の完了で active でなくなった → 完了処理 skip
+    logger.warn("completeSessionWithReason: session is no longer active, skipping", {
       eventType: "complete_session_skipped_non_active",
       sessionId,
       currentStatus: current.status,
+      reason,
       quizAttemptId,
     });
     return null;
@@ -421,7 +426,7 @@ export async function completeSession(
   const updated = await ds.updateLessonSession(sessionId, {
     status: "completed",
     exitAt: new Date().toISOString(),
-    exitReason: "quiz_submitted",
+    exitReason: reason,
     quizAttemptId,
   });
   if (!updated) {
@@ -431,6 +436,37 @@ export async function completeSession(
 }
 
 /**
+ * セッションをテスト送信で完了（退室打刻）
+ */
+export async function completeSession(
+  ds: DataSource,
+  sessionId: string,
+  quizAttemptId: string
+): Promise<LessonSession | null> {
+  return completeSessionWithReason(ds, sessionId, "quiz_submitted", quizAttemptId);
+}
+
+/**
+ * テスト任意化 Stage 3: セッションをテストスキップで完了（退室打刻）。
+ *
+ * `completeSession` と異なり quizAttemptId を持たない（スキップは attempt を作らないため）。
+ * 呼び出し直前に `ds.getLessonSession` で状態を再確認する点は `completeSession` と同様、
+ * 合格提出との並行競合（同一セッションへの二重完了）も同じ quiet-pass ルールで防ぐ。
+ */
+export async function completeSessionAsQuizSkipped(
+  ds: DataSource,
+  sessionId: string
+): Promise<LessonSession | null> {
+  return completeSessionWithReason(ds, sessionId, "quiz_skipped", null);
+}
+
+/**
+ * テスト任意化 Stage 3 で新設した `createSyntheticSkippedSession`（スキップ用）とは別物。
+ * 本関数は「合格提出」時の補完 session 作成専用で、`PATCH /quiz-attempts/:attemptId` の
+ * 合格パス（activeSession=null）から引き続き呼び出される現役コード（Stage 3 では変更なし）。
+ * ケース D 厳格化（Stage 5）で activeSession=null での提出自体が塞がれた場合に
+ * 初めて非活性化・backfill スクリプト専用化を検討する。
+ *
  * Issue #533: active session なしで quiz が合格提出された場合の補完 session を作成。
  *
  * 背景: quiz-attempts.ts は後方互換のため activeSession=null でも提出を許可する設計
@@ -494,6 +530,71 @@ export async function createSyntheticCompletedSession(
     longestPauseSec: 0,
     sessionVideoCompleted: true, // 合格時点で video 完了済みと見なす (進捗ページの latest 表示で違和感ないように)
     quizAttemptId: params.quizAttemptId,
+    isSynthetic: true,
+  });
+}
+
+/**
+ * テスト任意化 Stage 3: active session なしでテストがスキップされた場合の補完 session を作成。
+ *
+ * `createSyntheticCompletedSession`（合格用、doc id は attempt 単位）とは異なり、
+ * doc id を `synthetic_skip_{userId}_{lessonId}` という (受講者, レッスン) 単位の決定的 ID にする。
+ * これにより同一受講者が同一レッスンで何度スキップ API を叩いても 1 行に固定され、
+ * 出席レポートの重複行（本ミッションが根治対象とする既存不具合と同種）を構造的に防ぐ。
+ *
+ * ADR-027 D 案と対称に、entryAt を換算値にする（exitAt = スキップ実時刻を実刻として維持し、
+ * entryAt = exitAt - videoDurationSec*1000 を「動画を見てからスキップした」換算入室時刻とする）。
+ *
+ * `createLessonSessionWithId` の冪等性（既存 doc があれば created:false で返す）により、
+ * 呼び出し元は毎回無条件に呼んでよい。
+ */
+export async function createSyntheticSkippedSession(
+  ds: DataSource,
+  params: {
+    userId: string;
+    lessonId: string;
+    courseId: string;
+    videoId: string;
+    videoDurationSec: number;
+    skippedAt: string;
+  }
+): Promise<{ session: LessonSession; created: boolean }> {
+  // video.durationSec hard guard（createSyntheticCompletedSession と同方針）
+  if (!Number.isFinite(params.videoDurationSec) || params.videoDurationSec <= 0) {
+    throw new Error(
+      `createSyntheticSkippedSession: invalid videoDurationSec=${params.videoDurationSec} for lesson ${params.lessonId}`
+    );
+  }
+  // userId/lessonId は Firestore ドキュメント ID を組み立てる決定的キーの一部になるため、
+  // パス区切り文字を含まないことを防御的に確認する（Codex plan review 指摘反映）。
+  if (params.userId.includes("/") || params.lessonId.includes("/")) {
+    throw new Error(
+      `createSyntheticSkippedSession: userId/lessonId must not contain "/" (userId=${params.userId}, lessonId=${params.lessonId})`
+    );
+  }
+
+  const id = `synthetic_skip_${params.userId}_${params.lessonId}`;
+  const skippedMs = new Date(params.skippedAt).getTime();
+  const videoDurationMs = params.videoDurationSec * 1000;
+  // 換算入室時刻（実打刻ではない、ADR-027 D 案と対称の設計）
+  const entryAt = new Date(skippedMs - videoDurationMs).toISOString();
+  const deadlineAt = new Date(skippedMs + SESSION_DURATION_MS).toISOString();
+
+  return ds.createLessonSessionWithId(id, {
+    userId: params.userId,
+    lessonId: params.lessonId,
+    courseId: params.courseId,
+    videoId: params.videoId,
+    sessionToken: `synthetic-skip-${params.userId}-${params.lessonId}`,
+    status: "completed",
+    entryAt,
+    exitAt: params.skippedAt,
+    exitReason: "quiz_skipped",
+    deadlineAt,
+    pauseStartedAt: null,
+    longestPauseSec: 0,
+    sessionVideoCompleted: true,
+    quizAttemptId: null,
     isSynthetic: true,
   });
 }

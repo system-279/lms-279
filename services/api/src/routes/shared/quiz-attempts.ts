@@ -12,8 +12,11 @@ import {
   validateSessionDeadline,
   forceExitSession,
   completeSession,
+  completeSessionAsQuizSkipped,
   createSyntheticCompletedSession,
+  createSyntheticSkippedSession,
 } from "../../services/lesson-session.js";
+import { resolveTenantQuizPolicy } from "../../services/quiz-policy.js";
 import { guardQuizAccess, checkQuizAccessSoft } from "../../services/enrollment.js";
 import { logger } from "../../utils/logger.js";
 
@@ -22,6 +25,26 @@ const router = Router();
 // ============================================================
 // ヘルパー: 動画完了ゲートチェック（ADR-019）
 // ============================================================
+
+/**
+ * レッスンに動画がある場合は視聴完了しているかを問い合わせのみ行う（副作用なし）。
+ * 動画なしレッスンは「ゲート対象外」の意味で true（完了扱い）を返す。
+ * テスト任意化 Stage 3: `checkVideoCompletionGate` と `skipAvailable` 算出の両方から共用する。
+ */
+async function isVideoCompletedOrNotRequired(
+  req: Request,
+  lessonId: string,
+  userId: string
+): Promise<boolean> {
+  const ds = req.dataSource!;
+  const video = await ds.getVideoByLessonId(lessonId);
+  if (!video) {
+    // 動画なしレッスン → ゲート対象外
+    return true;
+  }
+  const analytics = await ds.getVideoAnalytics(userId, video.id);
+  return analytics?.isComplete === true;
+}
 
 /**
  * quiz.requireVideoCompletion=true かつレッスンに動画がある場合、
@@ -34,23 +57,14 @@ async function checkVideoCompletionGate(
   lessonId: string,
   userId: string
 ): Promise<boolean> {
-  const ds = req.dataSource!;
-
-  const video = await ds.getVideoByLessonId(lessonId);
-  if (!video) {
-    // 動画なしレッスン → ゲートなし
-    return false;
-  }
-
-  const analytics = await ds.getVideoAnalytics(userId, video.id);
-  if (!analytics || !analytics.isComplete) {
+  const completed = await isVideoCompletedOrNotRequired(req, lessonId, userId);
+  if (!completed) {
     res.status(403).json({
       error: "video_not_completed",
       message: "動画の視聴を完了してからテストに挑戦してください",
     });
     return true;
   }
-
   return false;
 }
 
@@ -112,6 +126,19 @@ router.get("/quizzes/by-lesson/:lessonId", requireUser, async (req: Request, res
       submittedAt: a.submittedAt,
     }));
 
+  // テスト任意化 Stage 3: skipAvailable / quizSkipped / pdfDownloadAllowedForSkipped
+  const [tenantQuizPolicy, progress] = await Promise.all([
+    ds.getTenantQuizPolicy(),
+    ds.getUserProgress(userId, lessonId),
+  ]);
+  const { quizSkipEnabled, pdfDownloadAllowedForSkipped } = resolveTenantQuizPolicy(tenantQuizPolicy);
+  const quizSkipped = progress?.quizSkipped === true;
+  const hasPassed = progress?.quizPassed === true;
+  const hasInProgressAttempt = attempts.some((a) => a.status === "in_progress");
+  const videoCompleted = await isVideoCompletedOrNotRequired(req, lessonId, userId);
+  const skipAvailable =
+    quizSkipEnabled && !quizSkipped && !hasPassed && !hasInProgressAttempt && videoCompleted;
+
   res.json({
     quiz: {
       id: quiz.id,
@@ -125,6 +152,9 @@ router.get("/quizzes/by-lesson/:lessonId", requireUser, async (req: Request, res
     attemptSummaries,
     accessExpired,
     ...(accessExpired && { expiredReason }),
+    skipAvailable,
+    quizSkipped,
+    pdfDownloadAllowedForSkipped,
   });
 });
 
@@ -244,6 +274,168 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
       startedAt: attempt.startedAt,
       timeLimitSec: quiz.timeLimitSec,
     },
+  });
+});
+
+/**
+ * 受講者向け: テストスキップ（テスト任意化 Stage 3）
+ * POST /quizzes/:quizId/skip
+ *
+ * ゲート順序（plan mode 承認済み計画 floating-strolling-spindle.md 参照）:
+ *   quiz 存在確認(404) → 既にスキップ済みなら 200 冪等（他ゲートより前） →
+ *   ポリシー OFF(403) → 動画完了無条件(403) → 受講期限(403) →
+ *   合格済み(409) → in_progress attempt(409) → 本処理
+ *
+ * 冪等判定を他ゲートより前に置く理由: 1 回目のスキップ成功後にテナント側で
+ * ポリシーを OFF に戻したり受講期限が経過したりしても、2 回目の同一呼び出しは
+ * 常に 200 を維持する（Codex plan review Critical 指摘反映）。
+ *
+ * POST /quizzes/:quizId/attempts は変更しない。quizSkipped=true 後でも
+ * 受験開始・合格提出は意図的に許容する（quizPassed && quizSkipped の併存を許す設計）。
+ */
+router.post("/quizzes/:quizId/skip", requireUser, async (req: Request, res: Response) => {
+  const ds = req.dataSource!;
+  const userId = req.user!.id;
+  const quizId = req.params.quizId as string;
+
+  const quiz = await ds.getQuizById(quizId);
+  if (!quiz) {
+    res.status(404).json({ error: "not_found", message: "Quiz not found" });
+    return;
+  }
+
+  // 冪等判定（他ゲートより前）: 既にスキップ済みなら以降のゲート状態に関わらず 200
+  const existingProgress = await ds.getUserProgress(userId, quiz.lessonId);
+  if (existingProgress?.quizSkipped === true) {
+    res.json({
+      quizSkipped: true,
+      lessonCompleted: existingProgress.lessonCompleted,
+      sessionRecorded: true,
+    });
+    return;
+  }
+
+  // テナントポリシー確認
+  const tenantQuizPolicy = await ds.getTenantQuizPolicy();
+  const { quizSkipEnabled } = resolveTenantQuizPolicy(tenantQuizPolicy);
+  if (!quizSkipEnabled) {
+    res.status(403).json({
+      error: "quiz_skip_disabled",
+      message: "このテストはスキップできません",
+    });
+    return;
+  }
+
+  // 動画完了ゲート（requireVideoCompletion の値によらず無条件適用。設計判断 2）
+  const blocked = await checkVideoCompletionGate(req, res, quiz.lessonId, userId);
+  if (blocked) return;
+
+  // 受講期限チェック
+  const enrollBlocked = await guardQuizAccess(req, res);
+  if (enrollBlocked) return;
+
+  // 合格済みなら「スキップ」に劣化させない
+  if (existingProgress?.quizPassed === true) {
+    res.status(409).json({
+      error: "quiz_already_passed",
+      message: "既に合格しています",
+    });
+    return;
+  }
+
+  // 受験中の attempt があれば先に提出させる
+  const attempts = await ds.getQuizAttempts({ quizId, userId });
+  if (attempts.some((a) => a.status === "in_progress")) {
+    res.status(409).json({
+      error: "attempt_in_progress",
+      message: "現在進行中のテストがあります。先に提出してください",
+    });
+    return;
+  }
+
+  // 進捗確定（quizSkippedAt のタイムスタンプ責務は updateLessonProgress 内部が持つ）
+  await updateLessonProgress(ds, userId, quiz.lessonId, quiz.courseId, {
+    quizSkipped: true,
+  });
+  const updatedProgress = await ds.getUserProgress(userId, quiz.lessonId);
+  const lessonCompleted = updatedProgress?.lessonCompleted ?? false;
+
+  // 出席セッション記録（失敗しても進捗確定を優先し 200 を維持、logger.error で観測可能にする）
+  let sessionRecorded = false;
+  try {
+    const activeSession = await ds.getActiveLessonSession(userId, quiz.lessonId);
+    if (activeSession) {
+      // TOCTOU 対策: 完了直前に状態を再確認（並行合格提出/force-exit/abandon との競合防止）
+      const completed = await completeSessionAsQuizSkipped(ds, activeSession.id);
+      sessionRecorded = completed !== null;
+      if (completed === null) {
+        logger.warn("Skip session completion skipped (session no longer active, concurrent event)", {
+          eventType: "quiz_skip_session_no_longer_active",
+          userId,
+          lessonId: quiz.lessonId,
+          sessionId: activeSession.id,
+        });
+      } else {
+        logger.info("Quiz skip recorded via active session completion", {
+          eventType: "quiz_skip_recorded",
+          userId,
+          lessonId: quiz.lessonId,
+          courseId: quiz.courseId,
+          sessionId: activeSession.id,
+        });
+      }
+    } else {
+      const video = await ds.getVideoByLessonId(quiz.lessonId);
+      if (!video) {
+        // 動画なしレッスン: スキップ自体は正常系（動画視聴が元々不要なため合成 session も不要）
+        logger.info("Quiz skip recorded without session (lesson has no video)", {
+          eventType: "quiz_skip_session_video_missing",
+          userId,
+          lessonId: quiz.lessonId,
+          courseId: quiz.courseId,
+        });
+      } else {
+        const { created } = await createSyntheticSkippedSession(ds, {
+          userId,
+          lessonId: quiz.lessonId,
+          courseId: quiz.courseId,
+          videoId: video.id,
+          videoDurationSec: video.durationSec,
+          skippedAt: new Date().toISOString(),
+        });
+        sessionRecorded = true;
+        if (!created) {
+          logger.info("Synthetic skip session already exists, skipping (idempotency hit)", {
+            eventType: "quiz_skip_session_already_exists",
+            userId,
+            lessonId: quiz.lessonId,
+          });
+        } else {
+          logger.info("Quiz skip recorded via synthetic session", {
+            eventType: "quiz_skip_recorded",
+            userId,
+            lessonId: quiz.lessonId,
+            courseId: quiz.courseId,
+          });
+        }
+      }
+    }
+  } catch (err) {
+    logger.error("Failed to record skip session", {
+      eventType: "quiz_skip_session_failed",
+      userId,
+      lessonId: quiz.lessonId,
+      courseId: quiz.courseId,
+      error: err instanceof Error
+        ? { name: err.name, message: err.message, stack: err.stack }
+        : String(err),
+    });
+  }
+
+  res.json({
+    quizSkipped: true,
+    lessonCompleted,
+    sessionRecorded,
   });
 });
 

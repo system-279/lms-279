@@ -36,6 +36,7 @@ type LessonProgress = {
   lessonId: string;
   videoCompleted: boolean;
   quizPassed: boolean;
+  quizSkipped: boolean;
   lessonCompleted: boolean;
 };
 
@@ -57,7 +58,7 @@ function LessonStatusIcon({ progress }: { progress: LessonProgress | undefined }
     return <CheckCircle className="w-5 h-5 text-green-600" />;
   }
   // Has some progress but not completed
-  if (progress.videoCompleted || progress.quizPassed) {
+  if (progress.videoCompleted || progress.quizPassed || progress.quizSkipped) {
     return <Clock className="w-5 h-5 text-yellow-500" />;
   }
   return <Circle className="w-5 h-5 text-muted-foreground/40" />;
@@ -70,7 +71,7 @@ function LessonStatusText({ progress }: { progress: LessonProgress | undefined }
   if (progress.lessonCompleted) {
     return <span className="text-green-600 text-sm font-medium">完了</span>;
   }
-  if (progress.videoCompleted || progress.quizPassed) {
+  if (progress.videoCompleted || progress.quizPassed || progress.quizSkipped) {
     return <span className="text-yellow-600 text-sm">進行中</span>;
   }
   return <span className="text-muted-foreground text-sm">未開始</span>;
