@@ -463,14 +463,18 @@ export async function completeSessionAsQuizSkipped(
 /**
  * テスト任意化 Stage 3 で新設した `createSyntheticSkippedSession`（スキップ用）とは別物。
  * 本関数は「合格提出」時の補完 session 作成専用で、`PATCH /quiz-attempts/:attemptId` の
- * 合格パス（activeSession=null）から引き続き呼び出される現役コード（Stage 3 では変更なし）。
- * ケース D 厳格化（Stage 5）で activeSession=null での提出自体が塞がれた場合に
- * 初めて非活性化・backfill スクリプト専用化を検討する。
+ * 合格パスから呼び出される。
+ *
+ * ケース D 厳格化（Stage 5）: `QUIZ_REQUIRE_ACTIVE_SESSION=true`（デフォルト）では
+ * activeSession=null での提出自体が新設ゲートで塞がれるため、本関数は到達不能な
+ * dead path になる。`=false` へロールバックした場合のみ引き続き呼び出される
+ * （Issue #533 の乖離再発防止のため意図的に温存、Stage 6 で削除・`@deprecated` 化を検討）。
  *
  * Issue #533: active session なしで quiz が合格提出された場合の補完 session を作成。
  *
- * 背景: quiz-attempts.ts は後方互換のため activeSession=null でも提出を許可する設計
- * (quiz-attempts.ts:292-294 コメント参照)。これにより lesson_sessions に痕跡が残らず、
+ * 背景: quiz-attempts.ts は `QUIZ_REQUIRE_ACTIVE_SESSION=false` 時のみ後方互換のため
+ * activeSession=null でも提出を許可する（quiz-attempts.ts の PATCH ハンドラのコメント参照）。
+ * これにより lesson_sessions に痕跡が残らず、
  * user_progress (quizPassed/quizBestScore) と乖離する事象が発生していた (長遊園様で 4 件)。
  *
  * 本関数は決定的 doc id `synthetic_{quizAttemptId}` で session を作成、冪等性を保証する。
@@ -597,6 +601,29 @@ export async function createSyntheticSkippedSession(
     quizAttemptId: null,
     isSynthetic: true,
   });
+}
+
+/**
+ * テスト任意化 Stage 5: クイズ受験のためのセッション状態を判別する共通ヘルパー。
+ *
+ * `getActiveLessonSession`（status のみ、期限を見ない）と `validateSessionDeadline`
+ * （期限のみ、status を見ない）が分離しているため、POST/PATCH 双方で同じ判定を
+ * 二重に書かずに済むよう集約する。
+ */
+export type ActiveSessionForQuiz =
+  | { kind: "active"; session: LessonSession }
+  | { kind: "expired"; session: LessonSession }
+  | { kind: "none" };
+
+export async function resolveActiveSessionForQuiz(
+  ds: DataSource,
+  userId: string,
+  lessonId: string
+): Promise<ActiveSessionForQuiz> {
+  const session = await ds.getActiveLessonSession(userId, lessonId);
+  if (!session) return { kind: "none" };
+  if (!validateSessionDeadline(session)) return { kind: "expired", session };
+  return { kind: "active", session };
 }
 
 /**

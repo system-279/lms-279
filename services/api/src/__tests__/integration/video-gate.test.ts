@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import supertest from "supertest";
 import { createTestApp } from "../helpers/create-app.js";
+import { createActiveSessionViaHttp } from "../helpers/create-active-session.js";
 import type { InMemoryDataSource } from "../../datasource/in-memory.js";
 
 describe("Video Completion Gate (ADR-019)", () => {
@@ -13,6 +14,7 @@ describe("Video Completion Gate (ADR-019)", () => {
   let ds: InMemoryDataSource;
   let quizId: string;
   let videoId: string;
+  let lessonId: string;
   const studentUserId = "test-student-1";
 
   beforeEach(async () => {
@@ -34,7 +36,7 @@ describe("Video Completion Gate (ADR-019)", () => {
     const lessonRes = await adminRequest
       .post(`/admin/courses/${courseId}/lessons`)
       .send({ title: "動画ゲートテストレッスン", hasVideo: true, hasQuiz: true });
-    const lessonId = lessonRes.body.lesson.id;
+    lessonId = lessonRes.body.lesson.id;
 
     // 3. 動画メタデータをDataSourceに直接注入（GCSサービスをバイパス）
     const video = await adminDs.createVideo({
@@ -135,6 +137,8 @@ describe("Video Completion Gate (ADR-019)", () => {
     });
 
     it("POST /quizzes/:quizId/attempts → 201 attempt作成成功", async () => {
+      // テスト任意化 Stage 5(ケースD厳格化): 有効セッションが必須のため事前に開始する
+      await createActiveSessionViaHttp(studentRequest, { lessonId, videoId });
       const res = await studentRequest.post(`/quizzes/${quizId}/attempts`);
 
       expect(res.status).toBe(201);

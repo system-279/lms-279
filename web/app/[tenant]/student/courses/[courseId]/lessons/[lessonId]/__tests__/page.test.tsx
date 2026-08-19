@@ -47,7 +47,9 @@ vi.mock("@/lib/hooks/use-video-completion", () => ({
   }),
 }));
 
-function lessonDetailResponse(overrides: Partial<{ pdfDownloadEligibility: string; quizSkipEnabled: boolean }> = {}) {
+function lessonDetailResponse(
+  overrides: Partial<{ pdfDownloadEligibility: string; quizSkipEnabled: boolean; sessionRequired: boolean }> = {},
+) {
   return {
     lesson: {
       id: LESSON_ID,
@@ -63,10 +65,18 @@ function lessonDetailResponse(overrides: Partial<{ pdfDownloadEligibility: strin
     resource: undefined,
     quizSkipEnabled: overrides.quizSkipEnabled ?? true,
     pdfDownloadEligibility: overrides.pdfDownloadEligibility ?? "needs_quiz_pass",
+    // テスト任意化 Stage 5(ケースD厳格化): hasVideo=false のレッスンを使うテストのため false
+    sessionRequired: overrides.sessionRequired ?? false,
   };
 }
 
-function quizByLessonResponse(overrides: Partial<{ skipAvailable: boolean; quizSkipped: boolean }> = {}) {
+function quizByLessonResponse(
+  overrides: Partial<{
+    skipAvailable: boolean;
+    quizSkipped: boolean;
+    retakeBlocked: boolean;
+  }> = {},
+) {
   return {
     quiz: {
       id: QUIZ_ID,
@@ -82,10 +92,15 @@ function quizByLessonResponse(overrides: Partial<{ skipAvailable: boolean; quizS
     skipAvailable: overrides.skipAvailable ?? true,
     quizSkipped: overrides.quizSkipped ?? false,
     pdfDownloadAllowedForSkipped: true,
+    // テスト任意化 Stage 5(ケースD厳格化): hasVideo=false のレッスンを使うテストのため免除される
+    retakeBlocked: overrides.retakeBlocked ?? false,
   };
 }
 
+let quizByLessonOverrides: Parameters<typeof quizByLessonResponse>[0] = {};
+
 beforeEach(() => {
+  quizByLessonOverrides = {};
   authFetchMock.mockReset();
   authFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
     const method = options?.method ?? "GET";
@@ -114,7 +129,7 @@ beforeEach(() => {
       return { session: null };
     }
     if (url === `/api/v1/quizzes/by-lesson/${LESSON_ID}`) {
-      return quizByLessonResponse();
+      return quizByLessonResponse(quizByLessonOverrides);
     }
     if (url === `/api/v1/quizzes/${QUIZ_ID}/skip` && method === "POST") {
       return { quizSkipped: true, lessonCompleted: true, sessionRecorded: false };
@@ -160,5 +175,15 @@ describe("StudentLessonDetailPage フェッチ配線", () => {
       // 初回マウント分(1) + スキップ後の再取得分(1) = 2
       expect(lessonDetailCalls).toHaveLength(2);
     });
+  });
+
+  it("テスト任意化 Stage 5(ケースD厳格化): retakeBlocked=trueのとき「テストを開始」ボタンが描画されず、再受験不可の文言が表示される", async () => {
+    quizByLessonOverrides = { retakeBlocked: true };
+    render(<StudentLessonDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("既に合格しているため再受験はできません。")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "テストを開始" })).not.toBeInTheDocument();
   });
 });

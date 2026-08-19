@@ -19,6 +19,8 @@ export interface QuizByLessonResponse {
   quizSkipped: boolean;
   /** テナントがスキップ者への資料PDFダウンロードを許可しているか。Stage 3のUIでは文言に使わない(Stage 4で確定表示に使用予定) */
   pdfDownloadAllowedForSkipped: boolean;
+  /** テスト任意化 Stage 5(ケースD厳格化): 既に合格済みのため再受験不可か */
+  retakeBlocked: boolean;
 }
 
 // ============================================================

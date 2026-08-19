@@ -47,6 +47,8 @@ export interface StudentLessonDetailResponse {
   resource?: LessonResource;
   quizSkipEnabled: boolean;
   pdfDownloadEligibility: PdfDownloadEligibility;
+  /** テスト任意化 Stage 5(ケースD厳格化): SessionRulesNotice の「有効セッション必須」注意書きの表示条件（flag ON かつ動画ありレッスンのみ） */
+  sessionRequired: boolean;
 }
 
 /**

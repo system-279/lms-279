@@ -98,26 +98,12 @@ describe("Quiz submission × Session integration", () => {
   });
 
   // =========================================================
-  // 1. 後方互換: セッションなしでもテスト提出は成功する
+  // 1. (削除済み) 旧「セッションなしでもテスト提出は成功する（後方互換）」テストは
+  //    テスト任意化 Stage 5(ケースD厳格化) により quiz-session-required.test.ts の
+  //    「セッションなしでは409 session_required、attemptは生成されない」に統合された。
+  //    QUIZ_REQUIRE_ACTIVE_SESSION=false 時の後方互換動作は同ファイルの
+  //    「QUIZ_REQUIRE_ACTIVE_SESSION=falseでは旧挙動（セッションなしでも201）に戻る」で検証する。
   // =========================================================
-  it("セッションなしでもテスト提出が成功する（後方互換）", async () => {
-    // attempt作成
-    const attemptRes = await studentRequest
-      .post(`/quizzes/${quizId}/attempts`)
-      .send({});
-    expect(attemptRes.status).toBe(201);
-
-    // 提出（セッション作成していない）
-    const submitRes = await studentRequest
-      .patch(`/quiz-attempts/${attemptRes.body.attempt.id}`)
-      .send({
-        answers: { q1: ["q1-a"] },
-      });
-
-    expect(submitRes.status).toBe(200);
-    expect(submitRes.body.attempt.status).toBe("submitted");
-    expect(submitRes.body.attempt.score).toBeDefined();
-  });
 
   // =========================================================
   // 2. 有効セッション内でテスト提出 → 成功+セッション完了
@@ -173,16 +159,17 @@ describe("Quiz submission × Session integration", () => {
     expect(sessionRes.status).toBe(201);
     const sessionId = sessionRes.body.session.id;
 
-    // セッションのdeadlineAtを過去に手動設定（期限切れシミュレーション）
-    await ds.updateLessonSession(sessionId, {
-      deadlineAt: new Date(Date.now() - 1000).toISOString(),
-    });
-
-    // attempt作成
+    // attempt作成（テスト任意化 Stage 5: attempt 作成に有効セッションが必須のため、
+    // セッションを期限切れにする前に作成する。元テストは順序が逆だった）
     const attemptRes = await studentRequest
       .post(`/quizzes/${quizId}/attempts`)
       .send({});
     expect(attemptRes.status).toBe(201);
+
+    // セッションのdeadlineAtを過去に手動設定（期限切れシミュレーション）
+    await ds.updateLessonSession(sessionId, {
+      deadlineAt: new Date(Date.now() - 1000).toISOString(),
+    });
 
     // 提出 → 403で拒否されること
     const submitRes = await studentRequest
@@ -203,7 +190,7 @@ describe("Quiz submission × Session integration", () => {
   // =========================================================
   // 3-bis. Issue #422: 期限切れ拒否後に新規 attempt 作成が可能になること（回帰テスト）
   // =========================================================
-  it("session_time_exceeded 拒否後、新規 attempt 作成が 409 ではなく成功する (Issue #422 path 1)", async () => {
+  it("session_time_exceeded 拒否後、再入室してから新規 attempt 作成が成功する (Issue #422 path 1)", async () => {
     // sessionVideoCompleted=true 経路をシミュレートするため動画完了状態を作る
     const sessionRes = await studentRequest
       .post("/lesson-sessions")
@@ -237,7 +224,14 @@ describe("Quiz submission × Session integration", () => {
     const oldAttempt = await ds.getQuizAttemptById(attemptId);
     expect(oldAttempt!.status).toBe("timed_out");
 
-    // 新規 attempt 作成が成功すること（旧バグなら 409 attempt_in_progress）
+    // テスト任意化 Stage 5(ケースD厳格化): force-exit 後は有効セッションが無くなるため、
+    // 新規 attempt 作成には再入室（新セッション開始）が必要になる。
+    // 再入室すれば旧バグ（409 attempt_in_progress で再受験不能）は再現しないことを確認する。
+    await studentRequest.post("/lesson-sessions").send({
+      lessonId,
+      videoId: "dummy-video",
+      sessionToken: "issue-422-token-retry",
+    });
     const newAttemptRes = await studentRequest
       .post(`/quizzes/${quizId}/attempts`)
       .send({});
@@ -412,6 +406,18 @@ describe("Quiz submission × Session integration", () => {
       watchedRanges: [{ start: 0, end: 240 }],
     });
 
+    // セッション作成（テスト任意化 Stage 5: attempt 作成に有効セッションが必須のため、
+    // attempt 作成より前にセッションを開始する。元テストは順序が逆だった）
+    const sessionRes = await studentRequest
+      .post("/lesson-sessions")
+      .send({
+        lessonId,
+        videoId: "dummy-video",
+        sessionToken: "test-token-reset",
+      });
+    expect(sessionRes.status).toBe(201);
+    const sessionId = sessionRes.body.session.id;
+
     // テスト回答を作成
     const attemptRes = await studentRequest
       .post(`/quizzes/${quizId}/attempts`)
@@ -425,17 +431,6 @@ describe("Quiz submission × Session integration", () => {
       quizPassed: false,
       quizBestScore: null,
     });
-
-    // セッション作成
-    const sessionRes = await studentRequest
-      .post("/lesson-sessions")
-      .send({
-        lessonId,
-        videoId: "dummy-video",
-        sessionToken: "test-token-reset",
-      });
-    expect(sessionRes.status).toBe(201);
-    const sessionId = sessionRes.body.session.id;
 
     // セッションを期限切れにして強制退室トリガー
     await ds.updateLessonSession(sessionId, {

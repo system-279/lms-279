@@ -205,6 +205,14 @@
       ]
     },
     {
+      "collectionGroup": "lesson_sessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "deadlineAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "super_dispatch_runs",
       "queryScope": "COLLECTION",
       "fields": [

@@ -1,18 +1,26 @@
 /**
  * Issue #533: active session なしで quiz が合格提出された場合の合成 session 作成の統合テスト
  *
- * 真因 (services/api/src/routes/shared/quiz-attempts.ts:292-294):
- *   設計上、activeSession=null でもテスト提出を許可するため、合格時に lesson_sessions に
- *   痕跡が残らず、user_progress と乖離していた。本テストは合成 session 作成パスを検証する。
+ * 真因 (services/api/src/routes/shared/quiz-attempts.ts):
+ *   QUIZ_REQUIRE_ACTIVE_SESSION=false（後方互換経路）では activeSession=null でも
+ *   テスト提出を許可するため、合格時に lesson_sessions に痕跡が残らず、user_progress と
+ *   乖離していた。本テストは合成 session 作成パスを検証する。
  *
- * AC1.1 (作成): activeSession=null + 合格 → synthetic_{attemptId} で session 作成
- * AC1.2 (不変): activeSession あり → 既存 completeSession path、合成 session 作成なし (既存テストで担保)
- * AC1.3 (冪等): 同 attempt の再呼び出しで重複作成なし
- * AC1.4 (失敗): video 解決不可 → 提出 200 維持、合成 session 作成 skip
- * AC1.5 (在室中): activeSession=null + 不合格 → 合成 session 作成しない
+ * テスト任意化 Stage 5(ケースD厳格化、セカンドオピニオン反映):
+ *   AC13(videoDurationSec hard guard) / AC2(exitAt算出) / AC1.3(冪等性) は
+ *   `services/api/src/services/__tests__/lesson-session-synthetic-completed.test.ts`
+ *   へ移設した（いずれも createSyntheticCompletedSession の直呼びで HTTP 不要のため）。
+ *   AC1.1/AC1.4/AC1.5 は QUIZ_REQUIRE_ACTIVE_SESSION=false を明示注入した
+ *   後方互換テストとして残す（デフォルト true では動画ありレッスンの activeSession=null
+ *   提出自体が新設ゲートで拒否されるため、この経路は flag=false 時のみ到達する）。
+ *
+ * AC1.1 (作成): flag=false, activeSession=null + 合格 → synthetic_{attemptId} で session 作成
+ * AC1.2 (不変): activeSession あり → 既存 completeSession path、合成 session 作成なし
+ * AC1.4 (失敗): flag=false, video 解決不可 → 提出 200 維持、合成 session 作成 skip
+ * AC1.5 (在室中): flag=false, activeSession=null + 不合格 → 合成 session 作成しない
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import supertest from "supertest";
 import express from "express";
 import cors from "cors";
@@ -34,7 +42,7 @@ const passingQuestions = [
   },
 ];
 
-describe("Issue #533: 合成 session 作成 (activeSession=null 時の合格提出)", () => {
+describe("Issue #533: 合成 session 作成 (activeSession=null 時の合格提出、QUIZ_REQUIRE_ACTIVE_SESSION=false)", () => {
   let studentRequest: ReturnType<typeof supertest>;
   let ds: InMemoryDataSource;
   let quizId: string;
@@ -42,8 +50,20 @@ describe("Issue #533: 合成 session 作成 (activeSession=null 時の合格提�
   let courseId: string;
   let videoId: string;
   const studentUserId = "test-student-synthetic";
+  const originalFlag = process.env.QUIZ_REQUIRE_ACTIVE_SESSION;
+
+  afterEach(() => {
+    if (originalFlag === undefined) {
+      delete process.env.QUIZ_REQUIRE_ACTIVE_SESSION;
+    } else {
+      process.env.QUIZ_REQUIRE_ACTIVE_SESSION = originalFlag;
+    }
+  });
 
   beforeEach(async () => {
+    // 本ファイルの全テストは QUIZ_REQUIRE_ACTIVE_SESSION=false（後方互換経路）を前提にする
+    process.env.QUIZ_REQUIRE_ACTIVE_SESSION = "false";
+
     ds = new InMemoryDataSource({ readOnly: false });
 
     const course = await ds.createCourse({
@@ -106,7 +126,7 @@ describe("Issue #533: 合成 session 作成 (activeSession=null 時の合格提�
   });
 
   // ============================================================
-  // AC1.1: activeSession=null + 合格 → 合成 session 作成
+  // AC1.1: flag=false, activeSession=null + 合格 → 合成 session 作成
   // ============================================================
   it("AC1.1: activeSession=null + 合格提出で synthetic_{attemptId} の session が作成される", async () => {
     const attemptRes = await studentRequest.post(`/quizzes/${quizId}/attempts`).send({});
@@ -133,58 +153,10 @@ describe("Issue #533: 合成 session 作成 (activeSession=null 時の合格提�
     expect(synthetic!.courseId).toBe(courseId);
     expect(synthetic!.videoId).toBe(videoId);
     expect(synthetic!.quizAttemptId).toBe(attemptId);
-
-    // D 案 (Phase 3 follow-up #4): entryAt = quiz.startedAt 維持、
-    // exitAt = startedAt + video.durationSec*1000 + quizDurationMs
-    const attempt = await ds.getQuizAttemptById(attemptId);
-    expect(attempt).not.toBeNull();
-    expect(synthetic!.entryAt).toBe(attempt!.startedAt);
-    const startedMs = new Date(attempt!.startedAt!).getTime();
-    const submittedMs = new Date(attempt!.submittedAt!).getTime();
-    const quizDurationMs = submittedMs - startedMs;
-    // video.durationSec = 300 (beforeEach で設定)
-    const expectedExitMs = startedMs + 300 * 1000 + quizDurationMs;
-    expect(new Date(synthetic!.exitAt!).getTime()).toBe(expectedExitMs);
   });
 
   // ============================================================
-  // AC1.3: 冪等性 — 重複呼び出しで session が複製されない
-  // ============================================================
-  it("AC1.3: 同 attemptId で createSyntheticCompletedSession が再呼び出しされても重複作成されない", async () => {
-    // 1 回目: 通常 flow
-    const attemptRes = await studentRequest.post(`/quizzes/${quizId}/attempts`).send({});
-    const attemptId = attemptRes.body.attempt.id;
-    await studentRequest
-      .patch(`/quiz-attempts/${attemptId}`)
-      .send({ answers: { q1: ["q1-a"] } });
-
-    const allBefore = (await ds.getLessonSessionsByCourse(courseId)).filter(
-      (s) => s.id === `synthetic_${attemptId}`,
-    );
-    expect(allBefore.length).toBe(1);
-
-    // 2 回目: helper を直接呼び出して冪等性確認
-    const { createSyntheticCompletedSession } = await import("../../services/lesson-session.js");
-    const { created } = await createSyntheticCompletedSession(ds, {
-      userId: studentUserId,
-      lessonId,
-      courseId,
-      videoId,
-      quizAttemptId: attemptId,
-      startedAt: new Date().toISOString(),
-      submittedAt: new Date().toISOString(),
-      videoDurationSec: 300,
-    });
-    expect(created).toBe(false); // 既存ヒット
-
-    const allAfter = (await ds.getLessonSessionsByCourse(courseId)).filter(
-      (s) => s.id === `synthetic_${attemptId}`,
-    );
-    expect(allAfter.length).toBe(1); // 重複なし
-  });
-
-  // ============================================================
-  // AC1.4: video 解決不可 → 提出 200 維持、合成 session 作成 skip、logger.error で監視可能
+  // AC1.4: flag=false, video 解決不可 → 提出 200 維持、合成 session 作成 skip
   // ============================================================
   it("AC1.4: video が存在しないレッスンで提出 200 + 合成 session 作成 skip + structured logger.error 出力", async () => {
     // logger.error をスパイし、AC「logger.error で監視可能」要件を機械的に検証
@@ -247,7 +219,7 @@ describe("Issue #533: 合成 session 作成 (activeSession=null 時の合格提�
   });
 
   // ============================================================
-  // AC1.5: activeSession=null + 不合格 → 合成 session 作成しない (合格時のみ)
+  // AC1.5: flag=false, activeSession=null + 不合格 → 合成 session 作成しない (合格時のみ)
   // ============================================================
   it("AC1.5: 不合格提出では合成 session は作成されない (合格時のみ)", async () => {
     const attemptRes = await studentRequest.post(`/quizzes/${quizId}/attempts`).send({});
@@ -265,7 +237,7 @@ describe("Issue #533: 合成 session 作成 (activeSession=null 時の合格提�
   });
 
   // ============================================================
-  // AC1.2 補強: active session ありの既存 path は不変 (合成 session 作成しない)
+  // AC1.2: active session ありの既存 path は不変 (合成 session 作成しない、flag に依らず成立)
   // ============================================================
   it("AC1.2: active session 経由の合格提出では合成 session は作成されない", async () => {
     // セッション作成
@@ -293,97 +265,5 @@ describe("Issue #533: 合成 session 作成 (activeSession=null 時の合格提�
     // 合成 session は作成されない
     const synthetic = await ds.getLessonSession(`synthetic_${attemptId}`);
     expect(synthetic).toBeNull();
-  });
-
-  // ============================================================
-  // AC13: videoDurationSec hard guard (Codex 指摘 #2 反映、Phase 3 follow-up #4)
-  // ============================================================
-  it("AC13: videoDurationSec が 0 → createSyntheticCompletedSession が throw", async () => {
-    const { createSyntheticCompletedSession } = await import("../../services/lesson-session.js");
-    await expect(
-      createSyntheticCompletedSession(ds, {
-        userId: studentUserId,
-        lessonId,
-        courseId,
-        videoId,
-        quizAttemptId: "attempt_guard_zero",
-        startedAt: new Date().toISOString(),
-        submittedAt: new Date().toISOString(),
-        videoDurationSec: 0,
-      }),
-    ).rejects.toThrow(/invalid videoDurationSec/);
-  });
-
-  it("AC13: videoDurationSec が負数 → throw", async () => {
-    const { createSyntheticCompletedSession } = await import("../../services/lesson-session.js");
-    await expect(
-      createSyntheticCompletedSession(ds, {
-        userId: studentUserId,
-        lessonId,
-        courseId,
-        videoId,
-        quizAttemptId: "attempt_guard_neg",
-        startedAt: new Date().toISOString(),
-        submittedAt: new Date().toISOString(),
-        videoDurationSec: -1,
-      }),
-    ).rejects.toThrow(/invalid videoDurationSec/);
-  });
-
-  it("AC13: videoDurationSec が NaN → throw", async () => {
-    const { createSyntheticCompletedSession } = await import("../../services/lesson-session.js");
-    await expect(
-      createSyntheticCompletedSession(ds, {
-        userId: studentUserId,
-        lessonId,
-        courseId,
-        videoId,
-        quizAttemptId: "attempt_guard_nan",
-        startedAt: new Date().toISOString(),
-        submittedAt: new Date().toISOString(),
-        videoDurationSec: NaN,
-      }),
-    ).rejects.toThrow(/invalid videoDurationSec/);
-  });
-
-  it("AC13: videoDurationSec が Infinity → throw", async () => {
-    const { createSyntheticCompletedSession } = await import("../../services/lesson-session.js");
-    await expect(
-      createSyntheticCompletedSession(ds, {
-        userId: studentUserId,
-        lessonId,
-        courseId,
-        videoId,
-        quizAttemptId: "attempt_guard_inf",
-        startedAt: new Date().toISOString(),
-        submittedAt: new Date().toISOString(),
-        videoDurationSec: Infinity,
-      }),
-    ).rejects.toThrow(/invalid videoDurationSec/);
-  });
-
-  // ============================================================
-  // AC2: exitAt の正確な算出値 (動画 60 分 + テスト 5 分 → 65 分後)
-  // ============================================================
-  it("AC2: exitAt = startedAt + videoDurationSec*1000 + quizDurationMs を正確に算出", async () => {
-    const { createSyntheticCompletedSession } = await import("../../services/lesson-session.js");
-    const startedAt = "2026-05-30T01:00:00.000Z";
-    const submittedAt = "2026-05-30T01:05:00.000Z"; // quiz 5 分
-    const videoDurationSec = 60 * 60; // 60 分
-
-    const { session, created } = await createSyntheticCompletedSession(ds, {
-      userId: studentUserId,
-      lessonId,
-      courseId,
-      videoId,
-      quizAttemptId: "attempt_ac2",
-      startedAt,
-      submittedAt,
-      videoDurationSec,
-    });
-    expect(created).toBe(true);
-    expect(session.entryAt).toBe(startedAt); // 維持
-    // exitAt = startedAt + 60min (動画) + 5min (テスト) = startedAt + 65min
-    expect(session.exitAt).toBe("2026-05-30T02:05:00.000Z");
   });
 });

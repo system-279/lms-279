@@ -9,14 +9,14 @@ import { requireUser } from "../../middleware/auth.js";
 import { gradeQuiz, stripCorrectAnswers, randomizeQuiz } from "../../services/quiz-grading.js";
 import { updateLessonProgress } from "../../services/progress.js";
 import {
-  validateSessionDeadline,
   forceExitSession,
   completeSession,
   completeSessionAsQuizSkipped,
   createSyntheticCompletedSession,
   createSyntheticSkippedSession,
+  resolveActiveSessionForQuiz,
 } from "../../services/lesson-session.js";
-import { resolveTenantQuizPolicy } from "../../services/quiz-policy.js";
+import { resolveTenantQuizPolicy, isQuizActiveSessionRequired } from "../../services/quiz-policy.js";
 import { guardQuizAccess, checkQuizAccessSoft } from "../../services/enrollment.js";
 import { logger } from "../../utils/logger.js";
 
@@ -139,6 +139,13 @@ router.get("/quizzes/by-lesson/:lessonId", requireUser, async (req: Request, res
   const skipAvailable =
     quizSkipEnabled && !quizSkipped && !hasPassed && !hasInProgressAttempt && videoCompleted;
 
+  // テスト任意化 Stage 5(ケースD厳格化): retakeBlocked(=合格済み)。
+  // sessionRequired は GET /lessons/:lessonId (StudentLessonDetailResponse) 側にのみ持たせる
+  // (SessionRulesNotice の表示条件として唯一そちらで消費されるため。当初こちらにも同名フィールドを
+  // 追加したが FE から一切参照されず、動画有無を求める getVideoByLessonId の呼び出しが
+  // isVideoCompletedOrNotRequired と重複するだけの無駄なクエリだった。second opinion レビュー指摘反映)
+  const retakeBlocked = hasPassed;
+
   res.json({
     quiz: {
       id: quiz.id,
@@ -155,6 +162,7 @@ router.get("/quizzes/by-lesson/:lessonId", requireUser, async (req: Request, res
     skipAvailable,
     quizSkipped,
     pdfDownloadAllowedForSkipped,
+    retakeBlocked,
   });
 });
 
@@ -232,6 +240,46 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
   // 受講期間チェック
   const enrollBlocked = await guardQuizAccess(req, res);
   if (enrollBlocked) return;
+
+  // テスト任意化 Stage 5(ケースD厳格化): 合格済みなら再受験不可（flagに依存せず常時適用。
+  // 合格を失うバグ経路の封鎖でもあるため、有効セッション必須化とは独立に効かせる）
+  const progressForRetakeCheck = await ds.getUserProgress(userId, quiz.lessonId);
+  if (progressForRetakeCheck?.quizPassed === true) {
+    res.status(409).json({
+      error: "quiz_already_passed",
+      message: "既に合格しています",
+    });
+    return;
+  }
+
+  // テスト任意化 Stage 5(ケースD厳格化): 有効セッション必須化（デフォルトON）。
+  // 動画なしレッスンは免除する（FEはセッションを動画play時にしか作らず、動画なし
+  // レッスンでは POST /lesson-sessions に必要な videoId が存在しないため）。
+  if (isQuizActiveSessionRequired()) {
+    const video = await ds.getVideoByLessonId(quiz.lessonId);
+    if (video) {
+      const sessionState = await resolveActiveSessionForQuiz(ds, userId, quiz.lessonId);
+      if (sessionState.kind === "expired") {
+        try {
+          await forceExitSession(ds, sessionState.session.id, "time_limit");
+        } catch (err) {
+          console.error(`Failed to force-exit session (time_limit): ${sessionState.session.id}`, err);
+        }
+        res.status(403).json({
+          error: "session_time_exceeded",
+          message: "セッション制限時間を超過したため、セッションが終了しました",
+        });
+        return;
+      }
+      if (sessionState.kind === "none") {
+        res.status(409).json({
+          error: "session_required",
+          message: "動画を再生してレッスンセッションを開始してから受験してください",
+        });
+        return;
+      }
+    }
+  }
 
   // 原子的にattempt作成（in_progress一意性 + attemptNumber採番 + maxAttemptsチェック）
   const result = await ds.createQuizAttemptAtomic(
@@ -483,19 +531,33 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
   const answers: Record<string, string[]> = req.body.answers ?? {};
 
   // セッション制限チェック（出席管理）
-  // 設計上、セッション未作成（activeSession=null）の場合はテスト提出を許可する。
-  // これにより出席管理導入前の受講者や、セッション機能未使用時の後方互換性を維持する。
-  const activeSession = await ds.getActiveLessonSession(userId, quiz.lessonId);
-  if (activeSession) {
-    if (!validateSessionDeadline(activeSession)) {
-      try {
-        await forceExitSession(ds, activeSession.id, "time_limit");
-      } catch (err) {
-        console.error(`Failed to force-exit session (time_limit): ${activeSession.id}`, err);
-      }
-      res.status(403).json({
-        error: "session_time_exceeded",
-        message: "セッション制限時間を超過したため、セッションが終了しました",
+  // テスト任意化 Stage 5(ケースD厳格化): QUIZ_REQUIRE_ACTIVE_SESSION=false の場合のみ、
+  // セッション未作成（kind="none"）でもテスト提出を許可する後方互換経路が残る。
+  // デフォルト（true）ではセッションなしの提出は下の else 節で拒否される。
+  // resolveActiveSessionForQuiz は POST 側のゲートと共用する単一の意味論解決ポイント
+  // （second opinion レビュー指摘反映: 以前は本ハンドラが同じ判定を独自実装していた）。
+  const sessionState = await resolveActiveSessionForQuiz(ds, userId, quiz.lessonId);
+  const activeSession = sessionState.kind === "active" ? sessionState.session : null;
+  if (sessionState.kind === "expired") {
+    try {
+      await forceExitSession(ds, sessionState.session.id, "time_limit");
+    } catch (err) {
+      console.error(`Failed to force-exit session (time_limit): ${sessionState.session.id}`, err);
+    }
+    res.status(403).json({
+      error: "session_time_exceeded",
+      message: "セッション制限時間を超過したため、セッションが終了しました",
+    });
+    return;
+  } else if (sessionState.kind === "none" && isQuizActiveSessionRequired()) {
+    const video = await ds.getVideoByLessonId(quiz.lessonId);
+    if (video) {
+      // 移行期対応: Stage 5 デプロイ前に開始された in-flight attempt を採点前に
+      // timed_out 化する（countEffectiveAttempts が timed_out を除外するため受験回数は消費しない）。
+      await ds.transitionQuizAttemptToTimedOut(attemptId);
+      res.status(409).json({
+        error: "session_required",
+        message: "動画を再生してレッスンセッションを開始してから受験してください",
       });
       return;
     }
@@ -601,6 +663,11 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
       // 進捗 (user_progress.quizPassed/quizBestScore) と出席 (lesson_sessions) の乖離を予防。
       // 失敗時は提出成功 (上で updateQuizAttempt 済み) を優先し、structured log で監視可能にする
       // (Issue #533 の根本問題は「乖離の検知手段がなかった」ことのため、ここで silent にしない)。
+      //
+      // テスト任意化 Stage 5(ケースD厳格化): QUIZ_REQUIRE_ACTIVE_SESSION=true（デフォルト）では
+      // 動画ありレッスンでの activeSession=null 提出自体が上流の PATCH ゲートで拒否されるため、
+      // この分岐は動画なしレッスン、または flag=false 時のみ到達する dead path になる。
+      // Issue #533 の乖離再発防止のため意図的に温存（Stage 6 で削除・@deprecated 化を検討）。
       try {
         // 型ガード: 上位 updateQuizAttempt で submittedAt: now を渡しているため実行時には string が確定だが、
         // 型上 string|null のため defensive にチェック。null/undefined 時は throw して silent fail を防ぐ。

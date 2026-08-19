@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import supertest from "supertest";
 import { createTestApp } from "../helpers/create-app.js";
+import { createActiveSessionViaHttp } from "../helpers/create-active-session.js";
 import type { InMemoryDataSource } from "../../datasource/in-memory.js";
 
 // 共通のテスト問題セット（全問正解版）
@@ -42,6 +43,7 @@ describe("Quiz Flow (complete flow)", () => {
   let ds: InMemoryDataSource;
   let quizId: string;
   let videoId: string;
+  let lessonId: string;
   const studentUserId = "test-student-1";
 
   beforeEach(async () => {
@@ -60,7 +62,7 @@ describe("Quiz Flow (complete flow)", () => {
     const lessonRes = await adminRequest
       .post(`/admin/courses/${courseId}/lessons`)
       .send({ title: "テストフローレッスン", hasVideo: true, hasQuiz: true });
-    const lessonId = lessonRes.body.lesson.id;
+    lessonId = lessonRes.body.lesson.id;
 
     // 3. 動画をDataSourceに直接注入
     const video = await adminDs.createVideo({
@@ -114,6 +116,15 @@ describe("Quiz Flow (complete flow)", () => {
     studentApp.use(createSharedRouter());
 
     studentRequest = supertest(studentApp);
+
+    // テスト任意化 Stage 5(ケースD厳格化): POST /attempts に有効セッションが必須のため、
+    // 受験フローの本質検証を妨げないよう beforeEach で一律にセッションを開始しておく。
+    // sessionVideoCompleted は true にする（上で video_analytics.isComplete=true を注入済みの
+    // studentUserId の実態に合わせる）。false のままだと max_attempts_failed 到達時の
+    // forceExitSession が学習データを全リセットし、video_analytics まで消えてしまう
+    // （ADR-027 ケースF: sessionVideoCompleted=false では reason 不問で全リセット）。
+    const sessionRes = await createActiveSessionViaHttp(studentRequest, { lessonId, videoId });
+    await adminDs.updateLessonSession(sessionRes.body.session.id, { sessionVideoCompleted: true });
   });
 
   describe("GET /quizzes/:quizId", () => {
@@ -277,14 +288,16 @@ describe("Quiz Flow (complete flow)", () => {
         .patch(`/quiz-attempts/${attempt1Id}`)
         .send({ answers: { q1: ["q1-a"], q2: ["q2-a"] } });
 
-      // 2回目
+      // 2回目（attemptNumber=2 >= maxAttempts=2 のため、提出と同時に forceExitSession(max_attempts_failed) が発火しセッションが終了する）
       const start2 = await studentRequest.post(`/quizzes/${quizId}/attempts`);
       const attempt2Id = start2.body.attempt.id;
       await studentRequest
         .patch(`/quiz-attempts/${attempt2Id}`)
         .send({ answers: { q1: ["q1-a"], q2: ["q2-a"] } });
 
-      // 3回目 → 超過エラー
+      // 3回目 → 超過エラー（テスト任意化 Stage 5: 2回目でセッションが終了しているため、
+      // maxAttempts超過の検証を行うには先に再入室が必要）
+      await createActiveSessionViaHttp(studentRequest, { lessonId, videoId });
       const res = await studentRequest.post(`/quizzes/${quizId}/attempts`);
 
       expect(res.status).toBe(403);
@@ -301,7 +314,7 @@ describe("Quiz Flow (complete flow)", () => {
         submittedAt: new Date().toISOString(),
       });
 
-      // 2回目: 正常に提出
+      // 2回目: 正常に提出（attemptNumber=2 >= maxAttempts=2 のため forceExitSession(max_attempts_failed) が発火する）
       const start2 = await studentRequest.post(`/quizzes/${quizId}/attempts`);
       expect(start2.status).toBe(201);
       const attempt2Id = start2.body.attempt.id;
@@ -310,6 +323,8 @@ describe("Quiz Flow (complete flow)", () => {
         .send({ answers: { q1: ["q1-a"], q2: ["q2-a"] } });
 
       // 3回目: timed_outは除外されるので、有効試行は1回 → 再受験可能
+      // （テスト任意化 Stage 5: 2回目でセッションが終了しているため再入室が必要）
+      await createActiveSessionViaHttp(studentRequest, { lessonId, videoId });
       const start3 = await studentRequest.post(`/quizzes/${quizId}/attempts`);
       expect(start3.status).toBe(201);
       expect(start3.body.attempt.attemptNumber).toBe(3);
