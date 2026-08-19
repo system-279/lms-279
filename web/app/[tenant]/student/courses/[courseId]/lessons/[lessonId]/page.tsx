@@ -120,7 +120,6 @@ function QuizSection({
   enrollmentSetting,
   onAttemptsLoaded,
   onSkipped,
-  onSkipAvailableChange,
 }: {
   lessonId: string;
   authFetch: <T>(url: string, options?: RequestInit) => Promise<T>;
@@ -129,8 +128,6 @@ function QuizSection({
   onAttemptsLoaded?: (hasPassed: boolean) => void;
   /** テストスキップ成功時に親へ通知（セッションstateクリア等のため）。 */
   onSkipped?: () => void;
-  /** skipAvailable の変化を親に通知（SessionRulesNoticeの文言分岐用）。 */
-  onSkipAvailableChange?: (skipAvailable: boolean) => void;
 }) {
   const [quizState, setQuizState] = useState<QuizUIState>("idle");
   const [quiz, setQuiz] = useState<Quiz | null>(null);
@@ -171,16 +168,14 @@ function QuizSection({
         setQuizAccessExpired(true);
       }
       // API ロールバック等で旧レスポンス形状(フィールド欠損)になった場合も例外にしない
-      const skipAvailableValue = data.skipAvailable ?? false;
-      setSkipAvailable(skipAvailableValue);
+      setSkipAvailable(data.skipAvailable ?? false);
       setQuizSkipped(data.quizSkipped ?? false);
-      onSkipAvailableChange?.(skipAvailableValue);
     } catch (e) {
       setQuizError(e instanceof Error ? e.message : "テスト情報の取得に失敗しました");
     } finally {
       setLoadingQuiz(false);
     }
-  }, [authFetch, lessonId, onSkipAvailableChange]);
+  }, [authFetch, lessonId]);
 
   // テストスキップ実行
   const handleSkip = useCallback(async () => {
@@ -762,11 +757,10 @@ export default function StudentLessonDetailPage() {
   const handleAttemptsLoaded = useCallback((hasPassed: boolean) => {
     setQuizPassed(hasPassed);
   }, []);
-  // テスト任意化 Stage 3: SessionRulesNotice の文言分岐用
+  // テスト任意化 Stage 3: SessionRulesNotice の文言分岐用（テナント単位の生ポリシー値。
+  // 動画視聴開始前から表示される受講ルール欄のため、動画完了後にしか取得できない
+  // by-lesson 応答の skipAvailable(受講者個別の合成値)ではなくこちらを使う）
   const [quizSkipEnabled, setQuizSkipEnabled] = useState(false);
-  const handleSkipAvailableChange = useCallback((skipAvailable: boolean) => {
-    setQuizSkipEnabled(skipAvailable);
-  }, []);
   const fetchPdfDownloadUrl = useCallback(async (): Promise<LessonPdfDownloadResponse> => {
     return authFetch<LessonPdfDownloadResponse>(`/api/v1/lessons/${lessonId}/pdf-download`);
   }, [authFetch, lessonId]);
@@ -812,12 +806,15 @@ export default function StudentLessonDetailPage() {
     fetchCourse();
   }, [fetchCourse]);
 
-  // レッスン詳細を取得 (講座資料 PDF のメタを含む)
+  // レッスン詳細を取得 (講座資料 PDF のメタ + テナントのスキップ可否ポリシーを含む)
   useEffect(() => {
     if (authLoading) return;
-    authFetch<{ lesson: unknown; resource?: LessonResource }>(`/api/v1/lessons/${lessonId}`)
+    authFetch<{ lesson: unknown; resource?: LessonResource; quizSkipEnabled?: boolean }>(
+      `/api/v1/lessons/${lessonId}`
+    )
       .then((data) => {
         setLessonResource(data.resource ?? null);
+        setQuizSkipEnabled(data.quizSkipEnabled ?? false);
       })
       .catch(() => {
         // resource 未取得時は何も表示しない (PDF DL ボタンは hidden になる)
@@ -1165,7 +1162,6 @@ export default function StudentLessonDetailPage() {
             enrollmentSetting={enrollmentSetting}
             onAttemptsLoaded={handleAttemptsLoaded}
             onSkipped={() => setSession(null)}
-            onSkipAvailableChange={handleSkipAvailableChange}
           />
         ) : (
           /* 動画未完了ゲートメッセージ */

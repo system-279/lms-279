@@ -11,6 +11,7 @@ import {
   generatePdfDownloadUrl,
   toLessonResource,
 } from "../../services/lesson-resource.js";
+import { resolveTenantQuizPolicy } from "../../services/quiz-policy.js";
 
 const router = Router();
 const storage = new Storage();
@@ -337,6 +338,12 @@ router.get("/lessons/:lessonId", requireUser, async (req: Request, res: Response
     return;
   }
 
+  // テスト任意化 Stage 3: SessionRulesNotice はレッスン画面の初回表示(動画視聴開始前)から
+  // 常時表示されるため、動画完了後にしか取得できない by-lesson 応答の skipAvailable
+  // (受講者個別の合成値)ではなく、テナント単位の生の quizSkipEnabled をここで返す。
+  const tenantQuizPolicy = await ds.getTenantQuizPolicy();
+  const { quizSkipEnabled } = resolveTenantQuizPolicy(tenantQuizPolicy);
+
   res.json({
     lesson: {
       id: lesson.id,
@@ -350,6 +357,7 @@ router.get("/lessons/:lessonId", requireUser, async (req: Request, res: Response
       updatedAt: lesson.updatedAt,
     },
     resource: toLessonResource(lesson),
+    quizSkipEnabled,
   });
 });
 

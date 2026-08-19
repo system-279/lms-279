@@ -503,6 +503,26 @@ describe("テスト任意化 Stage 3: POST /quizzes/:quizId/skip", () => {
   });
 
   // ============================================================
+  // GET /lessons/:lessonId の quizSkipEnabled (テナント単位の生ポリシー値)
+  // pr-review-toolkit セカンドオピニオン指摘反映: SessionRulesNotice は動画視聴開始前
+  // (=まだ skipAvailable を計算できない状態) から表示されるため、テナントの生ポリシー値を
+  // 別経路で返す必要がある。この値は受講者個別の視聴/合格状態を一切見ない。
+  // ============================================================
+  it("GET /lessons/:lessonId: ポリシーOFFではquizSkipEnabled=false(動画視聴前でも取得可能)", async () => {
+    const res = await studentRequest.get(`/lessons/${lessonId}`);
+    expect(res.status).toBe(200);
+    expect(res.body.quizSkipEnabled).toBe(false);
+  });
+
+  it("GET /lessons/:lessonId: ポリシーONなら動画未視聴でもquizSkipEnabled=true", async () => {
+    await enableSkipPolicy();
+    // completeVideo() を呼ばない = 動画視聴前を模倣
+    const res = await studentRequest.get(`/lessons/${lessonId}`);
+    expect(res.status).toBe(200);
+    expect(res.body.quizSkipEnabled).toBe(true);
+  });
+
+  // ============================================================
   // completion-eligibility結合: スキップ経由完了の実データ経路確認(Codex High反映)
   // ============================================================
   it("スキップ経由でのみ完了したコースはcourse_progress.isCompletedがtrueになる", async () => {
