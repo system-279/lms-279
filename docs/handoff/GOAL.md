@@ -16,10 +16,10 @@ updated: 2026-08-19
 ## 進行中のtasks
 - [x] Stage 1: データモデル+進捗ロジック（`quizSkipped`/`quizSkippedAt`追加、`computeLessonCompleted`実装、PR #594、2026-08-18 main merge済み）
 - [x] Stage 2: テナント設定(既定OFF) — `TenantQuizPolicy`型+Firestore/InMemory実装+API+`TenantQuizPolicyEditor`（PR #596、2026-08-19 main merge済み。Codex review(medium+high共に0件)+pr-review-toolkit second opinion(Medium 1件、logger.warnテスト未検証を反映済み)）
-- [ ] Stage 3: スキップ機能本体 — `POST /quizzes/:quizId/skip`+`createSyntheticSkippedSession`+受講者UI(スキップボタン・確認ダイアログ)
+- [x] Stage 3: スキップ機能本体 — `POST /quizzes/:quizId/skip`+`createSyntheticSkippedSession`+受講者UI(スキップボタン・確認ダイアログ)（PR #599、2026-08-19 main merge済み。plan modeでCodex plan review(Critical 2件・High複数件反映)を経て実装。Codex review CLIは環境固有要因(サンドボックスEPERM/CLI引数非互換/read-only早期終了)で3回連続失敗し断念、代わりにpr-review-toolkit second opinionでImportant 1件(`SessionRulesNotice`への`quizSkipEnabled`配線誤り)を検出・修正済み。PDF文言はStage 4前のテナント側ON化と矛盾しないよう抽象表現にトーンダウン済み(設計判断6)）
 - [ ] Stage 4: 資料PDF許可 — PDFゲート変更(合格 OR (スキップ AND テナント許可))+`LessonPdfButton`3状態化
 - [ ] Stage 5: ケースD厳格化(単独リリース必須、Stage 3/4と同一リリースにしない) — 有効セッション必須化+合格後再受験の遮断+`QUIZ_REQUIRE_ACTIVE_SESSION`env
 - [ ] Stage 6: ADR-040新規+ADR-019/027/036/020改訂+ドキュメント更新+既存重複synthetic行の整理スクリプト
 
 ## 🔄 中断点（in-flight）
-なし（Stage 2はPR #596(実装)+#597(GOAL.md反映)ともmain merge済み、Stage 3は未着手のため部分着手中のタスクなし）
+なし（Stage 3はPR #599(実装)main merge済み、本PRでGOAL.md反映も完了。Stage 4は未着手のため部分着手中のタスクなし）
