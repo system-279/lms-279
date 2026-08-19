@@ -112,11 +112,18 @@ describe("SessionRulesNotice", () => {
     ).toBeInTheDocument();
   });
 
-  it("テスト任意化 Stage 5(ケースD厳格化): 有効セッション必須の注意書きが表示される", () => {
-    render(<SessionRulesNotice session={null} />);
+  it("テスト任意化 Stage 5(ケースD厳格化): sessionRequired=trueのとき有効セッション必須の注意書きが表示される", () => {
+    render(<SessionRulesNotice session={null} sessionRequired={true} />);
     expect(
       screen.getByText(/テストの受験には有効なレッスンセッションが必要です/)
     ).toBeInTheDocument();
+  });
+
+  it("テスト任意化 Stage 5(ケースD厳格化): sessionRequired未指定(false扱い)では注意書きを表示しない(flag=false運用中・動画なしレッスンの誤案内防止)", () => {
+    render(<SessionRulesNotice session={null} />);
+    expect(
+      screen.queryByText(/テストの受験には有効なレッスンセッションが必要です/)
+    ).not.toBeInTheDocument();
   });
 
   it("quizSkipEnabled=trueではスキップ経路を含む文言に差し替わる", () => {

@@ -17,27 +17,11 @@ import {
   createSyntheticSkippedSession,
   resolveActiveSessionForQuiz,
 } from "../../services/lesson-session.js";
-import { resolveTenantQuizPolicy } from "../../services/quiz-policy.js";
+import { resolveTenantQuizPolicy, isQuizActiveSessionRequired } from "../../services/quiz-policy.js";
 import { guardQuizAccess, checkQuizAccessSoft } from "../../services/enrollment.js";
 import { logger } from "../../utils/logger.js";
-import { parseBooleanEnv } from "../../utils/env-config.js";
 
 const router = Router();
-
-// ============================================================
-// テスト任意化 Stage 5(ケースD厳格化): 有効セッション必須化フラグ
-// ============================================================
-
-/**
- * デフォルト true（有効セッション必須）。毎リクエスト評価する関数呼び出し方式にしている
- * 理由: モジュールスコープ定数にすると、既存テストの多く（createSharedRouter をファイル
- * 先頭で静的import）で flag=true/false 双方の挙動を同一ファイル内で検証できない
- * （モジュール初期化時点の process.env 値で凍結されるため）。
- * false 投入 → 監視後 true へ切替、という2段階ロールアウトを本番 deploy.yml で行う。
- */
-function isActiveSessionRequired(): boolean {
-  return parseBooleanEnv(process.env.QUIZ_REQUIRE_ACTIVE_SESSION, true, "QUIZ_REQUIRE_ACTIVE_SESSION");
-}
 
 // ============================================================
 // ヘルパー: 動画完了ゲートチェック（ADR-019）
@@ -159,7 +143,7 @@ router.get("/quizzes/by-lesson/:lessonId", requireUser, async (req: Request, res
   // テスト任意化 Stage 5(ケースD厳格化): retakeBlocked(=合格済み) / sessionRequired
   // (flag ON かつ動画ありレッスンのみ。動画なしレッスンは免除)
   const retakeBlocked = hasPassed;
-  const sessionRequired = isActiveSessionRequired() && (await ds.getVideoByLessonId(lessonId)) !== null;
+  const sessionRequired = isQuizActiveSessionRequired() && (await ds.getVideoByLessonId(lessonId)) !== null;
 
   res.json({
     quiz: {
@@ -271,7 +255,7 @@ router.post("/quizzes/:quizId/attempts", requireUser, async (req: Request, res: 
   // テスト任意化 Stage 5(ケースD厳格化): 有効セッション必須化（デフォルトON）。
   // 動画なしレッスンは免除する（FEはセッションを動画play時にしか作らず、動画なし
   // レッスンでは POST /lesson-sessions に必要な videoId が存在しないため）。
-  if (isActiveSessionRequired()) {
+  if (isQuizActiveSessionRequired()) {
     const video = await ds.getVideoByLessonId(quiz.lessonId);
     if (video) {
       const sessionState = await resolveActiveSessionForQuiz(ds, userId, quiz.lessonId);
@@ -564,7 +548,7 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
       });
       return;
     }
-  } else if (isActiveSessionRequired()) {
+  } else if (isQuizActiveSessionRequired()) {
     const video = await ds.getVideoByLessonId(quiz.lessonId);
     if (video) {
       // 移行期対応: Stage 5 デプロイ前に開始された in-flight attempt を採点前に

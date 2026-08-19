@@ -12,7 +12,7 @@ import {
   mapLessonResourceError,
   toLessonResource,
 } from "../../services/lesson-resource.js";
-import { resolveTenantQuizPolicy } from "../../services/quiz-policy.js";
+import { resolveTenantQuizPolicy, isQuizActiveSessionRequired } from "../../services/quiz-policy.js";
 
 const router = Router();
 const storage = new Storage();
@@ -340,6 +340,11 @@ router.get("/lessons/:lessonId", requireUser, async (req: Request, res: Response
     tenantQuizPolicy,
   );
 
+  // テスト任意化 Stage 5(ケースD厳格化): SessionRulesNotice の「有効セッション必須」注意書きの
+  // 表示条件（flag ON かつ動画ありレッスンのみ。Codex review 指摘反映: flag=false運用中や
+  // 動画なしレッスンで無条件表示すると誤案内になるため、実際のゲート適用条件と一致させる）
+  const sessionRequired = isQuizActiveSessionRequired() && lesson.hasVideo;
+
   res.json({
     lesson: {
       id: lesson.id,
@@ -355,6 +360,7 @@ router.get("/lessons/:lessonId", requireUser, async (req: Request, res: Response
     resource: toLessonResource(lesson),
     quizSkipEnabled,
     pdfDownloadEligibility,
+    sessionRequired,
   });
 });
 

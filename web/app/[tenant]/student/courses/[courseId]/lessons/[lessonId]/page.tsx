@@ -799,6 +799,9 @@ export default function StudentLessonDetailPage() {
   // 動画視聴開始前から表示される受講ルール欄のため、動画完了後にしか取得できない
   // by-lesson 応答の skipAvailable(受講者個別の合成値)ではなくこちらを使う）
   const [quizSkipEnabled, setQuizSkipEnabled] = useState(false);
+  // テスト任意化 Stage 5(ケースD厳格化): SessionRulesNotice の注意書き表示条件（サーバー権威）。
+  // 初期値は誤案内を避けるため安全側 (false = 表示しない) に倒す。
+  const [sessionRequired, setSessionRequired] = useState(false);
   const fetchPdfDownloadUrl = useCallback(async (): Promise<LessonPdfDownloadResponse> => {
     return authFetch<LessonPdfDownloadResponse>(`/api/v1/lessons/${lessonId}/pdf-download`);
   }, [authFetch, lessonId]);
@@ -852,6 +855,7 @@ export default function StudentLessonDetailPage() {
       setLessonResource(data.resource ?? null);
       setQuizSkipEnabled(data.quizSkipEnabled ?? false);
       setPdfDownloadEligibility(data.pdfDownloadEligibility ?? "needs_quiz_pass");
+      setSessionRequired(data.sessionRequired ?? false);
     } catch {
       // resource 未取得時は何も表示しない (PDF DL ボタンは hidden になる)
       setLessonResource(null);
@@ -1107,7 +1111,7 @@ export default function StudentLessonDetailPage() {
       </div>
 
       {/* 受講ルール */}
-      <SessionRulesNotice session={session} quizSkipEnabled={quizSkipEnabled} />
+      <SessionRulesNotice session={session} quizSkipEnabled={quizSkipEnabled} sessionRequired={sessionRequired} />
 
       {/* 受講期限の警告 */}
       {enrollmentSetting && !videoAccessExpired && (

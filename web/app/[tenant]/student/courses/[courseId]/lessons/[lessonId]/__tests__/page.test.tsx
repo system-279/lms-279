@@ -47,7 +47,9 @@ vi.mock("@/lib/hooks/use-video-completion", () => ({
   }),
 }));
 
-function lessonDetailResponse(overrides: Partial<{ pdfDownloadEligibility: string; quizSkipEnabled: boolean }> = {}) {
+function lessonDetailResponse(
+  overrides: Partial<{ pdfDownloadEligibility: string; quizSkipEnabled: boolean; sessionRequired: boolean }> = {},
+) {
   return {
     lesson: {
       id: LESSON_ID,
@@ -63,6 +65,8 @@ function lessonDetailResponse(overrides: Partial<{ pdfDownloadEligibility: strin
     resource: undefined,
     quizSkipEnabled: overrides.quizSkipEnabled ?? true,
     pdfDownloadEligibility: overrides.pdfDownloadEligibility ?? "needs_quiz_pass",
+    // テスト任意化 Stage 5(ケースD厳格化): hasVideo=false のレッスンを使うテストのため false
+    sessionRequired: overrides.sessionRequired ?? false,
   };
 }
 
