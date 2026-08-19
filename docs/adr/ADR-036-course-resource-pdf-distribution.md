@@ -1,7 +1,17 @@
 # ADR-036: 講座資料スライド PDF 配信
 
 ## ステータス
-採用 (2026-05-17) / 上限 150 MB に改訂 (2026-06-18) / 上限 300 MB に再改訂 (2026-06-19)
+採用 (2026-05-17) / 上限 150 MB に改訂 (2026-06-18) / 上限 300 MB に再改訂 (2026-06-19) / DLゲート3状態化 (2026-08-19、テスト任意化 ADR-040 Stage 4)
+
+## 改訂履歴
+
+- **2026-08-19（テスト任意化 Stage 4、ADR-040）**: **動機**: テストをスキップして完了扱いにする機能（ADR-040）の追加により、従来の「合格のみDL可」という単純な二値ゲートでは、スキップ済み受講者が資料を一切取得できなくなる。テナントの意思でスキップ者にもPDFを許可できるようにする要望があった。
+
+  **変更内容**: DLゲートを `progress.quizPassed === true`（合格のみ）単独判定から、「合格 OR (スキップ AND テナントが `quizSkipEnabled && pdfDownloadAllowedForSkipped` を許可)」に拡張。判定はサーバー側の純粋関数 `resolvePdfDownloadEligibility()`（`quizPassed`最優先、それ以外はスキップ状態とテナントポリシーで判定）に集約し、`GET /lessons/:lessonId` 応答の `pdfDownloadEligibility`（`allowed`/`needs_quiz_pass`/`blocked_by_skip`の3値）と `GET /lessons/:lessonId/pdf-download` の実ゲート判定の両方から共用する。新規エラーコード `pdf_not_allowed_for_skipped`（403、テナントがスキップ者へのDLを許可していない場合）を追加。
+
+  **判定をサーバー側純粋関数に集約した理由**: FE表示（`LessonPdfButton`の3状態化）とBEゲート判定が別々のロジックで乖離すると、ボタンは押せるのにAPIが403を返す/その逆の不整合が起きうる。単一の判定関数を両経路が参照することで構造的に防止した。
+
+  **テスト**: 既存`lesson-resource.test.ts`/`lesson-pdf-download.test.ts`に`getTenantQuizPolicy`呼び出し対応、スキップ+許可ON/OFF双方のテストケース追加。
 
 ## コンテキスト
 
@@ -78,6 +88,7 @@ pdfUpdatedAt?: string   // ISO 8601、監査・追跡用
 - ADR-025 (セキュリティ強化、短期署名 URL)
 - ADR-028 (DataSource テスト戦略)
 - ADR-029 (タイムゾーン、`videoAccessUntil` 比較)
+- ADR-040 (テスト任意化、DLゲート3状態化)
 
 ## 検討した代替案
 

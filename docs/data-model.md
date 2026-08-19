@@ -130,7 +130,9 @@ questions配列の各要素:
 | videoCompleted | boolean | 動画完了 |
 | quizPassed | boolean | テスト合格 |
 | quizBestScore | number | テスト最高得点 |
-| lessonCompleted | boolean | レッスン完了 |
+| quizSkipped | boolean | テストスキップ済み（テスト任意化、ADR-040。`quizPassed`とは独立、上書きしない） |
+| quizSkippedAt | string \| null | スキップが初めて確定した時刻（ISO8601）。以後の更新で保持される（ADR-040） |
+| lessonCompleted | boolean | レッスン完了（`videoCompleted && (quizPassed \|\| quizSkipped)`、ADR-020改訂） |
 | updatedAt | Timestamp | 最終更新 |
 
 #### course_progress/{id} (ID=userId_courseId)
@@ -153,7 +155,7 @@ questions配列の各要素:
 | status | string | active / completed / force_exited / abandoned |
 | entryAt | Timestamp | 入室打刻（動画再生開始時） |
 | exitAt | Timestamp? | 退室打刻（テスト送信 or 強制退室時） |
-| exitReason | string? | quiz_submitted / pause_timeout / time_limit / browser_close / max_attempts_failed |
+| exitReason | string? | quiz_submitted / pause_timeout / time_limit / browser_close / max_attempts_failed / quiz_skipped（テスト任意化、ADR-040） |
 | deadlineAt | Timestamp | entryAt + セッション制限時間（事前計算、`SESSION_DURATION_MS` env で設定。デフォルト 2 時間、本番運用は 3 時間） |
 | pauseStartedAt | Timestamp? | 現在の一時停止開始時刻 |
 | longestPauseSec | number | セッション中の最長一時停止秒数 |
@@ -173,4 +175,13 @@ questions配列の各要素:
 | quizAccessUntil | string | テスト受験期限（enrolledAt + 2ヶ月、自動計算） |
 | videoAccessUntil | string | 動画視聴期限（enrolledAt + 1年、自動計算） |
 | createdBy | string | 設定したスーパー管理者のメールアドレス |
+| updatedAt | string | 更新日時 |
+
+#### quiz_policy/_config（テスト任意化設定 — テナント単位、ADR-040）
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| id | string | 常に `"_config"` |
+| quizSkipEnabled | boolean | テスト任意化（スキップ）のマスタースイッチ。既定OFF（未設定テナント含む） |
+| pdfDownloadAllowedForSkipped | boolean | スキップ済み受講者への資料PDFダウンロード許可。マスターOFF時も値を保持し、実効判定は `quizSkipEnabled && pdfDownloadAllowedForSkipped` のAND |
+| updatedBy | string | 設定したスーパー管理者のメールアドレス |
 | updatedAt | string | 更新日時 |
