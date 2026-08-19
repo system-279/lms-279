@@ -13,7 +13,7 @@ import { SessionTimer } from "@/components/session/SessionTimer";
 import { PauseTimeoutOverlay } from "@/components/session/PauseTimeoutOverlay";
 import { ForceExitDialog } from "@/components/session/ForceExitDialog";
 import { DeadlineWarningBanner } from "@/components/enrollment-deadline-banner";
-import type { LessonSessionResponse, QuizByLessonResponse, QuizByLessonQuiz, QuizAttemptSummary } from "@lms-279/shared-types";
+import type { LessonSessionResponse, QuizByLessonResponse, QuizByLessonQuiz, QuizAttemptSummary, StudentLessonDetailResponse } from "@lms-279/shared-types";
 import { useVideoCompletion } from "@/lib/hooks/use-video-completion";
 import { LessonPdfButton } from "@/components/lesson/LessonPdfButton";
 import type { LessonResource, LessonPdfDownloadResponse } from "@lms-279/shared-types";
@@ -118,14 +118,17 @@ function QuizSection({
   lessonId,
   authFetch,
   enrollmentSetting,
-  onAttemptsLoaded,
+  onQuizStatusChanged,
   onSkipped,
 }: {
   lessonId: string;
   authFetch: <T>(url: string, options?: RequestInit) => Promise<T>;
   enrollmentSetting: { quizAccessUntil: string; videoAccessUntil: string } | null;
-  /** 取得済みの attempt summaries に合格 (isPassed=true) が含まれるかを親に通知。 */
-  onAttemptsLoaded?: (hasPassed: boolean) => void;
+  /**
+   * テスト状態 (受験結果・スキップ状態) が変化しうるたびに親へ通知する。
+   * 親はこれを機にレッスン詳細 (資料PDFダウンロード可否含む) を再取得する。
+   */
+  onQuizStatusChanged?: () => void;
   /** テストスキップ成功時に親へ通知（セッションstateクリア等のため）。 */
   onSkipped?: () => void;
 }) {
@@ -161,9 +164,6 @@ function QuizSection({
       setQuiz(data.quiz);
       setUserAttemptCount(data.userAttemptCount);
       setAttemptSummaries(data.attemptSummaries);
-      if (onAttemptsLoaded) {
-        onAttemptsLoaded(data.attemptSummaries.some((a) => a.isPassed === true));
-      }
       if (data.accessExpired) {
         setQuizAccessExpired(true);
       }
@@ -184,8 +184,11 @@ function QuizSection({
       method: "POST",
     });
     await fetchQuiz();
+    // スキップ状態は資料PDFダウンロード可否 (親が保持) にも影響するため親へ再取得を促す
+    // (テスト任意化 Stage 4)。初回マウント時の fetchQuiz には付随させない (二重フェッチ防止)。
+    onQuizStatusChanged?.();
     onSkipped?.();
-  }, [authFetch, quiz, fetchQuiz, onSkipped]);
+  }, [authFetch, quiz, fetchQuiz, onQuizStatusChanged, onSkipped]);
 
   useEffect(() => {
     fetchQuiz();
@@ -283,6 +286,8 @@ function QuizSection({
       setQuizState("result");
       // 受験回数などを更新
       await fetchQuiz();
+      // 合格状態は資料PDFダウンロード可否 (親が保持) にも影響するため親へ再取得を促す
+      onQuizStatusChanged?.();
     } catch (e) {
       setQuizError(e instanceof Error ? e.message : "テストの提出に失敗しました");
     } finally {
@@ -753,10 +758,10 @@ export default function StudentLessonDetailPage() {
 
   // 講座資料 PDF 用 (ADR-036)
   const [lessonResource, setLessonResource] = useState<LessonResource | null>(null);
-  const [quizPassed, setQuizPassed] = useState(false);
-  const handleAttemptsLoaded = useCallback((hasPassed: boolean) => {
-    setQuizPassed(hasPassed);
-  }, []);
+  // テスト任意化 Stage 4: サーバー権威のダウンロード可否 (GET /lessons/:lessonId から取得)。
+  // 初期値は安全側 (押せない) に倒す。
+  const [pdfDownloadEligibility, setPdfDownloadEligibility] =
+    useState<StudentLessonDetailResponse["pdfDownloadEligibility"]>("needs_quiz_pass");
   // テスト任意化 Stage 3: SessionRulesNotice の文言分岐用（テナント単位の生ポリシー値。
   // 動画視聴開始前から表示される受講ルール欄のため、動画完了後にしか取得できない
   // by-lesson 応答の skipAvailable(受講者個別の合成値)ではなくこちらを使う）
@@ -806,21 +811,24 @@ export default function StudentLessonDetailPage() {
     fetchCourse();
   }, [fetchCourse]);
 
-  // レッスン詳細を取得 (講座資料 PDF のメタ + テナントのスキップ可否ポリシーを含む)
+  // レッスン詳細を取得 (講座資料 PDF のメタ + テナントのスキップ可否ポリシー +
+  // PDF ダウンロード可否を含む)。テスト受験・スキップ後に再取得するため useCallback 化。
+  const fetchLessonDetail = useCallback(async () => {
+    try {
+      const data = await authFetch<StudentLessonDetailResponse>(`/api/v1/lessons/${lessonId}`);
+      setLessonResource(data.resource ?? null);
+      setQuizSkipEnabled(data.quizSkipEnabled ?? false);
+      setPdfDownloadEligibility(data.pdfDownloadEligibility ?? "needs_quiz_pass");
+    } catch {
+      // resource 未取得時は何も表示しない (PDF DL ボタンは hidden になる)
+      setLessonResource(null);
+    }
+  }, [authFetch, lessonId]);
+
   useEffect(() => {
     if (authLoading) return;
-    authFetch<{ lesson: unknown; resource?: LessonResource; quizSkipEnabled?: boolean }>(
-      `/api/v1/lessons/${lessonId}`
-    )
-      .then((data) => {
-        setLessonResource(data.resource ?? null);
-        setQuizSkipEnabled(data.quizSkipEnabled ?? false);
-      })
-      .catch(() => {
-        // resource 未取得時は何も表示しない (PDF DL ボタンは hidden になる)
-        setLessonResource(null);
-      });
-  }, [authFetch, authLoading, lessonId]);
+    fetchLessonDetail();
+  }, [authLoading, fetchLessonDetail]);
 
   // ============================================================
   // セッション（入退室管理）
@@ -1160,7 +1168,7 @@ export default function StudentLessonDetailPage() {
             lessonId={lessonId}
             authFetch={authFetch}
             enrollmentSetting={enrollmentSetting}
-            onAttemptsLoaded={handleAttemptsLoaded}
+            onQuizStatusChanged={fetchLessonDetail}
             onSkipped={() => setSession(null)}
           />
         ) : (
@@ -1182,7 +1190,7 @@ export default function StudentLessonDetailPage() {
       {/* 講座資料 PDF ダウンロード (ADR-036) */}
       <LessonPdfButton
         resource={lessonResource ?? undefined}
-        quizPassed={quizPassed}
+        downloadEligibility={pdfDownloadEligibility}
         videoAccessExpired={isVideoAccessExpired}
         fetchDownloadUrl={fetchPdfDownloadUrl}
       />

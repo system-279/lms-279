@@ -13,7 +13,7 @@ describe("LessonPdfButton", () => {
     render(
       <LessonPdfButton
         resource={RESOURCE}
-        quizPassed={false}
+        downloadEligibility="needs_quiz_pass"
         fetchDownloadUrl={vi.fn()}
       />,
     );
@@ -22,11 +22,24 @@ describe("LessonPdfButton", () => {
     expect(screen.getByText(/テスト合格後にダウンロード/)).toBeInTheDocument();
   });
 
+  it("スキップ済みでテナント許可なし時: disabled + スキップ向け説明テキスト表示", () => {
+    render(
+      <LessonPdfButton
+        resource={RESOURCE}
+        downloadEligibility="blocked_by_skip"
+        fetchDownloadUrl={vi.fn()}
+      />,
+    );
+    const button = screen.getByRole("button", { name: /講座資料 PDF をダウンロード/ });
+    expect(button).toBeDisabled();
+    expect(screen.getByText(/テストをスキップ/)).toBeInTheDocument();
+  });
+
   it("AC-13 受講期間切れ時: 何も表示しない", () => {
     const { container } = render(
       <LessonPdfButton
         resource={RESOURCE}
-        quizPassed={true}
+        downloadEligibility="allowed"
         videoAccessExpired={true}
         fetchDownloadUrl={vi.fn()}
       />,
@@ -38,7 +51,7 @@ describe("LessonPdfButton", () => {
     const { container } = render(
       <LessonPdfButton
         resource={undefined}
-        quizPassed={true}
+        downloadEligibility="allowed"
         fetchDownloadUrl={vi.fn()}
       />,
     );
@@ -53,7 +66,7 @@ describe("LessonPdfButton", () => {
       expiresAt: "2026-05-17T13:15:00Z",
     });
     render(
-      <LessonPdfButton resource={RESOURCE} quizPassed={true} fetchDownloadUrl={fetchMock} />,
+      <LessonPdfButton resource={RESOURCE} downloadEligibility="allowed" fetchDownloadUrl={fetchMock} />,
     );
     fireEvent.click(screen.getByRole("button", { name: /講座資料 PDF をダウンロード/ }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
@@ -70,7 +83,7 @@ describe("LessonPdfButton", () => {
   it("ダウンロード失敗時: エラーメッセージを表示する", async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error("一時的に取得できません"));
     render(
-      <LessonPdfButton resource={RESOURCE} quizPassed={true} fetchDownloadUrl={fetchMock} />,
+      <LessonPdfButton resource={RESOURCE} downloadEligibility="allowed" fetchDownloadUrl={fetchMock} />,
     );
     fireEvent.click(screen.getByRole("button", { name: /講座資料 PDF をダウンロード/ }));
     await waitFor(() => {

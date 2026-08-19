@@ -27,8 +27,13 @@ export function resolveTenantQuizPolicy(policy: TenantQuizPolicy | null): {
   };
 }
 
-// Stage 4 で PDF ダウンロードゲートを実装する際、
-// quizSkipEnabled && pdfDownloadAllowedForSkipped の AND を ad-hoc な条件式で
-// 書かせないよう、ここに canDownloadPdfAfterQuizSkip(policy) 相当の名前付き純粋関数を追加する
-// （codex plan review 指摘対応、実装計画 imperative-bubbling-dijkstra.md 設計判断6）。
-// Stage 2 では未使用のため、実装は Stage 4 着手時まで見送る。
+/**
+ * スキップ済み受講者が講座資料PDFをダウンロードできるかを判定する（Stage 4）。
+ * マスタースイッチ（quizSkipEnabled）が OFF の場合、サブ設定
+ * （pdfDownloadAllowedForSkipped）の値が残っていてもダウンロードは許可しない
+ * （設計判断6、AND を ad-hoc な条件式で書かせないための名前付き純粋関数）。
+ */
+export function canDownloadPdfAfterQuizSkip(policy: TenantQuizPolicy | null): boolean {
+  const resolved = resolveTenantQuizPolicy(policy);
+  return resolved.quizSkipEnabled && resolved.pdfDownloadAllowedForSkipped;
+}

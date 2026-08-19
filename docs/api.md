@@ -81,10 +81,12 @@
 | POST | `/super/master/lessons/:lessonId/pdf` | アップロード完了確認＋メタ書込み | Super Admin |
 | DELETE | `/super/master/lessons/:lessonId/pdf` | PDF削除（メタクリア＋GCS削除） | Super Admin |
 | POST | `/super/master/courses/:courseId/sync-resources` | 配信先テナントへPDFメタ遡及反映 | Super Admin |
-| GET | `/lessons/:lessonId` | レッスン詳細（`resource?` 含む、`pdfGcsPath` 除外） | Student |
-| GET | `/lessons/:lessonId/pdf-download` | DL用署名URL取得（15min有効、合格+期間ゲート） | Student |
+| GET | `/lessons/:lessonId` | レッスン詳細（`resource?` / `pdfDownloadEligibility` 含む、`pdfGcsPath` 除外） | Student |
+| GET | `/lessons/:lessonId/pdf-download` | DL用署名URL取得（15min有効、合格 OR (スキップ+テナント許可) + 期間ゲート、テスト任意化Stage4） | Student |
 
-エラーコード: `invalid_file_type` / `file_too_large` / `lesson_not_found` / `quiz_not_passed` / `access_expired` / `resource_not_found` / `gcs_unavailable` / `gcs_file_missing`。`gcs_unavailable` のみ transient (FE retry-after)、他は permanent。
+`pdfDownloadEligibility`（`GET /lessons/:lessonId` 応答）: `allowed` / `needs_quiz_pass` / `blocked_by_skip` の3値。合格 OR (スキップ済み AND テナントの `quizSkipEnabled && pdfDownloadAllowedForSkipped`) で `allowed`。
+
+エラーコード: `invalid_file_type` / `file_too_large` / `lesson_not_found` / `quiz_not_passed` / `pdf_not_allowed_for_skipped` / `access_expired` / `resource_not_found` / `gcs_unavailable` / `gcs_file_missing`。`gcs_unavailable` のみ transient (FE retry-after)、他は permanent。
 
 ### テスト
 
