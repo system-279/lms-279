@@ -225,5 +225,22 @@ describe("テスト任意化 Stage 5: 有効セッション必須化 + 合格後
       expect(submitRes.status).toBe(200);
       expect(submitRes.body.attempt.status).toBe("submitted");
     });
+
+    it("動画なしレッスンはflag=true(default)でもセッションなしの提出が影響を受けない（免除、second opinionレビュー指摘反映）", async () => {
+      await setupLessonWithVideo(false);
+      buildStudentApp();
+      // flag=trueデフォルトのまま、動画なしレッスンではPOST側もセッション免除されているため
+      // セッションなしでattempt作成が成功する
+      const startRes = await studentRequest.post(`/quizzes/${quizId}/attempts`).send({});
+      expect(startRes.status).toBe(201);
+      const attemptId = startRes.body.attempt.id;
+
+      const submitRes = await studentRequest
+        .patch(`/quiz-attempts/${attemptId}`)
+        .send({ answers: { q1: ["q1-a"] } });
+
+      expect(submitRes.status).toBe(200);
+      expect(submitRes.body.attempt.status).toBe("submitted");
+    });
   });
 });

@@ -9,7 +9,6 @@ import { requireUser } from "../../middleware/auth.js";
 import { gradeQuiz, stripCorrectAnswers, randomizeQuiz } from "../../services/quiz-grading.js";
 import { updateLessonProgress } from "../../services/progress.js";
 import {
-  validateSessionDeadline,
   forceExitSession,
   completeSession,
   completeSessionAsQuizSkipped,
@@ -140,10 +139,12 @@ router.get("/quizzes/by-lesson/:lessonId", requireUser, async (req: Request, res
   const skipAvailable =
     quizSkipEnabled && !quizSkipped && !hasPassed && !hasInProgressAttempt && videoCompleted;
 
-  // テスト任意化 Stage 5(ケースD厳格化): retakeBlocked(=合格済み) / sessionRequired
-  // (flag ON かつ動画ありレッスンのみ。動画なしレッスンは免除)
+  // テスト任意化 Stage 5(ケースD厳格化): retakeBlocked(=合格済み)。
+  // sessionRequired は GET /lessons/:lessonId (StudentLessonDetailResponse) 側にのみ持たせる
+  // (SessionRulesNotice の表示条件として唯一そちらで消費されるため。当初こちらにも同名フィールドを
+  // 追加したが FE から一切参照されず、動画有無を求める getVideoByLessonId の呼び出しが
+  // isVideoCompletedOrNotRequired と重複するだけの無駄なクエリだった。second opinion レビュー指摘反映)
   const retakeBlocked = hasPassed;
-  const sessionRequired = isQuizActiveSessionRequired() && (await ds.getVideoByLessonId(lessonId)) !== null;
 
   res.json({
     quiz: {
@@ -162,7 +163,6 @@ router.get("/quizzes/by-lesson/:lessonId", requireUser, async (req: Request, res
     quizSkipped,
     pdfDownloadAllowedForSkipped,
     retakeBlocked,
-    sessionRequired,
   });
 });
 
@@ -532,23 +532,24 @@ router.patch("/quiz-attempts/:attemptId", requireUser, async (req: Request, res:
 
   // セッション制限チェック（出席管理）
   // テスト任意化 Stage 5(ケースD厳格化): QUIZ_REQUIRE_ACTIVE_SESSION=false の場合のみ、
-  // セッション未作成（activeSession=null）でもテスト提出を許可する後方互換経路が残る。
+  // セッション未作成（kind="none"）でもテスト提出を許可する後方互換経路が残る。
   // デフォルト（true）ではセッションなしの提出は下の else 節で拒否される。
-  const activeSession = await ds.getActiveLessonSession(userId, quiz.lessonId);
-  if (activeSession) {
-    if (!validateSessionDeadline(activeSession)) {
-      try {
-        await forceExitSession(ds, activeSession.id, "time_limit");
-      } catch (err) {
-        console.error(`Failed to force-exit session (time_limit): ${activeSession.id}`, err);
-      }
-      res.status(403).json({
-        error: "session_time_exceeded",
-        message: "セッション制限時間を超過したため、セッションが終了しました",
-      });
-      return;
+  // resolveActiveSessionForQuiz は POST 側のゲートと共用する単一の意味論解決ポイント
+  // （second opinion レビュー指摘反映: 以前は本ハンドラが同じ判定を独自実装していた）。
+  const sessionState = await resolveActiveSessionForQuiz(ds, userId, quiz.lessonId);
+  const activeSession = sessionState.kind === "active" ? sessionState.session : null;
+  if (sessionState.kind === "expired") {
+    try {
+      await forceExitSession(ds, sessionState.session.id, "time_limit");
+    } catch (err) {
+      console.error(`Failed to force-exit session (time_limit): ${sessionState.session.id}`, err);
     }
-  } else if (isQuizActiveSessionRequired()) {
+    res.status(403).json({
+      error: "session_time_exceeded",
+      message: "セッション制限時間を超過したため、セッションが終了しました",
+    });
+    return;
+  } else if (sessionState.kind === "none" && isQuizActiveSessionRequired()) {
     const video = await ds.getVideoByLessonId(quiz.lessonId);
     if (video) {
       // 移行期対応: Stage 5 デプロイ前に開始された in-flight attempt を採点前に

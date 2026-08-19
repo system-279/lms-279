@@ -28,7 +28,10 @@
  *
  * 前提:
  *   firestore.indexes.json に (status ASC, deadlineAt ASC) の composite index を追加済み。
- *   `firebase deploy --only firestore:indexes` を手動実行する必要あり（CI/CD には含まれない）。
+ *   .github/workflows/deploy.yml の deploy-firestore-indexes ジョブが main への push 時に
+ *   `firebase deploy --only firestore:indexes` を自動実行するため、本 PR の merge 後に手動操作は
+ *   不要（second opinion レビュー指摘反映: 当初「CI/CD には含まれない」と誤記していたが、
+ *   このリポジトリでは既に自動デプロイされる既存ジョブがある）。
  *
  * 環境変数:
  *   GOOGLE_APPLICATION_CREDENTIALS  サービスアカウント JSON のパス（WIF 環境では external_account JSON）

@@ -75,7 +75,6 @@ function quizByLessonResponse(
     skipAvailable: boolean;
     quizSkipped: boolean;
     retakeBlocked: boolean;
-    sessionRequired: boolean;
   }> = {},
 ) {
   return {
@@ -95,7 +94,6 @@ function quizByLessonResponse(
     pdfDownloadAllowedForSkipped: true,
     // テスト任意化 Stage 5(ケースD厳格化): hasVideo=false のレッスンを使うテストのため免除される
     retakeBlocked: overrides.retakeBlocked ?? false,
-    sessionRequired: overrides.sessionRequired ?? false,
   };
 }
 
