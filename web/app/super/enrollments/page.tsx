@@ -21,6 +21,7 @@ import {
 import { addMonths, addYears } from "date-fns";
 import { useSuperAdminFetch } from "@/lib/super-api";
 import type { TenantEnrollmentSettingResponse } from "@lms-279/shared-types";
+import { TenantQuizPolicyEditor } from "./components/TenantQuizPolicyEditor";
 
 type Tenant = { id: string; name: string };
 
@@ -256,6 +257,11 @@ export default function EnrollmentsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* テスト任意化設定 */}
+      {selectedTenant && (
+        <TenantQuizPolicyEditor key={selectedTenant} tenantId={selectedTenant} />
+      )}
     </div>
   );
 }

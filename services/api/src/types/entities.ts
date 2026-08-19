@@ -351,3 +351,22 @@ export interface TenantEnrollmentSetting {
   createdBy: string;       // スーパー管理者email
   updatedAt: string;
 }
+
+// ========================================
+// テスト任意化（テナント単位スキップ設定）
+// ========================================
+
+/**
+ * テナント単位のテスト任意化設定。
+ * quizSkipEnabled=false（未設定含む）が既定であり、全テナント既定 OFF。
+ * pdfDownloadAllowedForSkipped は quizSkipEnabled=false の状態でも値をそのまま保持する
+ * （マスター OFF 時にサブ設定を強制正規化しない設計判断。詳細: 実装計画 imperative-bubbling-dijkstra.md 設計判断5）。
+ * 実効的な PDF ダウンロード許可判定は quizSkipEnabled && pdfDownloadAllowedForSkipped の AND で行うこと。
+ */
+export interface TenantQuizPolicy {
+  id: string;                          // = "_config"
+  quizSkipEnabled: boolean;            // テスト任意化（スキップ）のマスタースイッチ
+  pdfDownloadAllowedForSkipped: boolean; // スキップ済み受講者への資料PDFダウンロード許可（マスターOFF時も値を保持）
+  updatedBy: string;                   // スーパー管理者email
+  updatedAt: string;
+}
