@@ -96,10 +96,16 @@
 | PATCH | `/admin/lessons/:lessonId/quiz` | テスト更新 | Admin |
 | DELETE | `/admin/lessons/:lessonId/quiz` | テスト削除 | Admin |
 | GET | `/quizzes/:quizId` | テスト取得（正解なし） | Student |
+| GET | `/quizzes/by-lesson/:lessonId` | レッスン紐付けテスト取得（`skipAvailable`/`quizSkipped`含む、テスト任意化） | Student |
 | POST | `/quizzes/:quizId/attempts` | テスト開始 | Student |
+| POST | `/quizzes/:quizId/skip` | テストスキップ（テスト任意化Stage3、ADR-040。冪等、動画完了ゲート無条件適用） | Student |
 | PATCH | `/quiz-attempts/:attemptId` | テスト提出 | Student |
 | GET | `/quiz-attempts/:attemptId/result` | 結果取得 | Student |
 | POST | `/admin/lessons/:lessonId/quiz/generate` | Google DocsからAIテスト生成 | Admin |
+| GET | `/super/tenants/:tenantId/quiz-policy` | テスト任意化設定取得（未設定時は既定値をdefaultで返す） | Super Admin |
+| PUT | `/super/tenants/:tenantId/quiz-policy` | テスト任意化設定更新（`quizSkipEnabled`/`pdfDownloadAllowedForSkipped`） | Super Admin |
+
+`POST /quizzes/:quizId/skip` エラーコード: `not_found` / `quiz_skip_disabled`（テナントポリシーOFF） / `quiz_already_passed`（合格済み） / `attempt_in_progress`（受験中attempt有り）。`POST /quizzes/:quizId/attempts` は既存コードに加え `session_required`（409、有効セッション必須、テスト任意化Stage5・`QUIZ_REQUIRE_ACTIVE_SESSION=true`時） / `quiz_already_passed`（409、合格後再受験の遮断、flag非依存）を追加（ADR-027改訂・ADR-040）。
 
 ### 進捗
 

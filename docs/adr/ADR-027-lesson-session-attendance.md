@@ -1,9 +1,19 @@
 # ADR-027: レッスンセッション出席管理
 
 ## ステータス
-承認済み（2026-06-10 改訂: D 案 動画長+テスト時間の換算退室時刻 #533 follow-up #4 (PR #559 #533 follow-up #3 撤回) / 2026-06-10 改訂: 自動補完 session 滞在時間カラム表示分離 #533 follow-up #3 / 2026-06-10 改訂: 編集前 original snapshot 保持 #556 / 2026-06-10 改訂: PDF 印字時バッジ非表示化 #533 follow-up / 2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
+承認済み（2026-08-19 改訂: テスト任意化 ADR-040、ケースD厳格化(Stage 5)+quiz_skipped退室理由(Stage 3) / 2026-06-10 改訂: D 案 動画長+テスト時間の換算退室時刻 #533 follow-up #4 (PR #559 #533 follow-up #3 撤回) / 2026-06-10 改訂: 自動補完 session 滞在時間カラム表示分離 #533 follow-up #3 / 2026-06-10 改訂: 編集前 original snapshot 保持 #556 / 2026-06-10 改訂: PDF 印字時バッジ非表示化 #533 follow-up / 2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
 
 ## 改訂履歴
+- **2026-08-19（テスト任意化 Stage 3/5、ADR-040）**: **動機**: テスト任意化機能でテストをスキップして完了扱いにする経路（`POST /quizzes/:quizId/skip`）を追加するにあたり、出席セッションにも「スキップで退室」という新しい退室理由が必要になった。あわせて、スキップという正規の抜け道ができたことで、既存のケースD（`activeSession=null` での後方互換受験）という暗黙の抜け道を維持する理由が薄れたため、Stage 5 で厳格化した。
+
+  **Stage 3（スキップ時の出席記録）**: `exitReason` に `quiz_skipped` を追加。スキップ成功時、アクティブセッションがあれば `completeSessionAsQuizSkipped()`（既存 `completeSession` を内部委譲）でセッションを完了させる。アクティブセッションが存在しない場合（動画完了後に一度退室していた等）は新規 `createSyntheticSkippedSession()` で合成セッションを作成する。doc id は `synthetic_skip_{userId}_{lessonId}` という (受講者, レッスン) 単位の決定的IDとし、既存の合格用合成セッション（`createSyntheticCompletedSession`、doc id=`synthetic_{attemptId}`、本ADR上段2026-06-09エントリ参照）とは意図的に別実装にした。attempt単位のdoc id設計そのものが既存の重複行問題の原因だったため、レッスン単位の決定的IDで構造的に1行へ固定する。`entryAt`/`exitAt` は動画長からの換算退室時刻方式（D案、2026-06-10エントリ参照）と対称の設計。
+
+  **Stage 5（ケースD厳格化）**: 本ADRのケース定義表（2026-05-21改訂）における**ケースD（セッション未作成、後方互換）を厳格化**。新規env `QUIZ_REQUIRE_ACTIVE_SESSION`（default `true`）を追加し、`POST /quizzes/:quizId/attempts` に有効セッション必須チェックを追加した。動画のないレッスン（FEがセッションを作らない）は免除する。デフォルト（`true`）ではケースD自体が発生しなくなり、`session_required`（409）が返る。ロールバック用に `false` を指定すると旧挙動（セッション制約スキップ）に戻る。加えて、合格済みユーザーの再受験を `quiz_already_passed`（409、flag非依存で常時適用）として遮断した。理由: (a) `quizBestScore` は既に最高点保持のため再受験の業務的必然性が薄い、(b) 合格後に再受験して`maxAttempts`到達すると`forceExitSession(max_attempts_failed)`が発火し学習データが全消去される「合格を失う」バグ経路をこれで同時に塞げる、(c) スコア訂正の運用退路はスーパー管理者の出席レコード手動編集で既に存在する。PATCH側（提出）は、セッションが提出直前に失効したケースを「採点前に`timed_out`化してから409で拒否し受験回数を消費させない」形で処理する（移行期の飛行中attempt対策）。
+
+  **本番反映は2段階ロールアウト**: `QUIZ_REQUIRE_ACTIVE_SESSION=false`でコードのみ先行デプロイ（挙動不変）→本番監視後、別PRで`=true`へ切替。切替後にケースD行自体が実質的に廃止される。
+
+  **テスト**: `session-quiz-integration.test.ts`（セッションなし後方互換のテストを仕様反転で書き換え）、`quiz-attempt-synthetic-session.test.ts`（削除、既存ケースの一部は`createSyntheticCompletedSession`のユニットテストとして移設）、新規セッションなし→409、期限切れセッション→403、合格済み→409、PATCH提出直前にセッション消失→timed_out化+409+受験回数不消費、`QUIZ_REQUIRE_ACTIVE_SESSION=false`で旧挙動に戻ることの確認。codex review×2（medium/strict-config）+ pr-review-toolkit 3エージェント並列を実施、収束指摘4件を反映済み（PR #604）。
+
 - **2026-06-10 (Phase 3 follow-up #4, #533) — PR #559 (follow-up #3) 撤回 + D 案採用**: **動機**: 前 follow-up #3 (PR #559) は UI 表示分離 (A 案 `"— (テストのみ)"`) で問題回避していたが、開発者から「Firestore データ自体を業務的に正しい値で記録したい」要望。業務ロジック整理 (ADR-019 動画完了ゲートにより自動補完対象は必ず過去に動画視聴完了済) を踏まえ、**滞在時間 = 動画長 + テスト時間** とする D 案に転換。
 
   **変更内容**: `createSyntheticCompletedSession` で **`entryAt = quiz.startedAt` 維持 / `exitAt = startedAt + video.durationSec*1000 + quizDurationMs` (換算退室時刻)** に変更。過去 17 件 (長遊園 12 + 福の種 5) も backfill `update-existing` モードで一括 exitAt 上書き。PR #559 の UI 表示分離コード (`formatRecordStayDuration` / `SYNTHETIC_STAY_DURATION_LABEL` / `stayDurationSortValue`) は削除し `formatStayDuration` 直接利用に復帰。「自動補完」バッジ (#552) / 「編集済」バッジ (#557) / `buildEditPatchBody` / `isStayTimeEdited` は維持。
@@ -82,14 +92,15 @@
 
   **規律装置の本質（初回視聴完遂の担保）は不変**で、初回視聴中（永続 `isComplete=false`）の time_limit は引き続き全リセット。
 
-  ### ケース定義表（2026-05-21 改訂）
+  ### ケース定義表（2026-05-21 改訂、2026-08-19 D行改訂）
 
   | ID | 条件 | 挙動 | 再受験可否 |
   |---|---|---|---|
   | A | 不合格 + セッション内（time_limit 未到達）+ maxAttempts 未到達 | セッション継続 | ✅ 即時再受験 |
   | B | `time_limit` + `sessionVideoCompleted=true`（現セッション内で完了） | リセット skip、in_progress attempt のみ `timed_out` 化 | ✅ 新セッションで再受験 |
   | C | `browser_close`（abandoned） | リセットせず、in_progress attempt のみ `timed_out` 化 | ✅ 新セッションで再受験 |
-  | D | セッション未作成（動画再生せず直接テスト送信） | activeSession=null でセッション制約スキップ | ✅ 受講期間内なら受験可 |
+  | D | セッション未作成（動画再生せず直接テスト送信） | `QUIZ_REQUIRE_ACTIVE_SESSION=true`（default、テスト任意化Stage5厳格化後）では**発生しない**（`session_required`、409）。`=false`（本番先行デプロイ中の現在値）でのみ旧挙動 activeSession=null でセッション制約スキップ | `=true`: ❌ 発生しない / `=false`: ✅ 受講期間内なら受験可 |
+  | D'（新、Stage5） | 合格済みユーザーの再受験試行（flag非依存で常時適用） | `quiz_already_passed`（409） | ❌ 再受験不可 |
   | E | `time_limit` + `sessionVideoCompleted=false` + **永続 `isComplete=false`** | 全リセット（初回視聴中の規律装置） | ❌ 動画から見直し |
   | **E'**（新） | `time_limit` / `pause_timeout` + `sessionVideoCompleted=false` + **永続 `isComplete=true`**（再視聴中の完了経験者）| **リセット skip**、in_progress attempt のみ `timed_out` 化 | ✅ 新セッションで再受験 |
   | F | `max_attempts_failed`（`maxAttempts > 0 && attemptNumber >= maxAttempts`） | 全リセット（永続フラグ無視、規律破り） | ❌ 動画から見直し |

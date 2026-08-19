@@ -103,9 +103,10 @@ npm run test
 - **Google Workspace連携**: DWDでDrive動画インポート + Docsテスト生成（ADR-026）
 - **出席管理**: lesson_sessionsで入退室打刻、15分一時停止/セッション制限時間で強制退室（`SESSION_DURATION_MS` env、デフォルト 2 時間。ADR-027）
 - **テスト戦略**: InMemoryDataSource中心の統合テスト（ADR-028）
-- **講座資料PDF配信**: レッスン単位、テスト合格後DL、`videoAccessUntil`まで有効、新バケット`lms-279-resources`、GCSは全テナント共有（ADR-036）
+- **講座資料PDF配信**: レッスン単位、合格 OR (スキップ AND テナント許可)でDL可、`videoAccessUntil`まで有効、新バケット`lms-279-resources`、GCSは全テナント共有（ADR-036）
 - **タイムゾーン基準**: 受講期限はUTC日末保存、JST表示（ADR-029）
 - **FE-BE共有型**: `@lms-279/shared-types`でAPIレスポンスDTOを共有。新規APIエンドポイント追加時はshared-typesに型を先に定義すること
+- **テスト任意化**: テナント単位でテスト受験を任意化（`quizSkipEnabled`）、スキップ時も動画視聴は必須。ケースD（セッションなし受験）は`QUIZ_REQUIRE_ACTIVE_SESSION`で厳格化、合格後再受験は常時遮断（ADR-040, ADR-019/027/036/020改訂）
 
 全ADRは`docs/adr/`を参照。
 
@@ -120,7 +121,7 @@ npm run test
 Firestore: `tenants/{tenantId}/` 配下に全データ。
 詳細は`docs/data-model.md`を参照。
 
-主要コレクション: courses, lessons, videos, video_events, video_analytics, quizzes, quiz_attempts, user_progress, course_progress, lesson_sessions
+主要コレクション: courses, lessons, videos, video_events, video_analytics, quizzes, quiz_attempts, user_progress, course_progress, lesson_sessions, quiz_policy
 
 ## ドキュメント更新ルール
 
