@@ -9,6 +9,8 @@ type SessionInfo = {
 
 interface SessionRulesNoticeProps {
   session: SessionInfo | null;
+  /** テスト任意化(テナント単位スキップ)がこのテナントで有効か。ON時は退室・再受験の文言をスキップ経路も含む表現に差し替える。 */
+  quizSkipEnabled?: boolean;
 }
 
 // 入室時刻と期限から制限時間を「3時間」「2.5時間」のような表記に整える。
@@ -24,7 +26,7 @@ export function formatDurationHours(entryAtIso: string, deadlineAtIso: string): 
   return Number.isInteger(hours) ? `${hours}時間` : `${hours.toFixed(1)}時間`;
 }
 
-export function SessionRulesNotice({ session }: SessionRulesNoticeProps) {
+export function SessionRulesNotice({ session, quizSkipEnabled }: SessionRulesNoticeProps) {
   const formatDeadline = (isoString: string): string => {
     const d = new Date(isoString);
     const h = d.getHours().toString().padStart(2, "0");
@@ -44,8 +46,16 @@ export function SessionRulesNotice({ session }: SessionRulesNoticeProps) {
         <li className="font-medium text-foreground">
           動画は途中をスキップせず、最初から最後まで視聴してください。スキップした区間は視聴完了にカウントされず、テストを受けられません
         </li>
-        <li>テストに合格すると「退室」（出席完了）として記録されます</li>
-        <li>テストに不合格の場合は退室となりません。合格するまで再受験できます</li>
+        <li>
+          {quizSkipEnabled
+            ? "テストに合格する、またはスキップすると「退室」（出席完了）として記録されます"
+            : "テストに合格すると「退室」（出席完了）として記録されます"}
+        </li>
+        <li>
+          {quizSkipEnabled
+            ? "テストに不合格の場合は退室となりません。合格するか、テストをスキップするまで再受験できます"
+            : "テストに不合格の場合は退室となりません。合格するまで再受験できます"}
+        </li>
         <li>動画を15分以上一時停止すると、強制退室となります</li>
         <li>
           入室から{durationLabel}以内にテストに合格してください。超過すると強制退室となり、動画視聴・テスト回答がリセットされます（最初からやり直しです）

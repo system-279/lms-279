@@ -101,4 +101,26 @@ describe("SessionRulesNotice", () => {
     );
     expect(screen.getByText(/⏰ 制限時間: \d{2}:\d{2} まで/)).toBeInTheDocument();
   });
+
+  it("quizSkipEnabled未指定(false扱い)では従来通り「テストに合格すると」の文言", () => {
+    render(<SessionRulesNotice session={null} />);
+    expect(
+      screen.getByText("テストに合格すると「退室」（出席完了）として記録されます")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("テストに不合格の場合は退室となりません。合格するまで再受験できます")
+    ).toBeInTheDocument();
+  });
+
+  it("quizSkipEnabled=trueではスキップ経路を含む文言に差し替わる", () => {
+    render(<SessionRulesNotice session={null} quizSkipEnabled={true} />);
+    expect(
+      screen.getByText("テストに合格する、またはスキップすると「退室」（出席完了）として記録されます")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "テストに不合格の場合は退室となりません。合格するか、テストをスキップするまで再受験できます"
+      )
+    ).toBeInTheDocument();
+  });
 });

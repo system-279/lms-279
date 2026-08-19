@@ -13,7 +13,7 @@
 import { Router, Request, Response } from "express";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
-import { JST_OFFSET_MS, type SuperAttendanceResponse, type SuperStudentProgressResponse, type TenantEnrollmentSettingResponse } from "@lms-279/shared-types";
+import { JST_OFFSET_MS, type SuperAttendanceResponse, type SuperStudentProgressResponse, type TenantEnrollmentSettingResponse, type SessionExitReason } from "@lms-279/shared-types";
 import {
   superAdminAuthMiddleware,
   getAllSuperAdmins,
@@ -1109,8 +1109,15 @@ router.patch("/tenants/:tenantId/attendance-report/:sessionId", async (req: Requ
     res.status(400).json({ error: "invalid_time_range", message: "entryAt must be before exitAt" });
     return;
   }
-  const VALID_EXIT_REASONS = ["quiz_submitted", "pause_timeout", "time_limit", "browser_close", "max_attempts_failed"];
-  if (exitReason !== undefined && (typeof exitReason !== "string" || !VALID_EXIT_REASONS.includes(exitReason))) {
+  const VALID_EXIT_REASONS = [
+    "quiz_submitted",
+    "pause_timeout",
+    "time_limit",
+    "browser_close",
+    "max_attempts_failed",
+    "quiz_skipped",
+  ] as const satisfies readonly SessionExitReason[];
+  if (exitReason !== undefined && (typeof exitReason !== "string" || !(VALID_EXIT_REASONS as readonly string[]).includes(exitReason))) {
     res.status(400).json({ error: "invalid_exitReason", message: `exitReason must be one of: ${VALID_EXIT_REASONS.join(", ")}` });
     return;
   }

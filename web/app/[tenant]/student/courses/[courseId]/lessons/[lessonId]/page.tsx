@@ -17,6 +17,8 @@ import type { LessonSessionResponse, QuizByLessonResponse, QuizByLessonQuiz, Qui
 import { useVideoCompletion } from "@/lib/hooks/use-video-completion";
 import { LessonPdfButton } from "@/components/lesson/LessonPdfButton";
 import type { LessonResource, LessonPdfDownloadResponse } from "@lms-279/shared-types";
+import { QuizSkipButton } from "@/components/quiz/QuizSkipButton";
+import type { QuizSkipResponse } from "@lms-279/shared-types";
 
 // ============================================================
 // 型定義
@@ -117,12 +119,15 @@ function QuizSection({
   authFetch,
   enrollmentSetting,
   onAttemptsLoaded,
+  onSkipped,
 }: {
   lessonId: string;
   authFetch: <T>(url: string, options?: RequestInit) => Promise<T>;
   enrollmentSetting: { quizAccessUntil: string; videoAccessUntil: string } | null;
   /** 取得済みの attempt summaries に合格 (isPassed=true) が含まれるかを親に通知。 */
   onAttemptsLoaded?: (hasPassed: boolean) => void;
+  /** テストスキップ成功時に親へ通知（セッションstateクリア等のため）。 */
+  onSkipped?: () => void;
 }) {
   const [quizState, setQuizState] = useState<QuizUIState>("idle");
   const [quiz, setQuiz] = useState<Quiz | null>(null);
@@ -138,6 +143,9 @@ function QuizSection({
   const [loadingSubmit, setLoadingSubmit] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
   const [quizAccessExpired, setQuizAccessExpired] = useState(false);
+  // テスト任意化 Stage 3
+  const [skipAvailable, setSkipAvailable] = useState(false);
+  const [quizSkipped, setQuizSkipped] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const answersRef = useRef(answers);
   answersRef.current = answers;
@@ -159,12 +167,25 @@ function QuizSection({
       if (data.accessExpired) {
         setQuizAccessExpired(true);
       }
+      // API ロールバック等で旧レスポンス形状(フィールド欠損)になった場合も例外にしない
+      setSkipAvailable(data.skipAvailable ?? false);
+      setQuizSkipped(data.quizSkipped ?? false);
     } catch (e) {
       setQuizError(e instanceof Error ? e.message : "テスト情報の取得に失敗しました");
     } finally {
       setLoadingQuiz(false);
     }
   }, [authFetch, lessonId]);
+
+  // テストスキップ実行
+  const handleSkip = useCallback(async () => {
+    if (!quiz) return;
+    await authFetch<QuizSkipResponse>(`/api/v1/quizzes/${quiz.id}/skip`, {
+      method: "POST",
+    });
+    await fetchQuiz();
+    onSkipped?.();
+  }, [authFetch, quiz, fetchQuiz, onSkipped]);
 
   useEffect(() => {
     fetchQuiz();
@@ -355,6 +376,14 @@ function QuizSection({
             受験可能な回数の上限に達しています。
           </p>
         ) : null}
+
+        {/* テスト任意化 Stage 3: スキップ済み表示 / スキップボタン */}
+        {quizSkipped && (
+          <p className="text-sm text-muted-foreground">
+            このテストはスキップ済みです。
+          </p>
+        )}
+        <QuizSkipButton skipAvailable={skipAvailable} onSkip={handleSkip} />
 
         {/* 過去の受験結果 */}
         {attemptSummaries.length > 0 && (
@@ -728,6 +757,10 @@ export default function StudentLessonDetailPage() {
   const handleAttemptsLoaded = useCallback((hasPassed: boolean) => {
     setQuizPassed(hasPassed);
   }, []);
+  // テスト任意化 Stage 3: SessionRulesNotice の文言分岐用（テナント単位の生ポリシー値。
+  // 動画視聴開始前から表示される受講ルール欄のため、動画完了後にしか取得できない
+  // by-lesson 応答の skipAvailable(受講者個別の合成値)ではなくこちらを使う）
+  const [quizSkipEnabled, setQuizSkipEnabled] = useState(false);
   const fetchPdfDownloadUrl = useCallback(async (): Promise<LessonPdfDownloadResponse> => {
     return authFetch<LessonPdfDownloadResponse>(`/api/v1/lessons/${lessonId}/pdf-download`);
   }, [authFetch, lessonId]);
@@ -773,12 +806,15 @@ export default function StudentLessonDetailPage() {
     fetchCourse();
   }, [fetchCourse]);
 
-  // レッスン詳細を取得 (講座資料 PDF のメタを含む)
+  // レッスン詳細を取得 (講座資料 PDF のメタ + テナントのスキップ可否ポリシーを含む)
   useEffect(() => {
     if (authLoading) return;
-    authFetch<{ lesson: unknown; resource?: LessonResource }>(`/api/v1/lessons/${lessonId}`)
+    authFetch<{ lesson: unknown; resource?: LessonResource; quizSkipEnabled?: boolean }>(
+      `/api/v1/lessons/${lessonId}`
+    )
       .then((data) => {
         setLessonResource(data.resource ?? null);
+        setQuizSkipEnabled(data.quizSkipEnabled ?? false);
       })
       .catch(() => {
         // resource 未取得時は何も表示しない (PDF DL ボタンは hidden になる)
@@ -1030,7 +1066,7 @@ export default function StudentLessonDetailPage() {
       </div>
 
       {/* 受講ルール */}
-      <SessionRulesNotice session={session} />
+      <SessionRulesNotice session={session} quizSkipEnabled={quizSkipEnabled} />
 
       {/* 受講期限の警告 */}
       {enrollmentSetting && !videoAccessExpired && (
@@ -1125,6 +1161,7 @@ export default function StudentLessonDetailPage() {
             authFetch={authFetch}
             enrollmentSetting={enrollmentSetting}
             onAttemptsLoaded={handleAttemptsLoaded}
+            onSkipped={() => setSession(null)}
           />
         ) : (
           /* 動画未完了ゲートメッセージ */

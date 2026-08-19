@@ -103,6 +103,7 @@ function isoToTimeJST(iso: string | null): string {
 
 const EXIT_REASON_LABELS: Record<string, string> = {
   quiz_submitted: "テスト合格",
+  quiz_skipped: "テストスキップ",
   pause_timeout: "一時停止超過",
   time_limit: "時間制限",
   browser_close: "ブラウザ終了",

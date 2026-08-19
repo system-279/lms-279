@@ -172,6 +172,20 @@ describe("evaluateCompletionEligibility", () => {
         expect(result.courseIdsSnapshot).toEqual(["zebra", "apple"]);
       }
     });
+
+    it("テスト任意化(スキップ経由)で完了したコースも isCompleted=true であれば eligible になる（完了の発生源を区別しない）", () => {
+      // この関数は course_progress.isCompleted / totalLessons のみを見る純粋関数で、
+      // lessonCompleted が quizPassed 経由か quizSkipped 経由かを一切区別しない
+      // (computeLessonCompleted の videoCompleted && (quizPassed || quizSkipped) が
+      // 既に isCompleted に反映済みという前提)。この不変条件をテストで固定する。
+      // 実際のスキップ API → course_progress 再計算の結合テストは
+      // quiz-skip.test.ts の「スキップ経由でのみ完了したコースは...」ケースを参照。
+      const result = evaluateCompletionEligibility(
+        [course("c-skip")],
+        [progress("c-skip")],
+      );
+      expect(result.eligible).toBe(true);
+    });
   });
 
   describe("defensive guard (code-review #1 / #2)", () => {
