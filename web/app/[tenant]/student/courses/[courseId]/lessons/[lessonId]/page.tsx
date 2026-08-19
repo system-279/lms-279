@@ -170,15 +170,12 @@ function QuizSection({
       // API ロールバック等で旧レスポンス形状(フィールド欠損)になった場合も例外にしない
       setSkipAvailable(data.skipAvailable ?? false);
       setQuizSkipped(data.quizSkipped ?? false);
-      // 受験結果・スキップ状態は資料PDFダウンロード可否 (親が保持) にも影響するため、
-      // 取得のたびに親へ再取得を促す (テスト任意化 Stage 4)
-      onQuizStatusChanged?.();
     } catch (e) {
       setQuizError(e instanceof Error ? e.message : "テスト情報の取得に失敗しました");
     } finally {
       setLoadingQuiz(false);
     }
-  }, [authFetch, lessonId, onQuizStatusChanged]);
+  }, [authFetch, lessonId]);
 
   // テストスキップ実行
   const handleSkip = useCallback(async () => {
@@ -187,8 +184,11 @@ function QuizSection({
       method: "POST",
     });
     await fetchQuiz();
+    // スキップ状態は資料PDFダウンロード可否 (親が保持) にも影響するため親へ再取得を促す
+    // (テスト任意化 Stage 4)。初回マウント時の fetchQuiz には付随させない (二重フェッチ防止)。
+    onQuizStatusChanged?.();
     onSkipped?.();
-  }, [authFetch, quiz, fetchQuiz, onSkipped]);
+  }, [authFetch, quiz, fetchQuiz, onQuizStatusChanged, onSkipped]);
 
   useEffect(() => {
     fetchQuiz();
@@ -286,6 +286,8 @@ function QuizSection({
       setQuizState("result");
       // 受験回数などを更新
       await fetchQuiz();
+      // 合格状態は資料PDFダウンロード可否 (親が保持) にも影響するため親へ再取得を促す
+      onQuizStatusChanged?.();
     } catch (e) {
       setQuizError(e instanceof Error ? e.message : "テストの提出に失敗しました");
     } finally {
