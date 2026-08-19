@@ -15,7 +15,7 @@ updated: 2026-08-19
 
 ## 進行中のtasks
 - [x] Stage 1: データモデル+進捗ロジック（`quizSkipped`/`quizSkippedAt`追加、`computeLessonCompleted`実装、PR #594、2026-08-18 main merge済み）
-- [ ] Stage 2: テナント設定(既定OFF) — `TenantQuizPolicy`型+Firestore/InMemory実装+API+`TenantQuizPolicyEditor`
+- [x] Stage 2: テナント設定(既定OFF) — `TenantQuizPolicy`型+Firestore/InMemory実装+API+`TenantQuizPolicyEditor`（PR #596、2026-08-19 main merge済み。Codex review(medium+high共に0件)+pr-review-toolkit second opinion(Medium 1件、logger.warnテスト未検証を反映済み)）
 - [ ] Stage 3: スキップ機能本体 — `POST /quizzes/:quizId/skip`+`createSyntheticSkippedSession`+受講者UI(スキップボタン・確認ダイアログ)
 - [ ] Stage 4: 資料PDF許可 — PDFゲート変更(合格 OR (スキップ AND テナント許可))+`LessonPdfButton`3状態化
 - [ ] Stage 5: ケースD厳格化(単独リリース必須、Stage 3/4と同一リリースにしない) — 有効セッション必須化+合格後再受験の遮断+`QUIZ_REQUIRE_ACTIVE_SESSION`env
