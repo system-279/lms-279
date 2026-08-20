@@ -107,6 +107,7 @@ npm run test
 - **タイムゾーン基準**: 受講期限はUTC日末保存、JST表示（ADR-029）
 - **FE-BE共有型**: `@lms-279/shared-types`でAPIレスポンスDTOを共有。新規APIエンドポイント追加時はshared-typesに型を先に定義すること
 - **テスト任意化**: テナント単位でテスト受験を任意化（`quizSkipEnabled`）、スキップ時も動画視聴は必須。ケースD（セッションなし受験）は`QUIZ_REQUIRE_ACTIVE_SESSION`で厳格化、合格後再受験は常時遮断（ADR-040, ADR-019/027/036/020改訂）
+- **出席レコード異常検出**: 重複（`overlap_previous`）/負滞在（`negative_duration`）/放置active（`stale_active`）の3種をオンザフライ計算で検知、出席レポートにバッジ表示（DBスキーマ変更なし。ADR-027改訂）
 
 全ADRは`docs/adr/`を参照。
 

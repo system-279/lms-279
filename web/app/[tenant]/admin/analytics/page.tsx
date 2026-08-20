@@ -30,6 +30,11 @@ import type {
   LessonSessionStatus,
   SessionExitReason,
 } from "@lms-279/shared-types";
+import {
+  ANOMALY_TOOLTIPS,
+  anomalyLabel,
+  hasAnomaly,
+} from "@/app/super/attendance/_helpers/anomaly";
 
 // ─── UI用ローカル型 ──────────────────────────────────────────────
 
@@ -739,6 +744,7 @@ function AttendanceTab() {
                   <TableHead>ステータス</TableHead>
                   <TableHead>退室理由</TableHead>
                   <TableHead>所要時間</TableHead>
+                  <TableHead>異常</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -764,11 +770,27 @@ function AttendanceTab() {
                         : "-"}
                     </TableCell>
                     <TableCell className="text-sm">{rec.durationMin}分</TableCell>
+                    <TableCell className="text-sm">
+                      {hasAnomaly(rec.anomalies) &&
+                        rec.anomalies!.map((a) => (
+                          <Badge
+                            key={a}
+                            variant="destructive"
+                            className="mr-1"
+                            title={ANOMALY_TOOLTIPS[a]}
+                          >
+                            {anomalyLabel(a)}
+                          </Badge>
+                        ))}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           )}
+          <p className="text-xs text-muted-foreground">
+            ※ 異常検知は同一コース内の記録のみで判定しています（コースを跨いだ重複は検知対象外）。
+          </p>
         </div>
       ) : null}
     </div>

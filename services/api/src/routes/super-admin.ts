@@ -14,6 +14,7 @@ import { Router, Request, Response } from "express";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import { JST_OFFSET_MS, type SuperAttendanceResponse, type SuperStudentProgressResponse, type TenantEnrollmentSettingResponse, type SessionExitReason } from "@lms-279/shared-types";
+import { detectSessionAnomalies, type AnomalyCandidate } from "../services/session-anomaly.js";
 import {
   superAdminAuthMiddleware,
   getAllSuperAdmins,
@@ -1067,8 +1068,23 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
     };
   });
 
+  // 異常検知（F2、ADR-027）: super レポートはユーザー単位・コース跨ぎで判定
+  const anomalyCandidates: AnomalyCandidate[] = records.map((r) => ({
+    sessionId: r.id,
+    userId: r.userId,
+    status: r.status,
+    entryAt: r.entryAt,
+    exitAt: r.exitAt,
+    isSynthetic: r.isSynthetic,
+  }));
+  const anomaliesBySessionId = detectSessionAnomalies(anomalyCandidates, new Date());
+  const recordsWithAnomalies = records.map((r) => ({
+    ...r,
+    anomalies: anomaliesBySessionId.get(r.id),
+  }));
+
   // デフォルトソート: 受講者名 → コース名 → レッスン名
-  records.sort((a, b) => {
+  recordsWithAnomalies.sort((a, b) => {
     const nameComp = (a.userName ?? "").localeCompare(b.userName ?? "", "ja");
     if (nameComp !== 0) return nameComp;
     const courseComp = a.courseName.localeCompare(b.courseName, "ja");
@@ -1079,8 +1095,8 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
   const response: SuperAttendanceResponse = {
     tenantId,
     tenantName: tenantDoc.data()?.name ?? tenantId,
-    records,
-    totalRecords: records.length,
+    records: recordsWithAnomalies,
+    totalRecords: recordsWithAnomalies.length,
   };
   res.json(response);
 });
