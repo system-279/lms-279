@@ -37,3 +37,6 @@ updated: 2026-08-20 (Firestore複合indexデプロイ完了・ミッション達
 
 ## 🔄 中断点（in-flight）
 なし（全タスク完了）
+
+## 🔔 監視中
+- PR #620（`QUIZ_REQUIRE_ACTIVE_SESSION=true`本番切替のロールバック弁、2026-08-20作成）は観察期間を置いて維持する方針（2026-08-21、決裁者確認）。`/quizzes/:quizId/attempts`の409(`session_required`/`session_time_exceeded`)発生率異常、または正当な受講者からの問い合わせが確認されない限りmergeしない。観察期間終了の目安なし（次回`/catchup`等で状況確認し、問題なければクローズを検討）。
