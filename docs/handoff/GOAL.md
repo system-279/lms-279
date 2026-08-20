@@ -22,4 +22,4 @@ updated: 2026-08-20
 - [ ] Stage 6: ADR-040新規+ADR-019/027/036/020改訂+ドキュメント更新（PR #608 main merge済み）+ 重複行整理Phase A（読み取り専用監査スクリプト、PR #609 main merge済み）は完了。Phase A本番監査を実行（`audit-duplicate-synthetic-sessions.yml`が`@lms-279/shared-types`のbuildステップ欠落で初回失敗→PR #613で修正・再実行成功）。実測結果（全テナント横断・3テナント）: 複数行候補62グループ/余剰行101行、うちprotected(super-admin編集済)27グループ、synthetic_skip_multi異常シグナルは0件。Phase B決定: 対応が必要なsafeグループはmixed_synthetic_real 2件(atali82iテナント)のみのため自動統合/削除スクリプトの新規開発は見送り、super-adminによる手動編集で対応する方針。監査スクリプトは`schedule`(毎週月曜)による定期監視に転用し、異常検知時は終了コード3で失敗を可視化するよう改修済み（本PR #614）。**未完了**: safeな2グループの実際の手動編集はPII制限（監査スクリプトはuserId/doc id非出力）によりsuper-adminが別途特定・対応する必要があり、実際の削除/補正操作自体は本セッション時点で未着手。ただし対象特定手順・判定材料・対応方針の選択肢は本セッションで`docs/runbook/stage6-mixed-session-duplicate-cleanup.md`として手順化済み（開発者が実行する前提の準備作業、実行自体はsuper-admin領分のためAIは代行しない）。詳細: ADR-040「Stage 6 Phase A/B」節
 
 ## 🔄 中断点（in-flight）
-なし(Stage 5の実装自体は完了・PR #604 main merge済み。残るのは監視期間経過後の別PRでのflag切替のみで、コードレベルの部分着手は存在しない)
+なし(Stage 5はPR #619で本番flag切替完了・Cloud Run実機確認済み、PR #621でFE側テストカバレッジも追加済み。ロールバック用PR #620は待機状態で保持。残るStage 6の手動編集はsuper-admin領分でAI側の部分着手は存在しない、対象特定手順は`docs/runbook/stage6-mixed-session-duplicate-cleanup.md`に手順化済み)
