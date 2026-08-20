@@ -12,6 +12,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import StudentLessonDetailPage from "../page";
+import { ApiError } from "@/lib/api";
 
 const COURSE_ID = "course-1";
 const LESSON_ID = "lesson-1";
@@ -98,44 +99,54 @@ function quizByLessonResponse(
 }
 
 let quizByLessonOverrides: Parameters<typeof quizByLessonResponse>[0] = {};
+// テスト任意化 Stage 5(ケースD厳格化): POST /quizzes/:quizId/attempts の失敗を
+// テストごとに差し替えるためのフック（既定は成功、attempt作成を返す）。
+let attemptsPostError: ApiError | null = null;
+
+async function defaultAuthFetchImpl(url: string, options?: RequestInit) {
+  const method = options?.method ?? "GET";
+
+  if (url === `/api/v1/courses/${COURSE_ID}`) {
+    return {
+      course: { id: COURSE_ID, name: "コース1", description: "", status: "published", passThreshold: 70 },
+      lessons: [
+        {
+          id: LESSON_ID,
+          courseId: COURSE_ID,
+          title: "レッスン1",
+          order: 0,
+          hasVideo: false,
+          hasQuiz: true,
+          videoUnlocksPrior: false,
+        },
+      ],
+      enrollmentSetting: null,
+    };
+  }
+  if (url === `/api/v1/lessons/${LESSON_ID}`) {
+    return lessonDetailResponse();
+  }
+  if (url.startsWith("/api/v1/lesson-sessions/active")) {
+    return { session: null };
+  }
+  if (url === `/api/v1/quizzes/by-lesson/${LESSON_ID}`) {
+    return quizByLessonResponse(quizByLessonOverrides);
+  }
+  if (url === `/api/v1/quizzes/${QUIZ_ID}/skip` && method === "POST") {
+    return { quizSkipped: true, lessonCompleted: true, sessionRecorded: false };
+  }
+  if (url === `/api/v1/quizzes/${QUIZ_ID}/attempts` && method === "POST") {
+    if (attemptsPostError) throw attemptsPostError;
+    return { attempt: { id: "attempt-1", quizId: QUIZ_ID, startedAt: "2026-01-01T00:00:00.000Z", timeLimitSec: null } };
+  }
+  throw new Error(`unmocked authFetch call: ${method} ${url}`);
+}
 
 beforeEach(() => {
   quizByLessonOverrides = {};
+  attemptsPostError = null;
   authFetchMock.mockReset();
-  authFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
-    const method = options?.method ?? "GET";
-
-    if (url === `/api/v1/courses/${COURSE_ID}`) {
-      return {
-        course: { id: COURSE_ID, name: "コース1", description: "", status: "published", passThreshold: 70 },
-        lessons: [
-          {
-            id: LESSON_ID,
-            courseId: COURSE_ID,
-            title: "レッスン1",
-            order: 0,
-            hasVideo: false,
-            hasQuiz: true,
-            videoUnlocksPrior: false,
-          },
-        ],
-        enrollmentSetting: null,
-      };
-    }
-    if (url === `/api/v1/lessons/${LESSON_ID}`) {
-      return lessonDetailResponse();
-    }
-    if (url.startsWith("/api/v1/lesson-sessions/active")) {
-      return { session: null };
-    }
-    if (url === `/api/v1/quizzes/by-lesson/${LESSON_ID}`) {
-      return quizByLessonResponse(quizByLessonOverrides);
-    }
-    if (url === `/api/v1/quizzes/${QUIZ_ID}/skip` && method === "POST") {
-      return { quizSkipped: true, lessonCompleted: true, sessionRecorded: false };
-    }
-    throw new Error(`unmocked authFetch call: ${method} ${url}`);
-  });
+  authFetchMock.mockImplementation(defaultAuthFetchImpl);
 });
 
 describe("StudentLessonDetailPage フェッチ配線", () => {
@@ -183,6 +194,31 @@ describe("StudentLessonDetailPage フェッチ配線", () => {
 
     await waitFor(() => {
       expect(screen.getByText("既に合格しているため再受験はできません。")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "テストを開始" })).not.toBeInTheDocument();
+  });
+
+  it("テスト任意化 Stage 5(ケースD厳格化): POST /attempts が409 session_requiredで失敗した場合、案内文言が表示される", async () => {
+    attemptsPostError = new ApiError(409, "session_required", "動画を再生してレッスンセッションを開始してから受験してください");
+    render(<StudentLessonDetailPage />);
+
+    const startButton = await screen.findByRole("button", { name: "テストを開始" });
+    fireEvent.click(startButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("動画を再生してレッスンセッションを開始してから受験してください")).toBeInTheDocument();
+    });
+  });
+
+  it("テスト任意化 Stage 5(ケースD厳格化): POST /attempts が409 quiz_already_passedで失敗した場合、再受験不可の状態へ遷移する", async () => {
+    attemptsPostError = new ApiError(409, "quiz_already_passed", "既に合格しています");
+    render(<StudentLessonDetailPage />);
+
+    const startButton = await screen.findByRole("button", { name: "テストを開始" });
+    fireEvent.click(startButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("既に合格しているため再受験できません")).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "テストを開始" })).not.toBeInTheDocument();
   });
