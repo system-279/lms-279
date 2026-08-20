@@ -1,0 +1,84 @@
+name: Audit Duplicate Synthetic Sessions
+
+# Stage 6 Phase A（ADR-040）: lesson_sessions の複数行候補を (userId, lessonId) 単位で
+# グルーピングし、4バケット（mixed_synthetic_real / synthetic_pass_multi /
+# synthetic_skip_multi / real_only_multi）に分類して件数を報告する read-only workflow。
+#
+# 用途:
+#   出席・テスト結果レポート（/super/attendance）に複数行として現れうる
+#   lesson_sessions の実態を計測し、Phase B（統合/削除スクリプト、別PR）の設計入力にする。
+#
+# 安全機構:
+#   - read-only スクリプト（書き込み一切なし）
+#   - userId / email / doc id は一切出力しない（PII 制限、lessonId/tenantId/件数集計のみ）
+#   - --max-docs-per-tenant 上限到達テナントが1件でもあれば、スクリプトは終了コード2で
+#     終了し、この実行結果を Phase B の入力に使うべきでないことをログで明示する
+#   - read-only であっても main ブランチでのみ実行可（doc id に userId が埋め込まれうる
+#     本スクリプト固有の PII 感度を踏まえ、backfill workflow と同水準の制限を課す）
+#
+# セキュリティ: workflow_dispatch 入力はすべて env 経由で受け、run: 内で直接 inputs を
+# 補間しない（command injection 対策）。
+# 参考: https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: 'テナント ID（空 = 全テナント横断）例: 8vexhzpc'
+        required: false
+        type: string
+      top_lessons:
+        description: 'lesson 別上位件数（既定 20、最大 200）'
+        required: false
+        default: '20'
+        type: string
+      max_docs_per_tenant:
+        description: 'テナントあたり読み取り上限件数（既定 20000、最大 200000）'
+        required: false
+        default: '20000'
+        type: string
+
+jobs:
+  audit:
+    name: Audit
+    # main ブランチでのみ実行可（read-only だが PII 感度を踏まえた制限）
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FIREBASE_PROJECT_ID: lms-279
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
+
+      - name: Run audit script
+        env:
+          GOOGLE_CLOUD_PROJECT: lms-279
+          TENANT_ID: ${{ inputs.tenant_id }}
+          TOP_LESSONS: ${{ inputs.top_lessons }}
+          MAX_DOCS_PER_TENANT: ${{ inputs.max_docs_per_tenant }}
+        run: |
+          set -euo pipefail
+          FLAGS=()
+          if [ -n "$TENANT_ID" ]; then FLAGS+=("--tenant-id=$TENANT_ID"); fi
+          if [ -n "$TOP_LESSONS" ]; then FLAGS+=("--top-lessons=$TOP_LESSONS"); fi
+          if [ -n "$MAX_DOCS_PER_TENANT" ]; then FLAGS+=("--max-docs-per-tenant=$MAX_DOCS_PER_TENANT"); fi
+          echo "Running with tenant=${TENANT_ID:-(all)} top-lessons=$TOP_LESSONS max-docs-per-tenant=$MAX_DOCS_PER_TENANT"
+          npx tsx scripts/audit-duplicate-synthetic-sessions.ts "${FLAGS[@]}"
