@@ -223,3 +223,138 @@ describe("StudentLessonDetailPage フェッチ配線", () => {
     expect(screen.queryByRole("button", { name: "テストを開始" })).not.toBeInTheDocument();
   });
 });
+
+describe("StudentLessonDetailPage F1事前ゲート（ADR-027ケースG）", () => {
+  const VIDEO_ID = "video-1";
+
+  async function videoLessonAuthFetchImpl(url: string, options?: RequestInit) {
+    const method = options?.method ?? "GET";
+
+    if (url === `/api/v1/courses/${COURSE_ID}`) {
+      return {
+        course: { id: COURSE_ID, name: "コース1", description: "", status: "published", passThreshold: 70 },
+        lessons: [
+          {
+            id: LESSON_ID,
+            courseId: COURSE_ID,
+            title: "レッスン1",
+            order: 0,
+            hasVideo: true,
+            hasQuiz: true,
+            videoUnlocksPrior: false,
+          },
+        ],
+        enrollmentSetting: null,
+      };
+    }
+    if (url === `/api/v1/lessons/${LESSON_ID}`) {
+      return lessonDetailResponse({ sessionRequired: false });
+    }
+    if (url === `/api/v1/lesson-sessions/active?lessonId=${LESSON_ID}`) {
+      return {
+        session: null,
+        entryCooldown: {
+          blocked: true,
+          retryAfterMs: 42000,
+          nextEntryAllowedAt: "2026-01-01T00:00:42.000Z",
+          previousLessonId: "lesson-0",
+        },
+        entryGapMs: 60000,
+      };
+    }
+    if (url === `/api/v1/lessons/${LESSON_ID}/video`) {
+      return { video: { id: VIDEO_ID, speedLock: true } };
+    }
+    if (url === `/api/v1/videos/${VIDEO_ID}/playback-url`) {
+      return { playbackUrl: "https://example.com/video.mp4" };
+    }
+    if (url === `/api/v1/quizzes/by-lesson/${LESSON_ID}`) {
+      return quizByLessonResponse(quizByLessonOverrides);
+    }
+    throw new Error(`unmocked authFetch call: ${method} ${url}`);
+  }
+
+  beforeEach(() => {
+    quizByLessonOverrides = {};
+    authFetchMock.mockReset();
+    authFetchMock.mockImplementation(videoLessonAuthFetchImpl);
+  });
+
+  it("entryCooldown.blocked=trueのとき、インライン通知が表示されVideoPlayerが無効化オーバーレイを描画する", async () => {
+    render(<StudentLessonDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/あと42秒で開始できます/)).toBeInTheDocument();
+    });
+
+    expect(document.querySelector("[data-testid='video-player-disabled-overlay']")).not.toBeNull();
+  });
+
+  it("entryCooldown.blocked=trueのとき、動画クリックしてもセッション作成(POST /lesson-sessions)は呼ばれない", async () => {
+    render(<StudentLessonDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/あと42秒で開始できます/)).toBeInTheDocument();
+    });
+
+    const video = document.querySelector("video");
+    expect(video).not.toBeNull();
+    if (video) fireEvent.click(video);
+
+    const postCalls = authFetchMock.mock.calls.filter(
+      ([url, opts]) => url === "/api/v1/lesson-sessions" && (opts as RequestInit | undefined)?.method === "POST",
+    );
+    expect(postCalls).toHaveLength(0);
+  });
+
+  it("事前ゲートを通過した後にPOST /lesson-sessionsが409 entry_too_soonを返した場合（タイミング競合のフォールバック）、インライン通知と無効化オーバーレイに切り替わる", async () => {
+    authFetchMock.mockReset();
+    authFetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      const method = options?.method ?? "GET";
+      if (url === `/api/v1/courses/${COURSE_ID}`) {
+        return {
+          course: { id: COURSE_ID, name: "コース1", description: "", status: "published", passThreshold: 70 },
+          lessons: [
+            {
+              id: LESSON_ID, courseId: COURSE_ID, title: "レッスン1", order: 0,
+              hasVideo: true, hasQuiz: true, videoUnlocksPrior: false,
+            },
+          ],
+          enrollmentSetting: null,
+        };
+      }
+      if (url === `/api/v1/lessons/${LESSON_ID}`) return lessonDetailResponse({ sessionRequired: false });
+      // 事前ゲート段階では entryCooldown なし（ブロックされていない）
+      if (url === `/api/v1/lesson-sessions/active?lessonId=${LESSON_ID}`) return { session: null };
+      if (url === `/api/v1/lessons/${LESSON_ID}/video`) return { video: { id: VIDEO_ID, speedLock: true } };
+      if (url === `/api/v1/videos/${VIDEO_ID}/playback-url`) return { playbackUrl: "https://example.com/video.mp4" };
+      if (url === `/api/v1/quizzes/by-lesson/${LESSON_ID}`) return quizByLessonResponse(quizByLessonOverrides);
+      if (url === "/api/v1/lesson-sessions" && method === "POST") {
+        throw new ApiError(409, "entry_too_soon", "前のレッスンを退室してから少し間隔をあけてください", {
+          retryAfterMs: 15000,
+          nextEntryAllowedAt: "2026-01-01T00:00:15.000Z",
+          previousLessonId: "lesson-0",
+        });
+      }
+      throw new Error(`unmocked authFetch call: ${method} ${url}`);
+    });
+
+    render(<StudentLessonDetailPage />);
+
+    const video = await waitFor(() => {
+      const el = document.querySelector("video");
+      expect(el).not.toBeNull();
+      return el as HTMLVideoElement;
+    });
+
+    // 事前ゲートは通過している（disabledオーバーレイなし）
+    expect(document.querySelector("[data-testid='video-player-disabled-overlay']")).toBeNull();
+
+    fireEvent.play(video);
+
+    await waitFor(() => {
+      expect(screen.getByText(/あと15秒で開始できます/)).toBeInTheDocument();
+    });
+    expect(document.querySelector("[data-testid='video-player-disabled-overlay']")).not.toBeNull();
+  });
+});

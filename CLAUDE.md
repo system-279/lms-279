@@ -81,6 +81,7 @@ npm run test
 | `SESSION_DURATION_MS` | レッスンセッション上限（ミリ秒、正の整数、default: 7200000 = 2時間。本番は10800000 = 3時間） |
 | `PAUSE_TIMEOUT_MS` | 連続一時停止の上限（ミリ秒、正の整数、default: 900000 = 15分） |
 | `QUIZ_REQUIRE_ACTIVE_SESSION` | テスト受験に有効なレッスンセッションを必須化するか（`true`/`false`、default: true。false で ADR-027 ケースD後方互換経路が有効化） |
+| `LESSON_ENTRY_GAP_MS` | 異なるレッスンへの入室を、同一コース内の直前退室からブロックする最小間隔（ミリ秒、0以上の整数、default: 60000 = 1分。`0` で無効化、ADR-027 ケースG） |
 
 ## 重要な設計判断
 
@@ -108,6 +109,7 @@ npm run test
 - **FE-BE共有型**: `@lms-279/shared-types`でAPIレスポンスDTOを共有。新規APIエンドポイント追加時はshared-typesに型を先に定義すること
 - **テスト任意化**: テナント単位でテスト受験を任意化（`quizSkipEnabled`）、スキップ時も動画視聴は必須。ケースD（セッションなし受験）は`QUIZ_REQUIRE_ACTIVE_SESSION`で厳格化、合格後再受験は常時遮断（ADR-040, ADR-019/027/036/020改訂）
 - **出席レコード異常検出**: 重複（`overlap_previous`）/負滞在（`negative_duration`）/放置active（`stale_active`）の3種をオンザフライ計算で検知、出席レポートにバッジ表示（DBスキーマ変更なし。ADR-027改訂）
+- **レッスン入室最小間隔**: 異なるレッスンへの入室を同一コース内の直前退室から`LESSON_ENTRY_GAP_MS`（デフォルト1分）ブロック、同一レッスン再入室は免除。トランザクションでgap判定+session作成を原子化、FEは事前ゲート（再生ボタン無効化）で防止（ADR-027ケースG改訂）
 
 全ADRは`docs/adr/`を参照。
 

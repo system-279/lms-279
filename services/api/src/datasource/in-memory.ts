@@ -16,6 +16,8 @@ import type {
   SetFirebaseUidResult,
   FindOrCreateUserResult,
   FindOrCreateUserDefaults,
+  SessionWithGapCheckInput,
+  SessionWithGapCheckResult,
 } from "./interface.js";
 import { ReadOnlyDataSourceError } from "./interface.js";
 import type {
@@ -42,6 +44,7 @@ import type {
   TenantQuizPolicy,
 } from "../types/entities.js";
 import { countEffectiveAttempts } from "../services/quiz-attempt-utils.js";
+import { evaluateEntryGap } from "../services/lesson-entry-gap.js";
 
 // デモ用初期データ
 const initialCourses: Course[] = [
@@ -1234,6 +1237,59 @@ export class InMemoryDataSource implements DataSource {
 
   async getLessonSessionsByCourse(courseId: string): Promise<LessonSession[]> {
     return this.lessonSessions.filter((s) => s.courseId === courseId);
+  }
+
+  async getLessonSessionsByUserAndCourse(userId: string, courseId: string): Promise<LessonSession[]> {
+    return this.lessonSessions.filter((s) => s.userId === userId && s.courseId === courseId);
+  }
+
+  async createSessionWithGapCheck(input: SessionWithGapCheckInput): Promise<SessionWithGapCheckResult> {
+    this.throwIfReadOnly();
+    const { userId, lessonId, courseId, videoId, sessionToken, now, deadlineAt, gapMs } = input;
+
+    // 状態判定 → 早期 return（await を挟まないため atomic、tryReserveCompletionNotification と同方針）
+    const existingActiveOnLesson = this.lessonSessions.find(
+      (s) => s.userId === userId && s.lessonId === lessonId && s.status === "active"
+    );
+    if (existingActiveOnLesson) {
+      return { kind: "allowed", session: existingActiveOnLesson, created: false };
+    }
+
+    const nowMs = new Date(now).getTime();
+    const courseSessions = this.lessonSessions.filter(
+      (s) => s.userId === userId && s.courseId === courseId
+    );
+    const decision = evaluateEntryGap(courseSessions, lessonId, nowMs, gapMs);
+    if (decision.blocked) {
+      return {
+        kind: "blocked",
+        retryAfterMs: decision.retryAfterMs!,
+        nextEntryAllowedAt: decision.nextEntryAllowedAt!,
+        previousLessonId: decision.previousLessonId!,
+      };
+    }
+
+    const session: LessonSession = {
+      userId,
+      lessonId,
+      courseId,
+      videoId,
+      sessionToken,
+      status: "active",
+      entryAt: now,
+      exitAt: null,
+      exitReason: null,
+      deadlineAt,
+      pauseStartedAt: null,
+      longestPauseSec: 0,
+      sessionVideoCompleted: false,
+      quizAttemptId: null,
+      id: InMemoryDataSource.uniqueId("session"),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.lessonSessions.push(session);
+    return { kind: "allowed", session, created: true };
   }
 
   async resetLessonDataForUser(userId: string, lessonId: string, _courseId: string): Promise<void> {

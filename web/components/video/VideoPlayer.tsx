@@ -25,6 +25,13 @@ interface VideoPlayerProps {
   onEndedFlush?: (analytics: FlushAnalytics | null) => void;
   /** 5秒バッチ送信ごとのanalytics更新コールバック */
   onAnalyticsUpdate?: (analytics: FlushAnalytics) => void;
+  /**
+   * true の間、再生操作（動画クリック・コントロールの再生ボタン）を無効化する
+   * （F1 入室最小間隔の事前ゲート、ADR-027 ケースG）。
+   * 既存 session の `deadlineAt` 経過等によるリアクティブな pause とは異なり、
+   * クリックそのものを事前にブロックすることで「クリック直後に一瞬再生される」実害を防ぐ。
+   */
+  disabled?: boolean;
 }
 
 /** crypto.randomUUID が使えない環境向けフォールバック */
@@ -51,6 +58,7 @@ export function VideoPlayer({
   preview = false,
   onEndedFlush,
   onAnalyticsUpdate,
+  disabled = false,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -180,8 +188,20 @@ export function VideoPlayer({
     };
   }, []);
 
+  // disabled 化した瞬間に再生中なら停止する（F1: 事前ゲート突破後の POST /lesson-sessions
+  // 409 フォールバックで disabled=true になるタイミングでは onPlay 経由で既に再生が始まっている
+  // ため、クリック無効化だけでは無人再生を止められない）
+  useEffect(() => {
+    if (!disabled) return;
+    const video = videoRef.current;
+    if (video && !video.paused) {
+      video.pause();
+    }
+  }, [disabled]);
+
   // --- 再生/一時停止トグル ---
   const handlePlayPause = useCallback(() => {
+    if (disabled) return;
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
@@ -189,7 +209,7 @@ export function VideoPlayer({
     } else {
       video.pause();
     }
-  }, []);
+  }, [disabled]);
 
   // --- シーク ---
   const handleSeek = useCallback((time: number) => {
@@ -259,6 +279,15 @@ export function VideoPlayer({
           onSeek={handleSeek}
         />
       </div>
+
+      {/* 事前ゲートオーバーレイ（F1、ADR-027 ケースG）: disabled 中はクリックを一切透過させない */}
+      {disabled && (
+        <div
+          className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 cursor-not-allowed"
+          data-testid="video-player-disabled-overlay"
+          onClick={(e) => e.stopPropagation()}
+        />
+      )}
 
       {/* イベントトラッカー（UIなし、プレビューモードでは無効） */}
       {!preview && videoId && (

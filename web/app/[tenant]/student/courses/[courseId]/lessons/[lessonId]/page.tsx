@@ -12,8 +12,9 @@ import { SessionRulesNotice } from "@/components/session/SessionRulesNotice";
 import { SessionTimer } from "@/components/session/SessionTimer";
 import { PauseTimeoutOverlay } from "@/components/session/PauseTimeoutOverlay";
 import { ForceExitDialog } from "@/components/session/ForceExitDialog";
+import { EntryCooldownInline, useEntryCooldown } from "@/components/session/EntryCooldownNotice";
 import { DeadlineWarningBanner } from "@/components/enrollment-deadline-banner";
-import type { LessonSessionResponse, QuizByLessonResponse, QuizByLessonQuiz, QuizAttemptSummary, StudentLessonDetailResponse } from "@lms-279/shared-types";
+import type { ActiveLessonSessionResponse, LessonEntryCooldown, LessonEntryTooSoonDetails, LessonSessionResponse, QuizByLessonResponse, QuizByLessonQuiz, QuizAttemptSummary, StudentLessonDetailResponse } from "@lms-279/shared-types";
 import { useVideoCompletion } from "@/lib/hooks/use-video-completion";
 import { LessonPdfButton } from "@/components/lesson/LessonPdfButton";
 import type { LessonResource, LessonPdfDownloadResponse } from "@lms-279/shared-types";
@@ -779,6 +780,14 @@ export default function StudentLessonDetailPage() {
   // セッション作成前からVideoPlayerに渡すtoken。createSessionで同じ値をBEに送信する。
   const pendingTokenRef = useRef(crypto.randomUUID());
 
+  // F1（入室最小間隔、ADR-027 ケースG）: entryCooldown はページ読込時の GET /lesson-sessions/active
+  // から取得する事前ゲート用の初期値。entryGapMs は SessionRulesNotice の動的表記に渡す。
+  const [entryCooldown, setEntryCooldown] = useState<LessonEntryCooldown | undefined>(undefined);
+  const [entryGapMs, setEntryGapMs] = useState<number | undefined>(undefined);
+  const cooldown = useEntryCooldown(
+    entryCooldown?.blocked ? entryCooldown.retryAfterMs : undefined
+  );
+
   const [loadingCourse, setLoadingCourse] = useState(true);
   const [loadingVideo, setLoadingVideo] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -872,14 +881,18 @@ export default function StudentLessonDetailPage() {
   // ============================================================
 
   // ページ読み込み時: アクティブセッション取得
+  // F1（ADR-027 ケースG）: session なし時も entryCooldown/entryGapMs が付与される場合がある
+  // （事前ゲート表示用。session が既にある場合は F1 対象外なので undefined のまま）。
   const fetchActiveSession = useCallback(async () => {
     try {
-      const data = await authFetch<{ session: LessonSession | null }>(
+      const data = await authFetch<ActiveLessonSessionResponse>(
         `/api/v1/lesson-sessions/active?lessonId=${lessonId}`
       );
       if (data.session) {
         setSession(data.session);
       }
+      setEntryCooldown(data.entryCooldown);
+      setEntryGapMs(data.entryGapMs);
     } catch (error) {
       console.error("Failed to fetch active session:", error);
     }
@@ -910,8 +923,21 @@ export default function StudentLessonDetailPage() {
       );
       setSession(data.session);
     } catch (error) {
-      console.error("Failed to create session:", error);
-      setError("出席セッションの作成に失敗しました。ページを再読み込みしてください。");
+      // F1（ADR-027 ケースG）: 事前ゲート（disabled表示）をすり抜けた場合
+      // （タイミング競合等）のフォールバック防御。entryCooldown を更新して
+      // disabled 表示 + EntryCooldownInline に切り替える。
+      if (error instanceof ApiError && error.code === "entry_too_soon") {
+        const details = error.details as LessonEntryTooSoonDetails | undefined;
+        setEntryCooldown({
+          blocked: true,
+          retryAfterMs: details?.retryAfterMs,
+          nextEntryAllowedAt: details?.nextEntryAllowedAt,
+          previousLessonId: details?.previousLessonId,
+        });
+      } else {
+        console.error("Failed to create session:", error);
+        setError("出席セッションの作成に失敗しました。ページを再読み込みしてください。");
+      }
     } finally {
       sessionCreatingRef.current = false;
     }
@@ -1111,7 +1137,7 @@ export default function StudentLessonDetailPage() {
       </div>
 
       {/* 受講ルール */}
-      <SessionRulesNotice session={session} quizSkipEnabled={quizSkipEnabled} sessionRequired={sessionRequired} />
+      <SessionRulesNotice session={session} quizSkipEnabled={quizSkipEnabled} sessionRequired={sessionRequired} entryGapMs={entryGapMs} />
 
       {/* 受講期限の警告 */}
       {enrollmentSetting && !videoAccessExpired && (
@@ -1144,6 +1170,11 @@ export default function StudentLessonDetailPage() {
 
             {!loadingVideo && !videoError && !videoAccessExpired && playbackUrl && videoMeta && (
               <>
+                {/* F1（ADR-027 ケースG）: 事前ゲート。session が無く、cooldown が active な間は
+                    再生ボタン自体を無効化し、インライン通知をプレイヤー上部に表示する */}
+                {!session && cooldown.active && (
+                  <EntryCooldownInline remainingSec={cooldown.remainingSec} />
+                )}
                 <div className="relative">
                   <VideoPlayer
                     videoId={videoMeta.id}
@@ -1157,6 +1188,7 @@ export default function StudentLessonDetailPage() {
                     onPlay={handleVideoPlay}
                     onPause={handleVideoPause}
                     sessionToken={session?.sessionToken ?? pendingTokenRef.current}
+                    disabled={!session && cooldown.active}
                   />
                   {session && (
                     <PauseTimeoutOverlay

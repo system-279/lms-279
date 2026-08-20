@@ -33,6 +33,30 @@ export type { CourseFilter, LessonFilter, Video, VideoEvent, VideoAnalytics, Vid
 export type { Quiz, QuizAttempt, QuizFilter, QuizAttemptFilter, QuizQuestion, QuizOption, QuestionType, QuizAttemptStatus } from "../types/entities.js";
 export type { UserProgress, CourseProgress } from "../types/entities.js";
 export type { LessonSession, LessonSessionFilter, LessonSessionStatus, SessionExitReason } from "../types/entities.js";
+
+/** F1（入室最小間隔、ADR-027 ケースG）の `createSessionWithGapCheck` 入力。 */
+export interface SessionWithGapCheckInput {
+  userId: string;
+  lessonId: string;
+  courseId: string;
+  videoId: string;
+  sessionToken: string;
+  /** 現在時刻（ISO 8601、テスト容易性のため引数化） */
+  now: string;
+  /** 新規作成時の deadlineAt（ISO 8601、entryAt + SESSION_DURATION_MS） */
+  deadlineAt: string;
+  /** 入室最小間隔（ミリ秒）。`LESSON_ENTRY_GAP_MS` の値をそのまま渡す（呼び出し側で 0 判定して short-circuit 済み前提） */
+  gapMs: number;
+}
+
+export type SessionWithGapCheckResult =
+  | { kind: "allowed"; session: LessonSession; created: boolean }
+  | {
+      kind: "blocked";
+      retryAfterMs: number;
+      nextEntryAllowedAt: string;
+      previousLessonId: string;
+    };
 export type { TenantEnrollmentSetting } from "../types/entities.js";
 export type { TenantQuizPolicy } from "../types/entities.js";
 
@@ -323,6 +347,33 @@ export interface DataSource {
   getActiveLessonSession(userId: string, lessonId: string): Promise<LessonSession | null>;
   updateLessonSession(sessionId: string, data: Partial<Omit<LessonSession, "id" | "createdAt">>): Promise<LessonSession | null>;
   getLessonSessionsByCourse(courseId: string): Promise<LessonSession[]>;
+  /**
+   * 同一ユーザー・同一コース内のセッション一覧（2 等値クエリ、orderByなし）。
+   * F1（入室最小間隔、ADR-027 ケースG）の gap 判定・プレビュー表示用。
+   * Firestore 実装は `lesson_sessions(userId, courseId)` 複合 index を要する
+   * （`firestore.indexes.json` 参照）。
+   */
+  getLessonSessionsByUserAndCourse(userId: string, courseId: string): Promise<LessonSession[]>;
+  /**
+   * F1: 入室最小間隔チェック付きセッション取得/作成（アトミック操作）。
+   *
+   * 実装契約（atomicity 必須）: 「同一レッスンの active session 確認 → 同一コース内の
+   * 直近 exitAt 取得 → gap 判定 → session 作成」を単一 transaction で行う。
+   * - Firestore 実装: `db.runTransaction(...)` で包む。クエリのみの transaction は
+   *   0 件ヒット時にロックが効かないため、`getOrCreateLessonSession` と同様
+   *   センチネルロックドキュメント（`session_locks/{userId}_{lessonId}` および
+   *   `session_locks/entry_gap_{userId}_{courseId}`）で保護する。
+   * - InMemory 実装: Node.js single-threaded 性質を活かし、本 method 実行中に
+   *   `await` を挟まないことで atomicity を担保する。
+   *
+   * gap 判定順（呼び出し側 lesson-session.ts の `getOrCreateSessionWithGapCheck` と対応）:
+   *   1. 当該レッスンに active session が既にあれば許可（リロード対応）
+   *   2. 同一コース内の非 synthetic・終端（exitAt !== null）・パース可能・exitAt <= now な
+   *      セッションのうち最新 exitAt を取得
+   *   3. 直近セッションが同一レッスンなら免除（同一レッスン再入室は gap 対象外）
+   *   4. gap（now - 直近exitAt）が `gapMs` 未満なら blocked
+   */
+  createSessionWithGapCheck(input: SessionWithGapCheckInput): Promise<SessionWithGapCheckResult>;
 
   // Lesson Data Reset (force exit)
   resetLessonDataForUser(userId: string, lessonId: string, courseId: string): Promise<void>;

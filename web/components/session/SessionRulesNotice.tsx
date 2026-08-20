@@ -18,6 +18,20 @@ interface SessionRulesNoticeProps {
    * （Codex review 指摘: 無条件表示すると実際のゲート条件と食い違い誤案内になるため）。
    */
   sessionRequired?: boolean;
+  /**
+   * F1（入室最小間隔、ADR-027 ケースG）: `LESSON_ENTRY_GAP_MS` の値（ミリ秒）。
+   * `0`（kill switch、無効化）または未指定の場合は箇条書きを表示しない。
+   * 表記は env 変更で腐らないようこの値から動的生成する（「1分」をハードコードしない）。
+   */
+  entryGapMs?: number;
+}
+
+/** ミリ秒を「1分」「90秒」のような表記に整える（分未満の端数がある場合は秒表記にフォールバック）。 */
+export function formatEntryGapLabel(ms: number): string {
+  if (ms % 60000 === 0) {
+    return `${ms / 60000}分`;
+  }
+  return `${Math.round(ms / 1000)}秒`;
 }
 
 // 入室時刻と期限から制限時間を「3時間」「2.5時間」のような表記に整える。
@@ -33,7 +47,7 @@ export function formatDurationHours(entryAtIso: string, deadlineAtIso: string): 
   return Number.isInteger(hours) ? `${hours}時間` : `${hours.toFixed(1)}時間`;
 }
 
-export function SessionRulesNotice({ session, quizSkipEnabled, sessionRequired }: SessionRulesNoticeProps) {
+export function SessionRulesNotice({ session, quizSkipEnabled, sessionRequired, entryGapMs }: SessionRulesNoticeProps) {
   const formatDeadline = (isoString: string): string => {
     const d = new Date(isoString);
     const h = d.getHours().toString().padStart(2, "0");
@@ -70,6 +84,11 @@ export function SessionRulesNotice({ session, quizSkipEnabled, sessionRequired }
         {sessionRequired && (
           <li>
             テストの受験には有効なレッスンセッションが必要です。セッションが切れている場合は、動画を再生し直してから受験してください
+          </li>
+        )}
+        {!!entryGapMs && entryGapMs > 0 && (
+          <li>
+            出席の記録を正確に残すため、前のレッスンを退室してから次のレッスンに入室するまで{formatEntryGapLabel(entryGapMs)}程度の間隔をあけていただいています
           </li>
         )}
       </ul>

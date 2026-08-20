@@ -169,6 +169,8 @@ questions配列の各要素:
 
 **出席レコード異常検出（F2、ADR-027 §改訂履歴 2026-08-20）**: `lesson_sessions` にフィールド追加なし。出席レポートAPI（`SuperAttendanceRecord`/`AdminAttendanceRecord`）が返す `anomalies?: SessionAnomalyType[]`（`overlap_previous` / `negative_duration` / `stale_active`）は取得済みセッション集合に対するオンザフライ計算（`session-anomaly.ts`）であり、Firestoreには保存されない。
 
+**レッスン入室最小間隔（F1、ADR-027 ケースG、2026-08-20）**: `lesson_sessions` にフィールド追加なし。`GET /lesson-sessions/active` が返す `entryCooldown`（`LessonEntryCooldown`型）はセッション未作成時のプレビュー用にリクエスト時計算される値であり、Firestoreには保存されない。gap判定・session作成自体は新規Firestoreインデックス `lesson_sessions(userId, courseId)`（`firestore.indexes.json`）を要する。
+
 #### course_enrollment_settings/{courseId}（受講期間設定 — テナント×コース単位）
 | フィールド | 型 | 説明 |
 |-----------|------|------|
