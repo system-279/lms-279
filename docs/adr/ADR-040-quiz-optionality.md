@@ -33,7 +33,7 @@
 | 3 | スキップ機能本体: `POST /quizzes/:quizId/skip`+`createSyntheticSkippedSession`+受講者UI | #599 | main merge済み(2026-08-19) |
 | 4 | 資料PDF許可: PDFゲート変更+`LessonPdfButton`3状態化 | #601 | main merge済み(2026-08-19) |
 | 5 | ケースD厳格化: 有効セッション必須化+合格後再受験の遮断 | #604 | コード main merge済み(2026-08-19)。本番 flag は `QUIZ_REQUIRE_ACTIVE_SESSION=false` で先行デプロイ中、監視期間経過後に別PRで `=true` へ切替予定 |
-| 6 | ADR改訂+ドキュメント更新+既存重複データの整理（Phase A監査+Phase B方針決定） | #608(ADR)、#609(Phase A監査スクリプト)、#613(shared-typesビルド修正) | 完了 |
+| 6 | ADR改訂+ドキュメント更新+既存重複データの整理（Phase A監査+Phase B方針決定） | #608(ADR)、#609(Phase A監査スクリプト)、#613(shared-typesビルド修正)、#614(Phase B決定+定期監視化) | 完了 |
 
 ## Stage 6 Phase A/B（既存重複データの整理）
 
@@ -50,7 +50,7 @@
 **Phase B 決定**: 構造的異常シグナル（synthetic_skip_multi）が全テナントで0件、かつ実際に対応が必要な safe な real+synthetic 混在グループが2件（atali82iテナント）のみと判明したため、自動統合/削除スクリプトの新規開発は見送る。理由は開発コストに対して対象が極小であるため。
 
 1. **safe な2グループ（atali82iテナント）は super-admin が手動編集で対応**。監査スクリプトは PII 制限（userId/doc id 非出力）により対象ドキュメントを特定できないため、super-admin が Firestore コンソール等で個別に特定・対応する（本 ADR 時点で未実施、担当は開発者）。
-2. **監査スクリプトは定期監視用途に転用**。`audit-duplicate-synthetic-sessions.yml` に `schedule`（毎週月曜 09:00 JST）を追加し、synthetic_skip_multi 異常シグナルが1件以上検出された場合は終了コード3で workflow run を失敗させ、再発を可視化する（PR #613 のフォローアップ）。
+2. **監査スクリプトは定期監視用途に転用**。`audit-duplicate-synthetic-sessions.yml` に `schedule`（毎週月曜 09:00 JST）を追加し、synthetic_skip_multi 異常シグナルが1件以上検出された場合は終了コード3で workflow run を失敗させ、再発を可視化する（PR #613 のshared-typesビルド修正フォローアップとして本PR #614で実装）。
 3. **real_only_multi（44グループ）は対応対象外**。synthetic セッション重複ではなく正当な再受講のベースラインであり、ADR-040 のスコープ外。
 
 
