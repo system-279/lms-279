@@ -1,4 +1,84 @@
-# Session Handoff — 2026-08-20 (Session 86)
+# Session Handoff — 2026-08-20 (Session 87)
+
+## TL;DR
+
+**`/catchup`（Stage5/6条件待ち確認、即着手0件）→「段階的に進めましょう」でStage6 runbook新規作成しPR #618マージ、Stage5は本番ログ確認 →`/grip`で切替可否の判断材料HTML生成・実機検証 →「セカンドオピニオンに」でCodexへgrip内容を批判的レビューさせ、指摘を本番ログで検証→合格後再受験遮断がflag非依存で常時適用済み・実トラフィックが直近1日`/quizzes`配下0件という新事実を発見 →「変更は必須」「待てない」という指摘を受けflag切替PR #619をマージ、本番実機で反映確認、ロールバック用PR #620を待機用意 → PRマージ直後にmain直pushミス発生・申告（3回目の再発としてmemory更新） →「実トラフィックがないなら」の指摘でFE側テストギャップを発見・2件追加（全383テストPASS、codex review0件）しPR #621をfeatureブランチ経由でマージ →`/handoff`実施**。
+
+| 主要成果 | 結果 |
+|---|---|
+| Stage6手動編集用runbook新規作成（PII制限で監査スクリプトが対象特定不可な問題への対応） | ✅ `docs/runbook/stage6-mixed-session-duplicate-cleanup.md`、対象特定用の一時スクリプトテンプレート・判定材料・対応方針の選択肢を整理。PR #618マージ済み |
+| `/grip`によるStage5 flag切替可否の判断材料生成 + Codexセカンドオピニオン + 自己検証 | ✅ Codex指摘「有効化前テスト検証が見えない」は誤り(既存integration testあり)と判明した一方、「監視は障害偏重で誤拒否を観測できない」は本番調査で的中（実トラフィックが構造的にほぼゼロと判明）。判断材料の質を大きく引き上げた |
+| Stage5本番flag切替（`QUIZ_REQUIRE_ACTIVE_SESSION=false`→`true`） | ✅ PR #619作成・CI全PASS確認後マージ、Cloud Run実機(revision api-00483-4wx)で`value: 'true'`反映を再確認。ロールバック用PR #620を待機状態(未merge)で用意、切り戻しは新規デプロイのみ(実測約5分)で完結 |
+| 実トラフィックが構造的にほぼゼロと判明したことを受け、FE側テストカバレッジのギャップを埋める | ✅ BE統合テストは既存だがFE側(`POST /attempts`の409応答→受講者向けメッセージ変換)の自動テストが存在しなかったため`session_required`/`quiz_already_passed`の2ケースを追加。type-check/lint/workspace全体テスト(383件)PASS、codex review(medium)指摘0件。PR #621を正しくfeatureブランチ経由で作成・マージ |
+| main直接pushミスの発生・申告・memory更新 | ⚠️ PR #618マージ直後、ADR-040/GOAL.mdのStage5完了反映をmain上で直接commit・pushしてしまった（同一セッション内の別箇所では正しくfeatureブランチを使えており、`git branch --show-current`の機械的実行が一貫していなかった）。実害は低いドキュメントのみの変更と判断しrevertはせず、主語明示でユーザーへ申告。既存グローバルmemory`feedback_no_direct_push_main.md`の「PRマージ直後の後続コミット」トリガーが3回目の再発だったため再発事例3として追記 |
+
+- **Issue Net (本セッション)**: Close 0 + 起票 0 = **Net 0**
+- **本セッションmerged PR**: 5件（#618 Stage6 runbook、#619 flag切替、#621 FEテスト追加、#622 GOAL.md更新は認可待ち、加えて main直push分1件はPR経由ではなくミスとして直接反映）
+- **本セッション本番destructive操作**: 1件（`QUIZ_REQUIRE_ACTIVE_SESSION`の本番flag切替、PR #619、番号単位の明示認可を得て実施。CI全PASS確認後にmerge、Cloud Run実機で反映確認済み）
+- **意思決定確認事項**: Stage5監視方針（監視延長 vs 実データで判断）・flag切替PR作成/merge可否・ロールバックPR準備方針・PR #621 merge可否をすべて個別にAskUserQuestionで確認取得
+
+---
+
+## grip + Codexセカンドオピニオンの詳細
+
+`/grip`でStage5 flag切替可否の判断材料HTML（自白セクション・判断分岐図・理解度クイズ付き）を生成し実機検証した後、Codex(plan mode、effort=high)へ文書内容そのものへの批判的レビューを依頼した。Codexの指摘のうち「有効化前のテスト検証が見えない」は`quiz-session-required.test.ts`等の既存統合テストで反証されたが、「監視は障害偏重で正当ユーザーの誤拒否を観測できない」という指摘は独自に本番ログを調査した結果さらに深刻な形で的中した: 直近1日で`/quizzes`配下へのリクエストが1件もなく（ヘルスチェック除く実トラフィックも1日36〜64件程度）、「監視期間を延ばす」という当初方針そのものが無効だったことが判明した。またコード調査で「合格後再受験の遮断」がflagに依存せず常時適用済み（PR #604 merge時点から本番稼働中）という事実も発見し、grip文書の前提の一部を訂正した。
+
+## Stage5 flag切替の実施経緯
+
+実トラフィックが構造的にほぼゼロと判明したことを受け、開発者から「変更は必須なのに、これ以上なにが必要か」「実トラフィックは待てない、次の本番が始まる前に確実に完了させる必要がある」という指摘を受けた。これに応じてFE側のエラーハンドリング（`session_required`/`quiz_already_passed`の409応答→受講者向けメッセージ変換）の自動テストが存在しないギャップを能動的に発見し、実トラフィックでの後追い検証に代わる事前検証として2件のユニットテストを追加した。BE側は既存の統合テストで担保済みだったため、今回のFEテスト追加でStage5の主要な検証ギャップが埋まった。
+
+## 同根再発スキャン（§4.6） / 対症療法判定（§4.7）
+
+本セッションにPR #620（`fix:`プレフィックス、ただし実体は障害復旧ではなく待機用ロールバックブランチ）があるため発動:
+
+- 過去7日handoffアーカイブでのキーワード検索（`QUIZ_REQUIRE_ACTIVE_SESSION`/`session_required`/`quiz_already_passed`）: Session 82/83アーカイブにヒットしたが、いずれもStage5の元実装セッション自体（バグ再発ではなく計画通りの機能開発の一環）。Session 83のhandoffは当時から「FE `session_required`/`quiz_already_passed`のcatchブランチ直接ユニットテスト未整備」と明記しており、本セッションのPR #621はこの既知ギャップの計画的解消に該当する
+- PR #619/#620/#621が共有するのは`deploy.yml`の同一行のみで、ロジック層のバグ修正ではなく意図的な2段階ロールアウトの計画通りの実施 → 同根再発スキャン: **候補0件（既知ギャップの計画的解消と確認）** / 対症療法判定: **該当なし**（Codexセカンドオピニオン+本番トラフィック実測+FEテスト追加という構造的対応）
+
+## 次のアクション（3分割構造）
+
+#### 即着手タスクなし
+
+#### 条件待ち（明示trigger付き）
+
+| # | 項目 | trigger（充足条件） | 充足時のタスク | 充足確認方法 |
+|---|------|------------------|--------------|------------|
+| 1 | [GOAL.md] Stage6: atali82iテナントのsafeな2グループの手動編集 | 開発者本人によるFirestoreコンソール等での実施 | `docs/runbook/stage6-mixed-session-duplicate-cleanup.md`の手順に従い対象特定→編集→監査スクリプト再実行で確認 | `npx tsx scripts/audit-duplicate-synthetic-sessions.ts --tenant-id=atali82i`でsafe件数が0になっていることを確認 |
+| 2 | 定期監視ワークフローの初回スケジュール実行結果確認 | 次回月曜(2026-08-24 09:00 JST)の`schedule`定期実行完了 | 実行結果を確認し、`synthetic_skip_multi`異常（終了コード3）が検出されていないか確認 | `gh run list --workflow=audit-duplicate-synthetic-sessions.yml --limit 3` |
+| 3 | Stage5切替後の実トラフィック発生時の409監視 | `/quizzes/:quizId/attempts`への実アクセス発生（現状ほぼゼロ） | `session_required`/`session_time_exceeded`の発生率が異常でないか確認、異常時はPR #620をmergeしてロールバック | `gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="api" AND httpRequest.requestUrl=~"/quizzes/.*/attempts" AND httpRequest.status=409'` |
+
+#### 却下候補（記録のみ）
+
+| # | 項目 | 検討経緯 | 着手しない理由 | 参照条件 |
+|---|------|---------|--------------|---------|
+| 1 | npm audit `--force`要の残り（next.js 16.3.1・firebase-admin 14.2.0メジャー更新等） | Session 84でdecision-maker合意済み方針（継続） | firebase-admin 14系はbreaking change明示、影響範囲調査が別タスク規模 | decision-makerからの明示指示時のみ |
+| 2 | Issue #521（postponed、アンブレラ残り）・#405/#276/#275/#274（いずれもpostponed） | catchupで存在確認のみ | postponedラベルは明示指示なき限り着手不可（CLAUDE.md原則） | decision-makerからの明示指示時のみ |
+| 3 | `.claude/scheduled_tasks.lock`の未コミット削除 | 複数セッション継続で観測（Session 86でも記録済み） | 原因不明のまま操作すべきでない、実害なし | decision-makerからの明示指示時のみ |
+
+> ⚠️ 「優先順にすすめて」等の包括指示で次セッションが動けるのは即着手タスクのみ（本セッションは0件）。条件待ち・却下候補は包括指示の対象外。
+
+## Issue Net 変化
+- Close 数: 0 件
+- 起票数: 0 件
+- Net: 0 件
+
+## 再開可能性判定
+✅ **再開可能** - `docs/handoff/GOAL.md`とADR-040、PR #618/#619/#620/#621のマージ履歴から開発再開できます
+
+---
+
+## 最終結論
+
+⚠️ **セッション終了前に要対応** — 1件の要対応事項あり
+- OPEN PR: 2件（#620はロールバック用の意図的な待機PR、mergeしないことが正しい状態。#622はGOAL.md更新のドキュメントのみのPRで認可待ち）
+- active Issue: 5件（#521/#405/#276/#275/#274、いずれも本セッション無関係の既存backlog、全てpostponed）
+- Git: `.claude/scheduled_tasks.lock`のみ変更あり（複数セッション継続の既存ランタイム残骸、対応不要）
+- 即着手タスク: 0件 / 条件待ち: 3件（Stage6手動編集・定期監視初回実行確認・Stage5切替後の409監視、いずれも外部trigger待ち）
+- 残留プロセス: なし
+- 既知のblocker: PR #622のmerge認可待ちのみ（docs-onlyのtrivial PR、認可を得ればこの場で即完了可能）
+- 同根再発スキャン(§4.6): 候補0件（既知ギャップの計画的解消） / 対症療法判定(§4.7): 該当なし
+- 本セッション中に発生したmain直接pushミス（3回目の再発）はグローバルmemoryへ記録済み
+
+
 
 ## TL;DR
 
