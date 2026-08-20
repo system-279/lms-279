@@ -16,8 +16,25 @@ import {
   abandonSession,
   handleStaleSession,
 } from "../../services/lesson-session.js";
+import type { SessionWithGapCheckResult } from "../../datasource/interface.js";
 
 const router = Router();
+
+/** F1（ADR-027 ケースG）: gap 判定でブロックされた際の 409 レスポンス（新規作成・retry の2箇所で共用） */
+function sendEntryTooSoon(
+  res: Response,
+  outcome: Extract<SessionWithGapCheckResult, { kind: "blocked" }>
+): void {
+  res.status(409).json({
+    error: "entry_too_soon",
+    message: "前のレッスンを退室してから少し間隔をあけてください",
+    details: {
+      retryAfterMs: outcome.retryAfterMs,
+      nextEntryAllowedAt: outcome.nextEntryAllowedAt,
+      previousLessonId: outcome.previousLessonId,
+    },
+  });
+}
 
 /**
  * セッション作成（入室打刻）
@@ -54,15 +71,7 @@ router.post("/lesson-sessions", requireUser, async (req: Request, res: Response)
     );
 
     if (outcome.kind === "blocked") {
-      res.status(409).json({
-        error: "entry_too_soon",
-        message: "前のレッスンを退室してから少し間隔をあけてください",
-        details: {
-          retryAfterMs: outcome.retryAfterMs,
-          nextEntryAllowedAt: outcome.nextEntryAllowedAt,
-          previousLessonId: outcome.previousLessonId,
-        },
-      });
+      sendEntryTooSoon(res, outcome);
       return;
     }
 
@@ -77,15 +86,7 @@ router.post("/lesson-sessions", requireUser, async (req: Request, res: Response)
           ds, userId, lessonId, lesson.courseId, videoId, sessionToken
         );
         if (retryOutcome.kind === "blocked") {
-          res.status(409).json({
-            error: "entry_too_soon",
-            message: "前のレッスンを退室してから少し間隔をあけてください",
-            details: {
-              retryAfterMs: retryOutcome.retryAfterMs,
-              nextEntryAllowedAt: retryOutcome.nextEntryAllowedAt,
-              previousLessonId: retryOutcome.previousLessonId,
-            },
-          });
+          sendEntryTooSoon(res, retryOutcome);
           return;
         }
         res.status(201).json({ session: formatSession(retryOutcome.session) });

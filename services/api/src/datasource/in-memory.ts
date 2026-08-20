@@ -44,6 +44,7 @@ import type {
   TenantQuizPolicy,
 } from "../types/entities.js";
 import { countEffectiveAttempts } from "../services/quiz-attempt-utils.js";
+import { evaluateEntryGap } from "../services/lesson-entry-gap.js";
 
 // デモ用初期データ
 const initialCourses: Course[] = [
@@ -1256,30 +1257,16 @@ export class InMemoryDataSource implements DataSource {
 
     const nowMs = new Date(now).getTime();
     const courseSessions = this.lessonSessions.filter(
-      (s) => s.userId === userId && s.courseId === courseId && !s.isSynthetic && s.exitAt !== null
+      (s) => s.userId === userId && s.courseId === courseId
     );
-    let latest: LessonSession | null = null;
-    let latestExitMs = -Infinity;
-    for (const s of courseSessions) {
-      const exitMs = new Date(s.exitAt as string).getTime();
-      if (Number.isNaN(exitMs) || exitMs > nowMs) continue;
-      if (exitMs > latestExitMs) {
-        latestExitMs = exitMs;
-        latest = s;
-      }
-    }
-
-    if (latest && latest.lessonId !== lessonId) {
-      const gap = nowMs - latestExitMs;
-      if (gap < gapMs) {
-        const nextEntryAllowedMs = latestExitMs + gapMs;
-        return {
-          kind: "blocked",
-          retryAfterMs: nextEntryAllowedMs - nowMs,
-          nextEntryAllowedAt: new Date(nextEntryAllowedMs).toISOString(),
-          previousLessonId: latest.lessonId,
-        };
-      }
+    const decision = evaluateEntryGap(courseSessions, lessonId, nowMs, gapMs);
+    if (decision.blocked) {
+      return {
+        kind: "blocked",
+        retryAfterMs: decision.retryAfterMs!,
+        nextEntryAllowedAt: decision.nextEntryAllowedAt!,
+        previousLessonId: decision.previousLessonId!,
+      };
     }
 
     const session: LessonSession = {

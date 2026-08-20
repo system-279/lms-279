@@ -1,12 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 
 interface EntryCooldownState {
   remainingSec: number;
@@ -79,28 +73,6 @@ export function EntryCooldownInline({ remainingSec }: EntryCooldownInlineProps) 
     >
       {cooldownMessage(remainingSec)}
     </div>
-  );
-}
-
-interface EntryCooldownDialogProps {
-  open: boolean;
-  remainingSec: number;
-}
-
-/**
- * モーダル版。事前ゲートをすり抜けたタイミング競合等、割り込み度の高い通知が必要な
- * フォールバック経路向け（ForceExitDialog と同構造）。
- */
-export function EntryCooldownDialog({ open, remainingSec }: EntryCooldownDialogProps) {
-  return (
-    <Dialog open={open}>
-      <DialogContent showCloseButton={false}>
-        <DialogHeader>
-          <DialogTitle>少しお待ちください</DialogTitle>
-        </DialogHeader>
-        <p className="text-sm text-muted-foreground">{cooldownMessage(remainingSec)}</p>
-      </DialogContent>
-    </Dialog>
   );
 }
 

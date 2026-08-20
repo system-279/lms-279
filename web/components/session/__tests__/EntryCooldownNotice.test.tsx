@@ -1,41 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, renderHook, act } from "@testing-library/react";
-import {
-  useEntryCooldown,
-  EntryCooldownInline,
-  EntryCooldownDialog,
-} from "../EntryCooldownNotice";
-
-// Mock Radix Dialog to render children directly in jsdom (no portal issues, matches ForceExitDialog.test.tsx)
-vi.mock("@radix-ui/react-dialog", () => {
-  return {
-    Root: ({
-      children,
-      open,
-    }: {
-      children: React.ReactNode;
-      open?: boolean;
-    }) => (open ? <div data-testid="dialog-root">{children}</div> : null),
-    Portal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    Overlay: () => <div data-testid="dialog-overlay" />,
-    Content: ({ children }: { children: React.ReactNode }) => (
-      <div data-testid="dialog-content">{children}</div>
-    ),
-    Title: ({
-      children,
-      ...props
-    }: {
-      children: React.ReactNode;
-      [key: string]: unknown;
-    }) => <h2 {...props}>{children}</h2>,
-    Close: ({
-      children,
-    }: {
-      children: React.ReactNode;
-      [key: string]: unknown;
-    }) => <button>{children}</button>,
-  };
-});
+import { useEntryCooldown, EntryCooldownInline } from "../EntryCooldownNotice";
 
 describe("useEntryCooldown", () => {
   beforeEach(() => {
@@ -101,18 +66,5 @@ describe("EntryCooldownInline", () => {
     render(<EntryCooldownInline remainingSec={42} />);
     expect(screen.getByText(/あと42秒で開始できます/)).toBeInTheDocument();
     expect(screen.getByText(/学習データは失われていません/)).toBeInTheDocument();
-  });
-});
-
-describe("EntryCooldownDialog", () => {
-  it("does not render when open=false", () => {
-    const { container } = render(<EntryCooldownDialog open={false} remainingSec={10} />);
-    expect(container.querySelector("[data-testid='dialog-root']")).toBeNull();
-  });
-
-  it("shows the remaining seconds when open=true", () => {
-    render(<EntryCooldownDialog open={true} remainingSec={10} />);
-    expect(screen.getByText("少しお待ちください")).toBeInTheDocument();
-    expect(screen.getByText(/あと10秒で開始できます/)).toBeInTheDocument();
   });
 });

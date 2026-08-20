@@ -362,7 +362,7 @@ export interface DataSource {
    * - Firestore 実装: `db.runTransaction(...)` で包む。クエリのみの transaction は
    *   0 件ヒット時にロックが効かないため、`getOrCreateLessonSession` と同様
    *   センチネルロックドキュメント（`session_locks/{userId}_{lessonId}` および
-   *   `session_locks/{userId}_{courseId}`）で保護する。
+   *   `session_locks/entry_gap_{userId}_{courseId}`）で保護する。
    * - InMemory 実装: Node.js single-threaded 性質を活かし、本 method 実行中に
    *   `await` を挟まないことで atomicity を担保する。
    *

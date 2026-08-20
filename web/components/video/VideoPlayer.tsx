@@ -188,6 +188,17 @@ export function VideoPlayer({
     };
   }, []);
 
+  // disabled 化した瞬間に再生中なら停止する（F1: 事前ゲート突破後の POST /lesson-sessions
+  // 409 フォールバックで disabled=true になるタイミングでは onPlay 経由で既に再生が始まっている
+  // ため、クリック無効化だけでは無人再生を止められない）
+  useEffect(() => {
+    if (!disabled) return;
+    const video = videoRef.current;
+    if (video && !video.paused) {
+      video.pause();
+    }
+  }, [disabled]);
+
   // --- 再生/一時停止トグル ---
   const handlePlayPause = useCallback(() => {
     if (disabled) return;

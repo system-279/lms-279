@@ -8,6 +8,7 @@ import type { LessonSession, Quiz, QuizAttempt, SessionExitReason } from "../typ
 import { parseNonNegativeDurationMs, parsePositiveDurationMs } from "../utils/env-config.js";
 import { logger } from "../utils/logger.js";
 import { withTransientRetry } from "../utils/with-transient-retry.js";
+import { evaluateEntryGap } from "./lesson-entry-gap.js";
 import { updateCourseProgress } from "./progress.js";
 
 // セッション制限時間（ミリ秒、正の整数）。env var SESSION_DURATION_MS で上書き可、デフォルト 2 時間、本番運用は 3 時間（10800000）。
@@ -171,33 +172,8 @@ export async function previewEntryCooldown(
   const activeOnLesson = await ds.getActiveLessonSession(userId, lessonId);
   if (activeOnLesson) return { blocked: false };
 
-  const nowMs = now.getTime();
   const sessions = await ds.getLessonSessionsByUserAndCourse(userId, courseId);
-  let latestExitMs = -Infinity;
-  let latestLessonId: string | null = null;
-  for (const s of sessions) {
-    if (s.isSynthetic) continue;
-    if (!s.exitAt) continue;
-    const exitMs = new Date(s.exitAt).getTime();
-    if (Number.isNaN(exitMs) || exitMs > nowMs) continue;
-    if (exitMs > latestExitMs) {
-      latestExitMs = exitMs;
-      latestLessonId = s.lessonId;
-    }
-  }
-
-  if (latestLessonId === null || latestLessonId === lessonId) return { blocked: false };
-
-  const gap = nowMs - latestExitMs;
-  if (gap >= LESSON_ENTRY_GAP_MS) return { blocked: false };
-
-  const nextEntryAllowedMs = latestExitMs + LESSON_ENTRY_GAP_MS;
-  return {
-    blocked: true,
-    retryAfterMs: nextEntryAllowedMs - nowMs,
-    nextEntryAllowedAt: new Date(nextEntryAllowedMs).toISOString(),
-    previousLessonId: latestLessonId,
-  };
+  return evaluateEntryGap(sessions, lessonId, now.getTime(), LESSON_ENTRY_GAP_MS);
 }
 
 /**

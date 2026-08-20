@@ -46,6 +46,7 @@ import type {
   TenantQuizPolicy,
 } from "../types/entities.js";
 import { countEffectiveAttempts } from "../services/quiz-attempt-utils.js";
+import { evaluateEntryGap } from "../services/lesson-entry-gap.js";
 
 /**
  * @deprecated toISOStrict() または toISOOptional() を使用してください。
@@ -1662,32 +1663,15 @@ export class FirestoreDataSource implements DataSource {
       }
 
       const courseSnapshot = await tx.get(this.userCourseSessionsQuery(userId, courseId));
-      let latestExitMs = -Infinity;
-      let latestLessonId: string | null = null;
-      for (const doc of courseSnapshot.docs) {
-        const data = doc.data();
-        if (data.isSynthetic === true) continue;
-        const exitAt = toISOOptional(data.exitAt);
-        if (!exitAt) continue;
-        const exitMs = new Date(exitAt).getTime();
-        if (Number.isNaN(exitMs) || exitMs > nowMs) continue;
-        if (exitMs > latestExitMs) {
-          latestExitMs = exitMs;
-          latestLessonId = data.lessonId;
-        }
-      }
-
-      if (latestLessonId !== null && latestLessonId !== lessonId) {
-        const gap = nowMs - latestExitMs;
-        if (gap < gapMs) {
-          const nextEntryAllowedMs = latestExitMs + gapMs;
-          return {
-            kind: "blocked",
-            retryAfterMs: nextEntryAllowedMs - nowMs,
-            nextEntryAllowedAt: new Date(nextEntryAllowedMs).toISOString(),
-            previousLessonId: latestLessonId,
-          } satisfies SessionWithGapCheckResult;
-        }
+      const courseSessions = courseSnapshot.docs.map((doc) => this.toLessonSession(doc.id, doc.data()));
+      const decision = evaluateEntryGap(courseSessions, lessonId, nowMs, gapMs);
+      if (decision.blocked) {
+        return {
+          kind: "blocked",
+          retryAfterMs: decision.retryAfterMs!,
+          nextEntryAllowedAt: decision.nextEntryAllowedAt!,
+          previousLessonId: decision.previousLessonId!,
+        } satisfies SessionWithGapCheckResult;
       }
 
       const newDocRef = this.collection("lesson_sessions").doc();

@@ -431,4 +431,93 @@ describe("F1 lesson entry gap: HTTP route (POST /lesson-sessions)", () => {
     expect(typeof res.body.details.retryAfterMs).toBe("number");
     expect(typeof res.body.details.nextEntryAllowedAt).toBe("string");
   });
+
+  it("GET /lesson-sessions/active returns entryCooldown + entryGapMs when no session exists yet and the gap check would block", async () => {
+    const { app, ds } = createTestApp();
+    const request = supertest(app);
+
+    const courseRes = await request
+      .post("/admin/courses")
+      .send({ name: "Gap Preview Course", description: "desc" });
+    const courseId = courseRes.body.course.id;
+
+    const lessonARes = await request
+      .post(`/admin/courses/${courseId}/lessons`)
+      .send({ title: "Lesson A", hasVideo: true, hasQuiz: true });
+    const lessonBRes = await request
+      .post(`/admin/courses/${courseId}/lessons`)
+      .send({ title: "Lesson B", hasVideo: true, hasQuiz: true });
+
+    const now = new Date();
+    await ds.createLessonSession({
+      userId: "test-user-1",
+      lessonId: lessonARes.body.lesson.id,
+      courseId,
+      videoId: "v1",
+      sessionToken: "t1",
+      status: "completed",
+      entryAt: new Date(now.getTime() - 600000).toISOString(),
+      exitAt: now.toISOString(),
+      exitReason: "quiz_submitted",
+      deadlineAt: new Date(now.getTime() + 7200000).toISOString(),
+      pauseStartedAt: null,
+      longestPauseSec: 0,
+      sessionVideoCompleted: true,
+      quizAttemptId: null,
+    });
+
+    const res = await request.get(
+      `/lesson-sessions/active?lessonId=${lessonBRes.body.lesson.id}`
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.session).toBeNull();
+    expect(res.body.entryGapMs).toBe(60000);
+    expect(res.body.entryCooldown).toEqual(
+      expect.objectContaining({
+        blocked: true,
+        previousLessonId: lessonARes.body.lesson.id,
+      })
+    );
+    expect(typeof res.body.entryCooldown.retryAfterMs).toBe("number");
+    expect(typeof res.body.entryCooldown.nextEntryAllowedAt).toBe("string");
+  });
+
+  it("GET /lesson-sessions/active omits entryCooldown when a session already exists for the requested lesson", async () => {
+    const { app, ds } = createTestApp();
+    const request = supertest(app);
+
+    const courseRes = await request
+      .post("/admin/courses")
+      .send({ name: "Active Session Course", description: "desc" });
+    const courseId = courseRes.body.course.id;
+    const lessonRes = await request
+      .post(`/admin/courses/${courseId}/lessons`)
+      .send({ title: "Lesson A", hasVideo: true, hasQuiz: true });
+
+    await ds.createLessonSession({
+      userId: "test-user-1",
+      lessonId: lessonRes.body.lesson.id,
+      courseId,
+      videoId: "v1",
+      sessionToken: "t1",
+      status: "active",
+      entryAt: new Date().toISOString(),
+      exitAt: null,
+      exitReason: null,
+      deadlineAt: new Date(Date.now() + 7200000).toISOString(),
+      pauseStartedAt: null,
+      longestPauseSec: 0,
+      sessionVideoCompleted: false,
+      quizAttemptId: null,
+    });
+
+    const res = await request.get(
+      `/lesson-sessions/active?lessonId=${lessonRes.body.lesson.id}`
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.session).not.toBeNull();
+    expect(res.body.entryCooldown?.blocked).toBeFalsy();
+  });
 });

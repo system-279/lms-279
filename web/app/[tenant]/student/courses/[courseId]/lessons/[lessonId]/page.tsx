@@ -14,7 +14,7 @@ import { PauseTimeoutOverlay } from "@/components/session/PauseTimeoutOverlay";
 import { ForceExitDialog } from "@/components/session/ForceExitDialog";
 import { EntryCooldownInline, useEntryCooldown } from "@/components/session/EntryCooldownNotice";
 import { DeadlineWarningBanner } from "@/components/enrollment-deadline-banner";
-import type { ActiveLessonSessionResponse, LessonEntryCooldown, LessonSessionResponse, QuizByLessonResponse, QuizByLessonQuiz, QuizAttemptSummary, StudentLessonDetailResponse } from "@lms-279/shared-types";
+import type { ActiveLessonSessionResponse, LessonEntryCooldown, LessonEntryTooSoonDetails, LessonSessionResponse, QuizByLessonResponse, QuizByLessonQuiz, QuizAttemptSummary, StudentLessonDetailResponse } from "@lms-279/shared-types";
 import { useVideoCompletion } from "@/lib/hooks/use-video-completion";
 import { LessonPdfButton } from "@/components/lesson/LessonPdfButton";
 import type { LessonResource, LessonPdfDownloadResponse } from "@lms-279/shared-types";
@@ -927,9 +927,7 @@ export default function StudentLessonDetailPage() {
       // （タイミング競合等）のフォールバック防御。entryCooldown を更新して
       // disabled 表示 + EntryCooldownInline に切り替える。
       if (error instanceof ApiError && error.code === "entry_too_soon") {
-        const details = error.details as
-          | { retryAfterMs?: number; nextEntryAllowedAt?: string; previousLessonId?: string }
-          | undefined;
+        const details = error.details as LessonEntryTooSoonDetails | undefined;
         setEntryCooldown({
           blocked: true,
           retryAfterMs: details?.retryAfterMs,
