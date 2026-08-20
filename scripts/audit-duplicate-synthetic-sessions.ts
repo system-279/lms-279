@@ -231,8 +231,8 @@ export function groupByUserLesson(docs: readonly RawSessionDoc[]): GroupingResul
       missingLessonId++;
       continue;
     }
-    // NUL区切り: userId/lessonId 自体に任意の文字が含まれても他のキーと衝突しない
-    const key = `${d.userId} ${d.lessonId}`;
+    // キーは JSON.stringify でエンコードする（codex review指摘反映）。単純な区切り文字連結（空白やNUL等）は userId/lessonId 自体にその文字が含まれると異なる組み合わせが同一キーに衝突しうる（かつ NUL 文字はソースファイルを binary 扱いにする欠陥もあった）ため、JSON.stringify は両文字列をエスケープした上で一意に符号化するため衝突しない。
+    const key = JSON.stringify([d.userId, d.lessonId]);
     const arr = map.get(key);
     if (arr) {
       arr.push(d);
@@ -244,7 +244,7 @@ export function groupByUserLesson(docs: readonly RawSessionDoc[]): GroupingResul
   const groups: DuplicateGroup[] = [];
   for (const [key, members] of map) {
     if (members.length < 2) continue;
-    const [userId, lessonId] = key.split(" ");
+    const [userId, lessonId] = JSON.parse(key) as [string, string];
     groups.push({ userId, lessonId, members });
   }
 
@@ -274,13 +274,22 @@ export function classifyGroup(group: DuplicateGroup): GroupClassification {
   const hasSynthetic = syntheticPassCount + syntheticSkipCount > 0;
   const hasReal = realCount > 0;
 
+  // 排他ルール（codex review指摘反映）: real_only_multi は「hasSynthetic===false」を
+  // 唯一の条件にする。以前は「synthetic_pass>=2 でも synthetic_skip>=2 でもない」場合に
+  // real_only_multi へ落としていたため、`QUIZ_REQUIRE_ACTIVE_SESSION=false` 時に実在しうる
+  // 「skip 1件 + pass 1件、real 0件」の組み合わせ（後方互換経路として許容されている
+  // quizSkipped && quizPassed の併存）が誤って「real のみ」と分類されてしまっていた。
   let bucket: GroupBucket;
   if (hasSynthetic && hasReal) {
     bucket = "mixed_synthetic_real";
-  } else if (!hasReal && syntheticPassCount >= 2) {
-    bucket = "synthetic_pass_multi";
-  } else if (!hasReal && syntheticSkipCount >= 2) {
+  } else if (syntheticSkipCount >= 2) {
+    // skip 単独では構造的に発生し得ないはずの異常シグナルを最優先で検知する
+    // （pass も同時に複数あるケースを含めても、この異常性の方が報告価値が高い）
     bucket = "synthetic_skip_multi";
+  } else if (hasSynthetic) {
+    // pass>=2 の当初想定バグに加え、pass=1+skip=1（skip>=2ではない）のような
+    // all-synthetic だが定型に当てはまらない組み合わせもここに含める
+    bucket = "synthetic_pass_multi";
   } else {
     bucket = "real_only_multi";
   }

@@ -149,7 +149,6 @@ async function main(): Promise<void> {
     doc("d3", "u2", "l1"), // singleton → グループに含まれない
     doc("d4", null, "l1"), // userId欠落 → 除外+カウント
     doc("d5", "u1", null), // lessonId欠落 → 除外+カウント
-    doc("d6", "u1 x", "l1"), // "u1" + " " + "l1" のキーと衝突しないこと（区切り文字混入対策）
   ]);
 
   assert.equal(result.missingUserId, 1);
@@ -158,6 +157,40 @@ async function main(): Promise<void> {
   assert.equal(result.groups[0].userId, "u1");
   assert.equal(result.groups[0].lessonId, "l1");
   assert.equal(result.groups[0].members.length, 2);
+}
+
+// ============================================================
+// groupByUserLesson: キー衝突耐性（codex review指摘: 単純な区切り文字連結は
+// userId/lessonId 自体に区切り文字が含まれると異なる組み合わせが同一キーに衝突しうる）
+// ============================================================
+{
+  const doc = (docId: string, userId: string, lessonId: string): RawSessionDoc => ({
+    docId,
+    userId,
+    lessonId,
+    status: null,
+    exitReason: null,
+    entryAt: null,
+    exitAt: null,
+    quizAttemptId: null,
+    isSyntheticFlag: null,
+    hasOriginal: false,
+    hasEditedAt: false,
+  });
+
+  // 単純な "," 連結なら userId="a,b"/lessonId="c" と userId="a"/lessonId="b,c" が
+  // 同一キー "a,b,c" に衝突する。JSON.stringify([userId, lessonId]) はエスケープにより
+  // 衝突しないことを確認する。
+  const result = groupByUserLesson([
+    doc("d1", "a,b", "c"),
+    doc("d2", "a,b", "c"), // 同一ペア → グループ化される
+    doc("d3", "a", "b,c"), // 別ペアだが単純連結なら同一キーになりうる
+    doc("d4", "a", "b,c"),
+  ]);
+
+  assert.equal(result.groups.length, 2, "異なる (userId, lessonId) ペアは別グループのままであるべき");
+  const pairs = result.groups.map((g) => `${g.userId}|${g.lessonId}`).sort();
+  assert.deepEqual(pairs, ["a,b|c", "a|b,c"].sort());
 }
 
 // ============================================================
@@ -228,6 +261,23 @@ async function main(): Promise<void> {
     });
     assert.equal(c.bucket, "real_only_multi");
     assert.equal(c.hasSkipMultiAnomaly, false);
+  }
+
+  // codex review指摘の回帰テスト: skip 1件 + pass 1件（real 0件）は
+  // real_only_multi に誤分類されてはならない（QUIZ_REQUIRE_ACTIVE_SESSION=false 時に
+  // skip 後さらに無セッションで合格提出した場合に実在しうる組み合わせ）
+  {
+    const c = classifyGroup({
+      userId: "u1",
+      lessonId: "l1",
+      members: [
+        { ...base, docId: "synthetic_skip_u1_l1", userId: "u1", lessonId: "l1", quizAttemptId: null },
+        { ...base, docId: "synthetic_attemptA", userId: "u1", lessonId: "l1", quizAttemptId: "attemptA" },
+      ],
+    });
+    assert.notEqual(c.bucket, "real_only_multi");
+    assert.equal(c.bucket, "synthetic_pass_multi");
+    assert.equal(c.realCount, 0);
   }
 
   // protected: hasOriginal のみ / hasEditedAt のみ / 両方
