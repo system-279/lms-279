@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-20 (PR-B #631 マージ済み反映)
+updated: 2026-08-20 (Firestore複合indexデプロイ完了・ミッション達成)
 ---
 
 ## 現在のミッション
@@ -17,7 +17,7 @@ updated: 2026-08-20 (PR-B #631 マージ済み反映)
 ## 完了の定義
 - PR-A(F2異常検知、約8ファイル)がmainにmerge済み（証明: `gh pr list --state merged --search "F2" --search "異常検知"`で該当PRがヒット、または計画ファイルのPR-Aセクション記載ファイル群のgit履歴で確認）→ 済（PR #628）
 - PR-B(F1入室ギャップ)がmainにmerge済み（証明: 同様にPR-Bセクション記載ファイル群を確認）→ 済（PR #631、レビュー指摘対応コミット含む）
-- `firestore.indexes.json`の`lesson_sessions(userId,courseId)`複合indexが本番デプロイ済み（証明: `gcloud firestore indexes composite list --project=lms-279`で該当indexの`state: READY`を確認）→ **未実施**（`firebase deploy --only firestore:indexes -P <alias>`はCI/CDパイプライン対象外の手動ステップ、rules/firebase.md参照。index未デプロイの間はF1のgap判定トランザクションがFAILED_PRECONDITIONで失敗し続けfail-openで常時許可扱いになる = 機能が実質無効化された状態のまま気づかれない、が受講者側の直接被害はない）
+- `firestore.indexes.json`の`lesson_sessions(userId,courseId)`複合indexが本番デプロイ済み（証明: `gcloud firestore indexes composite list --project=lms-279`で該当indexの`state: READY`を確認）→ 済（決裁者承認の上`firebase deploy --only firestore:indexes -P default`実行、`state: READY`確認済み）
 - 本番`LESSON_ENTRY_GAP_MS`切替 → 対象外（2段階ロールアウトを行わない方針変更のため、コード上のデフォルト値60000msがそのままデプロイされる。index未デプロイの間は上記の通り事実上無効）
 - 計画ファイル記載の受入基準(AC)9項目すべてを満たす（証明: `/Users/yyyhhh/.claude/plans/shimmying-sleeping-moth.md`の「検証・受入基準(AC)」セクション参照、各項目のテストコマンドを実行）
 
@@ -30,10 +30,10 @@ updated: 2026-08-20 (PR-B #631 マージ済み反映)
 - [x] PR-B: codex review + pr-review-toolkit 2エージェント並列実施(large tier該当、計10件の指摘すべて反映。gap判定ロジックを`services/lesson-entry-gap.ts`に共通化等)
 - [x] PR-B: マージ(PR #631、2026-08-20)
 - [x] ADR-027改訂・CLAUDE.md重要な設計判断・docs/data-model.md更新(PR-A/PR-B分)
-- [ ] `firestore.indexes.json`の新規複合index(`lesson_sessions(userId,courseId)`)を本番へ手動デプロイ（`firebase deploy --only firestore:indexes -P <alias>`。本番infra変更のため決裁者確認の上で実施）
+- [x] `firestore.indexes.json`の新規複合index(`lesson_sessions(userId,courseId)`)を本番へ手動デプロイ（決裁者承認の上で実施。Firebase CLIの認証アカウント切替（`system@jaccw.or.jp`→`lms-279`にownerを持つ`system@279279.net`をログイン追加）を経て`firebase deploy --only firestore:indexes -P default`実行、`gcloud firestore indexes composite list --project=lms-279`で`state: READY`確認済み）
+
+## 🎯 GOAL.md のミッション達成
+「進行中のtasks」全項目`[x]`。F1(PR #631)・F2(PR #628)ともmainへマージ済み、F1に必要な本番Firestoreインデックスもデプロイ・READY確認済み。次のゴールへの更新 or 本ファイル削除を検討してください。
 
 ## 🔄 中断点（in-flight）
-- 対象タスク: 完了の定義の最終1項目 = Firestore複合indexの本番デプロイのみ残存
-- 直前の状態: PR #628・#631とも mainにマージ済み。コードは本番へ通常CI/CDで反映される見込みだが、`firestore.indexes.json`の変更はCI/CDパイプライン対象外（rules/firebase.md）のため、index自体は未デプロイのまま。この状態でもF1のgap判定はfail-open設計のため受講者への実害はなし（機能が動かないだけ）
-- 次の一手: 決裁者に`firebase deploy --only firestore:indexes -P <alias>`の実行可否を確認してから実施。実施後は`gcloud firestore indexes composite list --project=lms-279`で`state: READY`を確認
-- 検証コマンド: `git log --oneline -5`でPR #628・#631マージ済みを確認 → `gcloud firestore indexes composite list --project=lms-279`でindex状態を確認
+なし（全タスク完了）
