@@ -1,3 +1,86 @@
+# Session Handoff — 2026-08-20 (Session 86)
+
+## TL;DR
+
+**`/catchup`（即着手候補としてIssue #584提示）→ AskUserQuestionで着手承認 → 調査の結果、当初計画のPlaywright E2Eは`AUTH_MODE=dev`でsuper UIへブラウザ到達不可という構造的制約（Session 64判明の既知事項）でスコープ超過と判明 → AskUserQuestionで「戦略見直しで#584を閉じる」方針を承認取得 → AC-α7-09/10/12の検証方法をcomponent/統合テストへ正式変更（ADR-041新規、PR #616） → codex review 2回+pr-review-toolkit 2エージェントのfindings反映 → 全CI PASS確認後マージ、Issue #584自動クローズ+親Issue #521へ反映コメント → post-commit-quality-check.sh（グローバルhook）にnpm workspacesモノレポでの誤検知バグを発見・修正着手 → 作業中に同一ファイルを別セッション（claude-64）が並行編集していると判明、SendMessageで調整しbranch所有権を一本化 → codex review計4ラウンドでP2指摘7件を反映 → PR #552（`~/.claude`リポジトリ、LMSとは別repo）として作成、decision-maker承認のうえclaude-64がマージ、本セッションで独立検証 → `/handoff`実施**。
+
+| 主要成果 | 結果 |
+|---|---|
+| Issue #584（Phase 4 α-7 follow-up、AC-α7-04/05/09/10/11/12/13のPlaywright E2Eカバー、cutover Step 6前完了必須・P1）に着手 | ✅ 調査の結果、AUTH_MODE=devでのsuper UI到達不可（Firebase Auth SDKがAUTH_MODE==="firebase"時のみ有効化される設計）が本命ブロッカーと判明。認証機構新設は本Issueのスコープ超過と判断 |
+| AC-04/05/09/10/11/12/13の検証方法をPlaywrightからcomponent/統合テストへ正式変更する戦略見直しをAskUserQuestionで承認取得 | ✅ AC-04/05/11/13は既存テストで実質網羅済みと判明（追加不要）。AC-09（jest-axe自動a11y検出）/AC-10（Tailwindクラス静的チェック）/AC-12（実`useDryRun`hook結合の連打防止テスト）を追加、判断根拠をADR-041に記録 |
+| PR #616作成、codex review 2回（medium/strict-config+high、findings 0件）+ pr-review-toolkit 2エージェント（code-reviewer/pr-test-analyzer）でセカンドオピニオン | ✅ 2件の指摘（design doc内の古いADR参照、AC-12テストのresolve後再現性未検証）を反映。全CI（Build/Lint/Test/Type Check/Playwright E2E）PASS確認後、decision-maker承認でsquash merge。Issue #584自動クローズ、親Issue #521へ反映コメント追加 |
+| 副次的発見: グローバル`post-commit-quality-check.sh`が、npm workspacesモノレポ（root testスクリプトが`-w`で複数ワークスペースへfan-out）で、実際にはテストが存在・PASSするにもかかわらず「No test files found」の偽陽性警告を出す既知未報告バグを発見。Session 81/82/84のLATEST.mdでも「本セッション作業のスコープ外」として繰り返し記録されていた事象の根本原因を特定 | ✅ AskUserQuestionで「今この場で修正」の承認取得、`-w`/`--workspace`指定ワークスペースへの相対パス振り分けに修正 |
+| 修正作業中、`~/.claude`（全セッション共有の単一working tree）を別セッション（claude-64）が同一ファイルへ並行編集していると発覚（working tree混在で検出） | ✅ ListAgents+SendMessageで状況共有、branch所有権をこちらへ一本化・相手は未commit分を安全に撤退。相手提案のROOT_TEST_ENV_PREFIX（環境変数prefix保持）も統合 |
+| codex review計4ラウンド実施、Jest/Vitest互換性・routing対象外ファイルの扱い・環境変数prefix/trailing args引き継ぎ・`-w`のパス指定/ロングフォーム対応など計7件のP2指摘を反映。Jestラッパー（react-scripts等）検出は費用対効果判断で対応見送りとしコメントで明記 | ✅ PR #552（`~/.claude`リポジトリ）作成、decision-maker承認のうえclaude-64がsquash merge（main: 417fce8）、本セッションでも独立にマージ状態を確認 |
+
+- **Issue Net (本セッション、LMSリポジトリ)**: Close 1（#584） + 起票 0 = **Net 1**
+- **本セッションmerged PR**: 2件（LMSリポジトリ: #616自作成1件。`~/.claude`リポジトリ: #552、claude-64がマージ実行、本セッションが作成・修正主体）
+- **本セッション本番destructive操作**: 0件（テスト/ドキュメント/hookスクリプトの変更のみ、データ書き込みなし）
+- **意思決定確認事項**: Issue #584着手可否・戦略見直し方針（component/統合テストへ変更）・PR #616マージ・hookバグ修正の対処方針（今この場で修正）・PR #552（`~/.claude`）マージ後のCodeRabbit rate-limited結果の扱いをすべて個別にAskUserQuestionで確認取得
+
+---
+
+## Issue #584 戦略見直しの詳細
+
+元の設計仕様（`docs/specs/2026-06-03-phase-4-pr-alpha-7-dry-run-ui-impl-plan.md`）ではAC-09/10/12はPlaywright（実ブラウザDOM検証）が検証方法として明記されていたが、実装後のSession 64で「`AUTH_MODE=dev`ではWeb側のFirebase Auth SDK購読処理が`AUTH_MODE==="firebase"`時のみ有効化される設計のため、`/super/*`へブラウザ到達不可」という制約が判明し、「戦略B（ハイブリッド）」としてAC-05のみAPI境界のPlaywrightテストでカバーし、DOM検証系ACを保留していた。この保留分がIssue #584として独立追跡されていた。
+
+本セッションでは、この制約の解消（Firebase Auth Emulator導入 or dev-modeログインバイパス新設）が別のアーキテクチャ判断・新機能追加になり当初Issue見積もりを超えることをAskUserQuestionで確認したうえで、検証方法自体を正式に変更する方針へ転換した。AC-09（Tabキー順序/focus-visible実描画）とAC-10（実レイアウト検証）は、jsdomの技術的限界により本質的に検証不可能な部分が残ることをADR-041と設計docに明記し、既知の残存ギャップとして許容（隠さず開示）した。
+
+## グローバルharness並行編集インシデントの詳細
+
+`~/.claude`は全セッションが単一working treeを共有する構成のため、post-commit-quality-check.shの修正作業中、別セッション（claude-64）が同一ファイルへ独立に類似修正（同一バグの別発見）を並行編集していることが、working treeへの意図しない内容混入（`ROOT_TEST_ENV_PREFIX`/`round25`等、自分が書いていないコード）で発覚した。ListAgentsで他セッションを確認し、cross-session-messageで状況共有・作業分担を調整（branch所有権をこちらへ一本化、相手は未commit分を安全に撤退）することで、コンフリクトを解消し重複作業を防いだ。この事象は claude-64 側で memory 化されている（`feedback_global_harness_concurrent_session_collision.md`、グローバルmemory、汎用原則のため本プロジェクトのmemoryへは重複記録しない）。
+
+## 同根再発スキャン（§4.6） / 対症療法判定（§4.7）
+
+本セッションに Issue 目的の PR（#616、`Closes #584`）および `fix:` プレフィックス PR（#552、別リポジトリ）があるため発動:
+
+- PR #616: 過去7日handoffアーカイブでのキーワード検索（`dry-run`/`AUTH_MODE=dev`/`dispatch-settings`/`super UI`）はヒットなし。テスト戦略の正式変更であり、retry/timeout等の対症療法要素はなし。根本原因（jsdomの技術的制約、Firebase Auth SDK設計）を特定したうえでの構造的対応 → 同根再発スキャン: **候補0件** / 対症療法判定: **該当なし**
+- PR #552: Session 81/82/84のLATEST.mdで繰り返し「スコープ外・実害なし」と記録されていた同一事象の根本原因（root相対パスとworkspace cwdのミスマッチ）を今回特定・修正。これは「別セッションで再発した同根バグ」ではなく「複数セッションで観測されていた既知事象の初めての根治」に該当する。修正はCIログの構造分析に基づく構造的対応であり対症療法ではない → 同根再発スキャン: **過去に3回言及されていた既知事象を本セッションで根治**（新規再発ではない） / 対症療法判定: **該当なし**
+
+## 次のアクション（3分割構造）
+
+#### 即着手タスクなし
+
+#### 条件待ち（明示trigger付き）
+
+| # | 項目 | trigger（充足条件） | 充足時のタスク | 充足確認方法 |
+|---|------|------------------|--------------|------------|
+| 1 | [GOAL.md] Stage5本番flag切替（`QUIZ_REQUIRE_ACTIVE_SESSION=true`） | 本番監視期間経過（PR #604デプロイは2026-08-19）+ decision-makerの切替判断 | `deploy.yml`の該当envを`=true`へ変更する別PRを作成・マージ | 本番ログでsession_required到達状況を確認、decision-makerに切替可否を確認 |
+| 2 | 定期監視ワークフローの初回スケジュール実行結果確認 | 次回月曜(2026-08-24 09:00 JST)の`schedule`定期実行完了 | 実行結果を確認し、`synthetic_skip_multi`異常（終了コード3）が検出されていないか確認 | `gh run list --workflow=audit-duplicate-synthetic-sessions.yml --limit 3` |
+
+#### 却下候補（記録のみ）
+
+| # | 項目 | 検討経緯 | 着手しない理由 | 参照条件 |
+|---|------|---------|--------------|---------|
+| 1 | atali82iテナントのsafeな2グループの特定・手動編集 | Session 85でPlaywright+人ログイン案・新規スクリプト開発案を検討済み却下（継続） | 監査スクリプトのPII制限によりAI実行不可、恒久的に人専用アクション | 開発者がFirestoreコンソールで直接実施 |
+| 2 | npm audit `--force`要の残り（next.js 16.3.1・firebase-admin 14.2.0メジャー更新等） | Session 84でdecision-maker合意済み方針（継続） | firebase-admin 14系はbreaking change明示、影響範囲調査が別タスク規模 | decision-makerからの明示指示時のみ |
+| 3 | Issue #521（postponed、15件アンブレラの残り8件）・#405/#276/#275/#274（いずれもpostponed） | catchupで存在確認のみ | postponedラベルは明示指示なき限り着手不可（CLAUDE.md原則） | decision-makerからの明示指示時のみ |
+
+> ⚠️ 「優先順にすすめて」等の包括指示で次セッションが動けるのは即着手タスクのみ（本セッションは0件）。条件待ち・却下候補は包括指示の対象外。
+
+## Issue Net 変化
+- Close 数: 1 件（#584）
+- 起票数: 0 件
+- Net: 1 件
+
+## 再開可能性判定
+✅ **再開可能** - `docs/handoff/GOAL.md`とPR #616のマージ履歴・ADR-041から開発再開できます
+
+---
+
+## 最終結論
+
+✅ **セッション終了可** — 残作業ゼロ、クリーン状態達成
+- OPEN PR: 0件（本セッションで作成した#616、および`~/.claude`リポジトリの#552は全てマージ済み）
+- active Issue: 5件（#521/#405/#276/#275/#274、いずれも本セッション無関係の既存backlog、全てpostponed）
+- Git: `.claude/scheduled_tasks.lock`のみ変更あり（複数セッション継続の既存ランタイム残骸、対応不要）
+- 即着手タスク: 0件 / 条件待ち: 2件（Stage5本番flag切替・定期監視初回実行確認、いずれもGOAL.md由来で継続）
+- 残留プロセス: なし
+- 既知のblocker: なし。CI（PR #616分）は全て`success`で完了確認済み
+- 同根再発スキャン(§4.6): PR #616は候補0件。PR #552は過去3セッションで言及されていた既知事象の根治（新規再発ではない） / 対症療法判定(§4.7): 両PRとも該当なし
+
+---
+
 # Session Handoff — 2026-08-20 (Session 85)
 
 ## TL;DR
