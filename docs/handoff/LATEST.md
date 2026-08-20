@@ -1,3 +1,68 @@
+# Session Handoff — 2026-08-20 (Session 88)
+
+## TL;DR
+
+**「ゴールまでどれくらい？」→ Stage6完了の定義3項目のうち唯一残っていた「atali82iテナントsafeグループ2件の手動編集」に対し、「ステップバイステップでアシストを」の依頼を受けターミナル操作を1コマンドずつガイド → 事前準備としてFirestore PITR未設定を発見・開発者承認のうえ有効化 → ADC再認証・runbookサンプルスクリプトのパス誤り(相対import/CJS-ESM/node_modules解決)を3回のエラーを経て修正しながら対象データ特定に成功 → 開発者が両グループとも「現状維持」(削除・補正なし)と判断 → GOAL.md/ADR-040へ反映しPR #624作成・マージ → `/handoff`実施**。
+
+| 主要成果 | 結果 |
+|---|---|
+| 本番Firestore(lms-279)のバックアップ未設定(PITR/定期エクスポートともに0件)を発見 | ✅ `rules/production-data-safety.md` §2のMUST要件が未充足と判明、開発者承認のうえPITRを有効化(`gcloud firestore databases update --enable-pitr`)。Stage6の削除系操作に備え復旧経路を確保 |
+| Stage6 runbook(`docs/runbook/stage6-mixed-session-duplicate-cleanup.md`)のサンプルスクリプトが実際のディレクトリ構成と不整合と判明 | ✅ 3点を都度修正しながら開発者のターミナルで実行成功させた: ①相対import `../lms-279/...`(実ディレクトリ名は`lms`)→絶対パスへ ②top-level awaitがCJS判定でエラー→拡張子`.mts`へ ③`/tmp`配置だとNode ESM解決がプロジェクトの`node_modules`に届かない→`.secrets/`(既存.gitignore対象)へ配置。runbook自体の修正はスコープ外(整理・点検カテゴリ、指示なしのため見送り) |
+| atali82iテナントのsafeな2グループ(mixed_synthetic_real)を開発者が個別調査 | ✅ 両グループとも同一パターン(realの未完了セッション`force_exited`複数件+ケースD後方互換経由の`synthetic_pass`完了記録1件)。開発者判断: 削除・補正いずれも行わず「現状維持」で対応完了 |
+| GOAL.md完了の定義3項目を本ターンで独立再検証しミッション完了をマーク | ✅ ①6段階全PR(#594/596/599/601/604/608/609/613/614)merge済み ②本番Cloud Run実機で`QUIZ_REQUIRE_ACTIVE_SESSION=true`確認 ③ADR-040存在確認、いずれも本セッション内で再実行して確認。GOAL.md/ADR-040を更新しPR #624作成→マージ(squash) |
+
+- **Issue Net (本セッション)**: Close 0 + 起票 0 = **Net 0**
+- **本セッションmerged PR**: 1件（#624、GOAL.md/ADR-040のStage6完了反映、docs-only trivial tier）
+- **本セッション本番操作**: 1件（Firestore PITR有効化、非破壊的な安全性向上、開発者承認取得済み）。データ削除/補正は0件（開発者判断「現状維持」）
+- **意思決定確認事項**: PITR未設定への対応方針・Step3対応方針(現状維持/削除/PATCH補正)・PR #624作成可否・PR #624マージ可否をすべて個別にAskUserQuestionで確認取得
+
+---
+
+## 次のアクション（3分割構造）
+
+#### 即着手タスクなし
+
+#### 条件待ちなし
+
+GOAL.mdミッションが完了したため、Stage6由来の条件待ちタスクは消滅した。
+
+#### 却下候補（記録のみ）
+
+| # | 項目 | 検討経緯 | 着手しない理由 | 参照条件 |
+|---|------|---------|--------------|---------|
+| 1 | `docs/runbook/stage6-mixed-session-duplicate-cleanup.md`のサンプルスクリプト修正(絶対パス化/`.mts`化/`.secrets/`配置への恒久反映) | 本セッションで3つの実行時エラーを踏んで都度その場修正、runbook本文は未反映のまま | 整理・点検カテゴリで指示なし。GOAL.mdミッション完了によりrunbook自体の再利用機会も不明 | decision-makerからの明示指示時のみ |
+| 2 | postponed Issue 5件（#521/#405/#276/#275/#274） | catchupで存在確認のみ | postponedラベルは明示指示なき限り着手不可（CLAUDE.md原則） | decision-makerからの明示指示時のみ |
+| 3 | `.claude/scheduled_tasks.lock`の未コミット削除 | 複数セッション継続で観測（Session 86/87でも記録済み） | 原因不明のまま操作すべきでない、実害なし | decision-makerからの明示指示時のみ |
+| 4 | PR #620（ロールバック用、待機状態）のmerge/close判断 | GOAL.mdミッション完了により切り戻し手段としての役割は継続 | 待機状態が意図的な設計、decision-maker判断待ち | decision-makerからの明示指示時のみ |
+| 5 | GitHub 24件の脆弱性(Dependabot、11 high/13 moderate、`gh pr create`時にremoteが警告表示) | push時にGitHubの自動警告で検知、内容未調査 | 本セッションのスコープ外、triage未実施 | decision-makerからの明示指示時のみ |
+
+> ⚠️ 「優先順にすすめて」等の包括指示で次セッションが動けるのは即着手タスクのみ（本セッションは0件）。条件待ち・却下候補は包括指示の対象外。
+
+## Issue Net 変化
+- Close 数: 0 件
+- 起票数: 0 件
+- Net: 0 件
+
+## 再開可能性判定
+✅ **再開可能** - GOAL.mdはミッション完了状態。次のゴール着手時はGOAL.mdの更新 or 削除をdecision-makerと相談してから行う
+
+---
+
+## 最終結論
+
+✅ **セッション終了可** — 残作業ゼロ、GOAL.mdミッション完了
+- OPEN PR: 1件（#620はロールバック用の意図的な待機PR、mergeしないことが正しい状態）
+- active Issue: 5件（いずれも本セッション無関係の既存backlog、全てpostponed）
+- Git: `.claude/scheduled_tasks.lock`のみ変更あり（複数セッション継続の既存ランタイム残骸、対応不要）
+- 即着手タスク: 0件 / 条件待ち: 0件（GOAL.mdミッション完了のため）
+- 残留プロセス: なし
+- 既知のblocker: なし。CI（PR #624分）はLint/Type Check/Build `success`確認済み、Test/E2E/main branch post-merge CIはin_progress(docs-onlyのtrivial変更で実質影響なしと判断)
+- 同根再発スキャン(§4.6): 本セッションに`fix:`プレフィックスPRなし → 対象外
+- 対症療法判定(§4.7): 対象外（修正PRなし）
+- 🎯 **GOAL.mdのミッション達成** — 次のゴールへの更新 or ファイル削除をdecision-makerに確認してください
+
+---
+
 # Session Handoff — 2026-08-20 (Session 87)
 
 ## TL;DR
