@@ -413,6 +413,55 @@ async function main(): Promise<void> {
 }
 
 // ============================================================
+// mergeSummaries: totalSkipMultiAnomalyCount 合算（Phase B以降の定期監視シグナル、ADR-040）
+// ============================================================
+{
+  const doc = (docId: string, userId: string, lessonId: string): RawSessionDoc => ({
+    docId,
+    userId,
+    lessonId,
+    status: null,
+    exitReason: null,
+    entryAt: null,
+    exitAt: null,
+    quizAttemptId: null,
+    isSyntheticFlag: true,
+    hasOriginal: false,
+    hasEditedAt: false,
+  });
+  const scanMeta: ScanMeta = {
+    startedAt: "2026-08-20T00:00:00.000Z",
+    finishedAt: "2026-08-20T00:00:01.000Z",
+    pageCount: 1,
+    docsRead: 2,
+    hitDocCap: false,
+  };
+
+  // tenantA: synthetic_skip が2件のグループ1件 → skipMultiAnomalyCount=1
+  const summaryAnomalous = aggregateTenant(
+    "tenantA",
+    [doc("synthetic_skip_u1_l1", "u1", "l1"), doc("synthetic_skip_u1_l1_dup", "u1", "l1")],
+    scanMeta,
+    0,
+    0,
+    20
+  );
+  assert.equal(summaryAnomalous.skipMultiAnomalyCount, 1);
+
+  // tenantB: 異常なし
+  const summaryClean = aggregateTenant("tenantB", [], scanMeta, 0, 0, 20);
+  assert.equal(summaryClean.skipMultiAnomalyCount, 0);
+
+  const grand = mergeSummaries([summaryAnomalous, summaryClean]);
+  assert.equal(grand.totalSkipMultiAnomalyCount, 1, "全テナント合算値が正しいこと");
+  assert.equal(grand.invalidForPhaseB, false, "INVALID_FOR_PHASE_B とは独立の判定であること");
+
+  // 異常0件のケース（実測値との整合確認）
+  const grandAllClean = mergeSummaries([summaryClean, summaryClean]);
+  assert.equal(grandAllClean.totalSkipMultiAnomalyCount, 0);
+}
+
+// ============================================================
 // printTenantSummary / printGrandTotal: PII 非出力の検証
 // (userId は TenantDuplicateSummary/GrandTotal の型に存在しないため構造的に出力不可能だが、
 //  実際の出力全体を捕捉して念のため userId 文字列が含まれないことも確認する)
