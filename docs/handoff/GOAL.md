@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-20
+updated: 2026-08-20 (PR-A #628 マージ済み反映)
 ---
 
 ## 現在のミッション
@@ -20,17 +20,18 @@ updated: 2026-08-20
 - 計画ファイル記載の受入基準(AC)9項目すべてを満たす（証明: `/Users/yyyhhh/.claude/plans/shimmying-sleeping-moth.md`の「検証・受入基準(AC)」セクション参照、各項目のテストコマンドを実行）
 
 ## 進行中のtasks
-- [ ] PR-A: F2異常検知の実装(session-anomaly.ts新設、super-admin.ts/analytics.tsへの組込み、shared-types拡張、FE2箇所へのバッジ追加)
-- [ ] PR-A: codex review実施(large tier該当)
-- [ ] PR-A: マージ、観測期間(最低1週間)開始
+- [x] PR-A: F2異常検知の実装(session-anomaly.ts新設、super-admin.ts/analytics.tsへの組込み、shared-types拡張、FE2箇所へのバッジ+フィルタ追加)
+- [x] PR-A: codex review + pr-review-toolkit 2エージェント並列実施(large tier該当、計7件の指摘すべて反映)
+- [x] PR-A: マージ(PR #628、2026-08-20)、観測期間(最低1週間、〜2026-08-27目安)開始
+- [ ] 観測期間終了後、`stale_active`/`overlap_previous`の実発生件数を確認(super-admin.ts attendance-reportまたはFirestore該当コレクションを確認)
 - [ ] PR-B: F1入室ギャップの実装(トランザクション化されたgap判定+session作成、firestore.indexes.json追加、FE事前ゲート、EntryCooldownNotice新設)
 - [ ] PR-B: codex review実施(large tier該当)
 - [ ] PR-B: マージ、`LESSON_ENTRY_GAP_MS=0`でデプロイ(挙動不変)
 - [ ] 本番監視後、`LESSON_ENTRY_GAP_MS=60000`へ切替(2段階ロールアウト完了)
-- [ ] ADR-027改訂・CLAUDE.md環境変数表・docs/data-model.md・docs/api.md更新
+- [x] ADR-027改訂・CLAUDE.md重要な設計判断・docs/data-model.md更新(PR-A分。docs/api.mdはPR-A時点で新規エラーコードなしのため対象外、PR-B時に`entry_too_soon`を追記予定)
 
 ## 🔄 中断点（in-flight）
-- 対象タスク: PR-A(F2異常検知の実装)着手前
-- 直前の状態: 計画確定・plan mode承認済み・Codexセカンドオピニオン反映済み。実装コードは1行も書いていない(調査・計画・レビューのみ完了)
-- 次の一手: `/Users/yyyhhh/.claude/plans/shimmying-sleeping-moth.md`の「PR-A: F2 重複/負滞在 異常検知」セクションに従い、`services/api/src/services/session-anomaly.ts`の新規作成から着手する
-- 検証コマンド: `cat /Users/yyyhhh/.claude/plans/shimmying-sleeping-moth.md` で計画全文を確認してから着手
+- 対象タスク: PR-A完了。観測期間中(最低1週間)、PR-B(F1入室ギャップ)着手前の待機
+- 直前の状態: PR #628マージ済み(mainに反映済み)。異常検知はread-onlyのため受講者影響なし、追加のデプロイ作業不要（Cloud Runの通常CI/CDパイプラインで自動反映想定、手動デプロイ確認は次セッションで`gh run list`等により確認）
+- 次の一手: 観測期間(目安2026-08-27以降)経過後、super出席レポート(`/super/attendance`)またはFirestore `lesson_sessions`で`stale_active`/`overlap_previous`の実発生件数を確認してから、`/Users/yyyhhh/.claude/plans/shimmying-sleeping-moth.md`の「PR-B: F1 入室最小間隔」セクションに従い着手する
+- 検証コマンド: `git log --oneline -5`でPR #628マージ済みを確認 → `cat /Users/yyyhhh/.claude/plans/shimmying-sleeping-moth.md`で計画全文を再確認
