@@ -12,29 +12,29 @@
 
 | 技術 | バージョン | 用途 |
 |------|----------|------|
-| Next.js | 16.1.1 | App Router, SSR/RSC |
-| React | 19.2.3 | UIフレームワーク |
+| Next.js | 16.2.6 | App Router, SSR/RSC |
+| React | 19.2.8 | UIフレームワーク |
 | Tailwind CSS | 4.1.18 | スタイリング |
 | Radix UI | 各種 | アクセシブルUIコンポーネント |
-| Lucide React | 0.562.0 | アイコン |
-| Firebase SDK | 12.8.0 | クライアント認証 |
+| Lucide React | 0.577.0 | アイコン |
+| Firebase SDK | 12.14.0 | クライアント認証 |
 
 ## バックエンド
 
 | 技術 | バージョン | 用途 |
 |------|----------|------|
 | Express | 5.2.1 | REST APIフレームワーク |
-| Firebase Admin SDK | 13.6.0 | サーバーサイド認証 |
-| Firestore SDK | 8.1.0 | データベース |
+| Firebase Admin SDK | 13.10.0 | サーバーサイド認証 |
+| Firestore SDK | 8.6.0 | データベース |
 | GCS SDK | 7.16.0 | 動画ストレージ |
 
 ## テスト
 
 | 技術 | バージョン | 用途 |
 |------|----------|------|
-| Vitest | 4.0.18 | ユニットテスト |
+| Vitest | 4.1.6 | ユニットテスト |
 | Supertest | 7.2.2 | APIテスト |
-| Playwright | 1.57.0 | E2Eテスト |
+| Playwright | 1.60.0 | E2Eテスト |
 
 ## インフラ
 
@@ -53,5 +53,5 @@
 
 | 技術 | バージョン | 用途 |
 |------|----------|------|
-| ESLint | 9.27.0 | リンター |
+| ESLint | 9.39.4 | リンター |
 | npm workspaces | - | モノレポ管理 |
