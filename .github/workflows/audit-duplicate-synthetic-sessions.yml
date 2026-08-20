@@ -6,7 +6,12 @@ name: Audit Duplicate Synthetic Sessions
 #
 # 用途:
 #   出席・テスト結果レポート（/super/attendance）に複数行として現れうる
-#   lesson_sessions の実態を計測し、Phase B（統合/削除スクリプト、別PR）の設計入力にする。
+#   lesson_sessions の実態を計測する。Phase A実測（2026-08-20、全テナント横断）の結果、
+#   synthetic_skip_multi 異常シグナルは0件、mixed_synthetic_real の safe グループも2件のみ
+#   だったため、Phase B は自動統合/削除スクリプトを新規開発せず super-admin 手動編集で
+#   対応する方針とした（ADR-040参照）。本 workflow は以後、synthetic_skip_multi 異常の
+#   再発を検知する定期監視（schedule トリガー）用途に転用する。異常検知時はスクリプトが
+#   終了コード3を返し、この workflow run が失敗として可視化される。
 #
 # 安全機構:
 #   - read-only スクリプト（書き込み一切なし）
@@ -21,6 +26,12 @@ name: Audit Duplicate Synthetic Sessions
 # 参考: https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
 
 on:
+  # 週次で全テナント横断の定期監視実行（synthetic_skip_multi 異常シグナルの再発検知）。
+  # schedule イベントには inputs コンテキストが存在しないため、下記 env の
+  # ${{ inputs.* }} 参照は空文字に解決され、スクリプト側の既定値（全テナント/上位20件/
+  # 上限20000件）にフォールバックする。
+  schedule:
+    - cron: '0 0 * * 1' # 毎週月曜 09:00 JST
   workflow_dispatch:
     inputs:
       tenant_id:

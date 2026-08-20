@@ -2,7 +2,7 @@
 
 ## ステータス
 
-承認済み・実装完了（Stage 1〜5 が main マージ済み。Stage 5 の本番 flag 切替は監視期間経過後に別 PR で実施予定）
+承認済み・実装完了（Stage 1〜4, 6 が main マージ済み。Stage 5 のコードは main マージ済みだが本番 flag 切替は監視期間経過後に別 PR で実施予定。Stage 6 Phase B の safe グループ2件の手動対応は super-admin 未実施）
 
 ## コンテキスト
 
@@ -33,9 +33,27 @@
 | 3 | スキップ機能本体: `POST /quizzes/:quizId/skip`+`createSyntheticSkippedSession`+受講者UI | #599 | main merge済み(2026-08-19) |
 | 4 | 資料PDF許可: PDFゲート変更+`LessonPdfButton`3状態化 | #601 | main merge済み(2026-08-19) |
 | 5 | ケースD厳格化: 有効セッション必須化+合格後再受験の遮断 | #604 | コード main merge済み(2026-08-19)。本番 flag は `QUIZ_REQUIRE_ACTIVE_SESSION=false` で先行デプロイ中、監視期間経過後に別PRで `=true` へ切替予定 |
-| 6 | ADR改訂+ドキュメント更新+既存重複データの整理スクリプト | 本PR（文書化部分）+ 別PR（整理スクリプト） | 進行中 |
+| 6 | ADR改訂+ドキュメント更新+既存重複データの整理（Phase A監査+Phase B方針決定） | #608(ADR)、#609(Phase A監査スクリプト)、#613(shared-typesビルド修正) | 完了 |
 
-## 根拠
+## Stage 6 Phase A/B（既存重複データの整理）
+
+**Phase A（読み取り専用監査、`scripts/audit-duplicate-synthetic-sessions.ts`）実測結果（2026-08-20、全テナント横断・3テナント・打ち切りなしの完全走査）**:
+
+| バケット | グループ数 | 余剰行 | protected（super-admin編集済・不可侵） | safe（要対応） |
+|---|---|---|---|---|
+| real+synthetic 混在 | 18 | 35 | 16 | 2 |
+| synthetic(合格経路)複数 | 0 | 0 | - | - |
+| synthetic(スキップ経路)複数【構造異常シグナル】 | 0 | 0 | - | - |
+| real のみ複数（正当な再受講ベースライン、対象外） | 44 | 66 | 11 | 33 |
+| 合計 | 62 | 101 | 27 | 35 |
+
+**Phase B 決定**: 構造的異常シグナル（synthetic_skip_multi）が全テナントで0件、かつ実際に対応が必要な safe な real+synthetic 混在グループが2件（atali82iテナント）のみと判明したため、自動統合/削除スクリプトの新規開発は見送る。理由は開発コストに対して対象が極小であるため。
+
+1. **safe な2グループ（atali82iテナント）は super-admin が手動編集で対応**。監査スクリプトは PII 制限（userId/doc id 非出力）により対象ドキュメントを特定できないため、super-admin が Firestore コンソール等で個別に特定・対応する（本 ADR 時点で未実施、担当は開発者）。
+2. **監査スクリプトは定期監視用途に転用**。`audit-duplicate-synthetic-sessions.yml` に `schedule`（毎週月曜 09:00 JST）を追加し、synthetic_skip_multi 異常シグナルが1件以上検出された場合は終了コード3で workflow run を失敗させ、再発を可視化する（PR #613 のフォローアップ）。
+3. **real_only_multi（44グループ）は対応対象外**。synthetic セッション重複ではなく正当な再受講のベースラインであり、ADR-040 のスコープ外。
+
+
 
 - **加算方式（`quizPassed`温存）**: 既存の合格ベース表示・レポート・PDFゲートを一切書き換えずに済み、既存不具合の混入リスクを避けられる。三値（合格/スキップ/未合格）表示への拡張は表示層のみで完結する。
 - **サブコレクション方式のテナント設定**: `FirestoreDataSource.collection()` は `tenants/{tid}/` 配下にしか到達できない実装制約があり（`firestore.ts` 実測確認済み）、受講者向けAPI経路（スキップ判定・PDFゲート・コース応答）からテナント設定を読む必要があるため、DataSource経由で読めるサブコレクション方式でなければ `InMemoryDataSource` 中心の統合テスト戦略（ADR-028）が成立しない。テナントdocへの直接フィールド追加（`TenantNotificationCcConfig`方式）は不採用。

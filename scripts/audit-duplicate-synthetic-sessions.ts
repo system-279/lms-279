@@ -41,6 +41,15 @@
  *   - 本監査は全体スナップショットではない（ページごとの読み取りは走査中の新規作成で
  *     ズレうる）。Phase B 着手直前には必ず再監査すること
  *
+ * Phase B 方針（2026-08-20 実測後決定、ADR-040参照）:
+ *   実測（全テナント横断）で synthetic_skip_multi 異常シグナルが 0 件、
+ *   mixed_synthetic_real の safe（super-admin未編集）グループも 2 件のみと判明したため、
+ *   自動統合/削除スクリプトの新規開発は見送り、safe グループは super-admin 手動編集で対応する。
+ *   本スクリプトは定期実行（.github/workflows 側で schedule 設定）による構造的異常
+ *   （synthetic_skip_multi の再発）の監視用途に転用する。異常検知時は終了コード3で
+ *   終了し、定期実行ワークフローが失敗として可視化される（INVALID_FOR_PHASE_B の
+ *   終了コード2とは独立の判定で、両方に該当する場合はコード2を優先する）。
+ *
  * 使用方法:
  *   GOOGLE_APPLICATION_CREDENTIALS=path/to/key.json \
  *     npx tsx scripts/audit-duplicate-synthetic-sessions.ts \
@@ -537,6 +546,8 @@ export interface GrandTotal {
   readonly capHitTenantCount: number;
   /** true の場合、本結果は Phase B 設計の入力として使用してはならない。 */
   readonly invalidForPhaseB: boolean;
+  /** synthetic_skip_multi 異常シグナルの全テナント合算（Phase B以降は定期監視用途）。 */
+  readonly totalSkipMultiAnomalyCount: number;
 }
 
 /** テナント別集計をスカラーのみ合算する（lessonId はテナントスコープのため横断集計しない）。 */
@@ -545,6 +556,7 @@ export function mergeSummaries(summaries: readonly TenantDuplicateSummary[]): Gr
   let totalExcessRows = 0;
   let totalProtectedGroupCount = 0;
   let capHitTenantCount = 0;
+  let totalSkipMultiAnomalyCount = 0;
 
   for (const s of summaries) {
     for (const bucket of ALL_BUCKETS) {
@@ -554,6 +566,7 @@ export function mergeSummaries(summaries: readonly TenantDuplicateSummary[]): Gr
       totalProtectedGroupCount += b.protectedGroupCount;
     }
     if (s.scan.hitDocCap) capHitTenantCount++;
+    totalSkipMultiAnomalyCount += s.skipMultiAnomalyCount;
   }
 
   return {
@@ -563,6 +576,7 @@ export function mergeSummaries(summaries: readonly TenantDuplicateSummary[]): Gr
     totalProtectedGroupCount,
     capHitTenantCount,
     invalidForPhaseB: capHitTenantCount > 0,
+    totalSkipMultiAnomalyCount,
   };
 }
 
@@ -685,6 +699,12 @@ async function main(): Promise<void> {
   if (grandTotal.invalidForPhaseB) {
     process.exit(2);
   }
+  if (grandTotal.totalSkipMultiAnomalyCount > 0) {
+    console.error(
+      `[ANOMALY] synthetic_skip_multi 異常シグナルを${grandTotal.totalSkipMultiAnomalyCount}件検出しました。定期実行ワークフローの失敗として扱われます。`
+    );
+    process.exit(3);
+  }
 }
 
 // ============================================================
@@ -741,6 +761,7 @@ export function printGrandTotal(g: GrandTotal): void {
   console.log(`複数行候補グループ総数: ${g.totalGroupCount}`);
   console.log(`余剰行総数: ${g.totalExcessRows}`);
   console.log(`protected（super-admin手動編集済み、Phase Bで不可侵）グループ数: ${g.totalProtectedGroupCount}`);
+  console.log(`[異常シグナル合算] synthetic_skip_multi（構造的異常、定期監視対象）: ${g.totalSkipMultiAnomalyCount}`);
   if (g.invalidForPhaseB) {
     console.log();
     console.log(
