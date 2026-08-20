@@ -2,7 +2,7 @@
 
 ## ステータス
 
-承認済み・実装完了（Stage 1〜4, 6 が main マージ済み。Stage 5 のコードは main マージ済みだが本番 flag 切替は監視期間経過後に別 PR で実施予定。Stage 6 Phase B の safe グループ2件の手動対応は super-admin 未実施）
+承認済み・実装完了（Stage 1〜5, 6 が main マージ済み。Stage 5 は PR #619(2026-08-20)で本番 flag を `QUIZ_REQUIRE_ACTIVE_SESSION=true` へ切替、Cloud Run 実機で反映確認済み。ロールバック用 PR #620 を待機状態(未 merge)で保持。Stage 6 Phase B の safe グループ2件の手動対応は super-admin 未実施）
 
 ## コンテキスト
 
