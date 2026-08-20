@@ -699,13 +699,16 @@ describe("DryRunPreview (AC-α7-12 request control、実 hook 結合)", () => {
     superFetchMock.mockReset();
   });
 
-  it("再取得ボタンを連打しても superFetch は 1 回しか呼ばれない (FE dedupe + BE single-flight の一対設計)", async () => {
+  it("再取得ボタンを連打しても superFetch は 1 回しか呼ばれない (FE dedupe + BE single-flight の一対設計)。resolve 後の再クリックでは 2 回目が正しく発火する (pr-test-analyzer 指摘: dedupe 解除の恒久ロックを防ぐ回帰確認)", async () => {
     let resolveFetch: ((value: ProgressDryRunResult) => void) | undefined;
     superFetchMock.mockImplementationOnce(
       () =>
         new Promise<ProgressDryRunResult>((resolve) => {
           resolveFetch = resolve;
         }),
+    );
+    superFetchMock.mockResolvedValueOnce(
+      makeProgressResult({ totalWouldSendCount: 9 }),
     );
 
     render(<DryRunPreviewLive lane="progress" />);
@@ -725,28 +728,20 @@ describe("DryRunPreview (AC-α7-12 request control、実 hook 結合)", () => {
     expect(button).toBeDisabled();
 
     await act(async () => {
-      resolveFetch?.({
-        lane: "progress",
-        evaluatedAt: "2026-06-04T10:00:00.000Z",
-        settingsLoaded: true,
-        settingsSnapshot: {
-          progressReportEnabled: true,
-          scheduleDaysOfWeek: [1],
-          scheduleHourJst: 9,
-          signatureName: "Test",
-        },
-        tenantsScanned: 0,
-        tenantsSummary: [],
-        totalWouldSendCount: 0,
-        totalCcCount: 0,
-        estimatedDurationMs: 0,
-        estimatedPdfSizeKbRange: { min: 150, typical: 350, max: 1200 },
-        scaleTriggerExceeded: false,
-      });
+      resolveFetch?.(makeProgressResult());
       await Promise.resolve();
     });
 
     expect(button).toBeEnabled();
+
+    // resolve 後の再クリックで abortRef が正しく解除され、2 回目の refresh が
+    // 発火することを確認する (dedupe が誤って恒久ロックしていないかの回帰確認)
+    await act(async () => {
+      fireEvent.click(button);
+      await Promise.resolve();
+    });
+
+    expect(superFetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

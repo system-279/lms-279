@@ -255,7 +255,7 @@ E2: Quality Gate 5 段階 ← E1 完了後
   - 各要素に `aria-label` または可視ラベル
   - focus visible (outline) が CSS で表示される
   - 警告バナーは `role="alert"` (or `role="status"`)
-- **検証 (2026-08-20 改訂、Issue #584 戦略見直し、adr-2026-08-20-dry-run-e2e-strategy-revision 参照)**:
+- **検証 (2026-08-20 改訂、Issue #584 戦略見直し、ADR-041-dry-run-e2e-strategy-revision 参照)**:
   component test (`DryRunPreview.test.tsx`) で aria-label / role / focusable 属性を個別 assert +
   `jest-axe` による自動 a11y 違反検出。**未検証の既知ギャップ**: 実際の Tab キー順序遷移と
   `:focus-visible` outline の CSS 描画は jsdom がレイアウト/CSS 疑似クラスを評価しないため
