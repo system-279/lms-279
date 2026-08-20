@@ -49,7 +49,7 @@
 
 **Phase B 決定**: 構造的異常シグナル（synthetic_skip_multi）が全テナントで0件、かつ実際に対応が必要な safe な real+synthetic 混在グループが2件（atali82iテナント）のみと判明したため、自動統合/削除スクリプトの新規開発は見送る。理由は開発コストに対して対象が極小であるため。
 
-1. **safe な2グループ（atali82iテナント）は super-admin が手動編集で対応**。監査スクリプトは PII 制限（userId/doc id 非出力）により対象ドキュメントを特定できないため、super-admin が Firestore コンソール等で個別に特定・対応する（本 ADR 時点で未実施、担当は開発者）。
+1. **safe な2グループ（atali82iテナント）は super-admin が手動編集で対応**。監査スクリプトは PII 制限（userId/doc id 非出力）により対象ドキュメントを特定できないため、super-admin が Firestore コンソール等で個別に特定・対応する（本 ADR 時点で未実施、担当は開発者）。対象特定手順・判定材料・対応方針の選択肢は `docs/runbook/stage6-mixed-session-duplicate-cleanup.md` に手順化済み（実際の実行・削除/補正の判断自体は開発者が行う）。
 2. **監査スクリプトは定期監視用途に転用**。`audit-duplicate-synthetic-sessions.yml` に `schedule`（毎週月曜 09:00 JST）を追加し、synthetic_skip_multi 異常シグナルが1件以上検出された場合は終了コード3で workflow run を失敗させ、再発を可視化する（PR #613 のshared-typesビルド修正フォローアップとして本PR #614で実装）。
 3. **real_only_multi（44グループ）は対応対象外**。synthetic セッション重複ではなく正当な再受講のベースラインであり、ADR-040 のスコープ外。
 
