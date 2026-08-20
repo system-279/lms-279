@@ -7,15 +7,44 @@
  *   - error 表示 (ApiError、429 専用メッセージ含む)
  *   - empty state / disabled state (AC-α7-11)
  *   - loading 中の aria-busy / button disable (AC-α7-12)
+ *
+ * Issue #584 戦略見直し (2026-08-20、docs/adr/ADR-041-dry-run-e2e-strategy-revision.md):
+ *   AC-α7-09/10/12 の検証方法を「Playwright」から「コンポーネント/統合テスト」へ変更した際の
+ *   追加分。AC-09 は jest-axe による自動 a11y 違反検出、AC-12 は実 hook 結合での連打防止、
+ *   AC-10 は jsdom の限界内での Tailwind クラス存在チェック (弱い代替、下記コメント参照)。
  */
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { axe, toHaveNoViolations } from "jest-axe";
 import type {
   CompletionDryRunResult,
+  DispatchLane,
   ProgressDryRunResult,
 } from "@lms-279/shared-types";
 import { ApiError } from "@/lib/api";
 import { DryRunPreview } from "../DryRunPreview";
+import { useDryRun } from "../../hooks/useDryRun";
+
+expect.extend(toHaveNoViolations);
+
+const superFetchMock = vi.fn();
+vi.mock("@/lib/super-api", () => ({
+  useSuperAdminFetch: () => ({ superFetch: superFetchMock }),
+}));
+
+function DryRunPreviewLive({ lane }: { lane: DispatchLane }) {
+  const dr = useDryRun(lane);
+  return (
+    <DryRunPreview
+      lane={lane}
+      result={dr.result}
+      isLoading={dr.isLoading}
+      error={dr.error}
+      lastFetchedAt={dr.lastFetchedAt}
+      onRefresh={() => void dr.refresh()}
+    />
+  );
+}
 
 const NOW = "2026-06-04T10:00:00.000Z";
 
@@ -662,5 +691,154 @@ describe("DryRunPreview (error states)", () => {
       />,
     );
     expect(screen.getByText(/この操作を行う権限がありません/)).toBeInTheDocument();
+  });
+});
+
+describe("DryRunPreview (AC-α7-12 request control、実 hook 結合)", () => {
+  afterEach(() => {
+    superFetchMock.mockReset();
+  });
+
+  it("再取得ボタンを連打しても superFetch は 1 回しか呼ばれない (FE dedupe + BE single-flight の一対設計)。resolve 後の再クリックでは 2 回目が正しく発火する (pr-test-analyzer 指摘: dedupe 解除の恒久ロックを防ぐ回帰確認)", async () => {
+    let resolveFetch: ((value: ProgressDryRunResult) => void) | undefined;
+    superFetchMock.mockImplementationOnce(
+      () =>
+        new Promise<ProgressDryRunResult>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    superFetchMock.mockResolvedValueOnce(
+      makeProgressResult({ totalWouldSendCount: 9 }),
+    );
+
+    render(<DryRunPreviewLive lane="progress" />);
+    const button = screen.getByRole("button", {
+      name: "進捗レポート 配信プレビューを再取得",
+    });
+
+    // in-flight のまま連打 (useDryRun.refresh() の abortRef dedupe は
+    // 状態更新を待たず同期的に効くため、isLoading 反映前の連打でも 1 回に収束する)
+    act(() => {
+      fireEvent.click(button);
+      fireEvent.click(button);
+      fireEvent.click(button);
+    });
+
+    expect(superFetchMock).toHaveBeenCalledTimes(1);
+    expect(button).toBeDisabled();
+
+    await act(async () => {
+      resolveFetch?.(makeProgressResult());
+      await Promise.resolve();
+    });
+
+    expect(button).toBeEnabled();
+
+    // resolve 後の再クリックで abortRef が正しく解除され、2 回目の refresh が
+    // 発火することを確認する (dedupe が誤って恒久ロックしていないかの回帰確認)
+    await act(async () => {
+      fireEvent.click(button);
+      await Promise.resolve();
+    });
+
+    expect(superFetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("DryRunPreview (AC-α7-09 a11y 自動検出、jest-axe)", () => {
+  it("初期状態 (result=null) に axe 違反がない", async () => {
+    const { container } = render(
+      <DryRunPreview
+        lane="progress"
+        result={null}
+        isLoading={false}
+        error={null}
+        lastFetchedAt={null}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("結果表示状態 (テーブル/metric込み) に axe 違反がない", async () => {
+    const { container } = render(
+      <DryRunPreview
+        lane="progress"
+        result={makeProgressResult({ scaleTriggerExceeded: true })}
+        isLoading={false}
+        error={null}
+        lastFetchedAt={NOW}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("error 表示状態に axe 違反がない", async () => {
+    const { container } = render(
+      <DryRunPreview
+        lane="completion"
+        result={null}
+        isLoading={false}
+        error={new ApiError(500, "internal_error", "boom")}
+        lastFetchedAt={null}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  // 注意: axe-core は DOM 属性の静的な a11y ルール違反 (aria-* 不整合、
+  // コントラスト比等) を検出するのみで、実際の Tab キー順序・focus-visible
+  // outline の CSS 描画は検証しない (jsdom はレイアウト/CSS 疑似クラスを
+  // 評価しないため)。この部分は既知の未検証ギャップとして
+  // docs/specs/2026-06-03-phase-4-pr-alpha-7-dry-run-ui-impl-plan.md に明記する。
+});
+
+describe("DryRunPreview (AC-α7-10 responsive、静的クラス存在チェック)", () => {
+  // 注意: jsdom はレイアウトエンジンを持たないため、375px/768px での実際の
+  // 折り返し・グリッド列数変化そのものは検証できない (本質的にブラウザが必要)。
+  // ここでは「意図した responsive breakpoint クラスが JSX 出力に含まれているか」
+  // という弱い代替チェックのみを行う。既知の未検証ギャップとして design doc に明記。
+  it("progress lane の metric grid に md:grid-cols-4 クラスが出力される", () => {
+    const { container } = render(
+      <DryRunPreview
+        lane="progress"
+        result={makeProgressResult()}
+        isLoading={false}
+        error={null}
+        lastFetchedAt={NOW}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(container.querySelector(".md\\:grid-cols-4")).not.toBeNull();
+  });
+
+  it("completion lane の metric grid に md:grid-cols-3 クラスが出力される", () => {
+    const { container } = render(
+      <DryRunPreview
+        lane="completion"
+        result={makeCompletionResult()}
+        isLoading={false}
+        error={null}
+        lastFetchedAt={NOW}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(container.querySelector(".md\\:grid-cols-3")).not.toBeNull();
+  });
+
+  it("テナート別内訳テーブルは overflow-x-auto でラップされる (横崩れ防止)", () => {
+    const { container } = render(
+      <DryRunPreview
+        lane="progress"
+        result={makeProgressResult()}
+        isLoading={false}
+        error={null}
+        lastFetchedAt={NOW}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(container.querySelector(".overflow-x-auto table")).not.toBeNull();
   });
 });
