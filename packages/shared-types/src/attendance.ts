@@ -8,6 +8,18 @@
 import type { LessonSessionStatus, SessionExitReason } from "./enums.js";
 
 // ============================================================
+// 出席記録の異常検知（F2、ADR-027）
+// ============================================================
+
+/**
+ * 出席記録の異常種別。
+ * - overlap_previous: 同一ユーザーの他セッションと入退室時刻が重複している（後発の行に付与）
+ * - negative_duration: exitAt が entryAt より前（データ不整合）
+ * - stale_active: active のまま SESSION_DURATION_MS を超えて放置されている
+ */
+export type SessionAnomalyType = "overlap_previous" | "negative_duration" | "stale_active";
+
+// ============================================================
 // 管理者向け出席
 // GET /admin/analytics/attendance/courses/:courseId
 // ============================================================
@@ -24,6 +36,7 @@ export interface AdminAttendanceRecord {
   exitAt: string | null;
   exitReason: SessionExitReason | null;
   durationMin: number;
+  anomalies?: SessionAnomalyType[];
 }
 
 export interface AdminAttendanceResponse {
@@ -71,6 +84,7 @@ export interface SuperAttendanceRecord {
   };
   /** 最後の編集時刻 (ISO8601)。未編集の場合 `undefined`。Issue #556。 */
   editedAt?: string;
+  anomalies?: SessionAnomalyType[];
 }
 
 export interface SuperAttendanceResponse {

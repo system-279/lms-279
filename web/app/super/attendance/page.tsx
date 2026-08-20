@@ -52,6 +52,14 @@ import {
   type SyntheticKind,
 } from "./_helpers/synthetic-filter";
 import {
+  ANOMALY_FILTER_OPTIONS,
+  ANOMALY_TOOLTIPS,
+  anomalyLabel,
+  hasAnomaly,
+  matchesAnomalyFilter,
+  type AnomalyFilterKind,
+} from "./_helpers/anomaly";
+import {
   applyPdfColumnHide,
   restorePdfColumnDisplay,
 } from "./_helpers/pdf-print";
@@ -146,6 +154,7 @@ export default function AttendanceReportPage() {
   const [filterExitReasons, setFilterExitReasons] = useState<Set<string>>(new Set());
   const [filterQuizPassed, setFilterQuizPassed] = useState<Set<string>>(new Set());
   const [filterSyntheticKind, setFilterSyntheticKind] = useState<SyntheticKind>("all");
+  const [filterAnomalyKind, setFilterAnomalyKind] = useState<AnomalyFilterKind>("all");
 
   // ソート
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
@@ -208,6 +217,7 @@ export default function AttendanceReportPage() {
       setFilterExitReasons(new Set());
       setFilterQuizPassed(new Set());
       setFilterSyntheticKind("all");
+      setFilterAnomalyKind("all");
       setSortKey(null);
       setSortDir(null);
     } else {
@@ -300,6 +310,9 @@ export default function AttendanceReportPage() {
     if (filterSyntheticKind !== "all") {
       records = records.filter((r) => matchesIsSyntheticFilter(r.isSynthetic, filterSyntheticKind));
     }
+    if (filterAnomalyKind !== "all") {
+      records = records.filter((r) => matchesAnomalyFilter(r.anomalies, filterAnomalyKind));
+    }
 
     // ソート
     if (sortKey && sortDir) {
@@ -328,7 +341,7 @@ export default function AttendanceReportPage() {
     }
 
     return records;
-  }, [report, filterUsers, filterCourses, filterLessons, filterExitReasons, filterQuizPassed, filterSyntheticKind, sortKey, sortDir]);
+  }, [report, filterUsers, filterCourses, filterLessons, filterExitReasons, filterQuizPassed, filterSyntheticKind, filterAnomalyKind, sortKey, sortDir]);
 
   const openEdit = (record: SuperAttendanceRecord) => {
     setEditRecord(record);
@@ -452,7 +465,7 @@ export default function AttendanceReportPage() {
             </p>
             {(filterUsers.size > 0 || filterCourses.size > 0 || filterLessons.size > 0
               || filterExitReasons.size > 0 || filterQuizPassed.size > 0
-              || filterSyntheticKind !== "all") && (
+              || filterSyntheticKind !== "all" || filterAnomalyKind !== "all") && (
               <p className="text-sm text-muted-foreground">
                 抽出条件:{" "}
                 {[
@@ -463,6 +476,7 @@ export default function AttendanceReportPage() {
                   filterQuizPassed.size > 0 && `合否 ${filterQuizPassed.size} 件`,
                   filterSyntheticKind === "synthetic_only" && "session 種別: 自動補完のみ",
                   filterSyntheticKind === "actual_only" && "session 種別: 実 session のみ",
+                  filterAnomalyKind === "anomaly_only" && "異常のみ",
                 ]
                   .filter(Boolean)
                   .join(" / ")}
@@ -509,7 +523,7 @@ export default function AttendanceReportPage() {
               selected={filterQuizPassed}
               onChange={setFilterQuizPassed}
             />
-            {(filterUsers.size > 0 || filterCourses.size > 0 || filterLessons.size > 0 || filterExitReasons.size > 0 || filterQuizPassed.size > 0 || filterSyntheticKind !== "all") && (
+            {(filterUsers.size > 0 || filterCourses.size > 0 || filterLessons.size > 0 || filterExitReasons.size > 0 || filterQuizPassed.size > 0 || filterSyntheticKind !== "all" || filterAnomalyKind !== "all") && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -521,6 +535,7 @@ export default function AttendanceReportPage() {
                   setFilterExitReasons(new Set());
                   setFilterQuizPassed(new Set());
                   setFilterSyntheticKind("all");
+                  setFilterAnomalyKind("all");
                 }}
               >
                 フィルタ解除
@@ -551,6 +566,38 @@ export default function AttendanceReportPage() {
                         : "hover:bg-muted/50"
                     } ${i === 0 ? "rounded-l-md" : ""} ${
                       i === SYNTHETIC_KIND_OPTIONS.length - 1 ? "rounded-r-md" : ""
+                    } ${i > 0 ? "border-l" : ""}`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 異常フィルタ (F2, ADR-027) */}
+          <div className="flex flex-wrap items-center gap-2 mb-3 print:hidden">
+            <span className="text-xs text-muted-foreground">異常:</span>
+            <div
+              role="radiogroup"
+              aria-label="異常"
+              className="inline-flex rounded-md border"
+            >
+              {ANOMALY_FILTER_OPTIONS.map((opt, i) => {
+                const active = filterAnomalyKind === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => setFilterAnomalyKind(opt.value)}
+                    className={`px-3 py-1 text-xs transition-colors ${
+                      active
+                        ? "bg-secondary text-secondary-foreground"
+                        : "hover:bg-muted/50"
+                    } ${i === 0 ? "rounded-l-md" : ""} ${
+                      i === ANOMALY_FILTER_OPTIONS.length - 1 ? "rounded-r-md" : ""
                     } ${i > 0 ? "border-l" : ""}`}
                   >
                     {opt.label}
@@ -613,6 +660,17 @@ export default function AttendanceReportPage() {
                             編集済
                           </Badge>
                         )}
+                        {hasAnomaly(r.anomalies) &&
+                          r.anomalies!.map((a) => (
+                            <Badge
+                              key={a}
+                              variant="destructive"
+                              className="ml-1 print:hidden"
+                              title={ANOMALY_TOOLTIPS[a]}
+                            >
+                              {anomalyLabel(a)}
+                            </Badge>
+                          ))}
                       </TableCell>
                       <TableCell data-col="exitAt" className="whitespace-nowrap text-sm">{formatTime(r.exitAt)}</TableCell>
                       <TableCell data-col="stayDuration" className="whitespace-nowrap text-sm">

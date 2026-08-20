@@ -1,9 +1,19 @@
 # ADR-027: レッスンセッション出席管理
 
 ## ステータス
-承認済み（2026-08-19 改訂: テスト任意化 ADR-040、ケースD厳格化(Stage 5)+quiz_skipped退室理由(Stage 3) / 2026-06-10 改訂: D 案 動画長+テスト時間の換算退室時刻 #533 follow-up #4 (PR #559 #533 follow-up #3 撤回) / 2026-06-10 改訂: 自動補完 session 滞在時間カラム表示分離 #533 follow-up #3 / 2026-06-10 改訂: 編集前 original snapshot 保持 #556 / 2026-06-10 改訂: PDF 印字時バッジ非表示化 #533 follow-up / 2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
+承認済み（2026-08-20 改訂: 出席レコード異常検出 F2（重複/負滞在/stale active） / 2026-08-19 改訂: テスト任意化 ADR-040、ケースD厳格化(Stage 5)+quiz_skipped退室理由(Stage 3) / 2026-06-10 改訂: D 案 動画長+テスト時間の換算退室時刻 #533 follow-up #4 (PR #559 #533 follow-up #3 撤回) / 2026-06-10 改訂: 自動補完 session 滞在時間カラム表示分離 #533 follow-up #3 / 2026-06-10 改訂: 編集前 original snapshot 保持 #556 / 2026-06-10 改訂: PDF 印字時バッジ非表示化 #533 follow-up / 2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
 
 ## 改訂履歴
+- **2026-08-20（出席レコード異常検出 F2）**: **動機**: 2026-06-10 の Google Chat スレッドで開発者から指摘された⑦（明らかにおかしいログにエラーを出したい）が既存 Issue 対応から漏れていた。調査の結果、Next.js の client 遷移（App Router）では `beforeunload` が発火せず `sendBeacon` による abandon 通知が飛ばないため、前レッスンの session が `active` のまま残り、後から `handleStaleSession` が現在時刻で force_exit する結果、次レッスンの entryAt より後の exitAt になる重複ログが真因と判明。詳細は下記「出席レコード異常検出」セクション参照。
+
+  **PR-A（本 PR、read-only）**: `session-anomaly.ts` に DataSource 非依存の純粋関数 `detectSessionAnomalies()` を新設。`overlap_previous`（同一ユーザーの他セッションと入退室時刻が重複）/ `negative_duration`（exitAt < entryAt）/ `stale_active`（active のまま `SESSION_DURATION_MS` 超過で放置）の 3 種を検知し、super/admin 両出席レポートにバッジ表示 + 「異常のみ」フィルタ + CSV「異常」列で可視化する。受講者への挙動変更・DB スキーマ変更なし。synthetic session（`isSynthetic=true`）は換算タイムスタンプを持つため overlap 検知のスイープから除外（除外しないと合格提出のたびに誤検知が発生する）。
+
+  Codex セカンドオピニオン（MCP版、effort=high）で新規 6 件の指摘を受け、うち `stale_active` 種別追加（当初計画は重複/負滞在の 2 種のみで放置セッションを検知対象外にしていた）を採用。
+
+  **PR-B（後続、未着手）**: 重複ログの再発防止として、異なるレッスンへの入室を退室から `LESSON_ENTRY_GAP_MS`（デフォルト 60000ms、kill switch `0`）でブロックする。本 PR-A マージ後、最低 1 週間の観測期間を経て実発生件数を確認してから着手する。
+
+  **テスト**: `session-anomaly.test.ts`（14 ケース、境界値±1ms・synthetic 除外・stale_active 境界・長時間セッションが後続複数件を巻き込むケース含む）/ `attendance-report-anomaly.test.ts`（super レポート統合、5 ケース）/ `web/app/super/attendance/__tests__/anomaly.test.ts`（10 ケース）。
+
 - **2026-08-19（テスト任意化 Stage 3/5、ADR-040）**: **動機**: テスト任意化機能でテストをスキップして完了扱いにする経路（`POST /quizzes/:quizId/skip`）を追加するにあたり、出席セッションにも「スキップで退室」という新しい退室理由が必要になった。あわせて、スキップという正規の抜け道ができたことで、既存のケースD（`activeSession=null` での後方互換受験）という暗黙の抜け道を維持する理由が薄れたため、Stage 5 で厳格化した。
 
   **Stage 3（スキップ時の出席記録）**: `exitReason` に `quiz_skipped` を追加。スキップ成功時、アクティブセッションがあれば `completeSessionAsQuizSkipped()`（既存 `completeSession` を内部委譲）でセッションを完了させる。アクティブセッションが存在しない場合（動画完了後に一度退室していた等）は新規 `createSyntheticSkippedSession()` で合成セッションを作成する。doc id は `synthetic_skip_{userId}_{lessonId}` という (受講者, レッスン) 単位の決定的IDとし、既存の合格用合成セッション（`createSyntheticCompletedSession`、doc id=`synthetic_{attemptId}`、本ADR上段2026-06-09エントリ参照）とは意図的に別実装にした。attempt単位のdoc id設計そのものが既存の重複行問題の原因だったため、レッスン単位の決定的IDで構造的に1行へ固定する。`entryAt`/`exitAt` は動画長からの換算退室時刻方式（D案、2026-06-10エントリ参照）と対称の設計。
@@ -169,6 +179,19 @@
 - セッション開始後は制限時刻を動的カウントダウンで表示
   - 残り30分〜10分: 黄色警告
   - 残り10分以下: 赤色警告（パルスアニメーション）
+
+### 出席レコード異常検出（F2、2026-08-20）
+
+**F1（PR-B、後続）だけでは防げない**: 入室ギャップ制御（F1）は「入室時にブロックする」防止策であり、exitAt 基準で判定する。しかし重複ログの真因は stale active session（前レッスンの session が `active` のまま放置され、後から `handleStaleSession` が現在時刻で force_exit することで次レッスンの entryAt より後の exitAt が記録される現象）にあり、F1 では既に発生した重複を検知できない。F2 は F1 の副産物ではなく独立した機能として、既存データに対する**検知**を担う（防止は狭く・検知は広い、非対称設計）。
+
+**3 異常種別**（`services/api/src/services/session-anomaly.ts` の `detectSessionAnomalies()`）:
+- `overlap_previous`: 同一ユーザーの他セッションと入退室時刻が重複。entryAt 昇順スイープで `maxExitSoFar` を保持し、後発セッションの entryAt が厳密に `maxExitSoFar` 未満の場合に後発の行のみへ付与する（entryAt === 前 exitAt ちょうどは連続でありF1の領域、重複ではないため厳密な `<` で判定）。
+- `negative_duration`: exitAt < entryAt（データ不整合）。
+- `stale_active`: `status==="active"` のまま `SESSION_DURATION_MS` を超えて放置。
+
+synthetic session（`isSynthetic=true`）は quiz_attempt から換算された entryAt/exitAt を持つため overlap 検知のスイープ対象から除外する（除外しないと合格提出のたびに誤検知が発生する）。stale_active は synthetic session が常に `status="completed"` で作成されるため対象外になる。
+
+**検知範囲の非対称性**: super レポート（`GET /tenants/:tenantId/attendance-report`）はユーザー単位・コース跨ぎで判定する。admin レポート（`GET /admin/analytics/attendance/courses/:courseId`）は取得済みデータがコース内に限定されるため、同一コース内の記録のみで判定する（画面に脚注で明記）。いずれも取得済みデータに対するオンザフライ計算のためコスト0、Firestore スキーマ変更なし。
 
 ## 根拠
 - **別コレクション**: セッションは多対一（1レッスンに複数セッション）のため `user_progress` への埋め込みは不適切

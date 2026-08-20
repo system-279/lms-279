@@ -167,6 +167,8 @@ questions配列の各要素:
 | createdAt | Timestamp | 作成日時 |
 | updatedAt | Timestamp | 更新日時 |
 
+**出席レコード異常検出（F2、ADR-027 §改訂履歴 2026-08-20）**: `lesson_sessions` にフィールド追加なし。出席レポートAPI（`SuperAttendanceRecord`/`AdminAttendanceRecord`）が返す `anomalies?: SessionAnomalyType[]`（`overlap_previous` / `negative_duration` / `stale_active`）は取得済みセッション集合に対するオンザフライ計算（`session-anomaly.ts`）であり、Firestoreには保存されない。
+
 #### course_enrollment_settings/{courseId}（受講期間設定 — テナント×コース単位）
 | フィールド | 型 | 説明 |
 |-----------|------|------|

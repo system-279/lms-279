@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, Fragment } from "react";
+import { useEffect, useState, useCallback, useMemo, Fragment } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +30,14 @@ import type {
   LessonSessionStatus,
   SessionExitReason,
 } from "@lms-279/shared-types";
+import {
+  ANOMALY_FILTER_OPTIONS,
+  ANOMALY_TOOLTIPS,
+  anomalyLabel,
+  hasAnomaly,
+  matchesAnomalyFilter,
+  type AnomalyFilterKind,
+} from "@/app/super/attendance/_helpers/anomaly";
 
 // ─── UI用ローカル型 ──────────────────────────────────────────────
 
@@ -581,6 +589,7 @@ function AttendanceTab() {
   const [attendanceData, setAttendanceData] = useState<AdminAttendanceResponse | null>(null);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
+  const [filterAnomalyKind, setFilterAnomalyKind] = useState<AnomalyFilterKind>("all");
 
   const [exportLoading, setExportLoading] = useState(false);
 
@@ -628,8 +637,15 @@ function AttendanceTab() {
 
   const handleCourseChange = (courseId: string) => {
     setSelectedCourseId(courseId);
+    setFilterAnomalyKind("all");
     fetchAttendance(courseId);
   };
+
+  const filteredAttendanceRecords = useMemo(() => {
+    if (!attendanceData) return [];
+    if (filterAnomalyKind === "all") return attendanceData.records;
+    return attendanceData.records.filter((r) => matchesAnomalyFilter(r.anomalies, filterAnomalyKind));
+  }, [attendanceData, filterAnomalyKind]);
 
   // CSV エクスポート（認証付きblobダウンロード）
   const handleExport = useCallback(async () => {
@@ -725,8 +741,39 @@ function AttendanceTab() {
             </div>
           </div>
 
+          {/* 異常フィルタ (F2, ADR-027) */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground">異常:</span>
+            <div role="radiogroup" aria-label="異常" className="inline-flex rounded-md border">
+              {ANOMALY_FILTER_OPTIONS.map((opt, i) => {
+                const active = filterAnomalyKind === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => setFilterAnomalyKind(opt.value)}
+                    className={`px-3 py-1 text-xs transition-colors ${
+                      active ? "bg-secondary text-secondary-foreground" : "hover:bg-muted/50"
+                    } ${i === 0 ? "rounded-l-md" : ""} ${
+                      i === ANOMALY_FILTER_OPTIONS.length - 1 ? "rounded-r-md" : ""
+                    } ${i > 0 ? "border-l" : ""}`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+            {filteredAttendanceRecords.length !== attendanceData.records.length && (
+              <span className="text-xs text-muted-foreground">
+                {filteredAttendanceRecords.length}件 / 全{attendanceData.records.length}件
+              </span>
+            )}
+          </div>
+
           {/* 出席テーブル */}
-          {attendanceData.records.length === 0 ? (
+          {filteredAttendanceRecords.length === 0 ? (
             <EmptyState message="出席記録がありません" />
           ) : (
             <Table>
@@ -739,10 +786,11 @@ function AttendanceTab() {
                   <TableHead>ステータス</TableHead>
                   <TableHead>退室理由</TableHead>
                   <TableHead>所要時間</TableHead>
+                  <TableHead>異常</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {attendanceData.records.map((rec) => (
+                {filteredAttendanceRecords.map((rec) => (
                   <TableRow key={rec.sessionId}>
                     <TableCell className="font-medium">
                       <div className="space-y-0.5">
@@ -764,11 +812,27 @@ function AttendanceTab() {
                         : "-"}
                     </TableCell>
                     <TableCell className="text-sm">{rec.durationMin}分</TableCell>
+                    <TableCell className="text-sm">
+                      {hasAnomaly(rec.anomalies) &&
+                        rec.anomalies!.map((a) => (
+                          <Badge
+                            key={a}
+                            variant="destructive"
+                            className="mr-1"
+                            title={ANOMALY_TOOLTIPS[a]}
+                          >
+                            {anomalyLabel(a)}
+                          </Badge>
+                        ))}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           )}
+          <p className="text-xs text-muted-foreground">
+            ※ 異常検知は同一コース内の記録のみで判定しています（コースを跨いだ重複は検知対象外）。
+          </p>
         </div>
       ) : null}
     </div>

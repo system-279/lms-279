@@ -13,6 +13,13 @@ import type {
   SuspiciousViewingResponse,
   AdminAttendanceResponse,
 } from "@lms-279/shared-types";
+import { detectSessionAnomalies, type AnomalyCandidate, type SessionAnomalyType } from "../../services/session-anomaly.js";
+
+const ANOMALY_CSV_LABELS: Record<SessionAnomalyType, string> = {
+  overlap_previous: "重複",
+  negative_duration: "負滞在",
+  stale_active: "放置",
+};
 
 const router = Router();
 
@@ -405,6 +412,21 @@ async function buildAttendanceRecords(
   const userMap = new Map(users.map((u) => [u.id, u]));
   const lessonMap = new Map(lessons.map((l) => [l.id, l]));
 
+  // 異常検知（F2、ADR-027）: admin レポートは同一コース内の集合のみで判定
+  // （sessions は getLessonSessionsByCourse で既にコース内に絞り込み済み）。
+  // isSynthetic は AdminAttendanceRecord DTO に存在しないため、DTO変換前の
+  // 生 LessonSession[] に対して適用する。
+  const anomalyCandidates: AnomalyCandidate[] = sessions.map((s) => ({
+    sessionId: s.id,
+    userId: s.userId,
+    status: s.status,
+    entryAt: s.entryAt,
+    exitAt: s.exitAt,
+    isSynthetic: s.isSynthetic === true,
+    deadlineAt: s.deadlineAt,
+  }));
+  const anomaliesBySessionId = detectSessionAnomalies(anomalyCandidates, new Date());
+
   return sessions.map((s) => {
     const user = userMap.get(s.userId);
     const lesson = lessonMap.get(s.lessonId);
@@ -424,6 +446,7 @@ async function buildAttendanceRecords(
       exitAt: s.exitAt,
       exitReason: s.exitReason,
       durationMin: Math.round(durationMs / 60000),
+      anomalies: anomaliesBySessionId.get(s.id),
     };
   });
 }
@@ -480,7 +503,7 @@ router.get(
 
     const records = await buildAttendanceRecords(ds, courseId);
 
-    const header = "ユーザー名,メール,レッスン,入室時刻,退室時刻,ステータス,退室理由,所要時間（分）\n";
+    const header = "ユーザー名,メール,レッスン,入室時刻,退室時刻,ステータス,退室理由,所要時間（分）,異常\n";
     const rows = records
       .map((r) =>
         [
@@ -492,6 +515,7 @@ router.get(
           r.status,
           r.exitReason ?? "",
           String(r.durationMin),
+          (r.anomalies ?? []).map((a) => ANOMALY_CSV_LABELS[a]).join("；"),
         ]
           .map((v) => `"${v.replace(/"/g, '""')}"`)
           .join(",")
