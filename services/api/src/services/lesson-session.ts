@@ -3,9 +3,9 @@
  * 入室打刻・退室打刻・一時停止リセット・セッション制限時間の管理
  */
 
-import type { DataSource } from "../datasource/interface.js";
+import type { DataSource, SessionWithGapCheckResult } from "../datasource/interface.js";
 import type { LessonSession, Quiz, QuizAttempt, SessionExitReason } from "../types/entities.js";
-import { parsePositiveDurationMs } from "../utils/env-config.js";
+import { parseNonNegativeDurationMs, parsePositiveDurationMs } from "../utils/env-config.js";
 import { logger } from "../utils/logger.js";
 import { withTransientRetry } from "../utils/with-transient-retry.js";
 import { updateCourseProgress } from "./progress.js";
@@ -17,6 +17,15 @@ export const SESSION_DURATION_MS = parsePositiveDurationMs(
   process.env.SESSION_DURATION_MS,
   2 * 60 * 60 * 1000,
   "SESSION_DURATION_MS"
+);
+
+// 入室最小間隔（ミリ秒）。異なるレッスンへの入室を、直前レッスンの退室から本間隔だけブロックする
+// （F1、ADR-027 ケースG）。env var LESSON_ENTRY_GAP_MS で上書き可、デフォルト 60000ms（1分）。
+// `0` は kill switch（無効化、旧挙動）として明示的に許容する。
+export const LESSON_ENTRY_GAP_MS = parseNonNegativeDurationMs(
+  process.env.LESSON_ENTRY_GAP_MS,
+  60000,
+  "LESSON_ENTRY_GAP_MS"
 );
 
 /**
@@ -81,6 +90,114 @@ export async function getOrCreateSession(
     sessionVideoCompleted: false,
     quizAttemptId: null,
   });
+}
+
+/**
+ * F1: 入室最小間隔チェック付きセッション取得/作成（ADR-027 ケースG）。
+ *
+ * `LESSON_ENTRY_GAP_MS<=0`（kill switch）の場合は判定自体を省略し、
+ * 従来の `getOrCreateSession` と同じ挙動（無条件許可）にフォールバックする
+ * （kill switch 有効時に不要なトランザクションコストをかけないため）。
+ *
+ * トランザクション自体が失敗した場合は fail-open（入室許可）する。理由:
+ * 本機能は不正防止ではなくログ品質向上が目的であり、transient Firestore エラーで
+ * 受講者を締め出すのは本末転倒（`hasPersistentVideoCompletion` と同じ safe-by-default 思想）。
+ */
+export async function getOrCreateSessionWithGapCheck(
+  ds: DataSource,
+  userId: string,
+  lessonId: string,
+  courseId: string,
+  videoId: string,
+  sessionToken: string,
+  now: Date = new Date()
+): Promise<SessionWithGapCheckResult> {
+  if (LESSON_ENTRY_GAP_MS <= 0) {
+    const { session, created } = await getOrCreateSession(ds, userId, lessonId, courseId, videoId, sessionToken);
+    return { kind: "allowed", session, created };
+  }
+
+  const deadlineAt = new Date(now.getTime() + SESSION_DURATION_MS).toISOString();
+  try {
+    return await ds.createSessionWithGapCheck({
+      userId,
+      lessonId,
+      courseId,
+      videoId,
+      sessionToken,
+      now: now.toISOString(),
+      deadlineAt,
+      gapMs: LESSON_ENTRY_GAP_MS,
+    });
+  } catch (err) {
+    logger.error("getOrCreateSessionWithGapCheck: transaction failed, failing open (entry allowed)", {
+      errorType: "lesson_entry_gap_check_failed",
+      userId,
+      lessonId,
+      courseId,
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+    const { session, created } = await getOrCreateSession(ds, userId, lessonId, courseId, videoId, sessionToken);
+    return { kind: "allowed", session, created };
+  }
+}
+
+export interface EntryCooldownPreview {
+  blocked: boolean;
+  retryAfterMs?: number;
+  nextEntryAllowedAt?: string;
+  previousLessonId?: string;
+}
+
+/**
+ * F1: 入室最小間隔の事前プレビュー（read-only、session を作成しない）。
+ *
+ * `GET /lesson-sessions/active` から、受講者がまだ入室していない状態でも
+ * 「あと何秒待てば次のレッスンに入れるか」を事前表示するために使う
+ * （FE の事前ゲート表示。実際のブロックは `getOrCreateSessionWithGapCheck` が担う）。
+ *
+ * `createSessionWithGapCheck` と判定順は同一だが、書き込みを行わないため
+ * トランザクション不要（DataSource の通常read APIのみで完結）。
+ */
+export async function previewEntryCooldown(
+  ds: DataSource,
+  userId: string,
+  lessonId: string,
+  courseId: string,
+  now: Date = new Date()
+): Promise<EntryCooldownPreview> {
+  if (LESSON_ENTRY_GAP_MS <= 0) return { blocked: false };
+
+  const activeOnLesson = await ds.getActiveLessonSession(userId, lessonId);
+  if (activeOnLesson) return { blocked: false };
+
+  const nowMs = now.getTime();
+  const sessions = await ds.getLessonSessionsByUserAndCourse(userId, courseId);
+  let latestExitMs = -Infinity;
+  let latestLessonId: string | null = null;
+  for (const s of sessions) {
+    if (s.isSynthetic) continue;
+    if (!s.exitAt) continue;
+    const exitMs = new Date(s.exitAt).getTime();
+    if (Number.isNaN(exitMs) || exitMs > nowMs) continue;
+    if (exitMs > latestExitMs) {
+      latestExitMs = exitMs;
+      latestLessonId = s.lessonId;
+    }
+  }
+
+  if (latestLessonId === null || latestLessonId === lessonId) return { blocked: false };
+
+  const gap = nowMs - latestExitMs;
+  if (gap >= LESSON_ENTRY_GAP_MS) return { blocked: false };
+
+  const nextEntryAllowedMs = latestExitMs + LESSON_ENTRY_GAP_MS;
+  return {
+    blocked: true,
+    retryAfterMs: nextEntryAllowedMs - nowMs,
+    nextEntryAllowedAt: new Date(nextEntryAllowedMs).toISOString(),
+    previousLessonId: latestLessonId,
+  };
 }
 
 /**

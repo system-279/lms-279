@@ -7,9 +7,11 @@ import { Router, Request, Response } from "express";
 import { requireUser } from "../../middleware/auth.js";
 import { logger } from "../../utils/logger.js";
 import type { LessonSession } from "../../types/entities.js";
-import type { LessonSessionResponse } from "@lms-279/shared-types";
+import type { ActiveLessonSessionResponse, LessonSessionResponse } from "@lms-279/shared-types";
 import {
-  getOrCreateSession,
+  getOrCreateSessionWithGapCheck,
+  previewEntryCooldown,
+  LESSON_ENTRY_GAP_MS,
   forceExitSession,
   abandonSession,
   handleStaleSession,
@@ -47,19 +49,46 @@ router.post("/lesson-sessions", requireUser, async (req: Request, res: Response)
   }
 
   try {
-    const { session, created } = await getOrCreateSession(
+    const outcome = await getOrCreateSessionWithGapCheck(
       ds, userId, lessonId, lesson.courseId, videoId, sessionToken
     );
+
+    if (outcome.kind === "blocked") {
+      res.status(409).json({
+        error: "entry_too_soon",
+        message: "前のレッスンを退室してから少し間隔をあけてください",
+        details: {
+          retryAfterMs: outcome.retryAfterMs,
+          nextEntryAllowedAt: outcome.nextEntryAllowedAt,
+          previousLessonId: outcome.previousLessonId,
+        },
+      });
+      return;
+    }
+
+    const { session, created } = outcome;
 
     // 既存セッションが期限切れの場合はハンドル
     if (!created) {
       const handled = await handleStaleSession(ds, session);
       if (handled.status === "force_exited") {
-        // 期限切れだったのでトランザクション付きで新規作成
-        const { session: newSession } = await getOrCreateSession(
+        // 期限切れだったのでgap判定付きトランザクションで新規作成
+        const retryOutcome = await getOrCreateSessionWithGapCheck(
           ds, userId, lessonId, lesson.courseId, videoId, sessionToken
         );
-        res.status(201).json({ session: formatSession(newSession) });
+        if (retryOutcome.kind === "blocked") {
+          res.status(409).json({
+            error: "entry_too_soon",
+            message: "前のレッスンを退室してから少し間隔をあけてください",
+            details: {
+              retryAfterMs: retryOutcome.retryAfterMs,
+              nextEntryAllowedAt: retryOutcome.nextEntryAllowedAt,
+              previousLessonId: retryOutcome.previousLessonId,
+            },
+          });
+          return;
+        }
+        res.status(201).json({ session: formatSession(retryOutcome.session) });
         return;
       }
       // 既存のactiveセッションを返す
@@ -92,7 +121,16 @@ router.get("/lesson-sessions/active", requireUser, async (req: Request, res: Res
 
   const session = await ds.getActiveLessonSession(userId, lessonId);
   if (!session) {
-    res.json({ session: null });
+    const response: ActiveLessonSessionResponse = { session: null };
+    if (LESSON_ENTRY_GAP_MS > 0) {
+      const lesson = await ds.getLessonById(lessonId);
+      if (lesson) {
+        const cooldown = await previewEntryCooldown(ds, userId, lessonId, lesson.courseId);
+        response.entryCooldown = cooldown;
+        response.entryGapMs = LESSON_ENTRY_GAP_MS;
+      }
+    }
+    res.json(response);
     return;
   }
 
@@ -103,7 +141,8 @@ router.get("/lesson-sessions/active", requireUser, async (req: Request, res: Res
     return;
   }
 
-  res.json({ session: formatSession(handled) });
+  const response: ActiveLessonSessionResponse = { session: formatSession(handled) };
+  res.json(response);
 });
 
 /**

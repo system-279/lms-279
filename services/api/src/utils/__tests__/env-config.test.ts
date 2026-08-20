@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { parseBooleanEnv } from "../env-config.js";
+import { parseBooleanEnv, parseNonNegativeDurationMs } from "../env-config.js";
 import { logger } from "../logger.js";
 
 describe("parseBooleanEnv", () => {
@@ -52,6 +52,63 @@ describe("parseBooleanEnv", () => {
     parseBooleanEnv(undefined, true, "TEST_FLAG");
     parseBooleanEnv("true", true, "TEST_FLAG");
     parseBooleanEnv("false", true, "TEST_FLAG");
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("parseNonNegativeDurationMs", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("falls back to default when env var is undefined", () => {
+    expect(parseNonNegativeDurationMs(undefined, 60000, "TEST_MS")).toBe(60000);
+  });
+
+  it("falls back to default when env var is empty/whitespace", () => {
+    expect(parseNonNegativeDurationMs("", 60000, "TEST_MS")).toBe(60000);
+    expect(parseNonNegativeDurationMs("   ", 60000, "TEST_MS")).toBe(60000);
+  });
+
+  it("accepts 0 (kill switch, unlike parsePositiveDurationMs)", () => {
+    expect(parseNonNegativeDurationMs("0", 60000, "TEST_MS")).toBe(0);
+  });
+
+  it("accepts a positive integer", () => {
+    expect(parseNonNegativeDurationMs("60000", 0, "TEST_MS")).toBe(60000);
+  });
+
+  it("falls back to default when env var is negative", () => {
+    expect(parseNonNegativeDurationMs("-1", 60000, "TEST_MS")).toBe(60000);
+  });
+
+  it("falls back to default when env var is non-integer float", () => {
+    expect(parseNonNegativeDurationMs("60000.5", 60000, "TEST_MS")).toBe(60000);
+  });
+
+  it("falls back to default when env var is non-numeric", () => {
+    expect(parseNonNegativeDurationMs("abc", 60000, "TEST_MS")).toBe(60000);
+  });
+
+  it("logs error when env var is invalid (observability)", () => {
+    const spy = vi.spyOn(logger, "error").mockImplementation(() => logger);
+    parseNonNegativeDurationMs("abc", 60000, "TEST_MS");
+    expect(spy).toHaveBeenCalledWith(
+      "Invalid env duration, falling back to default",
+      expect.objectContaining({
+        envName: "TEST_MS",
+        rawValue: "abc",
+        defaultMs: 60000,
+        errorId: "ENV_DURATION_INVALID",
+      })
+    );
+  });
+
+  it("does not log when env var is 0, positive, or undefined", () => {
+    const spy = vi.spyOn(logger, "error").mockImplementation(() => logger);
+    parseNonNegativeDurationMs("0", 60000, "TEST_MS");
+    parseNonNegativeDurationMs("60000", 0, "TEST_MS");
+    parseNonNegativeDurationMs(undefined, 60000, "TEST_MS");
     expect(spy).not.toHaveBeenCalled();
   });
 });

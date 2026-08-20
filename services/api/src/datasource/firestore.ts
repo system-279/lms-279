@@ -19,6 +19,8 @@ import type {
   SetFirebaseUidResult,
   FindOrCreateUserResult,
   FindOrCreateUserDefaults,
+  SessionWithGapCheckInput,
+  SessionWithGapCheckResult,
 } from "./interface.js";
 import type {
   Course,
@@ -1615,6 +1617,116 @@ export class FirestoreDataSource implements DataSource {
       .orderBy("entryAt", "desc")
       .get();
     return mapDocsResilient(snapshot.docs, (id, data) => this.toLessonSession(id, data), "LessonSession");
+  }
+
+  private userCourseSessionsQuery(userId: string, courseId: string) {
+    // 2 等値のみ・orderByなし（`lesson_sessions(userId, courseId)` 複合 index、firestore.indexes.json 参照）。
+    // トランザクション内 (tx.get(query)) からも通常呼び出し (query.get()) からも同一クエリを再利用する。
+    return this.collection("lesson_sessions")
+      .where("userId", "==", userId)
+      .where("courseId", "==", courseId);
+  }
+
+  async getLessonSessionsByUserAndCourse(userId: string, courseId: string): Promise<LessonSession[]> {
+    const snapshot = await this.userCourseSessionsQuery(userId, courseId).get();
+    return mapDocsResilient(snapshot.docs, (id, data) => this.toLessonSession(id, data), "LessonSession");
+  }
+
+  async createSessionWithGapCheck(input: SessionWithGapCheckInput): Promise<SessionWithGapCheckResult> {
+    const { userId, lessonId, courseId, videoId, sessionToken, now, deadlineAt, gapMs } = input;
+    const nowMs = new Date(now).getTime();
+
+    return this.db.runTransaction(async (tx) => {
+      // センチネルドキュメントでドキュメントレベルロックを確保
+      // （getOrCreateLessonSession と同方針。クエリのみの transaction は 0 件ヒット時に
+      //  ロックが効かないため、レッスン単位・コース単位の 2 つのロック対象を用意する）。
+      const lessonLockRef = this.collection("session_locks").doc(`${userId}_${lessonId}`);
+      const courseLockRef = this.collection("session_locks").doc(`entry_gap_${userId}_${courseId}`);
+      await tx.get(lessonLockRef);
+      await tx.get(courseLockRef);
+
+      const activeSnapshot = await tx.get(
+        this.collection("lesson_sessions")
+          .where("userId", "==", userId)
+          .where("lessonId", "==", lessonId)
+          .where("status", "==", "active")
+          .limit(1)
+      );
+      if (!activeSnapshot.empty) {
+        const doc = activeSnapshot.docs[0];
+        return {
+          kind: "allowed",
+          session: this.toLessonSession(doc.id, doc.data()),
+          created: false,
+        } satisfies SessionWithGapCheckResult;
+      }
+
+      const courseSnapshot = await tx.get(this.userCourseSessionsQuery(userId, courseId));
+      let latestExitMs = -Infinity;
+      let latestLessonId: string | null = null;
+      for (const doc of courseSnapshot.docs) {
+        const data = doc.data();
+        if (data.isSynthetic === true) continue;
+        const exitAt = toISOOptional(data.exitAt);
+        if (!exitAt) continue;
+        const exitMs = new Date(exitAt).getTime();
+        if (Number.isNaN(exitMs) || exitMs > nowMs) continue;
+        if (exitMs > latestExitMs) {
+          latestExitMs = exitMs;
+          latestLessonId = data.lessonId;
+        }
+      }
+
+      if (latestLessonId !== null && latestLessonId !== lessonId) {
+        const gap = nowMs - latestExitMs;
+        if (gap < gapMs) {
+          const nextEntryAllowedMs = latestExitMs + gapMs;
+          return {
+            kind: "blocked",
+            retryAfterMs: nextEntryAllowedMs - nowMs,
+            nextEntryAllowedAt: new Date(nextEntryAllowedMs).toISOString(),
+            previousLessonId: latestLessonId,
+          } satisfies SessionWithGapCheckResult;
+        }
+      }
+
+      const newDocRef = this.collection("lesson_sessions").doc();
+      const nowDate = new Date(now);
+      const newSessionData = {
+        userId,
+        lessonId,
+        courseId,
+        videoId,
+        sessionToken,
+        status: "active" as const,
+        entryAt: now,
+        exitAt: null,
+        exitReason: null,
+        deadlineAt,
+        pauseStartedAt: null,
+        longestPauseSec: 0,
+        sessionVideoCompleted: false,
+        quizAttemptId: null,
+      };
+      tx.create(newDocRef, {
+        ...newSessionData,
+        createdAt: nowDate,
+        updatedAt: nowDate,
+      });
+      // ロックドキュメントを更新してトランザクション競合を検知可能にする
+      tx.set(lessonLockRef, { userId, lessonId, updatedAt: nowDate });
+      tx.set(courseLockRef, { userId, courseId, updatedAt: nowDate });
+
+      return {
+        kind: "allowed",
+        session: this.toLessonSession(newDocRef.id, {
+          ...newSessionData,
+          createdAt: nowDate,
+          updatedAt: nowDate,
+        }),
+        created: true,
+      } satisfies SessionWithGapCheckResult;
+    });
   }
 
   async resetLessonDataForUser(userId: string, lessonId: string, _courseId: string): Promise<void> {

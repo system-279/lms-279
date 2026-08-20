@@ -3,7 +3,26 @@ import { render, screen } from "@testing-library/react";
 import {
   SessionRulesNotice,
   formatDurationHours,
+  formatEntryGapLabel,
 } from "../SessionRulesNotice";
+
+describe("formatEntryGapLabel", () => {
+  it("formats a whole-minute value as '1分'", () => {
+    expect(formatEntryGapLabel(60000)).toBe("1分");
+  });
+
+  it("formats a multi-minute whole value as '2分'", () => {
+    expect(formatEntryGapLabel(120000)).toBe("2分");
+  });
+
+  it("falls back to seconds for a non-whole-minute value", () => {
+    expect(formatEntryGapLabel(90000)).toBe("90秒");
+  });
+
+  it("formats sub-minute values as seconds", () => {
+    expect(formatEntryGapLabel(30000)).toBe("30秒");
+  });
+});
 
 describe("formatDurationHours", () => {
   it("formats exact 2 hours as '2時間'", () => {
@@ -123,6 +142,27 @@ describe("SessionRulesNotice", () => {
     render(<SessionRulesNotice session={null} />);
     expect(
       screen.queryByText(/テストの受験には有効なレッスンセッションが必要です/)
+    ).not.toBeInTheDocument();
+  });
+
+  it("F1(ADR-027ケースG): entryGapMs>0のとき入室間隔の箇条書きが動的表記で表示される", () => {
+    render(<SessionRulesNotice session={null} entryGapMs={60000} />);
+    expect(
+      screen.getByText(/前のレッスンを退室してから次のレッスンに入室するまで1分程度の間隔/)
+    ).toBeInTheDocument();
+  });
+
+  it("F1(ADR-027ケースG): entryGapMs=0(kill switch)では箇条書きを表示しない", () => {
+    render(<SessionRulesNotice session={null} entryGapMs={0} />);
+    expect(
+      screen.queryByText(/前のレッスンを退室してから次のレッスンに入室するまで/)
+    ).not.toBeInTheDocument();
+  });
+
+  it("F1(ADR-027ケースG): entryGapMs未指定では箇条書きを表示しない", () => {
+    render(<SessionRulesNotice session={null} />);
+    expect(
+      screen.queryByText(/前のレッスンを退室してから次のレッスンに入室するまで/)
     ).not.toBeInTheDocument();
   });
 

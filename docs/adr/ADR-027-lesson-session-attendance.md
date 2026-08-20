@@ -1,16 +1,30 @@
 # ADR-027: レッスンセッション出席管理
 
 ## ステータス
-承認済み（2026-08-20 改訂: 出席レコード異常検出 F2（重複/負滞在/stale active） / 2026-08-19 改訂: テスト任意化 ADR-040、ケースD厳格化(Stage 5)+quiz_skipped退室理由(Stage 3) / 2026-06-10 改訂: D 案 動画長+テスト時間の換算退室時刻 #533 follow-up #4 (PR #559 #533 follow-up #3 撤回) / 2026-06-10 改訂: 自動補完 session 滞在時間カラム表示分離 #533 follow-up #3 / 2026-06-10 改訂: 編集前 original snapshot 保持 #556 / 2026-06-10 改訂: PDF 印字時バッジ非表示化 #533 follow-up / 2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
+承認済み（2026-08-20 改訂: レッスン入室最小間隔 F1（ケースG） / 2026-08-20 改訂: 出席レコード異常検出 F2（重複/負滞在/stale active） / 2026-08-19 改訂: テスト任意化 ADR-040、ケースD厳格化(Stage 5)+quiz_skipped退室理由(Stage 3) / 2026-06-10 改訂: D 案 動画長+テスト時間の換算退室時刻 #533 follow-up #4 (PR #559 #533 follow-up #3 撤回) / 2026-06-10 改訂: 自動補完 session 滞在時間カラム表示分離 #533 follow-up #3 / 2026-06-10 改訂: 編集前 original snapshot 保持 #556 / 2026-06-10 改訂: PDF 印字時バッジ非表示化 #533 follow-up / 2026-06-09 改訂: isSynthetic provenance flag 追加 #533 + Phase 3 可視化 #551 / 2026-05-21 改訂: 再視聴中の完了経験者救済ケース E' / 2026-05-16 改訂: セッション上限を環境変数化）
 
 ## 改訂履歴
+- **2026-08-20（レッスン入室最小間隔 F1、ケースG）**: **動機**: PR-A（F2 異常検知）の直後、開発者から「本システムは現時点で本番稼働していないため、実発生件数を待つ観測期間（当初計画の最低1週間）には意味がない」との判断があり、観測期間を待たずに F1（⑥、異なるレッスンへの入室を退室から1分間ブロック）へ即時着手した。
+
+  **実装**: `LESSON_ENTRY_GAP_MS`（デフォルト 60000ms、`0` で kill switch）env を新設。`services/api/src/services/lesson-session.ts` の `getOrCreateSessionWithGapCheck()` が gap 判定 + session 作成をトランザクション（`DataSource.createSessionWithGapCheck()`、Firestore 実装は `db.runTransaction`、InMemory 実装は await を挟まない同期実行）で原子的に行う。判定順は「同一レッスンへの再入室は免除（リロード・強制退室後の正規再挑戦に対応）→ 同一コース内の直近 exitAt を取得 → gap 未満なら 409 `entry_too_soon`」。トランザクション自体の失敗は fail-open（入室許可）。
+
+  **FE 事前ゲート**: `VideoPlayer` に `disabled` prop を追加し、`GET /lesson-sessions/active` が返す `entryCooldown`（`previewEntryCooldown()`、書き込みなしの read-only プレビュー）に基づき、クリック前から再生ボタンとオーバーレイでブロックする。`POST /lesson-sessions` の 409 応答（`entry_too_soon`）は事前ゲートをすり抜けたタイミング競合向けのフォールバック防御として維持。カウントダウンは `EntryCooldownNotice.tsx` の `useEntryCooldown()` フックで 1 秒 tick、0 秒到達後も再生は自動開始せず手動押下必須。
+
+  **同一レッスン再入室免除の理由**: `time_limit`/`pause_timeout` 後の同一レッスン再挑戦は ADR-027 の正規動線であり、免除しないと `handleStaleSession` の自己 force_exit で自分をブロックしてしまう。
+
+  **F1 の範囲は同一コース内のみ**（コース跨ぎの正当な切替を誤ブロックしないため）。F2（異常検知）は依然としてユーザー単位・コース跨ぎで判定するため、両者のスコープは非対称のまま。
+
+  **テスト**: `lesson-entry-gap-config.test.ts`（env値網羅、`"0"`→無効化含む）/ `lesson-entry-gap.test.ts`（境界値 59999ブロック/60000許可/60001許可、同一レッスン免除、別コース許可、synthetic前セッション許可、DataSource例外時fail-open、同時リクエスト2件による突破がトランザクションで防がれることを確認）/ `EntryCooldownNotice.test.tsx` / `SessionRulesNotice.test.tsx`（entryGapMs動的表記）/ `page.test.tsx`（事前ゲートで再生ボタンが無効化されること、クリックしてもセッション作成APIが呼ばれないこと）。
+
+  **ロールアウト**: `firestore.indexes.json` に `lesson_sessions(userId, courseId)` 複合 index を追加。観測期間を設けない判断のため、`LESSON_ENTRY_GAP_MS` は初回デプロイからデフォルト値（60000ms）で有効化する（PR-A のような `=0` 先行デプロイの 2 段階ロールアウトは行わない）。
+
 - **2026-08-20（出席レコード異常検出 F2）**: **動機**: 2026-06-10 の Google Chat スレッドで開発者から指摘された⑦（明らかにおかしいログにエラーを出したい）が既存 Issue 対応から漏れていた。調査の結果、Next.js の client 遷移（App Router）では `beforeunload` が発火せず `sendBeacon` による abandon 通知が飛ばないため、前レッスンの session が `active` のまま残り、後から `handleStaleSession` が現在時刻で force_exit する結果、次レッスンの entryAt より後の exitAt になる重複ログが真因と判明。詳細は下記「出席レコード異常検出」セクション参照。
 
-  **PR-A（本 PR、read-only）**: `session-anomaly.ts` に DataSource 非依存の純粋関数 `detectSessionAnomalies()` を新設。`overlap_previous`（同一ユーザーの他セッションと入退室時刻が重複）/ `negative_duration`（exitAt < entryAt）/ `stale_active`（active のまま `SESSION_DURATION_MS` 超過で放置）の 3 種を検知し、super/admin 両出席レポートにバッジ表示 + 「異常のみ」フィルタ + CSV「異常」列で可視化する。受講者への挙動変更・DB スキーマ変更なし。synthetic session（`isSynthetic=true`）は換算タイムスタンプを持つため overlap 検知のスイープから除外（除外しないと合格提出のたびに誤検知が発生する）。
+  **PR-A（read-only）**: `session-anomaly.ts` に DataSource 非依存の純粋関数 `detectSessionAnomalies()` を新設。`overlap_previous`（同一ユーザーの他セッションと入退室時刻が重複）/ `negative_duration`（exitAt < entryAt）/ `stale_active`（active のまま `SESSION_DURATION_MS` 超過で放置）の 3 種を検知し、super/admin 両出席レポートにバッジ表示 + 「異常のみ」フィルタ + CSV「異常」列で可視化する。受講者への挙動変更・DB スキーマ変更なし。synthetic session（`isSynthetic=true`）は換算タイムスタンプを持つため overlap 検知のスイープから除外（除外しないと合格提出のたびに誤検知が発生する）。
 
   Codex セカンドオピニオン（MCP版、effort=high）で新規 6 件の指摘を受け、うち `stale_active` 種別追加（当初計画は重複/負滞在の 2 種のみで放置セッションを検知対象外にしていた）を採用。
 
-  **PR-B（後続、未着手）**: 重複ログの再発防止として、異なるレッスンへの入室を退室から `LESSON_ENTRY_GAP_MS`（デフォルト 60000ms、kill switch `0`）でブロックする。本 PR-A マージ後、最低 1 週間の観測期間を経て実発生件数を確認してから着手する。
+  **PR-B（F1、上記エントリ参照）**: 当初計画では「マージ後最低1週間の観測期間を経てから着手」としていたが、本番未稼働のため観測期間を待たずに即日着手・完了した。
 
   **テスト**: `session-anomaly.test.ts`（14 ケース、境界値±1ms・synthetic 除外・stale_active 境界・長時間セッションが後続複数件を巻き込むケース含む）/ `attendance-report-anomaly.test.ts`（super レポート統合、5 ケース）/ `web/app/super/attendance/__tests__/anomaly.test.ts`（10 ケース）。
 
@@ -114,6 +128,7 @@
   | E | `time_limit` + `sessionVideoCompleted=false` + **永続 `isComplete=false`** | 全リセット（初回視聴中の規律装置） | ❌ 動画から見直し |
   | **E'**（新） | `time_limit` / `pause_timeout` + `sessionVideoCompleted=false` + **永続 `isComplete=true`**（再視聴中の完了経験者）| **リセット skip**、in_progress attempt のみ `timed_out` 化 | ✅ 新セッションで再受験 |
   | F | `max_attempts_failed`（`maxAttempts > 0 && attemptNumber >= maxAttempts`） | 全リセット（永続フラグ無視、規律破り） | ❌ 動画から見直し |
+  | **G**（新、2026-08-20、F1） | 異レッスンへの入室が、同一コース内の直前退室から `LESSON_ENTRY_GAP_MS` 未満 | `getOrCreateSessionWithGapCheck()` がトランザクションで gap 判定 + session 作成を原子的に実行、未満なら `entry_too_soon`（409）でブロック（session 自体を作らない。reset とは無関係の入室段階の制御） | - （再受験ではなく入室制御。同一レッスンへの再入室・別コースへの入室・kill switch 時は免除） |
 
 - **2026-05-20**: 現場声「テスト不合格時にいつでも再受験できる方が望ましいのではないか」を起点に再設計を検討。実コード検証で **`maxAttempts=0`（本番テナント `8vexhzpc` の全 quiz 設定。Codex review PR #407 body 参照）配下では既にケース A〜D で何度でも再受験可能** と判明。再受験不可はケース E と F のみ。E/F のリセット廃止 / 動画ゲート（ADR-019）撤廃 / 「いつでも再受験」設計変更は **規律装置（強制退室時の全リセット）を破壊する本末転倒** と判断し、いずれも不採用。3h 延長（PR #407）は対症療法として暫定維持、**恒久対応は業務側のコンテンツ設計**（レッスン単位で「動画長 + テスト所要時間 < `SESSION_DURATION_MS`」を満たす分割）で対応する。効果測定として `scripts/audit-session-force-exits.ts` + `.github/workflows/audit-session-force-exits.yml`（read-only）を追加し、ケース E の発生数を継続観察する。
 
