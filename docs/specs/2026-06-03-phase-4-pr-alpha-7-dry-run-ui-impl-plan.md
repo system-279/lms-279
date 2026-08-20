@@ -255,7 +255,12 @@ E2: Quality Gate 5 段階 ← E1 完了後
   - 各要素に `aria-label` または可視ラベル
   - focus visible (outline) が CSS で表示される
   - 警告バナーは `role="alert"` (or `role="status"`)
-- **検証**: Playwright (keyboard navigation テスト) + axe-core (a11y violations)
+- **検証 (2026-08-20 改訂、Issue #584 戦略見直し、adr-2026-08-20-dry-run-e2e-strategy-revision 参照)**:
+  component test (`DryRunPreview.test.tsx`) で aria-label / role / focusable 属性を個別 assert +
+  `jest-axe` による自動 a11y 違反検出。**未検証の既知ギャップ**: 実際の Tab キー順序遷移と
+  `:focus-visible` outline の CSS 描画は jsdom がレイアウト/CSS 疑似クラスを評価しないため
+  検証不可。当初計画の Playwright keyboard navigation テストは、AUTH_MODE=dev で super UI へ
+  ブラウザ到達できない既知制約 (Session 64 決定) により実施を見送り、残存リスクとして許容する。
 
 ### AC-α7-10 (Responsive、Codex 反映で追加)
 - **Given**: 画面幅 **375px** (iPhone SE 想定)
@@ -264,7 +269,11 @@ E2: Quality Gate 5 段階 ← E1 完了後
   - 対象者一覧 / skip 内訳 / 警告バナーが横崩れしない
   - 長い email / tenantId は折り返し or `text-overflow: ellipsis` で省略
   - タブ切替が縦並びに崩れず操作可能
-- **検証**: Playwright (375px viewport、768px viewport)
+- **検証 (2026-08-20 改訂、Issue #584 戦略見直し)**: component test で `md:grid-cols-N` /
+  `overflow-x-auto` 等の意図した responsive breakpoint クラスが JSX 出力に含まれることのみを
+  静的チェック (弱い代替)。**未検証の既知ギャップ**: 375px/768px での実際の折り返し・列数変化
+  そのものは jsdom にレイアウトエンジンがないため本質的に検証不可能。AC-09 と同じ理由 (super UI
+  へのブラウザ到達不可) により Playwright viewport テストは見送り、残存リスクとして許容する。
 
 ### AC-α7-11 (Empty / Disabled State、Codex 反映で追加)
 - **Given**: 以下の状態のいずれか
@@ -288,7 +297,10 @@ E2: Quality Gate 5 段階 ← E1 完了後
   - 取得実行中は同 lane の再取得ボタン disabled
   - BE 専用 limiter (10 req/min/superAdminEmail) を super-admin 単位で適用
   - 同一 lane の同時実行は single-flight (重複は進行中結果共有 or 429)
-- **検証**: Playwright (連打防止) + integration test (limiter / single-flight)
+- **検証 (2026-08-20 改訂、Issue #584 戦略見直し)**: FE は `DryRunPreview.test.tsx` で実
+  `useDryRun` hook 結合の component test (連打→dedupe→button disabled の一気通貫確認)、BE は
+  既存 integration test (`dispatch-dry-run.test.ts`、limiter / single-flight) でカバー。ブラウザ
+  実クリックによる Playwright 連打防止テストは AC-09/10 と同じ制約により見送り。
 
 ### AC-α7-13 (Data Freshness、Codex 反映で追加)
 - **Given**: dry-run 結果取得後

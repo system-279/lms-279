@@ -29,6 +29,9 @@
  *     (dispatch-dry-run.test.ts L349) でカバー済のため E2E 重複なし
  *   - AC-α7-06 read-only 保証は service-level test
  *     (services/api/src/services/dispatch/dry-run/__tests__/) でカバー
+ *   - AC-α7-09/10/12 (a11y / responsive / request control の DOM 検証部分) は、本 spec と同じ
+ *     AUTH_MODE=dev super UI 遷移不可制約により Playwright での実施を見送り、component test
+ *     (DryRunPreview.test.tsx) へ検証方法を正式変更した (Issue #584、ADR-041 参照)。
  */
 
 import { expect, test } from "@playwright/test";
