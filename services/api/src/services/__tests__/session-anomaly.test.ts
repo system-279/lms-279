@@ -11,6 +11,7 @@ function candidate(overrides: Partial<AnomalyCandidate> & { sessionId: string })
     entryAt: overrides.entryAt ?? null,
     exitAt: overrides.exitAt ?? null,
     isSynthetic: overrides.isSynthetic ?? false,
+    deadlineAt: overrides.deadlineAt,
   };
 }
 
@@ -144,5 +145,109 @@ describe("detectSessionAnomalies", () => {
     ];
     const result = detectSessionAnomalies(sessions, NOW);
     expect(result.size).toBe(0);
+  });
+
+  it("a single session can carry multiple anomaly tags simultaneously", () => {
+    const sessions = [
+      // active + entryAt older than SESSION_DURATION_MS (stale_active) + exitAt < entryAt (negative_duration)
+      candidate({
+        sessionId: "s1",
+        status: "active",
+        entryAt: "2026-08-20T07:00:00.000Z",
+        exitAt: "2026-08-20T06:00:00.000Z",
+      }),
+    ];
+    const result = detectSessionAnomalies(sessions, NOW);
+    expect(result.get("s1")).toEqual(["negative_duration", "stale_active"]);
+  });
+
+  describe("stale_active exact boundary", () => {
+    it("does not flag when entryAt is exactly SESSION_DURATION_MS old (strict >)", () => {
+      const sessions = [
+        // NOW (10:00) - 2h (default SESSION_DURATION_MS) = 08:00 exactly
+        candidate({ sessionId: "s1", status: "active", entryAt: "2026-08-20T08:00:00.000Z", exitAt: null }),
+      ];
+      const result = detectSessionAnomalies(sessions, NOW);
+      expect(result.size).toBe(0);
+    });
+
+    it("flags when entryAt is 1ms past the SESSION_DURATION_MS boundary", () => {
+      const sessions = [
+        candidate({ sessionId: "s1", status: "active", entryAt: "2026-08-20T07:59:59.999Z", exitAt: null }),
+      ];
+      const result = detectSessionAnomalies(sessions, NOW);
+      expect(result.get("s1")).toEqual(["stale_active"]);
+    });
+  });
+
+  it("negative_duration is flagged for synthetic sessions too (only overlap sweep excludes synthetic)", () => {
+    const sessions = [
+      candidate({
+        sessionId: "s1",
+        entryAt: "2026-08-20T09:10:00.000Z",
+        exitAt: "2026-08-20T09:00:00.000Z",
+        isSynthetic: true,
+      }),
+    ];
+    const result = detectSessionAnomalies(sessions, NOW);
+    expect(result.get("s1")).toEqual(["negative_duration"]);
+  });
+
+  describe("stale_active with stored deadlineAt", () => {
+    it("prefers deadlineAt over a fresh entryAt when deadlineAt has already passed (config shortened after session creation)", () => {
+      const sessions = [
+        candidate({
+          sessionId: "s1",
+          status: "active",
+          entryAt: "2026-08-20T09:55:00.000Z", // 5min ago, well within default 2h if recomputed
+          exitAt: null,
+          deadlineAt: "2026-08-20T09:59:00.000Z", // stored deadline already passed (1min ago)
+        }),
+      ];
+      const result = detectSessionAnomalies(sessions, NOW);
+      expect(result.get("s1")).toEqual(["stale_active"]);
+    });
+
+    it("does not flag when deadlineAt is still in the future even though entryAt-based recompute would flag (config extended after session creation)", () => {
+      const sessions = [
+        candidate({
+          sessionId: "s1",
+          status: "active",
+          entryAt: "2026-08-20T07:00:00.000Z", // 3h ago, would flag under default 2h recompute
+          exitAt: null,
+          deadlineAt: "2026-08-20T11:00:00.000Z", // stored deadline still 1h in the future
+        }),
+      ];
+      const result = detectSessionAnomalies(sessions, NOW);
+      expect(result.size).toBe(0);
+    });
+
+    it("falls back to entryAt + SESSION_DURATION_MS when deadlineAt is missing", () => {
+      const sessions = [
+        candidate({
+          sessionId: "s1",
+          status: "active",
+          entryAt: "2026-08-20T07:00:00.000Z",
+          exitAt: null,
+          deadlineAt: undefined,
+        }),
+      ];
+      const result = detectSessionAnomalies(sessions, NOW);
+      expect(result.get("s1")).toEqual(["stale_active"]);
+    });
+
+    it("falls back to entryAt + SESSION_DURATION_MS when deadlineAt is unparseable", () => {
+      const sessions = [
+        candidate({
+          sessionId: "s1",
+          status: "active",
+          entryAt: "2026-08-20T07:00:00.000Z",
+          exitAt: null,
+          deadlineAt: "not-a-date",
+        }),
+      ];
+      const result = detectSessionAnomalies(sessions, NOW);
+      expect(result.get("s1")).toEqual(["stale_active"]);
+    });
   });
 });

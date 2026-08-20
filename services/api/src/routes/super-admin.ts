@@ -1068,15 +1068,25 @@ router.get("/tenants/:tenantId/attendance-report", async (req: Request, res: Res
     };
   });
 
-  // 異常検知（F2、ADR-027）: super レポートはユーザー単位・コース跨ぎで判定
-  const anomalyCandidates: AnomalyCandidate[] = records.map((r) => ({
-    sessionId: r.id,
-    userId: r.userId,
-    status: r.status,
-    entryAt: r.entryAt,
-    exitAt: r.exitAt,
-    isSynthetic: r.isSynthetic,
-  }));
+  // 異常検知（F2、ADR-027）: super レポートはユーザー単位・コース跨ぎで判定。
+  // overlap/stale の検知には対象ユーザーの全期間セッション履歴が必要なため、
+  // from/to で表示行を絞り込んでいる場合は検知専用に絞り込み前の全件を別途取得する
+  // （絞り込んだ集合だけで判定すると、範囲外にある重複相手セッションを見逃す偽陰性が発生する）。
+  const anomalySourceDocs = (fromStr || toStr)
+    ? (await db.collection(`${basePath}/lesson_sessions`).get()).docs
+    : sessionsSnapshot.docs;
+  const anomalyCandidates: AnomalyCandidate[] = anomalySourceDocs.map((doc) => {
+    const data = doc.data();
+    return {
+      sessionId: doc.id,
+      userId: data.userId,
+      status: data.status,
+      entryAt: data.entryAt?.toDate?.().toISOString?.() ?? data.entryAt ?? null,
+      exitAt: data.exitAt?.toDate?.().toISOString?.() ?? data.exitAt ?? null,
+      isSynthetic: data.isSynthetic === true,
+      deadlineAt: data.deadlineAt?.toDate?.().toISOString?.() ?? data.deadlineAt ?? null,
+    };
+  });
   const anomaliesBySessionId = detectSessionAnomalies(anomalyCandidates, new Date());
   const recordsWithAnomalies = records.map((r) => ({
     ...r,

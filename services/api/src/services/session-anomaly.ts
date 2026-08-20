@@ -23,6 +23,14 @@ export interface AnomalyCandidate {
   entryAt: string | null;
   exitAt: string | null;
   isSynthetic: boolean;
+  /**
+   * セッション作成時点で確定した期限（entryAt + 当時の SESSION_DURATION_MS）。
+   * stale_active 判定はこの値を優先する。SESSION_DURATION_MS がデプロイ間で変更された場合、
+   * 現在の env 値で entryAt から再計算すると実際の force-exit 挙動（`handleStaleSession` は
+   * 保存済み deadlineAt を使う）と乖離するため。値がない/パース不能な場合のみ
+   * entryAt + 現在の SESSION_DURATION_MS へフォールバックする。
+   */
+  deadlineAt?: string | null;
 }
 
 function parseMs(value: string | null): number | null {
@@ -75,9 +83,16 @@ export function detectSessionAnomalies(
       }
     }
 
-    // stale_active: active のまま SESSION_DURATION_MS を超えて放置
+    // stale_active: active のまま期限（deadlineAt、なければ entryAt + 現在の SESSION_DURATION_MS）を超えて放置
     for (const s of group) {
       if (s.status !== "active") continue;
+      const deadlineMs = parseMs(s.deadlineAt ?? null);
+      if (deadlineMs !== null) {
+        if (nowMs > deadlineMs) {
+          addAnomaly(result, s.sessionId, "stale_active");
+        }
+        continue;
+      }
       const entryMs = parseMs(s.entryAt);
       if (entryMs === null) continue;
       if (nowMs - entryMs > SESSION_DURATION_MS) {

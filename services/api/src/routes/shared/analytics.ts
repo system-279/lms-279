@@ -423,6 +423,7 @@ async function buildAttendanceRecords(
     entryAt: s.entryAt,
     exitAt: s.exitAt,
     isSynthetic: s.isSynthetic === true,
+    deadlineAt: s.deadlineAt,
   }));
   const anomaliesBySessionId = detectSessionAnomalies(anomalyCandidates, new Date());
 
