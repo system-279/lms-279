@@ -1,42 +1,52 @@
 ---
-updated: 2026-08-20 (Firestore複合indexデプロイ完了・ミッション達成)
+updated: 2026-08-21 (MCPコネクタ化ミッション新設・Phase 0完了)
 ---
 
 ## 現在のミッション
-出席レポートの入退室ログ整合性を強化する。レッスン入室最小間隔(F1、異なるレッスンへの入室を退室から1分間ブロック)+セッション重複ログ異常検知(F2、重複/負滞在/stale activeの3種をレポートで検知)を実装する。
+LMSのテスト(quiz) CRUD操作を、Claudeのリモートmcpコネクタ経由でチームメンバーがclaude.ai/Claude Desktop/Claude Codeから実行できるようにする。既存API(services/api)は一切変更せず、新規Cloud RunサービスがOAuth 2.1認可サーバー(内部でFirebase Google サインインへ委譲)を兼ねる設計。
 
 ## 背景・why
-2026-06-10のGoogle Chatスレッドで開発者から出席レポート不整合について①〜⑦の指摘があった。①②③④⑤は既存Issue #533等で対応済みと確認したが、⑥(前後レッスンの退室ログが同時刻になる問題)と⑦(明らかにおかしいログへのエラー検知)は未対応のまま残っていた。以前完了と判定したGOAL.md(テスト任意化ミッション)はこの2件を含んでおらず、決裁者から「ゴール設定が甘かった、しっかりオーダー通り対応」の指示があり本ミッションを新設した。
+開発者から「テストの登録・編集をClaude Codeからスキルで簡単にできるようにしたい」との相談。検討の結果、チームメンバー全員が claude.ai/Desktop/Code のいずれからでも使える「組織カスタムリモートMCPコネクタ」方式を採用（Team plan組織連携MCPはOwnerが1回登録すれば全クライアント自動配布、公式ドキュメント確認済み）。
 
-開発者判断: ⑥は表示調整のみの簡易案ではなく実際の1分間隔ブロック(構造変更)、受講者が困惑しないよう分かりやすい説明文を表示すること。⑦は実装する。
+plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=high)で高重要度指摘（super admin横断CRUDリスク・監査ログの過大申告・同時編集ロストアップデート等）を受け全面改訂 → 承認。計画全文: `/Users/yyyhhh/.claude/plans/planmode-whimsical-curry.md`（Codexセカンドオピニオン適用ログ含む）。判断材料の図解: grip HTML（パスは前セッションのscratchpad配下、セッション終了後は失われるため次セッションでの再確認は計画ファイルを正とする）。
 
-計画はplan mode承認済み(2026-08-20)、Codexセカンドオピニオン(MCP版、effort=high)+実測検証(Firestore複合indexの要否を本番環境へのクエリで確認)を経て確定。計画全文: `/Users/yyyhhh/.claude/plans/shimmying-sleeping-moth.md`。判断材料の図解: `/private/tmp/claude-501/-Users-yyyhhh-Projects-279-lms/a9be797d-c139-4582-a660-52785541ba47/scratchpad/grip-20260820-192901-lesson-entry-gap-plan.html`(セッション終了後は失われるため、次セッションでの再確認は計画ファイルを正とする)。
+**Phase 0実装中の設計転換**: 当初想定していたMCP TS SDK (v2)の認可サーバーヘルパー(`mcpAuthRouter`)がlegacy化されていることが判明し、`oidc-provider`(panva、OpenID Certified、DCR/PKCE対応)を内部採用する方式へ転換。
 
-**観測期間・2段階ロールアウトの計画変更(2026-08-20)**: 開発者から「本システムは現在稼働していない、観測を1週間することに意味は無い」との明示指摘があり、PR-A後の観測期間・PR-B後の`LESSON_ENTRY_GAP_MS=0`→`60000`の2段階ロールアウトを両方省略。PR-Bはデフォルト値(60000ms)で直接デプロイする方針に変更（ADR-027改訂履歴に理由を記録済み）。下記「完了の定義」「進行中のtasks」はこの変更後の状態を反映。
-
-## 完了の定義
-- PR-A(F2異常検知、約8ファイル)がmainにmerge済み（証明: `gh pr list --state merged --search "F2" --search "異常検知"`で該当PRがヒット、または計画ファイルのPR-Aセクション記載ファイル群のgit履歴で確認）→ 済（PR #628）
-- PR-B(F1入室ギャップ)がmainにmerge済み（証明: 同様にPR-Bセクション記載ファイル群を確認）→ 済（PR #631、レビュー指摘対応コミット含む）
-- `firestore.indexes.json`の`lesson_sessions(userId,courseId)`複合indexが本番デプロイ済み（証明: `gcloud firestore indexes composite list --project=lms-279`で該当indexの`state: READY`を確認）→ 済（決裁者承認の上`firebase deploy --only firestore:indexes -P default`実行、`state: READY`確認済み）
-- 本番`LESSON_ENTRY_GAP_MS`切替 → 対象外（2段階ロールアウトを行わない方針変更のため、コード上のデフォルト値60000msがそのままデプロイされる。index未デプロイの間は上記の通り事実上無効）
-- 計画ファイル記載の受入基準(AC)9項目すべてを満たす（証明: `/Users/yyyhhh/.claude/plans/shimmying-sleeping-moth.md`の「検証・受入基準(AC)」セクション参照、各項目のテストコマンドを実行）
+## 完了の定義（Phase 0のみ、Phase 1-4は計画ファイル参照）
+- OAuthハンドシェイク(discovery/DCR/PKCE付き認可コードフロー/bearer認証)がローカル統合テストで動作する → 済（`npm run test -w @lms-279/mcp` 9件PASS）
+- Cloud Runへの実デプロイが成功し、公開URLでdiscovery/401応答が正しく返る → 済（`https://mcp-3zcica5euq-an.a.run.app`、curl実証確認済み）
+- 2系統の独立コードレビュー(codex review effort=high + pr-review-toolkit:code-reviewer)でCritical指摘が0件になっている → 済（両者が独立検出したCritical欠陥=Cloud Run起動時crash等、全件修正・実機再検証済み。PR #636マージ済み）
+- Claude Code / claude.ai / Claude Desktop の少なくとも1つから実際に接続し、pingツールが呼べる → **未達（進行中）**
 
 ## 進行中のtasks
-- [x] PR-A: F2異常検知の実装(session-anomaly.ts新設、super-admin.ts/analytics.tsへの組込み、shared-types拡張、FE2箇所へのバッジ+フィルタ追加)
-- [x] PR-A: codex review + pr-review-toolkit 2エージェント並列実施(large tier該当、計7件の指摘すべて反映)
-- [x] PR-A: マージ(PR #628、2026-08-20)
-- [x] PR-B: F1入室ギャップの実装(トランザクション化されたgap判定+session作成、firestore.indexes.json追加、FE事前ゲート、EntryCooldownNotice新設)
-- [x] PR-B: 実機UI確認（`E2E_TEST_ENABLED=true`の`e2e-test`テナント、Playwright MCPでdisabledオーバーレイ・カウントダウンバナー・案内文言を目視確認）
-- [x] PR-B: codex review + pr-review-toolkit 2エージェント並列実施(large tier該当、計10件の指摘すべて反映。gap判定ロジックを`services/lesson-entry-gap.ts`に共通化等)
-- [x] PR-B: マージ(PR #631、2026-08-20)
-- [x] ADR-027改訂・CLAUDE.md重要な設計判断・docs/data-model.md更新(PR-A/PR-B分)
-- [x] `firestore.indexes.json`の新規複合index(`lesson_sessions(userId,courseId)`)を本番へ手動デプロイ（決裁者承認の上で実施。Firebase CLIの認証アカウント切替（`system@jaccw.or.jp`→`lms-279`にownerを持つ`system@279279.net`をログイン追加）を経て`firebase deploy --only firestore:indexes -P default`実行、`gcloud firestore indexes composite list --project=lms-279`で`state: READY`確認済み）
-
-## 🎯 GOAL.md のミッション達成
-「進行中のtasks」全項目`[x]`。F1(PR #631)・F2(PR #628)ともmainへマージ済み、F1に必要な本番Firestoreインデックスもデプロイ・READY確認済み。次のゴールへの更新 or 本ファイル削除を検討してください。
+- [x] plan mode で計画策定、Codexセカンドオピニオンで全面改訂
+- [x] grip HTMLで判断材料を可視化
+- [x] Phase 0: services/mcp新設、oidc-provider + @modelcontextprotocol/express実装
+- [x] Phase 0: ローカル統合テスト9件PASS（PKCE成功系・異常系・Cloud Run想定回帰テスト含む）
+- [x] Phase 0: PR #636作成 → codex review + pr-review-toolkit 2系統レビュー実施
+- [x] Phase 0: 両レビューが独立検出したCritical欠陥（Cloud Run起動時crash、fetchOidcMetadataのbindアドレス誤り）を修正、Docker実機でCloud Run相当環境を再現し検証
+- [x] Phase 0: PR #636マージ（squash、main反映）
+- [x] Phase 0: Cloud Run自動デプロイ成功、公開URLでの実疎通をcurlで確認
+- [ ] Phase 0: `claude mcp add`でローカルスコープ登録 → OAuth認証 → pingツール呼び出し確認（決裁者が実施中、下記中断点参照）
+- [ ] Phase 1以降: 計画ファイル参照（OAuth認可サーバー本実装、権限方針確定、quiz CRUDツール実装、本番コネクタ登録等）
 
 ## 🔄 中断点（in-flight）
-なし（全タスク完了）
+**対象タスク**: Phase 0「実クライアントからの接続確認」（進行中のtasks 最後から2番目）
+
+**直前の状態**:
+1. 決裁者が `claude mcp add --transport http lms-quiz-mcp-phase0 https://mcp-3zcica5euq-an.a.run.app/mcp` を実行済み（成功、`/Users/yyyhhh/.claude.json` にproject-local scopeで登録済み）
+2. 既存の対話セッション内で `/mcp` を実行したが、そのセッションは登録前に起動していたため一覧に `lms-quiz-mcp-phase0` が表示されず（設定はセッション起動時ロードのため）。加えてダイアログはEscで閉じられた（`MCP dialog dismissed`）
+3. 決裁者へ「セッションを再起動してから `/mcp` を再実行し、一覧から `lms-quiz-mcp-phase0` を選択して認証する」よう案内済み。まだ再実行結果の報告なし
+
+**次の一手**: 決裁者からの `/mcp` 再実行結果・pingツール呼び出し結果を待つ。成功したら Phase 0 完了 → GOAL.mdの完了の定義を全て`済`にし、Phase 1着手の要否を決裁者に確認する。失敗したら `claude mcp list` / `claude mcp get lms-quiz-mcp-phase0` の出力を確認してトラブルシュートする。
+
+**検証コマンド**（次セッション開始時にこれで現状確認）:
+```bash
+claude mcp list
+claude mcp get lms-quiz-mcp-phase0
+curl -s https://mcp-3zcica5euq-an.a.run.app/.well-known/oauth-authorization-server | head -5
+```
 
 ## 🔔 監視中
-- PR #620（`QUIZ_REQUIRE_ACTIVE_SESSION=true`本番切替のロールバック弁、2026-08-20作成）は観察期間を置いて維持する方針（2026-08-21、決裁者確認）。`/quizzes/:quizId/attempts`の409(`session_required`/`session_time_exceeded`)発生率異常、または正当な受講者からの問い合わせが確認されない限りmergeしない。観察期間終了の目安なし（次回`/catchup`等で状況確認し、問題なければクローズを検討）。
+- PR #620（`QUIZ_REQUIRE_ACTIVE_SESSION=true`本番切替のロールバック弁、2026-08-20作成）は観察期間を置いて維持する方針（2026-08-21、決裁者確認）。`/quizzes/:quizId/attempts`の409(`session_required`/`session_time_exceeded`)発生率異常、または正当な受講者からの問い合わせが確認されない限りmergeしない。観察期間終了の目安なし
+- **Phase 0のCloud Runサービスは devInteractions（ダミー認証）が有効なまま**。組織カスタムコネクタとしての恒久登録はまだ行っていない。Phase 1でFirebase Google サインイン + ドメイン検証に置き換えるまで、チーム展開しないこと
