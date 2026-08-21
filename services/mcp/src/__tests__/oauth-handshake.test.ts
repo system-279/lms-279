@@ -37,7 +37,8 @@ async function obtainAuthorizationCode(
   app: Express,
   redirectUri: string,
   codeChallenge: string,
-  resource: string
+  resource: string,
+  scope?: string
 ): Promise<{ clientId: string; code: string }> {
   const reg = await request(app)
     .post("/reg")
@@ -53,15 +54,20 @@ async function obtainAuthorizationCode(
 
   // 実クライアント(Claude等)は RFC 8707 に従い resource パラメータを送る。
   // これを省略すると Phase 0 で発覚した invalid_target 回帰を検知できない。
-  const authRes = await request(app).get("/auth").query({
+  // また実クライアントは scope パラメータを一切送らない(resource のみ)ため、
+  // scope 未指定でも呼べるようにする(invalid_client/access_denied 回帰の再現用)。
+  const query: Record<string, string> = {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: "openid",
     resource,
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
-  });
+  };
+  if (scope !== undefined) {
+    query.scope = scope;
+  }
+  const authRes = await request(app).get("/auth").query(query);
   expect([302, 303]).toContain(authRes.status);
 
   let jar = mergeCookies(new Map(), authRes.headers["set-cookie"] as unknown as string[]);
@@ -163,6 +169,42 @@ describe("Phase 0: OAuth ハンドシェイク疎通", () => {
   it("PKCE付き認可コードフローでトークンを取得し、それを使って ping ツールを呼べる（devInteractionsのダミー同意画面経由）", async () => {
     const redirectUri = "http://localhost:1234/callback";
     const { codeVerifier, codeChallenge } = generatePkcePair();
+    const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+    const tokenRes = await request(app)
+      .post("/token")
+      .type("form")
+      .send({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: redirectUri,
+        client_id: clientId,
+        code_verifier: codeVerifier,
+      });
+    expect(tokenRes.status).toBe(200);
+    const accessToken = tokenRes.body.access_token as string;
+    expect(accessToken).toBeTruthy();
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "ping", arguments: {} },
+      });
+    expect(mcpRes.status).toBe(200);
+  });
+
+  it("実クライアント同様 scope パラメータを省略しても(resourceのみで)認可コードとトークンを取得できる", async () => {
+    // 実クライアント(Claude)は /auth に scope を一切送らず resource のみ送る。
+    // oidc-provider は要求 scope が空だと consent 後も grant に何も追加されず
+    // 「no scope was granted」で access_denied になる回帰があった(実クライアント接続で発覚)。
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeVerifier, codeChallenge } = generatePkcePair();
     const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`);
 
     const tokenRes = await request(app)
@@ -197,7 +239,7 @@ describe("Phase 0: OAuth ハンドシェイク疎通", () => {
     const redirectUri = "http://localhost:1234/callback";
     const { codeChallenge } = generatePkcePair();
     const { codeVerifier: wrongVerifier } = generatePkcePair(); // 別ペアの verifier(不一致)
-    const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`);
+    const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
 
     const tokenRes = await request(app)
       .post("/token")
@@ -216,7 +258,7 @@ describe("Phase 0: OAuth ハンドシェイク疎通", () => {
   it("PKCE code_verifier を省略した場合、/token がトークン発行を拒否する", async () => {
     const redirectUri = "http://localhost:1234/callback";
     const { codeChallenge } = generatePkcePair();
-    const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`);
+    const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
 
     const tokenRes = await request(app)
       .post("/token")
