@@ -36,7 +36,8 @@ function cookieHeader(jar: Map<string, string>): string {
 async function obtainAuthorizationCode(
   app: Express,
   redirectUri: string,
-  codeChallenge: string
+  codeChallenge: string,
+  resource: string
 ): Promise<{ clientId: string; code: string }> {
   const reg = await request(app)
     .post("/reg")
@@ -50,11 +51,14 @@ async function obtainAuthorizationCode(
   expect(reg.status).toBe(201);
   const clientId = reg.body.client_id as string;
 
+  // 実クライアント(Claude等)は RFC 8707 に従い resource パラメータを送る。
+  // これを省略すると Phase 0 で発覚した invalid_target 回帰を検知できない。
   const authRes = await request(app).get("/auth").query({
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
     scope: "openid",
+    resource,
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
   });
@@ -159,7 +163,7 @@ describe("Phase 0: OAuth ハンドシェイク疎通", () => {
   it("PKCE付き認可コードフローでトークンを取得し、それを使って ping ツールを呼べる（devInteractionsのダミー同意画面経由）", async () => {
     const redirectUri = "http://localhost:1234/callback";
     const { codeVerifier, codeChallenge } = generatePkcePair();
-    const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge);
+    const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`);
 
     const tokenRes = await request(app)
       .post("/token")
@@ -193,7 +197,7 @@ describe("Phase 0: OAuth ハンドシェイク疎通", () => {
     const redirectUri = "http://localhost:1234/callback";
     const { codeChallenge } = generatePkcePair();
     const { codeVerifier: wrongVerifier } = generatePkcePair(); // 別ペアの verifier(不一致)
-    const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge);
+    const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`);
 
     const tokenRes = await request(app)
       .post("/token")
@@ -212,7 +216,7 @@ describe("Phase 0: OAuth ハンドシェイク疎通", () => {
   it("PKCE code_verifier を省略した場合、/token がトークン発行を拒否する", async () => {
     const redirectUri = "http://localhost:1234/callback";
     const { codeChallenge } = generatePkcePair();
-    const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge);
+    const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`);
 
     const tokenRes = await request(app)
       .post("/token")
