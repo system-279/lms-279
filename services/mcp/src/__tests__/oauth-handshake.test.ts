@@ -393,6 +393,12 @@ describe("Phase 1a PR1: OAuth ハンドシェイク疎通（実Firebaseサイン
         .set("Cookie", cookieHeader(jar))
         .send({ idToken: "fake-id-token" });
       expect(res.status).toBe(403);
+
+      // サインインが完了していない(=interactionがloginプロンプトのまま)ことを確認。
+      // verifyGoogleIdTokenがinteractionResultより前にthrowしていることの回帰検知。
+      const page = await request(app).get(`/interaction/${uid}`).set("Cookie", cookieHeader(jar));
+      expect(page.status).toBe(200);
+      expect(page.text).toContain('id="signin"');
     });
 
     it("Google以外のプロバイダの場合、firebase-callback は403を返しサインインを完了させない", async () => {
@@ -431,6 +437,30 @@ describe("Phase 1a PR1: OAuth ハンドシェイク疎通（実Firebaseサイン
       const res = await request(app).post(`/interaction/${uid}/firebase-callback`).set("Cookie", cookieHeader(jar)).send({});
       expect(res.status).toBe(400);
     });
+  });
+
+  it("ログイン未完了(まだloginプロンプト)の状態で /confirm を呼ぶと400を返す", async () => {
+    // /confirm は consent プロンプトの時のみ有効。firebase-callback を経ずに
+    // 直接 /confirm を呼ぶ(順序異常・古いconsent画面のブックマーク再訪等)場合の
+    // router.ts の防御ロジック(name !== "consent" ガード)を検証する。
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+    const { jar, uid } = await startAuthorization(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+    const res = await request(app).post(`/interaction/${uid}/confirm`).set("Cookie", cookieHeader(jar)).send({});
+    expect(res.status).toBe(400);
+  });
+
+  it("interaction cookieが無い状態でconfirmを呼んでも、スタックトレースを含まない汎用エラーが返る", async () => {
+    // Cloud Runインスタンス再起動等でinteraction sessionが失われた状態を模して
+    // cookie無しで直接叩く。oidc-providerはSessionNotFoundを投げ、router.tsの
+    // next(err)経由でapp.ts末尾の汎用エラーハンドラに到達する想定
+    // (NODE_ENV未設定時のfinalhandlerスタックトレース漏洩の回帰テスト)。
+    const res = await request(app).post("/interaction/nonexistent-uid/confirm").send({});
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.text).not.toMatch(/at \S+ \(.*:\d+:\d+\)/); // Node.jsスタックトレース行の典型パターン
+    expect(res.text).not.toContain(".ts:");
+    expect(res.text).not.toContain(".js:");
   });
 });
 
@@ -498,6 +528,62 @@ describe("Phase 1a PR1: 同意画面の保存型XSS対策", () => {
     expect(consentPage.text).not.toContain("<script>alert(1)</script>");
     expect(consentPage.text).toContain("&lt;script&gt;");
     expect(consentUid).toBeTruthy();
+  });
+
+  it("DCRで登録した redirect_uri に含まれるHTMLタグがエスケープされて同意画面に表示される", async () => {
+    // client_name同様、views.ts冒頭コメントが脅威モデルとして明記するredirect_uriも
+    // ルーター経由の実プラムビングでエスケープされることを確認する(unit testの
+    // views.test.tsだけではrouter.tsでの取り回しミスを検知できない)。
+    const maliciousRedirectUri = 'http://localhost:1234/callback?x="><img src=x onerror=alert(2)>';
+    const reg = await request(app)
+      .post("/reg")
+      .set("Content-Type", "application/json")
+      .send({
+        redirect_uris: [maliciousRedirectUri],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code"],
+        response_types: ["code"],
+      });
+    expect(reg.status).toBe(201);
+    const clientId = reg.body.client_id as string;
+    const registeredRedirectUri = (reg.body.redirect_uris as string[])[0];
+
+    const { codeChallenge } = generatePkcePair();
+    const query = {
+      client_id: clientId,
+      redirect_uri: registeredRedirectUri,
+      response_type: "code",
+      resource: `${ISSUER_URL}/mcp`,
+      scope: "openid",
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+    };
+    const authRes = await request(app).get("/auth").query(query);
+    expect([302, 303]).toContain(authRes.status);
+    let jar = mergeCookies(new Map(), authRes.headers["set-cookie"] as unknown as string[]);
+    const loginUrl = new URL(authRes.headers.location as string, ISSUER_URL);
+    const loginUid = loginUrl.pathname.slice("/interaction/".length).split("/")[0];
+
+    mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken());
+    const callbackRes = await request(app)
+      .post(`/interaction/${loginUid}/firebase-callback`)
+      .set("Cookie", cookieHeader(jar))
+      .send({ idToken: "fake-id-token" });
+    jar = mergeCookies(jar, callbackRes.headers["set-cookie"] as unknown as string[]);
+
+    const resumePath = new URL(callbackRes.body.redirectTo as string, ISSUER_URL);
+    const resumeRes = await request(app)
+      .get(resumePath.pathname + resumePath.search)
+      .set("Cookie", cookieHeader(jar));
+    jar = mergeCookies(jar, resumeRes.headers["set-cookie"] as unknown as string[]);
+    const consentUrl = new URL(resumeRes.headers.location as string, ISSUER_URL);
+
+    const consentPage = await request(app)
+      .get(consentUrl.pathname + consentUrl.search)
+      .set("Cookie", cookieHeader(jar));
+    expect(consentPage.status).toBe(200);
+    expect(consentPage.text).not.toContain('"><img src=x onerror=alert(2)>');
+    expect(consentPage.text).toContain("&lt;img src=x onerror=alert(2)&gt;");
   });
 });
 

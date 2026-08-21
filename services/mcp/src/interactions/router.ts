@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type Provider from "oidc-provider";
+import { errors } from "oidc-provider";
 import { verifyGoogleIdToken, FirebaseSignInError } from "../firebase.js";
 import { renderLoginPage, renderConsentPage, renderErrorPage, type FirebaseWebConfig } from "./views.js";
 
@@ -36,6 +37,17 @@ export function createInteractionRouter(provider: Provider, firebaseConfig: Fire
       }
       res.status(501).set("Content-Type", "text/html; charset=utf-8").send(renderErrorPage("未対応の interaction です"));
     } catch (err) {
+      if (err instanceof errors.SessionNotFound) {
+        // Cloud Run インスタンス再起動等でインメモリの interaction session が
+        // 失われた場合に発生しうる、想定内のエラー(oidc.ts のPhase 1a PR2に
+        // 関するコメント参照。PR2で永続adapterに置き換えるまでは起こりうる)。
+        // 汎用エラーハンドラへ落とさずここで案内する。
+        res
+          .status(400)
+          .set("Content-Type", "text/html; charset=utf-8")
+          .send(renderErrorPage("サインインセッションの有効期限が切れました。もう一度やり直してください。"));
+        return;
+      }
       next(err);
     }
   });
@@ -57,7 +69,7 @@ export function createInteractionRouter(provider: Provider, firebaseConfig: Fire
       res.json({ redirectTo });
     } catch (err) {
       if (err instanceof FirebaseSignInError) {
-        res.status(403).json({ error: err.message });
+        res.status(err.transient ? 503 : 403).json({ error: err.message });
         return;
       }
       next(err);

@@ -2,7 +2,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { createMcpExpressApp, mcpAuthMetadataRouter, requireBearerAuth, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/express";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import type { OAuthMetadata } from "@modelcontextprotocol/server";
-import type { Express } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import type Provider from "oidc-provider";
 import rateLimit from "express-rate-limit";
 import { createOidcProvider } from "./oidc.js";
@@ -10,6 +10,7 @@ import { createTokenVerifier } from "./token-verifier.js";
 import { createMcpServer } from "./mcp-server.js";
 import { createInteractionRouter } from "./interactions/router.js";
 import type { FirebaseWebConfig } from "./interactions/views.js";
+import { logger } from "./logger.js";
 
 /**
  * oidc-provider は discovery document のエンドポイントURLを、固定した issuer 文字列
@@ -91,12 +92,15 @@ export async function createApp(
 
   // DCR (/reg) は initialAccessToken:false で誰でもクライアント登録できるため、
   // 最低限のレート制限を掛ける(計画ファイル「DCR登録へのレート制限」節。
-  // 濫用対策の本実装はPhase 1bのスコープ)。
+  // 濫用対策の本実装はPhase 1bのスコープ)。vitest は NODE_ENV=test を既定注入する
+  // ため(公式Vite/Vitest挙動、実測確認済み)、テストスイート内の多数のDCR登録が
+  // 誤って本番想定のレート制限に引っかからないようskipする。
   const registrationLimiter = rateLimit({
     windowMs: 60 * 1000,
     limit: 10,
     standardHeaders: "draft-7",
     legacyHeaders: false,
+    skip: () => process.env.NODE_ENV === "test",
     message: {
       error: { code: "RATE_LIMIT_EXCEEDED", message: "Too many requests" },
     },
@@ -136,7 +140,24 @@ export async function createApp(
 
   // OAuth AS の全エンドポイント (/auth, /token, /reg, /jwks, /.well-known/openid-configuration 等)。
   // 上記の Express 固有ルートに一致しないリクエストのみここに落ちる。
+  // provider.callback() は Koa ハンドラ(arity 2)のため next() を一切呼ばず、
+  // 内部で自己完結してエラー処理する。よって下記エラーハンドラは
+  // createInteractionRouter 等の Express 固有ルートが next(err) した場合のみ発火する。
   app.use(provider.callback());
+
+  // 未捕捉エラーのフォールバック。NODE_ENV=production 未設定でも Express 既定の
+  // finalhandler が err.stack をレスポンスに含めないよう、ここで必ず遮断する
+  // (--allow-unauthenticated な本サービスでは誰でも閲覧できてしまうため。
+  // pr-review-toolkit 2系統のセカンドオピニオンが独立に指摘、実ソースで検証済み)。
+  // 4引数シグネチャが Express にエラーハンドラと認識される要件のため、
+  // 未使用引数も省略しない。
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    logger.error("Unhandled request error", { error: err });
+    if (res.headersSent) {
+      return;
+    }
+    res.status(500).json({ error: "internal_error" });
+  });
 
   return { app, provider };
 }

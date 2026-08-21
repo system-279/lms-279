@@ -226,13 +226,18 @@ jobs:
           # 単一の呼び出しにまとめる。カスタム区切り文字(^@^)は値にカンマが
           # 含まれても安全なように使う(Firebase設定値は現状カンマを含まないが、
           # 将来の値変更に対する防御)。
+          # NODE_ENV=production は deploy-api job(上記117行目)と同じ fail-safe。
+          # 未設定だと Express の既定エラーハンドラ(finalhandler)が env!=='production'
+          # 時に未捕捉エラーのスタックトレースをレスポンスボディへ含めてしまい、
+          # --allow-unauthenticated な本サービスでは誰でも閲覧できてしまう
+          # (pr-review-toolkit 2系統のセカンドオピニオンが独立に指摘、実ソースで検証済み)。
           gcloud run deploy mcp \
             --image=${{ env.ARTIFACT_REGISTRY }}/mcp:${{ github.sha }} \
             --region=${{ env.GCP_REGION }} \
             --platform=managed \
             --allow-unauthenticated \
             --max-instances=1 \
-            --set-env-vars="^@^MCP_ISSUER_URL=https://mcp-3zcica5euq-an.a.run.app@FIREBASE_PROJECT_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}@FIREBASE_WEB_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}@FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}"
+            --set-env-vars="^@^NODE_ENV=production@MCP_ISSUER_URL=https://mcp-3zcica5euq-an.a.run.app@FIREBASE_PROJECT_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}@FIREBASE_WEB_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}@FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}"
 
   deploy-notification:
     name: Deploy Notification

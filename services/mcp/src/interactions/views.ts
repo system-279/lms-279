@@ -16,6 +16,18 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * <script>ブロック内へ値を埋め込む専用の JSON エンコード。
+ * JSON.stringify は `<`/`/` をエスケープしないため、埋め込み値に
+ * `</script>` が含まれると script タグが早期終了し任意マークアップ注入に
+ * つながりうる（escapeHtml とは別軸のリスク。現状 uid は oidc-provider の
+ * nanoid由来、firebaseConfigはサーバー側env由来でいずれも攻撃者制御不可だが、
+ * 将来この埋め込みパターンを他の値へ流用しても安全なように防御しておく）。
+ */
+function toScriptJson(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
 export interface FirebaseWebConfig {
   apiKey: string;
   authDomain: string;
@@ -59,7 +71,7 @@ export function renderLoginPage(params: { uid: string; firebaseConfig: FirebaseW
 import { initializeApp } from "https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup } from "https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-auth.js";
 
-const app = initializeApp(${JSON.stringify(firebaseConfig)});
+const app = initializeApp(${toScriptJson(firebaseConfig)});
 const auth = getAuth(app);
 const statusEl = document.getElementById("status");
 
@@ -69,7 +81,7 @@ document.getElementById("signin").addEventListener("click", async () => {
     const provider = new GoogleAuthProvider();
     const result = await signInWithPopup(auth, provider);
     const idToken = await result.user.getIdToken();
-    const res = await fetch(${JSON.stringify(`/interaction/${uid}/firebase-callback`)}, {
+    const res = await fetch(${toScriptJson(`/interaction/${uid}/firebase-callback`)}, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ idToken }),
@@ -104,8 +116,8 @@ export function renderConsentPage(params: {
 <button id="approve" class="primary">許可</button>
 <button id="deny">拒否</button>
 `;
-  const confirmUrl = JSON.stringify(`/interaction/${uid}/confirm`);
-  const abortUrl = JSON.stringify(`/interaction/${uid}/abort`);
+  const confirmUrl = toScriptJson(`/interaction/${uid}/confirm`);
+  const abortUrl = toScriptJson(`/interaction/${uid}/abort`);
   const script = `
 const statusEl = document.getElementById("status");
 
