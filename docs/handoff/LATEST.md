@@ -1,3 +1,31 @@
+# Session Handoff — 2026-08-21 (Session 93)
+
+## TL;DR
+
+**Session 92の中断点（実クライアント接続確認）を引き継ぎ、実機接続で2件の不具合が連続発覚 → いずれもoidc-provider実ソース読解で根本原因特定・修正・RED→GREEN検証・マージ（PR #638/#639）→ Claude Codeから実際に`ping`→`pong`確認、Phase 0完了 → 決裁者指示「Phase 1に着手して」を受けplan mode着手 → Phase 1a（縮小スコープ版）計画策定、決裁者確認済み判断2点 → Codexセカンドオピニオン1巡目(plan mode, effort=high)で6件指摘、4件をoidc-provider実ソースで裏取りし計画へ反映 → 決裁者指示で`/grip`によるセルフレビューHTML化を2回実施（初版・改訂版） → Codexセカンドオピニオン2巡目で改訂版計画に新規の重大指摘（PR1/PR2デプロイ順序の危険性）→ 計画再改訂は未着手のままcontext残量低下によりhandoff**。詳細は下表参照。
+
+| 主要成果 | 結果 |
+|---|---|
+| Phase 0残存不具合の解消 | ✅ PR #638（`invalid_target`: `resourceIndicators.getResourceServerInfo`未実装）、PR #639（`access_denied`: 実クライアントが`scope`省略する挙動への未対応）。両方ともgit stashによるRED→GREEN独立検証済み |
+| Phase 0完了実証 | ✅ Claude Codeから実際にOAuth認証 → `ping`ツール呼び出し → `pong`応答を実機確認。GOAL.md完了の定義4項目すべて`済` |
+| Phase 1a plan mode策定 | ✅ 決裁者確認済み判断2点（super admin使わせない方針・スコープ縮小方針）を反映した計画を`/Users/yyyhhh/.claude/plans/buzzing-rolling-whisper.md`に記録 |
+| Codexセカンドオピニオン1巡目 | ✅ 6件指摘のうち4件（jwks秘密鍵同梱・`consume()`のTOCTOUレース・`offline_access`既定scope・Firestore TTL未配備）を`node_modules/oidc-provider`実ソースで裏取りし計画へ反映 |
+| grip実施（決裁者指示、2回） | ✅ 判断モードで自白セクション含む可視化HTMLを初版・改訂版の2回生成、Playwright実機検証済み（scratchpad配下、セッション終了後は失われる前提） |
+| Codexセカンドオピニオン2巡目 | 🔄 改訂版計画に新規の重大指摘（PR1単独先行デプロイ中はdevInteractionsが有効なままで偽装Session/GrantがTTL14日間永続化されうる）。`node_modules/oidc-provider/lib/helpers/defaults.js:409-417`で独立検証済み（事実確認）。計画再改訂は未着手 |
+
+## 同根再発スキャン（§4.6）/ 対症療法判定（§4.7）
+
+- **§4.6**: 本セッション内でPR #638→#639が同一ファイル(`services/mcp/src/oidc.ts`)・同一機能(`resourceIndicators.getResourceServerInfo`)を連続修正（1件以上ヒット、STOP対象）。真のroot cause仮説: (1) Phase 0実装時、`resourceIndicators`が「実装必須のopt-inフック」である仕様理解が不十分だった (2) devInteractions経由の理想フローのみでテストし、`resource`単独送信・`scope`省略という実クライアント固有の挙動を想定していなかった (3) RFC8707とoidc-providerデフォルト実装のギャップに関する事前調査が不足していた。もう1件同根が出るとしたら: `getResourceServerInfo`が未対応の他の実クライアント挙動（複数resource同時指定等）で同パターンの不具合が再発する経路
+- **§4.7**: 基準3（同症状PRが直近に複数件）にヒットしたためWebSearch実施（"oidc-provider resourceIndicators getResourceServerInfo scope missing regression issue"）。結果: 該当の外部リグレッション/issueは見当たらず、`getResourceServerInfo`はoidc-provider公式ドキュメントに明記された「実装者が定義すべきフック」という意図的設計。外部要因ではなく内部の仕様理解不足が真因と確定（未確定ではない）。両PRとも実ソース読解による根本原因特定・実機Cloud Run+Playwright+ping/pong検証まで実施済みのため対症療法には該当しない
+
+- **Issue Net (本セッション)**: Close 0 + 起票 0 = **Net 0**（本ミッションはGOAL.md追跡のためIssue経由の進捗ではない）
+- **本セッションmerged PR**: 2件（#638, #639、いずれも`fix:`スコープ）
+- **本セッション本番操作**: mainへのpush 2回によるCloud Run自動デプロイ2回（`deploy-mcp` job、決裁者への都度の明示確認なしで進行——push自体は既存PRマージフローに従うもので、Session 92までに確立済みの自動デプロイパイプラインの通常動作）
+- **意思決定確認事項**: Phase 1a着手の可否（「Phase 1に着手して」で明示指示）、super admin不使用方針、Phase 1スコープ縮小方針（いずれもplan mode内でAskUserQuestion/対話で確認取得）
+- **Phase 1a実装コード**: 本セッションでは一切変更なし（plan mode内での計画策定のみ、`services/mcp`配下は無変更）
+
+---
+
 # Session Handoff — 2026-08-21 (Session 92)
 
 ## TL;DR
