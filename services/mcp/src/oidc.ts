@@ -1,4 +1,4 @@
-import Provider from "oidc-provider";
+import Provider, { errors } from "oidc-provider";
 
 /**
  * Phase 0 スパイク: devInteractions（oidc-provider 組み込みのダミー同意画面）で
@@ -16,6 +16,8 @@ import Provider from "oidc-provider";
  * 置き換えはPhase 1のスコープ。
  */
 export function createOidcProvider(issuerUrl: string): Provider {
+  const resourceIdentifier = new URL(`${issuerUrl}/mcp`).href;
+
   const provider = new Provider(issuerUrl, {
     clients: [],
     features: {
@@ -24,6 +26,20 @@ export function createOidcProvider(issuerUrl: string): Provider {
         enabled: true,
         initialAccessToken: false,
         issueRegistrationAccessToken: true,
+      },
+      // MCPクライアントはRFC 8707に従い /auth に resource パラメータ(このMCPサーバーの
+      // リソースURL)を必ず送る。oidc-provider は resourceIndicators 機能が(既定で)有効な
+      // 場合、getResourceServerInfo の実装を要求する — 未指定だと常に invalid_target を
+      // 投げるスタブが使われ、実クライアント接続で必ず失敗する(Phase 0で未検証のまま
+      // リリースし、実クライアント接続で発覚)。
+      resourceIndicators: {
+        enabled: true,
+        getResourceServerInfo: (_ctx, resourceIndicator) => {
+          if (new URL(resourceIndicator).href !== resourceIdentifier) {
+            throw new errors.InvalidTarget();
+          }
+          return { scope: "openid" };
+        },
       },
     },
     pkce: {
