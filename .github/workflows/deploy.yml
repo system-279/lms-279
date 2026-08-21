@@ -215,11 +215,16 @@ jobs:
           # 現時点で公開されるツールはpingのみ(実データ・実APIへのアクセスなし)。
           # 組織カスタムコネクタとしての恒久登録は行わず、疎通検証専用として扱うこと。
           # Phase 1でFirebase Google サインイン + ドメイン検証への置き換えが必須。
+          # --max-instances=1: oidc-provider がインメモリadapter/署名鍵のため(Phase 1で
+          # 永続adapterに置き換えるまでの暫定措置、services/mcp/src/oidc.ts参照)、複数
+          # インスタンスに分散するとDCR登録・認可コード・トークンがインスタンス間で
+          # 共有されず認可フローが失敗する。単一インスタンスに固定して回避する。
           gcloud run deploy mcp \
             --image=${{ env.ARTIFACT_REGISTRY }}/mcp:${{ github.sha }} \
             --region=${{ env.GCP_REGION }} \
             --platform=managed \
             --allow-unauthenticated \
+            --max-instances=1 \
             --set-env-vars="MCP_ISSUER_URL=https://mcp-3zcica5euq-an.a.run.app"
 
   deploy-notification:
