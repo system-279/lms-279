@@ -1,0 +1,49 @@
+/**
+ * env 読み込み・検証。Cloud Run 実行時（K_SERVICE 自動注入）に必須値が欠けていたら
+ * fail-fast で起動しない（services/api/src/middleware/tenant-auth.ts:27-54 と同じ
+ * パターン。ローカル/CI では K_SERVICE が無いため未設定でも起動を許容する）。
+ */
+
+export interface McpConfig {
+  port: number;
+  issuerUrl: string;
+  firebaseProjectId: string | undefined;
+  firebaseWebApiKey: string | undefined;
+  firebaseAuthDomain: string | undefined;
+}
+
+function isProductionRuntime(): boolean {
+  const nodeEnv = process.env.NODE_ENV?.trim().toLowerCase();
+  if (nodeEnv === "production") return true;
+  // Cloud Run は起動時に K_SERVICE を必ず注入する。NODE_ENV 設定漏れ時の保険。
+  if (typeof process.env.K_SERVICE === "string" && process.env.K_SERVICE.length > 0) return true;
+  return false;
+}
+
+export function loadConfig(): McpConfig {
+  const port = Number(process.env.PORT) || 8082;
+  const issuerUrl = process.env.MCP_ISSUER_URL ?? `http://127.0.0.1:${port}`;
+  const firebaseProjectId = process.env.FIREBASE_PROJECT_ID;
+  const firebaseWebApiKey = process.env.FIREBASE_WEB_API_KEY;
+  const firebaseAuthDomain = process.env.FIREBASE_AUTH_DOMAIN;
+
+  if (isProductionRuntime()) {
+    const missing = [
+      ["FIREBASE_PROJECT_ID", firebaseProjectId],
+      ["FIREBASE_WEB_API_KEY", firebaseWebApiKey],
+      ["FIREBASE_AUTH_DOMAIN", firebaseAuthDomain],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+
+    if (missing.length > 0) {
+      throw new Error(
+        `FATAL: missing required env var(s) in production runtime: ${missing.join(", ")}. ` +
+          `Firebase Google サインインが機能しないため起動しない ` +
+          `(services/mcp/src/config.ts、.github/workflows/deploy.yml の deploy-mcp job を確認)。`
+      );
+    }
+  }
+
+  return { port, issuerUrl, firebaseProjectId, firebaseWebApiKey, firebaseAuthDomain };
+}

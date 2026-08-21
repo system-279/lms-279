@@ -1,27 +1,34 @@
 import Provider, { errors } from "oidc-provider";
 
 /**
- * Phase 0 スパイク: devInteractions（oidc-provider 組み込みのダミー同意画面）で
- * OAuth ハンドシェイクの疎通のみを検証する。Firebase Google サインインへの委譲・
- * ドメイン検証は Phase 1 で本実装する（計画 planmode-whimsical-curry.md 参照）。
- * devInteractions は本番コネクタには絶対に接続しないこと。
+ * Phase 1a PR1: devInteractions（oidc-provider 組み込みのダミー同意画面）を廃止し、
+ * 実 Firebase Google サインイン + 自前同意画面（src/interactions/）へ置き換えた
+ * （計画 buzzing-rolling-whisper.md 参照）。findAccount は Firebase の uid を
+ * そのまま accountId として扱う（MCP 認可サーバー自身はメールドメイン検証をしない
+ * 方針。認可の実体は Phase 2 で quiz ツールが services/api を呼ぶ際の既存
+ * allowed_emails チェックに委ねる）。
  *
- * 既知の制約（Codex/code-reviewer両レビュー指摘、Phase 1で解消予定）: adapter/署名鍵を
- * 指定していないため oidc-provider 既定のインメモリ実装が使われる。DCRで登録した
- * クライアント・interactionセッション・発行済みトークンはすべてプロセスローカルにしか
- * 保持されない。Cloud Run が複数インスタンスにスケールする、またはインスタンスが
- * 再起動されると、認可コードフロー途中(/reg → /auth → /interaction の複数ホップ)で
- * 別インスタンスに着地した場合に失敗する。デプロイ時に `--max-instances=1` で単一
- * インスタンスに固定して緩和する(deploy.yml参照)。Firestore等の永続adapterへの
- * 置き換えはPhase 1のスコープ。
+ * 既知の制約（Phase 1a PR2 で解消予定）: adapter/署名鍵を指定していないため
+ * oidc-provider 既定のインメモリ実装が使われる。DCRで登録したクライアント・
+ * interactionセッション・発行済みトークンはすべてプロセスローカルにしか保持されない。
+ * Cloud Run が複数インスタンスにスケールする、またはインスタンスが再起動されると、
+ * 認可コードフロー途中(/reg → /auth → /interaction の複数ホップ)で別インスタンスに
+ * 着地した場合に失敗する。デプロイ時に `--max-instances=1` で単一インスタンスに
+ * 固定して緩和する(deploy.yml参照)。Firestore等の永続adapterへの置き換えは
+ * Phase 1a PR2 のスコープ（PR1 を先にデプロイすることで、永続化が有効になる時点では
+ * devInteractions 時代の偽装 Session が原理的に存在し得ない状態にしている）。
  */
 export function createOidcProvider(issuerUrl: string): Provider {
   const resourceIdentifier = new URL(`${issuerUrl}/mcp`).href;
 
   const provider = new Provider(issuerUrl, {
     clients: [],
+    findAccount: (_ctx, sub) => ({
+      accountId: sub,
+      claims: async () => ({ sub }),
+    }),
     features: {
-      devInteractions: { enabled: true },
+      devInteractions: { enabled: false },
       registration: {
         enabled: true,
         initialAccessToken: false,

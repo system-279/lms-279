@@ -1,12 +1,16 @@
 import { createApp } from "./app.js";
+import { loadConfig } from "./config.js";
 
-const PORT = Number(process.env.PORT) || 8082;
-const ISSUER_URL = process.env.MCP_ISSUER_URL ?? `http://127.0.0.1:${PORT}`;
+const config = loadConfig();
 
-createApp(ISSUER_URL, PORT)
+createApp(config.issuerUrl, config.port, {
+  apiKey: config.firebaseWebApiKey ?? "",
+  authDomain: config.firebaseAuthDomain ?? "",
+  projectId: config.firebaseProjectId ?? "",
+})
   .then(({ app }) => {
-    app.listen(PORT, () => {
-      console.log(`lms-279 mcp (phase 0) listening on ${ISSUER_URL}`);
+    app.listen(config.port, () => {
+      console.log(`lms-279 mcp listening on ${config.issuerUrl}`);
     });
   })
   .catch((err) => {

@@ -1,11 +1,39 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import request from "supertest";
 import type { Express } from "express";
 import * as crypto from "node:crypto";
-import { createApp } from "../app.js";
+
+const mockVerifyIdToken = vi.fn();
+
+vi.mock("firebase-admin/auth", () => ({
+  getAuth: () => ({
+    verifyIdToken: mockVerifyIdToken,
+  }),
+}));
+
+vi.mock("firebase-admin/app", () => ({
+  getApps: () => [{ name: "[DEFAULT]" }],
+  initializeApp: vi.fn(),
+}));
+
+const { createApp } = await import("../app.js");
 
 const ISSUER_URL = "http://127.0.0.1:8082";
 const BIND_PORT = 8082;
+
+/**
+ * Google プロバイダ + 検証済みメールの標準 decodedToken を生成するヘルパー。
+ * services/api/src/middleware/__tests__/super-admin-firebase.test.ts と同じパターン。
+ */
+function makeDecodedToken(overrides: Record<string, unknown> = {}) {
+  return {
+    uid: "test-firebase-uid",
+    email: "quiz-editor@example.com",
+    email_verified: true,
+    firebase: { sign_in_provider: "google.com", identities: {} },
+    ...overrides,
+  };
+}
 
 /**
  * 簡易 Cookie jar。Set-Cookie の属性(Path/HttpOnly/SameSite等)を除いた
@@ -28,25 +56,25 @@ function cookieHeader(jar: Map<string, string>): string {
 }
 
 /**
- * DCR でクライアント登録し、devInteractions のダミー同意画面(login → consent と
- * 複数プロンプトを踏みうる)を追従して、PKCE付き認可コードを取得するまでを行う。
- * GET/POST とも同一パス /interaction/:uid（フォームの hidden field `prompt` で
- * 分岐、oidc-provider lib/actions/interaction.js 実装に準拠）。
+ * DCR でクライアント登録し、/auth を叩いて最初の interaction（常に login prompt。
+ * フレッシュな cookie jar なので有効なセッションが存在しない）まで遷移する。
+ * ログイン拒否系のテストと、正常系ヘルパー(obtainAuthorizationCode)の両方から使う。
  */
-async function obtainAuthorizationCode(
+async function startAuthorization(
   app: Express,
   redirectUri: string,
   codeChallenge: string,
   resource: string,
-  scope?: string
-): Promise<{ clientId: string; code: string }> {
+  scope?: string,
+  grantTypes: string[] = ["authorization_code"]
+): Promise<{ clientId: string; jar: Map<string, string>; uid: string }> {
   const reg = await request(app)
     .post("/reg")
     .set("Content-Type", "application/json")
     .send({
       redirect_uris: [redirectUri],
       token_endpoint_auth_method: "none",
-      grant_types: ["authorization_code"],
+      grant_types: grantTypes,
       response_types: ["code"],
     });
   expect(reg.status).toBe(201);
@@ -71,31 +99,71 @@ async function obtainAuthorizationCode(
   expect([302, 303]).toContain(authRes.status);
 
   let jar = mergeCookies(new Map(), authRes.headers["set-cookie"] as unknown as string[]);
-  let location = authRes.headers.location as string;
+  const location = authRes.headers.location as string;
+  const url = new URL(location, ISSUER_URL);
+  expect(url.pathname.startsWith("/interaction/")).toBe(true);
+  const uid = url.pathname.slice("/interaction/".length).split("/")[0];
+
+  const page = await request(app).get(url.pathname + url.search).set("Cookie", cookieHeader(jar));
+  expect(page.status).toBe(200);
+  jar = mergeCookies(jar, page.headers["set-cookie"] as unknown as string[]);
+  expect(page.text).toContain('id="signin"'); // 常に login prompt であることの前提確認
+
+  return { clientId, jar, uid };
+}
+
+/**
+ * 実 Firebase Google サインイン（verifyIdTokenをモック）→ 同意画面 の一連を追従して、
+ * PKCE付き認可コードを取得するまでを行う。
+ */
+async function obtainAuthorizationCode(
+  app: Express,
+  redirectUri: string,
+  codeChallenge: string,
+  resource: string,
+  scope?: string,
+  grantTypes: string[] = ["authorization_code"]
+): Promise<{ clientId: string; code: string }> {
+  const { clientId, jar: startJar, uid: loginUid } = await startAuthorization(
+    app,
+    redirectUri,
+    codeChallenge,
+    resource,
+    scope,
+    grantTypes
+  );
+  let jar = startJar;
+
+  mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken());
+  const callbackRes = await request(app)
+    .post(`/interaction/${loginUid}/firebase-callback`)
+    .set("Cookie", cookieHeader(jar))
+    .send({ idToken: "fake-id-token" });
+  expect(callbackRes.status).toBe(200);
+  jar = mergeCookies(jar, callbackRes.headers["set-cookie"] as unknown as string[]);
+  let location = callbackRes.body.redirectTo as string;
+
   let code: string | null = null;
   const redirectOrigin = new URL(redirectUri).origin;
 
-  for (let hop = 0; hop < 6 && !code; hop += 1) {
-    const path = new URL(location, ISSUER_URL).pathname + new URL(location, ISSUER_URL).search;
+  for (let hop = 0; hop < 8 && !code; hop += 1) {
+    const url = new URL(location, ISSUER_URL);
+    const path = url.pathname + url.search;
 
-    if (path.startsWith("/interaction/")) {
-      const uid = path.slice("/interaction/".length).split("/")[0];
+    if (url.pathname.startsWith("/interaction/")) {
+      const uid = url.pathname.slice("/interaction/".length).split("/")[0];
       const page = await request(app).get(path).set("Cookie", cookieHeader(jar));
       expect(page.status).toBe(200);
       jar = mergeCookies(jar, page.headers["set-cookie"] as unknown as string[]);
-      const isLoginPrompt = page.text.includes('name="login"');
-      const submitRes = await request(app)
-        .post(`/interaction/${uid}`)
+      expect(page.text).toContain('id="approve"'); // login後は常に consent prompt の前提確認
+
+      const confirmRes = await request(app)
+        .post(`/interaction/${uid}/confirm`)
         .set("Cookie", cookieHeader(jar))
-        .type("form")
-        .send(
-          isLoginPrompt
-            ? { prompt: "login", login: "phase0-test-account", password: "any" }
-            : { prompt: "consent" }
-        );
-      expect([302, 303]).toContain(submitRes.status);
-      location = submitRes.headers.location as string;
-      jar = mergeCookies(jar, submitRes.headers["set-cookie"] as unknown as string[]);
+        .send({});
+      expect(confirmRes.status).toBe(200);
+      jar = mergeCookies(jar, confirmRes.headers["set-cookie"] as unknown as string[]);
+      location = confirmRes.body.redirectTo as string;
       continue;
     }
 
@@ -121,11 +189,15 @@ function generatePkcePair() {
   return { codeVerifier, codeChallenge };
 }
 
-describe("Phase 0: OAuth ハンドシェイク疎通", () => {
+describe("Phase 1a PR1: OAuth ハンドシェイク疎通（実Firebaseサインイン経由）", () => {
   let app: Express;
 
   beforeAll(async () => {
     ({ app } = await createApp(ISSUER_URL, BIND_PORT));
+  });
+
+  beforeEach(() => {
+    mockVerifyIdToken.mockReset();
   });
 
   it("RFC 9728 保護リソースメタデータを配信する", async () => {
@@ -166,7 +238,7 @@ describe("Phase 0: OAuth ハンドシェイク疎通", () => {
     expect(res.body.redirect_uris).toContain("http://localhost:0/callback");
   });
 
-  it("PKCE付き認可コードフローでトークンを取得し、それを使って ping ツールを呼べる（devInteractionsのダミー同意画面経由）", async () => {
+  it("PKCE付き認可コードフローでトークンを取得し、それを使って ping ツールを呼べる（実Firebaseサインイン経由）", async () => {
     const redirectUri = "http://localhost:1234/callback";
     const { codeVerifier, codeChallenge } = generatePkcePair();
     const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
@@ -202,7 +274,7 @@ describe("Phase 0: OAuth ハンドシェイク疎通", () => {
   it("実クライアント同様 scope パラメータを省略しても(resourceのみで)認可コードとトークンを取得できる", async () => {
     // 実クライアント(Claude)は /auth に scope を一切送らず resource のみ送る。
     // oidc-provider は要求 scope が空だと consent 後も grant に何も追加されず
-    // 「no scope was granted」で access_denied になる回帰があった(実クライアント接続で発覚)。
+    // 「no scope was granted」で access_denied になる回帰があった(実クライアント接続で発覚、PR #639)。
     const redirectUri = "http://localhost:1234/callback";
     const { codeVerifier, codeChallenge } = generatePkcePair();
     const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`);
@@ -280,6 +352,152 @@ describe("Phase 0: OAuth ハンドシェイク疎通", () => {
       .set("Authorization", "Bearer not-a-real-token")
       .send({});
     expect(res.status).toBe(401);
+  });
+
+  it("offline_access を明示要求しても refresh_token は発行されない", async () => {
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeVerifier, codeChallenge } = generatePkcePair();
+    const { clientId, code } = await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid offline_access",
+      ["authorization_code", "refresh_token"]
+    );
+
+    const tokenRes = await request(app)
+      .post("/token")
+      .type("form")
+      .send({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: redirectUri,
+        client_id: clientId,
+        code_verifier: codeVerifier,
+      });
+    expect(tokenRes.status).toBe(200);
+    expect(tokenRes.body.access_token).toBeTruthy();
+    expect(tokenRes.body.refresh_token).toBeUndefined();
+  });
+
+  describe("サインイン拒否系", () => {
+    it("email_verified が false の場合、firebase-callback は403を返しサインインを完了させない", async () => {
+      const redirectUri = "http://localhost:1234/callback";
+      const { codeChallenge } = generatePkcePair();
+      const { jar, uid } = await startAuthorization(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+      mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken({ email_verified: false }));
+      const res = await request(app)
+        .post(`/interaction/${uid}/firebase-callback`)
+        .set("Cookie", cookieHeader(jar))
+        .send({ idToken: "fake-id-token" });
+      expect(res.status).toBe(403);
+    });
+
+    it("Google以外のプロバイダの場合、firebase-callback は403を返しサインインを完了させない", async () => {
+      const redirectUri = "http://localhost:1234/callback";
+      const { codeChallenge } = generatePkcePair();
+      const { jar, uid } = await startAuthorization(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+      mockVerifyIdToken.mockResolvedValueOnce(
+        makeDecodedToken({ firebase: { sign_in_provider: "password", identities: {} } })
+      );
+      const res = await request(app)
+        .post(`/interaction/${uid}/firebase-callback`)
+        .set("Cookie", cookieHeader(jar))
+        .send({ idToken: "fake-id-token" });
+      expect(res.status).toBe(403);
+    });
+
+    it("メールアドレスが取得できない場合、firebase-callback は403を返しサインインを完了させない", async () => {
+      const redirectUri = "http://localhost:1234/callback";
+      const { codeChallenge } = generatePkcePair();
+      const { jar, uid } = await startAuthorization(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+      mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken({ email: undefined }));
+      const res = await request(app)
+        .post(`/interaction/${uid}/firebase-callback`)
+        .set("Cookie", cookieHeader(jar))
+        .send({ idToken: "fake-id-token" });
+      expect(res.status).toBe(403);
+    });
+
+    it("idToken が未指定の場合、firebase-callback は400を返す", async () => {
+      const redirectUri = "http://localhost:1234/callback";
+      const { codeChallenge } = generatePkcePair();
+      const { jar, uid } = await startAuthorization(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+      const res = await request(app).post(`/interaction/${uid}/firebase-callback`).set("Cookie", cookieHeader(jar)).send({});
+      expect(res.status).toBe(400);
+    });
+  });
+});
+
+describe("Phase 1a PR1: 同意画面の保存型XSS対策", () => {
+  let app: Express;
+
+  beforeAll(async () => {
+    ({ app } = await createApp(ISSUER_URL, BIND_PORT));
+  });
+
+  beforeEach(() => {
+    mockVerifyIdToken.mockReset();
+  });
+
+  it("DCRで登録した client_name に含まれるHTMLタグがエスケープされて同意画面に表示される", async () => {
+    const redirectUri = "http://localhost:1234/callback";
+    const maliciousClientName = '<script>alert(1)</script>';
+    const reg = await request(app)
+      .post("/reg")
+      .set("Content-Type", "application/json")
+      .send({
+        redirect_uris: [redirectUri],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code"],
+        response_types: ["code"],
+        client_name: maliciousClientName,
+      });
+    expect(reg.status).toBe(201);
+    const clientId = reg.body.client_id as string;
+
+    const { codeChallenge } = generatePkcePair();
+    const query = {
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: "code",
+      resource: `${ISSUER_URL}/mcp`,
+      scope: "openid",
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+    };
+    const authRes = await request(app).get("/auth").query(query);
+    let jar = mergeCookies(new Map(), authRes.headers["set-cookie"] as unknown as string[]);
+    const loginUrl = new URL(authRes.headers.location as string, ISSUER_URL);
+    const loginUid = loginUrl.pathname.slice("/interaction/".length).split("/")[0];
+
+    mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken());
+    const callbackRes = await request(app)
+      .post(`/interaction/${loginUid}/firebase-callback`)
+      .set("Cookie", cookieHeader(jar))
+      .send({ idToken: "fake-id-token" });
+    jar = mergeCookies(jar, callbackRes.headers["set-cookie"] as unknown as string[]);
+
+    const resumePath = new URL(callbackRes.body.redirectTo as string, ISSUER_URL);
+    const resumeRes = await request(app)
+      .get(resumePath.pathname + resumePath.search)
+      .set("Cookie", cookieHeader(jar));
+    jar = mergeCookies(jar, resumeRes.headers["set-cookie"] as unknown as string[]);
+    const consentUrl = new URL(resumeRes.headers.location as string, ISSUER_URL);
+    const consentUid = consentUrl.pathname.slice("/interaction/".length).split("/")[0];
+
+    const consentPage = await request(app)
+      .get(consentUrl.pathname + consentUrl.search)
+      .set("Cookie", cookieHeader(jar));
+    expect(consentPage.status).toBe(200);
+    expect(consentPage.text).not.toContain("<script>alert(1)</script>");
+    expect(consentPage.text).toContain("&lt;script&gt;");
+    expect(consentUid).toBeTruthy();
   });
 });
 

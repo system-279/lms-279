@@ -4,9 +4,12 @@ import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import type { OAuthMetadata } from "@modelcontextprotocol/server";
 import type { Express } from "express";
 import type Provider from "oidc-provider";
+import rateLimit from "express-rate-limit";
 import { createOidcProvider } from "./oidc.js";
 import { createTokenVerifier } from "./token-verifier.js";
 import { createMcpServer } from "./mcp-server.js";
+import { createInteractionRouter } from "./interactions/router.js";
+import type { FirebaseWebConfig } from "./interactions/views.js";
 
 /**
  * oidc-provider は discovery document のエンドポイントURLを、固定した issuer 文字列
@@ -67,12 +70,38 @@ async function fetchOidcMetadata(provider: Provider, issuerUrl: string, bindPort
   }
 }
 
-export async function createApp(issuerUrl: string, bindPort: number): Promise<{ app: Express; provider: Provider }> {
+export async function createApp(
+  issuerUrl: string,
+  bindPort: number,
+  firebaseConfig: FirebaseWebConfig = {
+    apiKey: process.env.FIREBASE_WEB_API_KEY ?? "",
+    authDomain: process.env.FIREBASE_AUTH_DOMAIN ?? "",
+    projectId: process.env.FIREBASE_PROJECT_ID ?? "",
+  }
+): Promise<{ app: Express; provider: Provider }> {
   const provider = createOidcProvider(issuerUrl);
   const oauthMetadata = await fetchOidcMetadata(provider, issuerUrl, bindPort);
 
   const app = createMcpExpressApp({ host: "0.0.0.0", allowedHosts: [new URL(issuerUrl).hostname] });
+  // Cloud Run等リバースプロキシ経由時にクライアントIPを正しく取得
+  // (services/api/src/index.ts:41-42 と同一パターン。express-rate-limit v8 は
+  // これが無いとプロキシ経由リクエストで検証エラーを投げる)。
+  app.set("trust proxy", 1);
   const resourceServerUrl = new URL(`${issuerUrl}/mcp`);
+
+  // DCR (/reg) は initialAccessToken:false で誰でもクライアント登録できるため、
+  // 最低限のレート制限を掛ける(計画ファイル「DCR登録へのレート制限」節。
+  // 濫用対策の本実装はPhase 1bのスコープ)。
+  const registrationLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 10,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    message: {
+      error: { code: "RATE_LIMIT_EXCEEDED", message: "Too many requests" },
+    },
+  });
+  app.use("/reg", registrationLimiter);
 
   app.use(
     mcpAuthMetadataRouter({
@@ -100,7 +129,11 @@ export async function createApp(issuerUrl: string, bindPort: number): Promise<{ 
     }
   );
 
-  // Phase 0: devInteractions (oidc-provider 組み込みのダミー同意画面) を含む
+  // Phase 1a PR1: devInteractions を廃止した実 Firebase サインイン + 同意画面。
+  // provider.callback()（下記 catch-all）より必ず前に登録する — 一致しなければ
+  // catch-all の oidc-provider 側ルーティングに落ちてしまう。
+  app.use(createInteractionRouter(provider, firebaseConfig));
+
   // OAuth AS の全エンドポイント (/auth, /token, /reg, /jwks, /.well-known/openid-configuration 等)。
   // 上記の Express 固有ルートに一致しないリクエストのみここに落ちる。
   app.use(provider.callback());
