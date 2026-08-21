@@ -175,6 +175,58 @@ jobs:
             --platform=managed \
             --allow-unauthenticated
 
+  deploy-mcp:
+    name: Deploy MCP (Phase 0 spike)
+    needs: [ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/1034821634012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@lms-279.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push MCP image
+        working-directory: services/mcp
+        run: |
+          docker build -t ${{ env.ARTIFACT_REGISTRY }}/mcp:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/mcp:latest .
+          docker push ${{ env.ARTIFACT_REGISTRY }}/mcp:${{ github.sha }}
+          docker push ${{ env.ARTIFACT_REGISTRY }}/mcp:latest
+
+      - name: Deploy MCP to Cloud Run
+        run: |
+          # Phase 0 スパイク: devInteractions（oidc-providerの組み込みダミー同意画面、任意の
+          # ユーザー名でログイン可能）が有効なまま。--allow-unauthenticatedはAnthropicの
+          # クラウド基盤からの到達に必須（IAP等ネットワーク層の防御は使えない、計画参照）。
+          # 現時点で公開されるツールはpingのみ(実データ・実APIへのアクセスなし)。
+          # 組織カスタムコネクタとしての恒久登録は行わず、疎通検証専用として扱うこと。
+          # Phase 1でFirebase Google サインイン + ドメイン検証への置き換えが必須。
+          # --max-instances=1: oidc-provider がインメモリadapter/署名鍵のため(Phase 1で
+          # 永続adapterに置き換えるまでの暫定措置、services/mcp/src/oidc.ts参照)、複数
+          # インスタンスに分散するとDCR登録・認可コード・トークンがインスタンス間で
+          # 共有されず認可フローが失敗する。単一インスタンスに固定して回避する。
+          gcloud run deploy mcp \
+            --image=${{ env.ARTIFACT_REGISTRY }}/mcp:${{ github.sha }} \
+            --region=${{ env.GCP_REGION }} \
+            --platform=managed \
+            --allow-unauthenticated \
+            --max-instances=1 \
+            --set-env-vars="MCP_ISSUER_URL=https://mcp-3zcica5euq-an.a.run.app"
+
   deploy-notification:
     name: Deploy Notification
     needs: [ci]
