@@ -34,9 +34,21 @@ export function createOidcProvider(issuerUrl: string): Provider {
       // リリースし、実クライアント接続で発覚)。
       resourceIndicators: {
         enabled: true,
-        getResourceServerInfo: (_ctx, resourceIndicator) => {
+        getResourceServerInfo: (ctx, resourceIndicator) => {
           if (new URL(resourceIndicator).href !== resourceIdentifier) {
             throw new errors.InvalidTarget();
+          }
+          // MCPクライアントは scope パラメータを送らず resource のみで認可を要求してくる
+          // (実クライアント接続で確認済み)。oidc-provider は要求 scope が空だと
+          // op_scopes_missing/rs_scopes_missing のいずれも「missing なし」と判定し、
+          // consent 後も grant に何も追加されないまま
+          // 「authorization request resolved ... but no scope was granted」で
+          // access_denied になる。resource 指定時は既定 scope を補い、consent→grant
+          // 付与が機能するようにする（oidc-provider 自身が defaultResource で
+          // params.resource を補完するのと同じパターン）。
+          const { params } = ctx.oidc;
+          if (params && !params.scope) {
+            params.scope = "openid";
           }
           return { scope: "openid" };
         },
