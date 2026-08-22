@@ -64,7 +64,8 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
 - **Phase 1a PR1マージ後、Cloud Run自動デプロイが進行中**（`Deploy to Cloud Run`ワークフロー、本セッション内で完了確認予定）。devInteractionsは本番で無効化されるが、**Firebase Console → Authentication → Authorized domainsに`mcp-3zcica5euq-an.a.run.app`を追加するまでは実Googleサインインが`auth/unauthorized-domain`で失敗する**（コード外の手動作業、次セッションの即着手候補）
 - **組織カスタムコネクタとしての恒久登録は上記手動作業+実機確認完了までまだ行わないこと**（Phase 1a PR2=Firestore永続化がまだ未着手のため、Cloud Run再デプロイで引き続きDCR登録クライアントが失効する制約が残っている）
 - **Phase 1a PR2着手時のセカンドオピニオン（Codex MCP版 + pr-review-toolkit:code-reviewer、2026-08-22）で判明: 無認証DCR（`initialAccessToken:false`）× Client永続化（TTL対象外）で、Firestore移行後は攻撃者の分散IP登録によるClient文書の恒久的増加が理論上可能**（現行インメモリはLRU上限1000件で自己制限されるが、永続化でこの歯止めが消える）。旧計画で「DCR濫用対策の本実装はPhase 1bへ先送り、PR1で最低限のレート制限のみ前倒し」と決裁者確認済みのため、PR2では対応しない（decision-maker確認済み、2026-08-22）。**Phase 1b着手時に、Client登録数の上限・監視/アラート・削除手順のいずれかの実装を再検討すること**
-- **Phase 1a PR2デプロイ前に必須の手動作業（コード側では強制不可、忘れるとサービス起動時crash-loop、または期限切れOAuth状態が無制限に蓄積する。pr-review-toolkitセカンドオピニオンで指摘、計画ファイル`noble-purring-rabbit.md`に手順詳細あり）**:
-  1. Secret Manager に `mcp-oauth-signing-key`（jwks + cookie署名鍵のJSON）を作成し、Cloud Runランタイムの既定compute SAに `roles/secretmanager.secretAccessor`（当該シークレット限定）を付与。未実施だと `MCP_STORAGE=firestore` かつ `MCP_SIGNING_SECRET_NAME` 必須の production runtime で起動時に例外→crash-loop
-  2. `gcloud firestore fields ttls update expiresAt --collection-group=mcp_oauth_store --enable-ttl` を実行。未実施でも起動はするが、`firestore.indexes.json`の`fieldOverrides`はindex除外のみでTTL自体は有効化しないため、期限切れの認可コード・トークン・セッションが物理的に削除されず`mcp_oauth_store`が無制限に増え続ける（Codex reviewでも同一指摘、P2）
-  3. Firestore書き込み権限は`services/api`が既に同じ既定compute SAで使用中のため付与済みの可能性が高いが、`gcloud projects get-iam-policy lms-279`で現況確認してから要否判断すること
+- **Phase 1a PR2デプロイ前に必須の手動作業 → 完了（2026-08-22、decision-makerとターミナルで実施）**:
+  1. Secret Manager に `mcp-oauth-signing-key`（jwks + cookie署名鍵のJSON、RSA 2048bit/RS256）を作成し、Cloud Runランタイムの既定compute SA（`1034821634012-compute@developer.gserviceaccount.com`）に `roles/secretmanager.secretAccessor`（当該シークレット限定）を付与 → 済（`gcloud secrets add-iam-policy-binding`で確認済み）
+  2. `gcloud firestore fields ttls update expiresAt --collection-group=mcp_oauth_store --enable-ttl` → 済（`ttlConfig.state: ACTIVE` を確認）
+  3. Firestore書き込み権限 → 確認の結果、既定compute SAは`roles/editor`を保有しておりFirestore読み書きを含むため追加付与不要と判明
+  - **残作業**: PR2デプロイ自体（`main`マージ済み、`.github/workflows/deploy.yml`のpush trigger経由で自動デプロイされる想定）とデプロイ後の実機検証（jwksのkidがSecret Manager由来に一致すること、Cloud Runリビジョン再デプロイ後もクライアント登録が失効しないこと、計画`noble-purring-rabbit.md`検証項目5-6参照）が未実施
