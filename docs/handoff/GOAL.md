@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-22 (Phase 1a PR1マージ・デプロイ完了、Firebase Authorized domains設定済み。実サインイン実機確認とPR2は未着手)
+updated: 2026-08-22 (Phase 1a PR1実サインイン実機確認完了。次の未着手はPhase 1以降のタスク分解のみ)
 ---
 
 ## 現在のミッション
@@ -33,7 +33,7 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
 - [x] Phase 1a: Codexセカンドオピニオン2巡目（PR1/PR2デプロイ順序の重大指摘）を受け計画再改訂 → 決裁者承認（PR1=認証の正しさを先に、PR2=永続化を後に）
 - [x] Phase 1a PR1: devInteractions → 実Firebase Googleサインイン実装、テスト27件PASS、codex review 2巡+pr-review-toolkit 3系統セカンドオピニオン全反映、PR #641マージ済み
 - [x] Phase 1a PR1 デプロイ後の手動作業: Firebase Console → Authentication → Authorized domains へ `mcp-3zcica5euq-an.a.run.app` を追加 → 済（Playwright MCPで実機操作、決裁者承認済み。追加後の一覧に`mcp-3zcica5euq-an.a.run.app`(Custom)が表示されることを確認）
-- [ ] Phase 1a PR1 実機確認: 実際にGoogleアカウントでサインイン → ping→pong確認（未実施。Authorized domains追加は完了したが、実サインインフロー自体はまだ試していない）
+- [x] Phase 1a PR1 実機確認: 実際にGoogleアカウントでサインイン → ping→pong確認 → 済（2026-08-22、`claude mcp add --transport http mcp https://mcp-3zcica5euq-an.a.run.app/mcp`でローカル登録→セッション再起動で反映→`/mcp`から認証開始→開発者の実Googleアカウントでサインイン・consent許可→`Authentication successful`表示→`ping`ツール呼び出しで`pong`応答を実機確認。ローカルscope登録は稼働中セッションに動的反映されず`claude --continue`での再起動が必要だった点、自動ブラウザ(Playwright)でのinteraction URL再訪問はセッション期限切れを招くため以降は決裁者自身のブラウザ操作に切り替えた点を教訓として記録）
 - [x] Phase 1a PR2: Firestore永続adapter + Secret Manager署名鍵。計画noble-purring-rabbit.md → Codex MCP版+pr-review-toolkit(code-reviewer/pr-test-analyzer)3系統セカンドオピニオンを計画段階・実装後（codex review計3回、うち1回はP1修正後の再検証でfindings 0件）反映 → PR #654マージ → デプロイ前手動作業（Secret Manager作成・IAM付与・TTL policy）完了 → PR #655マージ → Deploy to Cloud Run成功 → jwksのkidがSecret Manager由来と一致することを実機確認済み
 - [x] Phase 1a PR2 検証項目6: Cloud Runリビジョン再デプロイ後もクライアント登録が失効しないことの実機確認 → 済（テストクライアントをDCR登録→ベースライン`/auth`→303確認→空コミットpushで再デプロイ→リビジョン`mcp-00011-vkw`→`mcp-00012-fb5`切替を`gcloud run revisions list`で確認→同一client_idで`/auth`→303を再確認。PR2の存在意義そのものを実証。**テストクライアントの後片付け未完了**: `registrationManagement`feature未有効化のためDELETE /reg/{client_id}が404、Firestore直接削除も403で失敗。実害は極小（無認証DCRの既知リスクの範囲内、上記監視項目参照）だが要因未調査のまま残存）
 - [ ] Phase 1以降: 計画ファイル参照（quiz CRUDツール実装、本番コネクタ登録等）
@@ -72,5 +72,5 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
   - PR2デプロイ → 済（PR #655マージのpush trigger経由で`Deploy to Cloud Run`ワークフロー実行、`Deploy MCP`job含め全ステップ成功、2026-08-22）
   - デプロイ後実機検証（計画`noble-purring-rabbit.md`検証項目5）→ 済。`curl https://mcp-3zcica5euq-an.a.run.app/jwks`の`kid`(`bc85324d-c613-40e2-ba36-51592ea3d98c`)がSecret Manager登録値と完全一致することを確認
   - 検証項目6（Cloud Runリビジョン再デプロイ後もクライアント登録が失効しないこと）→ 済。詳細は上記tasksチェックリスト参照
-  - **残作業**: テストクライアント（`client_id: RZro_nWxJk7aYVHH81RfxrC6Grs3kSIcYdrcclL6dee`）が本番`mcp_oauth_store`に残存（`registrationManagement`feature未有効化のためDELETE /reg/{client_id}が404、Firestore直接削除も403で失敗、原因未調査）。実害は極小と判断し打ち切ったが、Phase 1b着手時に削除手段を再検討すること。また Phase 1a PR1 実機確認（実Googleアカウントでのサインイン→ping→pong確認）も引き続き未実施
+  - **残作業**: テストクライアント（`client_id: RZro_nWxJk7aYVHH81RfxrC6Grs3kSIcYdrcclL6dee`）が本番`mcp_oauth_store`に残存（`registrationManagement`feature未有効化のためDELETE /reg/{client_id}が404、Firestore直接削除も403で失敗、原因未調査）。実害は極小と判断し打ち切ったが、Phase 1b着手時に削除手段を再検討すること。**加えて2026-08-22の実機確認で新規に判明**: 今回の`ping`確認用に登録したテストクライアント（DCRで発行、client_id未記録）も同様に本番`mcp_oauth_store`に残存している見込み。同じ削除手段未確立の制約に該当するため、Phase 1b着手時にまとめて削除手段を検討すること
 - **⚠️ AI運用ミス記録（2026-08-22）**: 検証項目6の空コミットを`main`へ直接pushしてしまった（`~/.claude/CLAUDE.md` 4原則§4違反、コミット`83cf195`）。コード変更を伴わない空コミットのため実害はないが、本来はfeatureブランチ+PR経由すべきだった。今後デプロイトリガー目的の運用操作を行う際はブランチ運用方針を事前に確認すること
