@@ -39,6 +39,15 @@ function isDocIdTooLong(docId: string): boolean {
   return Buffer.byteLength(docId, "utf8") > MAX_DOC_ID_BYTES;
 }
 
+/**
+ * find() / findByField() 用の期限切れ判定。`Adapter.find(id)` は oidc-provider の
+ * `ignoreExpiration` オプション（`findGrantSource` 等が再利用検知のため意図的に指定する、
+ * `node_modules/oidc-provider/lib/helpers/grant_common.js` 参照）を受け取れないため、
+ * この判定は ignoreExpiration の有無を区別できない。これは oidc-provider 既定の
+ * MemoryAdapter も同様の制約を持つ（`storageOptions()` の maxAge により LRU 側で
+ * TTL切れのエントリは取得できなくなる、`node_modules/oidc-provider/lib/adapters/
+ * memory_adapter.js` 参照）ため、TTLベースの adapter に共通する許容されたトレードオフとして扱う。
+ */
 function isExpired(doc: StoredDoc): boolean {
   if (!doc.expiresAt) return false;
   return doc.expiresAt.toMillis() <= Date.now();
@@ -140,6 +149,15 @@ export class FirestoreOidcAdapter implements Adapter {
    * adapter側の原子性保証がないと同一コードから2本のアクセストークンが出うる。
    * InvalidGrant を投げると oidc-provider が 400 invalid_grant にマップし
    * トークンは発行されない(fail closed)。
+   *
+   * 意図的に isExpired() をチェックしない: 期限切れの妥当性判断は model 層
+   * (`base_model.js` の `verify()`)の責務であり、adapter層(このメソッド)の責務ではない
+   * (`node_modules/oidc-provider/lib/models/mixins/consumable.js` の `consume()` も
+   * `adapter.consume(this.jti)` を素通しするだけで期限チェックをしない、既定実装と同型)。
+   * また `findGrantSource`(`grant_common.js`)は再利用検知のため
+   * `Model.find(value, { ignoreExpiration: true })` で意図的に期限切れでも検索する経路を
+   * 持つ。ここで adapter 側が独自に期限切れを弾くと、この再利用検知の意図を阻害しうる
+   * (pr-review-toolkit:pr-test-analyzer指摘の検討結果、2026-08-22)。
    */
   async consume(id: string): Promise<void> {
     const docId = buildDocId(this.model, id);

@@ -46,6 +46,24 @@ describe("FirestoreOidcAdapter コントラクトテスト", () => {
     expect(found).toBeUndefined();
   });
 
+  it("consume() は Partial Update であり、consumed 以外のフィールドは変化しない", async () => {
+    // rules/production-data-safety.md 準拠: Partial Update する関数のテストには
+    // 「更新対象外フィールドの値が変化しないこと」を含める(pr-review-toolkit:pr-test-analyzer指摘)。
+    const factory = createFirestoreAdapterFactory(createFakeFirestore());
+    const adapter = factory("AuthorizationCode");
+
+    await adapter.upsert("code-1", { jti: "code-1", accountId: "user-1", grantId: "grant-1" }, 60);
+    await adapter.consume("code-1");
+    const found = await adapter.find("code-1");
+
+    expect(found).toEqual({
+      jti: "code-1",
+      accountId: "user-1",
+      grantId: "grant-1",
+      consumed: expect.any(Number),
+    });
+  });
+
   it("consume() 後の upsert() で consumed がクリアされる（既定MemoryAdapterと同じ挙動）", async () => {
     const factory = createFirestoreAdapterFactory(createFakeFirestore());
     const adapter = factory("AuthorizationCode");
@@ -139,7 +157,7 @@ describe("FirestoreOidcAdapter コントラクトテスト", () => {
     const factory = createFirestoreAdapterFactory(createFakeFirestore());
     const adapter = factory("AuthorizationCode");
 
-    await adapter.upsert("code-race", { jti: "code-race" }, 60);
+    await adapter.upsert("code-race", { jti: "code-race", accountId: "user-race" }, 60);
 
     const results = await Promise.allSettled([adapter.consume("code-race"), adapter.consume("code-race")]);
 
@@ -151,6 +169,78 @@ describe("FirestoreOidcAdapter コントラクトテスト", () => {
     expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(errors.InvalidGrant);
 
     const found = await adapter.find("code-race");
-    expect(found?.consumed).toBeDefined();
+    // 並行consumeでも accountId 等の他フィールドが変化しないことを確認(Partial Update不変性)
+    expect(found).toEqual({ jti: "code-race", accountId: "user-race", consumed: expect.any(Number) });
+  });
+
+  it("revokeByGrantId は同一model・同一grantIdの複数ドキュメントを全件削除する", async () => {
+    const factory = createFirestoreAdapterFactory(createFakeFirestore());
+    const adapter = factory("AccessToken");
+
+    await adapter.upsert("at-1", { jti: "at-1", grantId: "grant-multi" }, 3600);
+    await adapter.upsert("at-2", { jti: "at-2", grantId: "grant-multi" }, 3600);
+    await adapter.upsert("at-3", { jti: "at-3", grantId: "other-grant" }, 3600);
+
+    await adapter.revokeByGrantId("grant-multi");
+
+    expect(await adapter.find("at-1")).toBeUndefined();
+    expect(await adapter.find("at-2")).toBeUndefined();
+    expect(await adapter.find("at-3")).toEqual({ jti: "at-3", grantId: "other-grant" });
+  });
+
+  it("payload が破損している(JSON parse失敗)ドキュメントは find() が例外にせず undefined を返す", async () => {
+    const db = createFakeFirestore();
+    const factory = createFirestoreAdapterFactory(db);
+    const adapter = factory("AccessToken");
+
+    // fake-firestore の内部APIを直接叩いて破損データを仕込む
+    // (FirestoreOidcAdapter経由では正しいJSONしか書けないため)
+    await (db as unknown as { collection(name: string): { doc(id: string): { set(data: unknown): Promise<void> } } })
+      .collection("mcp_oauth_store")
+      .doc("AccessToken:" + Buffer.from("corrupt-1", "utf8").toString("base64url"))
+      .set({ model: "AccessToken", payload: "{not-valid-json" });
+
+    const found = await adapter.find("corrupt-1");
+    expect(found).toBeUndefined();
+  });
+
+  it("expiresIn: 0 は「TTL対象外」ではなく期限即時のTTL対象として扱われる（0とundefinedを区別する）", async () => {
+    const factory = createFirestoreAdapterFactory(createFakeFirestore());
+    const adapter = factory("AccessToken");
+
+    // expiresIn:0 は「有効期限なし」ではなく「即時失効」を意味する。
+    // 猶予300秒(EXPIRY_GRACE_SECONDS)加算後もまだ有効期間内のため find() は取得できる
+    // (0 が undefined と誤って同一視されていないことの確認: `typeof expiresIn === "number"` 判定)。
+    await adapter.upsert("token-zero", { jti: "token-zero" }, 0);
+    const found = await adapter.find("token-zero");
+
+    expect(found).toEqual({ jti: "token-zero" });
+  });
+
+  it("findByUid / findByUserCode は期限切れのドキュメントに対して undefined を返す", async () => {
+    const db = createFakeFirestore();
+    const factory = createFirestoreAdapterFactory(db);
+    const uidAdapter = factory("Session");
+    const userCodeAdapter = factory("DeviceCode");
+
+    await uidAdapter.upsert("sess-expired", { jti: "sess-expired", uid: "uid-expired" }, -1000);
+    await userCodeAdapter.upsert("dc-expired", { jti: "dc-expired", userCode: "EXPIRED1" }, -1000);
+
+    expect(await uidAdapter.findByUid("uid-expired")).toBeUndefined();
+    expect(await userCodeAdapter.findByUserCode("EXPIRED1")).toBeUndefined();
+  });
+
+  it("doc id が Firestore 上限(1500byte)を超える場合、upsert() は例外・find() は undefined を返す", async () => {
+    const factory = createFirestoreAdapterFactory(createFakeFirestore());
+    const adapter = factory("AccessToken");
+
+    // "AccessToken:" (12文字) + base64url化後の長さ が 1500byte を超えるよう、
+    // 十分に長い id を用意する(base64url は概ね元データの4/3倍)。
+    const oversizedId = "x".repeat(1200);
+
+    await expect(adapter.upsert(oversizedId, { jti: oversizedId }, 3600)).rejects.toThrow(
+      /exceeds Firestore limit/
+    );
+    await expect(adapter.find(oversizedId)).resolves.toBeUndefined();
   });
 });
