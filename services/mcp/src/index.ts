@@ -1,19 +1,54 @@
+import type { OidcProviderOptions } from "./oidc.js";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
+import { getFirestoreDb } from "./firebase.js";
+import { createFirestoreAdapterFactory } from "./storage/firestore-adapter.js";
+import { getSigningKeysFromSecretManager } from "./signing-keys.js";
 
-const config = loadConfig();
+async function buildStorageOptions(config: ReturnType<typeof loadConfig>): Promise<OidcProviderOptions> {
+  if (config.storage !== "firestore") {
+    return {};
+  }
+  // loadConfig() の production runtime fail-fast は NODE_ENV=production/K_SERVICE
+  // 検出時のみ働く。MCP_STORAGE=firestore だけをローカル/CIで設定し
+  // MCP_SIGNING_SECRET_NAME を設定し忘れるケース(production runtime外)はこの
+  // fail-fastを素通りするため、ここでも独立してチェックする
+  // (pr-review-toolkitセカンドオピニオン指摘、2026-08-22)。
+  if (!config.mcpSigningSecretName) {
+    throw new Error(
+      "FATAL: MCP_STORAGE=firestore requires MCP_SIGNING_SECRET_NAME to be set (services/mcp/src/config.ts)。"
+    );
+  }
+  const { jwks, cookieKeys } = await getSigningKeysFromSecretManager(config.mcpSigningSecretName);
+  const db = getFirestoreDb();
+  return {
+    adapter: createFirestoreAdapterFactory(db),
+    jwks,
+    cookieKeys,
+  };
+}
 
-createApp(config.issuerUrl, config.port, {
-  apiKey: config.firebaseWebApiKey ?? "",
-  authDomain: config.firebaseAuthDomain ?? "",
-  projectId: config.firebaseProjectId ?? "",
-})
-  .then(({ app }) => {
-    app.listen(config.port, () => {
-      console.log(`lms-279 mcp listening on ${config.issuerUrl}`);
-    });
-  })
-  .catch((err) => {
-    console.error("failed to start mcp service", err);
-    process.exit(1);
+async function main(): Promise<void> {
+  const config = loadConfig();
+  const storageOptions = await buildStorageOptions(config);
+
+  const { app } = await createApp(
+    config.issuerUrl,
+    config.port,
+    {
+      apiKey: config.firebaseWebApiKey ?? "",
+      authDomain: config.firebaseAuthDomain ?? "",
+      projectId: config.firebaseProjectId ?? "",
+    },
+    storageOptions
+  );
+
+  app.listen(config.port, () => {
+    console.log(`lms-279 mcp listening on ${config.issuerUrl}`);
   });
+}
+
+main().catch((err) => {
+  console.error("failed to start mcp service", err);
+  process.exit(1);
+});

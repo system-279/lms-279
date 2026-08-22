@@ -10,6 +10,9 @@ export interface McpConfig {
   firebaseProjectId: string | undefined;
   firebaseWebApiKey: string | undefined;
   firebaseAuthDomain: string | undefined;
+  /** "firestore" のとき永続adapter+Secret Manager署名鍵を使う。それ以外は既定のインメモリ実装 */
+  storage: "firestore" | "memory";
+  mcpSigningSecretName: string | undefined;
 }
 
 function isProductionRuntime(): boolean {
@@ -26,6 +29,8 @@ export function loadConfig(): McpConfig {
   const firebaseProjectId = process.env.FIREBASE_PROJECT_ID;
   const firebaseWebApiKey = process.env.FIREBASE_WEB_API_KEY;
   const firebaseAuthDomain = process.env.FIREBASE_AUTH_DOMAIN;
+  const storage: "firestore" | "memory" = process.env.MCP_STORAGE === "firestore" ? "firestore" : "memory";
+  const mcpSigningSecretName = process.env.MCP_SIGNING_SECRET_NAME;
 
   if (isProductionRuntime()) {
     const missing = [
@@ -43,7 +48,22 @@ export function loadConfig(): McpConfig {
           `(services/mcp/src/config.ts、.github/workflows/deploy.yml の deploy-mcp job を確認)。`
       );
     }
+
+    // Phase 1a PR2: 本番では必ず Firestore 永続化 + Secret Manager 署名鍵を使う
+    // (インメモリのままだと Cloud Run 再デプロイで DCR 登録クライアントが失効する)。
+    if (storage !== "firestore") {
+      throw new Error(
+        "FATAL: MCP_STORAGE=firestore is required in production runtime " +
+          "(services/mcp/src/config.ts、.github/workflows/deploy.yml の deploy-mcp job を確認)。"
+      );
+    }
+    if (!mcpSigningSecretName) {
+      throw new Error(
+        "FATAL: missing required env var MCP_SIGNING_SECRET_NAME in production runtime " +
+          "(services/mcp/src/config.ts、.github/workflows/deploy.yml の deploy-mcp job を確認)。"
+      );
+    }
   }
 
-  return { port, issuerUrl, firebaseProjectId, firebaseWebApiKey, firebaseAuthDomain };
+  return { port, issuerUrl, firebaseProjectId, firebaseWebApiKey, firebaseAuthDomain, storage, mcpSigningSecretName };
 }

@@ -45,6 +45,34 @@ jobs:
           # Deploy indexes using gcloud auth (Workload Identity Federation)
           firebase deploy --only firestore:indexes --project=${{ env.GCP_PROJECT_ID }} --non-interactive
 
+      - name: Wait for mcp_oauth_store Firestore indexes to become READY
+        run: |
+          # Phase 1a PR2: `firebase deploy --only firestore:indexes` は index作成の
+          # リクエストを送信して返るだけで、Firestore側の非同期ビルド完了(READY)を
+          # 待たない(Codex review再指摘、P1)。deploy-mcp job を本 job に依存させる
+          # だけでは index rollout race を防げず、初回デプロイ直後に
+          # findByUid/findByUserCode/revokeByGrantId が FAILED_PRECONDITION に
+          # なりうる。mcp_oauth_store の複合indexが全て READY になるまでポーリングし、
+          # それまで deploy-mcp job（本job成功後に needs で起動）を進ませない。
+          # 他collectionGroupの既存indexは通常運用中は既にREADYのため対象を絞る。
+          for i in $(seq 1 30); do
+            STATES=$(gcloud firestore indexes composite list \
+              --project=${{ env.GCP_PROJECT_ID }} \
+              --filter="COLLECTION_GROUP:mcp_oauth_store" \
+              --format="value(state)")
+            if [ -z "$STATES" ]; then
+              echo "mcp_oauth_store indexes not visible yet, waiting... (attempt $i/30)"
+            elif ! echo "$STATES" | grep -qv "^READY$"; then
+              echo "all mcp_oauth_store composite indexes are READY"
+              exit 0
+            else
+              echo "mcp_oauth_store indexes still building: $STATES (attempt $i/30)"
+            fi
+            sleep 20
+          done
+          echo "timed out waiting for mcp_oauth_store Firestore indexes to become READY" >&2
+          exit 1
+
   deploy-api:
     name: Deploy API
     needs: [ci]
@@ -177,7 +205,11 @@ jobs:
 
   deploy-mcp:
     name: Deploy MCP (Phase 0 spike)
-    needs: [ci]
+    # Phase 1a PR2: mcp_oauth_store の複合indexが READY になる前に MCP が新adapterで
+    # デプロイされると findByUid 等が FAILED_PRECONDITION になりうる(index rollout race、
+    # セカンドオピニオンで指摘・.github/workflows/deploy.yml で自分でも確認済み)ため、
+    # deploy-firestore-indexes に依存させる。
+    needs: [ci, deploy-firestore-indexes]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -215,12 +247,14 @@ jobs:
           # buzzing-rolling-whisper.md 参照）。--allow-unauthenticatedはAnthropicの
           # クラウド基盤からの到達に必須（IAP等ネットワーク層の防御は使えない、計画参照）。
           # 現時点で公開されるツールはpingのみ(実データ・実APIへのアクセスなし)。
-          # PR2（Firestore永続化 + Secret Manager署名鍵）が着地するまでは組織カスタム
-          # コネクタとしての恒久登録は行わないこと。
-          # --max-instances=1: oidc-provider がインメモリadapter/署名鍵のため(PR2で
-          # 永続adapterに置き換えるまでの暫定措置、services/mcp/src/oidc.ts参照)、複数
-          # インスタンスに分散するとDCR登録・認可コード・トークンがインスタンス間で
-          # 共有されず認可フローが失敗する。単一インスタンスに固定して回避する。
+          #
+          # Phase 1a PR2: Firestore adapter + Secret Manager 署名鍵を導入し、DCR登録
+          # クライアント・署名鍵の永続化を実現した(MCP_STORAGE=firestore、
+          # MCP_SIGNING_SECRET_NAME、services/mcp/src/index.ts参照)。
+          # --max-instances=1 は adapter・署名鍵の永続化とは別の理由でまだ残す:
+          # oidc-provider の Session/Interaction cookie は cookieKeys で署名されるが、
+          # インスタンス間のスティッキーセッション保証がないため、複数インスタンスでの
+          # 挙動未検証。解除はPR2の効果を本番で確認してから独立した変更として検討する。
           # --set-env-vars は1回の呼び出しで既存の環境変数を全て置き換える仕様
           # (gcloud run deploy --help)。2回指定すると後勝ちで前の値が消えるため、
           # 単一の呼び出しにまとめる。カスタム区切り文字(^@^)は値にカンマが
@@ -237,7 +271,7 @@ jobs:
             --platform=managed \
             --allow-unauthenticated \
             --max-instances=1 \
-            --set-env-vars="^@^NODE_ENV=production@MCP_ISSUER_URL=https://mcp-3zcica5euq-an.a.run.app@FIREBASE_PROJECT_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}@FIREBASE_WEB_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}@FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}"
+            --set-env-vars="^@^NODE_ENV=production@MCP_ISSUER_URL=https://mcp-3zcica5euq-an.a.run.app@MCP_STORAGE=firestore@MCP_SIGNING_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/mcp-oauth-signing-key/versions/latest@FIREBASE_PROJECT_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}@FIREBASE_WEB_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}@FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}"
 
   deploy-notification:
     name: Deploy Notification

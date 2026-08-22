@@ -2,6 +2,8 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import request from "supertest";
 import type { Express } from "express";
 import * as crypto from "node:crypto";
+import { createFirestoreAdapterFactory } from "../storage/firestore-adapter.js";
+import { createFakeFirestore } from "../storage/__tests__/fake-firestore.js";
 
 const mockVerifyIdToken = vi.fn();
 
@@ -605,5 +607,51 @@ describe("Phase 0: Cloud Run 想定の回帰テスト（issuerUrlのホストと
     expect(res.body.issuer).toBe(fakePublicIssuer);
     expect(res.body.authorization_endpoint).toBe(`${fakePublicIssuer}/auth`);
     expect(res.body.token_endpoint).toBe(`${fakePublicIssuer}/token`);
+  });
+});
+
+describe("Phase 1a PR2: クロスインスタンス永続化（Firestore adapter を共有した2つの独立したcreateAppインスタンス）", () => {
+  it("インスタンスAでDCR登録・認可コード取得したものを、インスタンスBでtoken交換〜ping呼び出しできる", async () => {
+    // Cloud Run のリビジョン切替で別インスタンスに着地しても認可フローが継続できることの実証
+    // (この PR の存在意義そのもの。計画 noble-purring-rabbit.md 検証項目#3)。
+    const sharedDb = createFakeFirestore();
+    const storageOptions = { adapter: createFirestoreAdapterFactory(sharedDb) };
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+
+    const { app: appA } = await createApp(ISSUER_URL, 8094, firebaseConfig, storageOptions);
+    const { app: appB } = await createApp(ISSUER_URL, 8095, firebaseConfig, storageOptions);
+
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeVerifier, codeChallenge } = generatePkcePair();
+
+    mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken());
+    const { clientId, code } = await obtainAuthorizationCode(appA, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+    // token交換は別インスタンス(appB)で行う = DCR登録・認可コード発行がappAのプロセスローカル
+    // メモリではなく共有Firestoreに永続化されていることの証明。
+    const tokenRes = await request(appB).post("/token").type("form").send({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+      client_id: clientId,
+      code_verifier: codeVerifier,
+    });
+    expect(tokenRes.status).toBe(200);
+    const accessToken = tokenRes.body.access_token as string;
+    expect(accessToken).toBeTruthy();
+
+    // 発行されたトークンでappA(=appBとは別インスタンス)の/mcpも呼べる
+    const mcpRes = await request(appA)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "ping", arguments: {} },
+      });
+    expect(mcpRes.status).toBe(200);
   });
 });

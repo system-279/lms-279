@@ -1,4 +1,4 @@
-import Provider, { errors } from "oidc-provider";
+import Provider, { errors, type Adapter, type AdapterFactory, type JWKS } from "oidc-provider";
 
 /**
  * Phase 1a PR1: devInteractions（oidc-provider 組み込みのダミー同意画面）を廃止し、
@@ -8,21 +8,28 @@ import Provider, { errors } from "oidc-provider";
  * 方針。認可の実体は Phase 2 で quiz ツールが services/api を呼ぶ際の既存
  * allowed_emails チェックに委ねる）。
  *
- * 既知の制約（Phase 1a PR2 で解消予定）: adapter/署名鍵を指定していないため
- * oidc-provider 既定のインメモリ実装が使われる。DCRで登録したクライアント・
- * interactionセッション・発行済みトークンはすべてプロセスローカルにしか保持されない。
- * Cloud Run が複数インスタンスにスケールする、またはインスタンスが再起動されると、
- * 認可コードフロー途中(/reg → /auth → /interaction の複数ホップ)で別インスタンスに
- * 着地した場合に失敗する。デプロイ時に `--max-instances=1` で単一インスタンスに
- * 固定して緩和する(deploy.yml参照)。Firestore等の永続adapterへの置き換えは
- * Phase 1a PR2 のスコープ（PR1 を先にデプロイすることで、永続化が有効になる時点では
- * devInteractions 時代の偽装 Session が原理的に存在し得ない状態にしている）。
+ * Phase 1a PR2: adapter/jwks/cookieKeys を省略すると oidc-provider 既定のインメモリ実装
+ * (`new Provider()` 呼び出しごとに独立したクロージャstore、`node_modules/oidc-provider/
+ * lib/helpers/initialize_adapter.js:14` で確認済み)と、パッケージ同梱の固定開発用秘密鍵
+ * (`jwks` 未指定時は `structuredClone(DEV_KEYSTORE)`、全 oidc-provider インストール共通の
+ * 既知の秘密鍵。`initialize_keystore.js:283` で確認済み)が使われる。本番では
+ * `MCP_STORAGE=firestore` 時に index.ts から Firestore adapter + Secret Manager 由来の
+ * 署名鍵が注入される（services/mcp/src/storage/firestore-adapter.ts、signing-keys.ts）。
  */
-export function createOidcProvider(issuerUrl: string): Provider {
+export interface OidcProviderOptions {
+  adapter?: AdapterFactory | (new (name: string) => Adapter);
+  jwks?: JWKS;
+  cookieKeys?: string[];
+}
+
+export function createOidcProvider(issuerUrl: string, options: OidcProviderOptions = {}): Provider {
   const resourceIdentifier = new URL(`${issuerUrl}/mcp`).href;
 
   const provider = new Provider(issuerUrl, {
     clients: [],
+    ...(options.adapter ? { adapter: options.adapter } : {}),
+    ...(options.jwks ? { jwks: options.jwks } : {}),
+    ...(options.cookieKeys ? { cookies: { keys: options.cookieKeys } } : {}),
     findAccount: (_ctx, sub) => ({
       accountId: sub,
       claims: async () => ({ sub }),
