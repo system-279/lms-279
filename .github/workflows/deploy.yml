@@ -45,6 +45,34 @@ jobs:
           # Deploy indexes using gcloud auth (Workload Identity Federation)
           firebase deploy --only firestore:indexes --project=${{ env.GCP_PROJECT_ID }} --non-interactive
 
+      - name: Wait for mcp_oauth_store Firestore indexes to become READY
+        run: |
+          # Phase 1a PR2: `firebase deploy --only firestore:indexes` は index作成の
+          # リクエストを送信して返るだけで、Firestore側の非同期ビルド完了(READY)を
+          # 待たない(Codex review再指摘、P1)。deploy-mcp job を本 job に依存させる
+          # だけでは index rollout race を防げず、初回デプロイ直後に
+          # findByUid/findByUserCode/revokeByGrantId が FAILED_PRECONDITION に
+          # なりうる。mcp_oauth_store の複合indexが全て READY になるまでポーリングし、
+          # それまで deploy-mcp job（本job成功後に needs で起動）を進ませない。
+          # 他collectionGroupの既存indexは通常運用中は既にREADYのため対象を絞る。
+          for i in $(seq 1 30); do
+            STATES=$(gcloud firestore indexes composite list \
+              --project=${{ env.GCP_PROJECT_ID }} \
+              --filter="COLLECTION_GROUP:mcp_oauth_store" \
+              --format="value(state)")
+            if [ -z "$STATES" ]; then
+              echo "mcp_oauth_store indexes not visible yet, waiting... (attempt $i/30)"
+            elif ! echo "$STATES" | grep -qv "^READY$"; then
+              echo "all mcp_oauth_store composite indexes are READY"
+              exit 0
+            else
+              echo "mcp_oauth_store indexes still building: $STATES (attempt $i/30)"
+            fi
+            sleep 20
+          done
+          echo "timed out waiting for mcp_oauth_store Firestore indexes to become READY" >&2
+          exit 1
+
   deploy-api:
     name: Deploy API
     needs: [ci]
