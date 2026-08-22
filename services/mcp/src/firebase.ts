@@ -1,5 +1,6 @@
 import { getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
+import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import { logger } from "./logger.js";
 
 /**
@@ -14,6 +15,15 @@ function ensureFirebaseApp(): void {
     const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT;
     initializeApp({ projectId });
   }
+}
+
+/**
+ * Phase 1a PR2: Firestore adapter(storage/firestore-adapter.ts)用のクライアント取得。
+ * ensureFirebaseApp() を共有し、Firebase Admin SDK の初期化を一箇所に保つ。
+ */
+export function getFirestoreDb(): Firestore {
+  ensureFirebaseApp();
+  return getFirestore();
 }
 
 /**

@@ -5,7 +5,7 @@ import type { OAuthMetadata } from "@modelcontextprotocol/server";
 import type { Express, NextFunction, Request, Response } from "express";
 import type Provider from "oidc-provider";
 import rateLimit from "express-rate-limit";
-import { createOidcProvider } from "./oidc.js";
+import { createOidcProvider, type OidcProviderOptions } from "./oidc.js";
 import { createTokenVerifier } from "./token-verifier.js";
 import { createMcpServer } from "./mcp-server.js";
 import { createInteractionRouter } from "./interactions/router.js";
@@ -78,9 +78,12 @@ export async function createApp(
     apiKey: process.env.FIREBASE_WEB_API_KEY ?? "",
     authDomain: process.env.FIREBASE_AUTH_DOMAIN ?? "",
     projectId: process.env.FIREBASE_PROJECT_ID ?? "",
-  }
+  },
+  // Phase 1a PR2: Firestore adapter + Secret Manager 署名鍵を注入する場合に渡す。
+  // 省略時は現行どおり oidc-provider 既定のインメモリ実装(既存テストとの後方互換)。
+  storageOptions: OidcProviderOptions = {}
 ): Promise<{ app: Express; provider: Provider }> {
-  const provider = createOidcProvider(issuerUrl);
+  const provider = createOidcProvider(issuerUrl, storageOptions);
   const oauthMetadata = await fetchOidcMetadata(provider, issuerUrl, bindPort);
 
   const app = createMcpExpressApp({ host: "0.0.0.0", allowedHosts: [new URL(issuerUrl).hostname] });
