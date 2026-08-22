@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-22 (Phase 1a PR1実サインイン実機確認完了。次の未着手はPhase 1以降のタスク分解のみ)
+updated: 2026-08-23 (Phase 1b-1/Phase 2a計画策定完了・Step0スパイクPASS。PR A実装が次の着手)
 ---
 
 ## 現在のミッション
@@ -36,7 +36,10 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
 - [x] Phase 1a PR1 実機確認: 実際にGoogleアカウントでサインイン → ping→pong確認 → 済（2026-08-22、`claude mcp add --transport http mcp https://mcp-3zcica5euq-an.a.run.app/mcp`でローカル登録→セッション再起動で反映→`/mcp`から認証開始→開発者の実Googleアカウントでサインイン・consent許可→`Authentication successful`表示→`ping`ツール呼び出しで`pong`応答を実機確認。ローカルscope登録は稼働中セッションに動的反映されず`claude --continue`での再起動が必要だった点、自動ブラウザ(Playwright)でのinteraction URL再訪問はセッション期限切れを招くため以降は決裁者自身のブラウザ操作に切り替えた点を教訓として記録）
 - [x] Phase 1a PR2: Firestore永続adapter + Secret Manager署名鍵。計画noble-purring-rabbit.md → Codex MCP版+pr-review-toolkit(code-reviewer/pr-test-analyzer)3系統セカンドオピニオンを計画段階・実装後（codex review計3回、うち1回はP1修正後の再検証でfindings 0件）反映 → PR #654マージ → デプロイ前手動作業（Secret Manager作成・IAM付与・TTL policy）完了 → PR #655マージ → Deploy to Cloud Run成功 → jwksのkidがSecret Manager由来と一致することを実機確認済み
 - [x] Phase 1a PR2 検証項目6: Cloud Runリビジョン再デプロイ後もクライアント登録が失効しないことの実機確認 → 済（テストクライアントをDCR登録→ベースライン`/auth`→303確認→空コミットpushで再デプロイ→リビジョン`mcp-00011-vkw`→`mcp-00012-fb5`切替を`gcloud run revisions list`で確認→同一client_idで`/auth`→303を再確認。PR2の存在意義そのものを実証。**テストクライアントの後片付け未完了**: `registrationManagement`feature未有効化のためDELETE /reg/{client_id}が404、Firestore直接削除も403で失敗。実害は極小（無認証DCRの既知リスクの範囲内、上記監視項目参照）だが要因未調査のまま残存）
-- [ ] Phase 1以降: 計画ファイル参照（quiz CRUDツール実装、本番コネクタ登録等）
+- [x] Phase 1以降 着手前調査: MCPアクセストークンがFirebase UIDのみ保持し、ユーザー本人としてservices/apiを呼ぶ手段が存在しないことが判明（Phase 2着手前のブロッカー）。plan modeで対処方針を決裁者確認（① refresh token永続化方式を採用 ② 読み取り専用ツール先行 ③ super admin対策はv1見送り・残存リスク記録 ④ get_quizは正解・解説含む全情報を返す）。計画ファイル `/Users/yyyhhh/.claude/plans/linear-zooming-conway.md`、grip HTMLでレビュー済み
+- [x] Step 0スパイク: Firebaseリフレッシュトークンをsecuretoken.googleapis.comで交換した後のIDトークンが`firebase.sign_in_provider === "google.com"`を保持し続けるかを実機検証 → PASS（実Googleアカウント`system@279279.net`でサインイン→ネットワーク応答からrefreshToken捕捉→curlで交換→デコードしたIDトークンで`sign_in_provider: "google.com"`, `email_verified: true`を確認。PR A設計の前提が成立）
+- [ ] Phase 1b-1 (PR A): Firebaseリフレッシュトークンの暗号化永続化（AES-GCM、鍵バージョン管理、Firestoreストア、トークン交換クライアント）。計画linear-zooming-conway.md参照
+- [ ] Phase 2a (PR B): 読み取り専用quizツール3種（list_courses/list_lessons/get_quiz） + LMS APIクライアント + 監査ログ。PR A完了後に着手
 
 ## 🔄 中断点（in-flight）
 なし（PR1は完全マージ済み。次の作業単位はPhase 1a PR1のデプロイ後手動作業、またはPhase 1a PR2の新規着手のいずれも未着手の独立タスク）
