@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-21 (Phase 1a計画中: Codexセカンドオピニオン2巡目で重大指摘、計画再改訂待ち)
+updated: 2026-08-22 (Phase 1a PR1マージ・デプロイ完了、Firebase Authorized domains設定済み。実サインイン実機確認とPR2は未着手)
 ---
 
 ## 現在のミッション
@@ -30,34 +30,15 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
 - [x] Phase 0: `claude mcp add`でローカルスコープ登録 → OAuth認証 → pingツール呼び出し確認 → 済（`pong`応答確認）
 - [x] Phase 1a: plan mode でスコープ縮小版計画を策定（決裁者承認: super admin不使用方針・スコープ縮小方針の2点）、計画ファイル `/Users/yyyhhh/.claude/plans/buzzing-rolling-whisper.md` に記録
 - [x] Phase 1a: Codexセカンドオピニオン1巡目（6件指摘、4件をoidc-provider実ソースで裏取りし計画に反映。詳細は計画ファイル「Codexセカンドオピニオンの反映」節）
-- [ ] Phase 1a: Codexセカンドオピニオン2巡目 — **PR1(永続化)を PR2(実Firebaseサインイン)より先に単独デプロイする設計自体が危険**という新規の重大指摘あり。計画の再改訂が未完了（下記中断点参照）
-- [ ] Phase 1a: 決裁者への計画再承認 → 実装着手（未着手、コード変更は本セッションでゼロ）
+- [x] Phase 1a: Codexセカンドオピニオン2巡目（PR1/PR2デプロイ順序の重大指摘）を受け計画再改訂 → 決裁者承認（PR1=認証の正しさを先に、PR2=永続化を後に）
+- [x] Phase 1a PR1: devInteractions → 実Firebase Googleサインイン実装、テスト27件PASS、codex review 2巡+pr-review-toolkit 3系統セカンドオピニオン全反映、PR #641マージ済み
+- [x] Phase 1a PR1 デプロイ後の手動作業: Firebase Console → Authentication → Authorized domains へ `mcp-3zcica5euq-an.a.run.app` を追加 → 済（Playwright MCPで実機操作、決裁者承認済み。追加後の一覧に`mcp-3zcica5euq-an.a.run.app`(Custom)が表示されることを確認）
+- [ ] Phase 1a PR1 実機確認: 実際にGoogleアカウントでサインイン → ping→pong確認（未実施。Authorized domains追加は完了したが、実サインインフロー自体はまだ試していない）
+- [ ] Phase 1a PR2: Firestore永続adapter + Secret Manager署名鍵（未着手、計画ファイルのPR2節参照）
 - [ ] Phase 1以降: 計画ファイル参照（quiz CRUDツール実装、本番コネクタ登録等）
 
 ## 🔄 中断点（in-flight）
-**対象タスク**: Phase 1a「Codexセカンドオピニオン2巡目 → 計画再改訂 → 決裁者への再承認」（進行中のtasksの3〜4番目）
-
-**直前の状態**:
-1. Phase 0完了後、決裁者から「Phase 1に着手して」との指示を受け、plan mode で Phase 1a（縮小スコープ版）の計画を策定。計画ファイル: `/Users/yyyhhh/.claude/plans/buzzing-rolling-whisper.md`
-2. 決裁者確認済みの2判断: (a) MCP経由でのsuper admin テナント横断操作は「使わせない」、(b) Phase 1のスコープは縮小版（Firebaseリフレッシュトークン暗号化永続化・鍵ローテーション・DCR濫用対策本実装・最小権限SA設計はPhase 1bへ先送り）
-3. Codexセカンドオピニオン1巡目（`mcp__codex__codex`, plan mode, effort=high）で6件の指摘。4件（jwks秘密鍵同梱・`consume()`のTOCTOUレース・`offline_access`既定scope・Firestore TTL未配備）は `node_modules/oidc-provider` の実ソースで裏取りし事実確認のうえ計画に反映済み。詳細は計画ファイル「Codexセカンドオピニオンの反映」節
-4. Codexセカンドオピニオン2巡目で、改訂版計画に対し**新規の重大指摘**: 「PR1（Firestore永続化adapter）をPR2（devInteractions→実Firebaseサインイン）より先に単独で本番デプロイする設計自体が危険」。理由: PR1稼働中はまだdevInteractions（任意文字列でログイン可能なダミー画面）が有効なため、攻撃者が任意のaccountIdでSession/Grantを作成でき、それがFirestoreに永続化される（oidc-provider既定のSession/Grant TTLは14日）。PR2デプロイ後もこの偽装Session/Grantが最大14日間生き残り、実Firebase認証を経ずに悪用されうる
-5. この指摘を独立検証済み: `node_modules/oidc-provider/lib/helpers/defaults.js:409-417` で `SessionTTL`/`GrantTTL` とも `14 * 24 * 60 * 60`（14日）であることを確認。また計画中の `gcloud firestore fields ttl-policies create` というコマンドは実際には存在せず、正しくは `gcloud firestore fields ttls update expiresAt --collection-group=mcp_oauth_store --enable-ttl` であることも `gcloud ... --help` で確認済み（両方とも事実、計画側の誤り）
-6. ここでユーザーからcontext残量低下によりhandoff指示を受け、**計画の再改訂（PR1/PR2の順序入れ替え等）はまだ着手していない**
-
-**次の一手**: 計画ファイル `/Users/yyyhhh/.claude/plans/buzzing-rolling-whisper.md` を、Codexセカンドオピニオン2巡目の指摘を反映して再改訂する。有力な方向性（次セッションで検討・決裁者確認のうえ選択）:
-- (a) PR1とPR2の実装順序を入れ替える（devInteractions→実Firebaseサインイン置き換えを先に、永続化を後に。永続化が有効になる時点で偽装Sessionが存在し得ない状態にする）
-- (b) PR1とPR2を本番デプロイ上は同時に有効化する（コードレビュー上は2PRのままでも、Cloud Runへのデプロイ・トラフィック切替はPR2完成まで待つ）
-- (c) PR1単独デプロイを許容する代わりに、PR2デプロイ直前に `mcp_oauth_store` を完全消去 + Cookie鍵ローテーション + 既存DCRクライアント失効の手順を追加する
-
-再改訂後は plan mode で `ExitPlanMode` → 決裁者の承認を得てから実装（PR1コード着手）に進む。**本セッションではservices/mcp配下のコードは一切変更していない**（すべてplan mode内での計画策定のみ）。
-
-**検証コマンド**（次セッション開始時にこれで現状確認）:
-```bash
-cat /Users/yyyhhh/.claude/plans/buzzing-rolling-whisper.md
-git status --short services/mcp/  # 変更ゼロのはず
-gh pr list --state open  # Phase 1a関連PRはまだ存在しないはず
-```
+なし（PR1は完全マージ済み。次の作業単位はPhase 1a PR1のデプロイ後手動作業、またはPhase 1a PR2の新規着手のいずれも未着手の独立タスク）
 
 ## Phase 0完了の経緯（本セッション、2026-08-21）
 実クライアント接続で当初の想定になかった不具合が2件連続発覚し、いずれも修正・実機再検証済み。
@@ -69,7 +50,16 @@ gh pr list --state open  # Phase 1a関連PRはまだ存在しないはず
 
 **既知の残存制約（Phase 1で解消予定、恒久登録はしないこと）**: `oidc-provider`はインメモリadapter（`services/mcp/src/oidc.ts`コメント参照）のため、Cloud Runの再デプロイ・インスタンス入れ替わりでDCR登録済みクライアントが失効する。本セッションでも2回再デプロイ後に`claude mcp remove`→`claude mcp add`での再登録が必要だった。Firestore等永続adapterへの置き換えまでは組織カスタムコネクタとしての本番配布は行わないこと。
 
+## Phase 1a PR1完了の経緯（本セッション、2026-08-22）
+決裁者承認の3案（(a)PR順序入替/(b)同時デプロイ/(c)データ消去手順追加）のうち(a)を選択、計画ファイルを再改訂した上でPR1（devInteractions→実Firebaseサインイン）を実装。
+
+- codex review 1巡目（実装直後）: 0件
+- CLAUDE.md大規模PR基準に従い`pr-review-toolkit`3系統（code-reviewer/silent-failure-hunter/pr-test-analyzer、sonnet固定・read-only）を並列起動。2系統が独立に同一CRITICAL指摘（`deploy-mcp`でNODE_ENV=production未設定 → 未捕捉エラーで`--allow-unauthenticated`な公開エンドポイントにstack traceが漏洩、`node_modules/finalhandler`/`express`の実ソースで検証済み）を検出、code-reviewerは`<script>`コンテキストのエスケープ漏れ（JSON.stringifyの`</script>`ブレークアウト）も追加指摘
+- 全指摘を修正: `NODE_ENV=production`追加、app.ts末尾に4引数エラーハンドラ追加（多層防御）、`firebase.ts`にログ追加（transient/permanent分類つき）、`views.ts`に`toScriptJson`ヘルパー追加、回帰テスト3件追加（27件PASS）
+- codex review 2巡目（修正反映後）: 1件（P1、Firebase Authorized domains未設定。コード修正不可の手動デプロイ前作業、計画ファイルに既に明記済み）
+- PR #641作成 → CI全項目PASS → 決裁者承認 → squashマージ
+
 ## 🔔 監視中
 - PR #620（`QUIZ_REQUIRE_ACTIVE_SESSION=true`本番切替のロールバック弁、2026-08-20作成）は観察期間を置いて維持する方針（2026-08-21、決裁者確認）。`/quizzes/:quizId/attempts`の409(`session_required`/`session_time_exceeded`)発生率異常、または正当な受講者からの問い合わせが確認されない限りmergeしない。観察期間終了の目安なし
-- **Phase 0のCloud Runサービスは devInteractions（ダミー認証）が有効なまま**。組織カスタムコネクタとしての恒久登録はまだ行っていない。Phase 1aでFirebase Google サインインに置き換えるまで、チーム展開しないこと
-- **Phase 1a計画は未確定（上記中断点参照）**。PR1/PR2の実装順序次第でファイル構成・デプロイ手順が変わりうるため、次セッションは計画ファイルの再改訂から再開すること。現時点のplan agentの詳細設計（Firestore adapterのスキーマ等）は本セッションのサブエージェント出力にのみ存在し、計画ファイル本体には要約のみが反映されている点に注意
+- **Phase 1a PR1マージ後、Cloud Run自動デプロイが進行中**（`Deploy to Cloud Run`ワークフロー、本セッション内で完了確認予定）。devInteractionsは本番で無効化されるが、**Firebase Console → Authentication → Authorized domainsに`mcp-3zcica5euq-an.a.run.app`を追加するまでは実Googleサインインが`auth/unauthorized-domain`で失敗する**（コード外の手動作業、次セッションの即着手候補）
+- **組織カスタムコネクタとしての恒久登録は上記手動作業+実機確認完了までまだ行わないこと**（Phase 1a PR2=Firestore永続化がまだ未着手のため、Cloud Run再デプロイで引き続きDCR登録クライアントが失効する制約が残っている）
