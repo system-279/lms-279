@@ -9,10 +9,17 @@ async function buildStorageOptions(config: ReturnType<typeof loadConfig>): Promi
   if (config.storage !== "firestore") {
     return {};
   }
-  // loadConfig() の production runtime fail-fast により、storage==="firestore" のときは
-  // mcpSigningSecretName が必ず設定されている。
-  const secretName = config.mcpSigningSecretName!;
-  const { jwks, cookieKeys } = await getSigningKeysFromSecretManager(secretName);
+  // loadConfig() の production runtime fail-fast は NODE_ENV=production/K_SERVICE
+  // 検出時のみ働く。MCP_STORAGE=firestore だけをローカル/CIで設定し
+  // MCP_SIGNING_SECRET_NAME を設定し忘れるケース(production runtime外)はこの
+  // fail-fastを素通りするため、ここでも独立してチェックする
+  // (pr-review-toolkitセカンドオピニオン指摘、2026-08-22)。
+  if (!config.mcpSigningSecretName) {
+    throw new Error(
+      "FATAL: MCP_STORAGE=firestore requires MCP_SIGNING_SECRET_NAME to be set (services/mcp/src/config.ts)。"
+    );
+  }
+  const { jwks, cookieKeys } = await getSigningKeysFromSecretManager(config.mcpSigningSecretName);
   const db = getFirestoreDb();
   return {
     adapter: createFirestoreAdapterFactory(db),
