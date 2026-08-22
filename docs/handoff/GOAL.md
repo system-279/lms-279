@@ -34,7 +34,8 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
 - [x] Phase 1a PR1: devInteractions → 実Firebase Googleサインイン実装、テスト27件PASS、codex review 2巡+pr-review-toolkit 3系統セカンドオピニオン全反映、PR #641マージ済み
 - [x] Phase 1a PR1 デプロイ後の手動作業: Firebase Console → Authentication → Authorized domains へ `mcp-3zcica5euq-an.a.run.app` を追加 → 済（Playwright MCPで実機操作、決裁者承認済み。追加後の一覧に`mcp-3zcica5euq-an.a.run.app`(Custom)が表示されることを確認）
 - [ ] Phase 1a PR1 実機確認: 実際にGoogleアカウントでサインイン → ping→pong確認（未実施。Authorized domains追加は完了したが、実サインインフロー自体はまだ試していない）
-- [ ] Phase 1a PR2: Firestore永続adapter + Secret Manager署名鍵（未着手、計画ファイルのPR2節参照）
+- [x] Phase 1a PR2: Firestore永続adapter + Secret Manager署名鍵。計画noble-purring-rabbit.md → Codex MCP版+pr-review-toolkit(code-reviewer/pr-test-analyzer)3系統セカンドオピニオンを計画段階・実装後（codex review計3回、うち1回はP1修正後の再検証でfindings 0件）反映 → PR #654マージ → デプロイ前手動作業（Secret Manager作成・IAM付与・TTL policy）完了 → PR #655マージ → Deploy to Cloud Run成功 → jwksのkidがSecret Manager由来と一致することを実機確認済み
+- [ ] Phase 1a PR2 検証項目6: Cloud Runリビジョン再デプロイ後もクライアント登録が失効しないことの実機確認（未実施、次セッションの即着手候補）
 - [ ] Phase 1以降: 計画ファイル参照（quiz CRUDツール実装、本番コネクタ登録等）
 
 ## 🔄 中断点（in-flight）
@@ -68,4 +69,6 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
   1. Secret Manager に `mcp-oauth-signing-key`（jwks + cookie署名鍵のJSON、RSA 2048bit/RS256）を作成し、Cloud Runランタイムの既定compute SA（`1034821634012-compute@developer.gserviceaccount.com`）に `roles/secretmanager.secretAccessor`（当該シークレット限定）を付与 → 済（`gcloud secrets add-iam-policy-binding`で確認済み）
   2. `gcloud firestore fields ttls update expiresAt --collection-group=mcp_oauth_store --enable-ttl` → 済（`ttlConfig.state: ACTIVE` を確認）
   3. Firestore書き込み権限 → 確認の結果、既定compute SAは`roles/editor`を保有しておりFirestore読み書きを含むため追加付与不要と判明
-  - **残作業**: PR2デプロイ自体（`main`マージ済み、`.github/workflows/deploy.yml`のpush trigger経由で自動デプロイされる想定）とデプロイ後の実機検証（jwksのkidがSecret Manager由来に一致すること、Cloud Runリビジョン再デプロイ後もクライアント登録が失効しないこと、計画`noble-purring-rabbit.md`検証項目5-6参照）が未実施
+  - PR2デプロイ → 済（PR #655マージのpush trigger経由で`Deploy to Cloud Run`ワークフロー実行、`Deploy MCP`job含め全ステップ成功、2026-08-22）
+  - デプロイ後実機検証（計画`noble-purring-rabbit.md`検証項目5）→ 済。`curl https://mcp-3zcica5euq-an.a.run.app/jwks`の`kid`(`bc85324d-c613-40e2-ba36-51592ea3d98c`)がSecret Manager登録値と完全一致することを確認
+  - **残作業**: 検証項目6（Cloud Runリビジョン再デプロイ後もクライアント登録が失効しないこと）は未実施。空コミット等での再デプロイ前後でclient_idの有効性をcurlで比較する手順が必要（次セッションの即着手候補）。また Phase 1a PR1 実機確認（実Googleアカウントでのサインイン→ping→pong確認）も引き続き未実施
