@@ -9,8 +9,13 @@
 export interface AdminCourseSummary {
   id: string;
   name: string;
-  description: string;
+  description: string | null;
   status: "draft" | "published" | "archived";
+  lessonOrder: string[];
+  passThreshold: number;
+  createdBy: string;
+  sourceMasterCourseId?: string;
+  copiedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -45,7 +50,7 @@ export interface AdminQuizQuestion {
 /**
  * 管理者向けなので正解(isCorrect)・解説(explanation)を含む全情報。
  * MCPツール get_quiz 経由でAnthropicのクラウド基盤を通過することを
- * 決裁者確認済み（計画linear-zooming-conway.md「PR B」節参照）。
+ * 開発者確認済み（計画linear-zooming-conway.md「PR B」節参照）。
  */
 export interface AdminQuizResponse {
   quiz: {

@@ -153,6 +153,18 @@ describe("createLmsApiClient", () => {
         transient: false,
       } satisfies Partial<LmsApiError>);
     });
+
+    it("courseId引数にパス区切り・クエリ文字を含む値を渡しても、単一のエンコード済みパスセグメントとして扱われる（tenant同様の防御をcourseIdにも適用していることの確認）", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ lessons: [] }), { status: 200 }));
+
+      const maliciousCourseId = "../super/master/quizzes?";
+      await client.listLessons("tenant-a", maliciousCourseId, "id-token-1");
+
+      const calledUrl = vi.mocked(global.fetch).mock.calls[0]?.[0] as string;
+      expect(calledUrl).toBe(
+        `https://api.example.test/api/v2/tenant-a/admin/courses/${encodeURIComponent(maliciousCourseId)}/lessons`
+      );
+    });
   });
 
   describe("getQuiz", () => {
@@ -205,6 +217,18 @@ describe("createLmsApiClient", () => {
       await expect(client.getQuiz("tenant-a", "l1", "id-token-1")).rejects.toMatchObject({
         transient: false,
       } satisfies Partial<LmsApiError>);
+    });
+
+    it("lessonId引数にパス区切り・クエリ文字を含む値を渡しても、単一のエンコード済みパスセグメントとして扱われる（tenant/courseId同様の防御をlessonIdにも適用していることの確認）", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ quiz: { id: "q1" } }), { status: 200 }));
+
+      const maliciousLessonId = "../super/master/quizzes/xyz?";
+      await client.getQuiz("tenant-a", maliciousLessonId, "id-token-1");
+
+      const calledUrl = vi.mocked(global.fetch).mock.calls[0]?.[0] as string;
+      expect(calledUrl).toBe(
+        `https://api.example.test/api/v2/tenant-a/admin/lessons/${encodeURIComponent(maliciousLessonId)}/quiz`
+      );
     });
   });
 });

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@google-cloud/secret-manager": "^6.3.0",
+    "@lms-279/shared-types": "*",
     "@modelcontextprotocol/express": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",

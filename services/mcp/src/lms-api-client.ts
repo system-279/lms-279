@@ -3,7 +3,13 @@
  * MCP quizツール（Phase 2a）専用。エラー分類は rules/error-handling.md §3準拠:
  * transient = ネットワーク/timeout/5xx、permanent = 4xx（401含む。リトライ判断は
  * 呼び出し元 mcp-server.ts が LmsApiError.httpStatus を見て行う）。
+ *
+ * 戻り値の型は @lms-279/shared-types の管理者向けDTOで表現する
+ * （CLAUDE.md「新規APIエンドポイント追加時はshared-typesに型を先に定義すること」、
+ * code-reviewerセカンドオピニオン指摘: 当初DTOを定義したのみで実際には
+ * unknown型のまま配線されておらず型安全性が機能していなかった）。
  */
+import type { AdminCourseSummary, AdminLessonSummary, AdminQuizResponse } from "@lms-279/shared-types";
 
 export class LmsApiError extends Error {
   constructor(
@@ -17,9 +23,9 @@ export class LmsApiError extends Error {
 }
 
 export interface LmsApiClient {
-  listCourses(tenant: string, idToken: string): Promise<unknown[]>;
-  listLessons(tenant: string, courseId: string, idToken: string): Promise<unknown[]>;
-  getQuiz(tenant: string, lessonId: string, idToken: string): Promise<unknown>;
+  listCourses(tenant: string, idToken: string): Promise<AdminCourseSummary[]>;
+  listLessons(tenant: string, courseId: string, idToken: string): Promise<AdminLessonSummary[]>;
+  getQuiz(tenant: string, lessonId: string, idToken: string): Promise<AdminQuizResponse["quiz"]>;
 }
 
 function isTransientStatus(status: number): boolean {
@@ -75,7 +81,7 @@ export function createLmsApiClient(baseUrl: string): LmsApiClient {
       if (!Array.isArray(courses)) {
         throw new LmsApiError("LMS APIの応答にcourses配列が含まれていません", undefined, undefined, false);
       }
-      return courses;
+      return courses as AdminCourseSummary[];
     },
 
     async listLessons(tenant, courseId, idToken) {
@@ -88,7 +94,7 @@ export function createLmsApiClient(baseUrl: string): LmsApiClient {
       if (!Array.isArray(lessons)) {
         throw new LmsApiError("LMS APIの応答にlessons配列が含まれていません", undefined, undefined, false);
       }
-      return lessons;
+      return lessons as AdminLessonSummary[];
     },
 
     async getQuiz(tenant, lessonId, idToken) {
@@ -101,7 +107,7 @@ export function createLmsApiClient(baseUrl: string): LmsApiClient {
       if (typeof quiz !== "object" || quiz === null) {
         throw new LmsApiError("LMS APIの応答にquizが含まれていません", undefined, undefined, false);
       }
-      return quiz;
+      return quiz as AdminQuizResponse["quiz"];
     },
   };
 }

@@ -28,17 +28,12 @@ function textResult(data: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(data) }] };
 }
 
-function extractUid(ctx: ServerContext): string | undefined {
+/** @internal テスト用にexport（token-verifier.tsが常にaccountIdを設定するため通常到達しない不変条件チェックの検証用） */
+export function extractUid(ctx: ServerContext): string | undefined {
   const accountId = ctx.http?.authInfo?.extra?.accountId;
   return typeof accountId === "string" && accountId.length > 0 ? accountId : undefined;
 }
 
-/**
- * アクセストークンからuidを取得 → credentialServiceでFirebase IDトークンを取得 →
- * fnを実行 → 結果に応じて監査ログを記録する。LMS APIが401を返した場合のみ、
- * forceRefreshで新規exchangeしたIDトークンで1回だけリトライする（ID交換の
- * タイミング起因のclock skew等を想定。計画linear-zooming-conway.md「PR B」節参照）。
- */
 /**
  * credentialServiceからのIDトークン取得を、失敗時も監査ログに残すラッパー。
  * 初回取得・401リトライ時のforceRefresh取得のどちらも同じ関数を通す
@@ -61,6 +56,12 @@ async function getIdTokenAudited(
   }
 }
 
+/**
+ * アクセストークンからuidを取得 → credentialServiceでFirebase IDトークンを取得 →
+ * fnを実行 → 結果に応じて監査ログを記録する。LMS APIが401を返した場合のみ、
+ * forceRefreshで新規exchangeしたIDトークンで1回だけリトライする（ID交換の
+ * タイミング起因のclock skew等を想定。計画linear-zooming-conway.md「PR B」節参照）。
+ */
 async function callToolWithAuth<T>(
   deps: McpServerDeps,
   ctx: ServerContext,
@@ -71,6 +72,10 @@ async function callToolWithAuth<T>(
 ): Promise<T> {
   const uid = extractUid(ctx);
   if (!uid) {
+    // accountIdはtoken-verifier.tsが検証済みトークンのsubから必ず設定するため、
+    // 通常到達しない不変条件違反経路。到達した場合も監査ログの空白を残さない
+    // （silent-failure-hunterセカンドオピニオン指摘: この一手だけ監査ログが漏れていた）。
+    await deps.auditLog.record({ actor: "unknown", tenant, tool, targetId, result: "error" });
     throw new Error("認証情報からユーザーIDを取得できませんでした");
   }
 
@@ -101,6 +106,15 @@ function mapErrorToResult(tool: string, error: unknown): CallToolResult {
     return errorResult("再認証が必要です。改めてサインインしてください。");
   }
   if (error instanceof LmsApiError) {
+    if (error.transient) {
+      // transient(ネットワーク例外・5xx)の error.message は fetch/AbortSignal.timeout
+      // が投げた生の例外文字列を含みうる(接続先ホスト名等の内部詳細が漏れる可能性)。
+      // get_quizの応答同様MCPクライアントの先はAnthropicのクラウド基盤を経由するため、
+      // 詳細はサーバー側ログにのみ残し、クライアントへは汎用メッセージのみ返す
+      // （silent-failure-hunterセカンドオピニオン指摘）。
+      logger.error(`${tool}: LMS API呼び出しが一時的に失敗しました`, { error: error.message });
+      return errorResult("LMS APIへの接続に一時的に失敗しました。しばらくしてから再度お試しください。");
+    }
     return errorResult(`LMS APIの呼び出しに失敗しました: ${error.message}`);
   }
   logger.error(`${tool} failed`, { error: String(error) });
