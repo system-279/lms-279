@@ -1135,3 +1135,46 @@ describe("Phase 2a: 読み取り専用quizツール（list_courses/list_lessons/
     expect(parsed.error).toBeDefined();
   });
 });
+
+describe("Phase 2a: Session/Grant/RefreshTokenのTTL短縮（codex review P1指摘: 資格情報喪失時に既定14日のセッション有効期限のせいで自己回復できない問題の緩和策）", () => {
+  it("ログイン時に発行される_sessionクッキーのexpiresが約24時間後になる（既定14日ではない）", async () => {
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(ISSUER_URL, 8111, firebaseConfig, {});
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const beforeLogin = Date.now();
+    const { jar: startJar, uid } = await startAuthorization(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+    let jar = startJar;
+
+    mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken());
+    const callbackRes = await request(app)
+      .post(`/interaction/${uid}/firebase-callback`)
+      .set("Cookie", cookieHeader(jar))
+      .send({ idToken: "fake-id-token" });
+    expect(callbackRes.status).toBe(200);
+    jar = mergeCookies(jar, callbackRes.headers["set-cookie"] as unknown as string[]);
+
+    // ログイン結果を resolve すると oidc-provider が Session を作成し、直後の resume
+    // リダイレクト応答で `_session` クッキー(expires属性つき)を発行する
+    // （実際のSet-Cookieヘッダを確認して判明。firebase-callback応答自体には含まれない）。
+    const resumeUrl = new URL(callbackRes.body.redirectTo as string, ISSUER_URL);
+    const resumeRes = await request(app)
+      .get(resumeUrl.pathname + resumeUrl.search)
+      .set("Cookie", cookieHeader(jar));
+    expect([302, 303]).toContain(resumeRes.status);
+
+    const setCookieHeader = (resumeRes.headers["set-cookie"] as unknown as string[]) ?? [];
+    const sessionCookie = setCookieHeader.find((c) => c.startsWith("_session="));
+    expect(sessionCookie).toBeDefined();
+    const expiresMatch = sessionCookie!.match(/expires=([^;]+)/i);
+    expect(expiresMatch).toBeTruthy();
+    const expiresAt = new Date(expiresMatch![1]!).getTime();
+
+    const ttlSeconds = (expiresAt - beforeLogin) / 1000;
+    // 24時間(86400秒)を中心に、テスト実行のオーバーヘッドを見込んだ許容幅(±5分)で確認する。
+    // 既定値の14日(1209600秒)とは明確に区別できる。
+    expect(ttlSeconds).toBeGreaterThan(24 * 60 * 60 - 300);
+    expect(ttlSeconds).toBeLessThan(24 * 60 * 60 + 300);
+  });
+});
