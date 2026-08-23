@@ -233,9 +233,11 @@ jobs:
         run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
 
       - name: Build and push MCP image
-        working-directory: services/mcp
         run: |
-          docker build -t ${{ env.ARTIFACT_REGISTRY }}/mcp:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/mcp:latest .
+          # Phase 2aで@lms-279/shared-typesへ依存したため、services/api同様
+          # リポジトリルートをビルドコンテキストにする（codex review P1指摘、2026-08-23。
+          # services/mcp/Dockerfile参照）。
+          docker build -f services/mcp/Dockerfile -t ${{ env.ARTIFACT_REGISTRY }}/mcp:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/mcp:latest .
           docker push ${{ env.ARTIFACT_REGISTRY }}/mcp:${{ github.sha }}
           docker push ${{ env.ARTIFACT_REGISTRY }}/mcp:latest
 
