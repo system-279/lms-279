@@ -1,7 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import type { CallToolResult, ServerContext } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { CredentialNotFoundError, type CredentialService } from "./credential-service.js";
+import {
+  CredentialNotFoundError,
+  type CredentialService,
+  type GetFirebaseIdTokenOptions,
+} from "./credential-service.js";
 import { LmsApiError, type LmsApiClient } from "./lms-api-client.js";
 import type { AuditLog } from "./audit-log.js";
 import { logger } from "./logger.js";
@@ -35,6 +39,28 @@ function extractUid(ctx: ServerContext): string | undefined {
  * forceRefreshで新規exchangeしたIDトークンで1回だけリトライする（ID交換の
  * タイミング起因のclock skew等を想定。計画linear-zooming-conway.md「PR B」節参照）。
  */
+/**
+ * credentialServiceからのIDトークン取得を、失敗時も監査ログに残すラッパー。
+ * 初回取得・401リトライ時のforceRefresh取得のどちらも同じ関数を通す
+ * （codex review P2指摘: 従来はtry/catchの外で呼んでいたため、資格情報の
+ * 取得自体が失敗したケースが監査ログから漏れていた）。
+ */
+async function getIdTokenAudited(
+  deps: McpServerDeps,
+  uid: string,
+  tenant: string,
+  tool: string,
+  targetId: string | undefined,
+  options?: GetFirebaseIdTokenOptions
+): Promise<string> {
+  try {
+    return await deps.credentialService.getFirebaseIdTokenForAccount(uid, options);
+  } catch (error) {
+    await deps.auditLog.record({ actor: uid, tenant, tool, targetId, result: "error" });
+    throw error;
+  }
+}
+
 async function callToolWithAuth<T>(
   deps: McpServerDeps,
   ctx: ServerContext,
@@ -48,14 +74,14 @@ async function callToolWithAuth<T>(
     throw new Error("認証情報からユーザーIDを取得できませんでした");
   }
 
-  const idToken = await deps.credentialService.getFirebaseIdTokenForAccount(uid);
+  const idToken = await getIdTokenAudited(deps, uid, tenant, tool, targetId);
   try {
     const result = await fn(idToken);
     await deps.auditLog.record({ actor: uid, tenant, tool, targetId, result: "success" });
     return result;
   } catch (error) {
     if (error instanceof LmsApiError && error.httpStatus === 401) {
-      const retriedIdToken = await deps.credentialService.getFirebaseIdTokenForAccount(uid, { forceRefresh: true });
+      const retriedIdToken = await getIdTokenAudited(deps, uid, tenant, tool, targetId, { forceRefresh: true });
       try {
         const result = await fn(retriedIdToken);
         await deps.auditLog.record({ actor: uid, tenant, tool, targetId, result: "success" });

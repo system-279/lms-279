@@ -948,7 +948,7 @@ describe("Phase 2a: 読み取り専用quizツール（list_courses/list_lessons/
     expect(result.isError).toBeUndefined();
     expect(JSON.parse(result.content[0]!.text)).toEqual({ courses: [{ id: "c1", name: "Course 1" }] });
     expect(deps.lmsApiClient.listCourses).toHaveBeenCalledWith("tenant-a", "fresh-id-token");
-    expect(deps.credentialService.getFirebaseIdTokenForAccount).toHaveBeenCalledWith("test-firebase-uid");
+    expect(deps.credentialService.getFirebaseIdTokenForAccount).toHaveBeenCalledWith("test-firebase-uid", undefined);
     expect(deps.auditLog.record).toHaveBeenCalledWith(
       expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "success" })
     );
@@ -1065,7 +1065,7 @@ describe("Phase 2a: 読み取り専用quizツール（list_courses/list_lessons/
     expect(result.content[0]!.text).toContain("Quiz not found for this lesson");
   });
 
-  it("資格情報未保存（CredentialNotFoundError）の場合、再認証を促すisError:trueメッセージを返す", async () => {
+  it("資格情報未保存（CredentialNotFoundError）の場合、再認証を促すisError:trueメッセージを返し、監査ログにもエラーとして記録する（codex review P2指摘: 初回のtoken取得失敗が監査ログに残っていなかった）", async () => {
     const deps = makeMcpServerDeps({
       credentialService: {
         getFirebaseIdTokenForAccount: vi.fn().mockRejectedValue(new CredentialNotFoundError("test-firebase-uid")),
@@ -1084,6 +1084,36 @@ describe("Phase 2a: 読み取り専用quizツール（list_courses/list_lessons/
     const result = parseMcpToolResult(mcpRes);
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain("再認証");
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
+  });
+
+  it("401リトライ時のforceRefresh自体が失敗した場合も監査ログにエラーとして記録する（codex review P2指摘: リトライ経路のtoken取得失敗も監査ログに残っていなかった）", async () => {
+    const getFirebaseIdTokenForAccount = vi
+      .fn()
+      .mockResolvedValueOnce("stale-id-token")
+      .mockRejectedValueOnce(new CredentialNotFoundError("test-firebase-uid"));
+    const listCourses = vi.fn().mockRejectedValueOnce(new LmsApiError("unauthorized", "unauthorized", 401, false));
+    const deps = makeMcpServerDeps({
+      credentialService: { getFirebaseIdTokenForAccount },
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8112, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
   });
 
   it("LMS APIが401を返した場合、forceRefreshで新しいIDトークンを取得し1回だけ自動リトライする", async () => {

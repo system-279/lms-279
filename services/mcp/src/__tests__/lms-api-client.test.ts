@@ -106,6 +106,24 @@ describe("createLmsApiClient", () => {
         transient: false,
       } satisfies Partial<LmsApiError>);
     });
+
+    it("tenant引数にパス区切り・クエリ文字を含む値を渡しても、単一のエンコード済みパスセグメントとして扱われエンドポイントを書き換えられない（codex review P2指摘: 未エンコードだと../や?でエンドポイントを操作できた）", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ courses: [] }), { status: 200 }));
+
+      const maliciousTenant = "../v2/super/master/quizzes/xyz?";
+      await client.listCourses(maliciousTenant, "id-token-1");
+
+      const calledUrl = vi.mocked(global.fetch).mock.calls[0]?.[0] as string;
+      expect(calledUrl).toBe(
+        `https://api.example.test/api/v2/${encodeURIComponent(maliciousTenant)}/admin/courses`
+      );
+      // 実際に送られたURLに、意図しないパス区切り("/")やクエリ開始("?")が
+      // 生の状態で紛れ込んでいないことを直接確認する
+      const pathAndQuery = calledUrl.replace("https://api.example.test/api/v2/", "");
+      const tenantSegment = pathAndQuery.split("/admin/courses")[0]!;
+      expect(tenantSegment).not.toContain("/");
+      expect(tenantSegment).not.toContain("?");
+    });
   });
 
   describe("listLessons", () => {

@@ -70,7 +70,7 @@ async function requestJson(baseUrl: string, path: string, idToken: string): Prom
 export function createLmsApiClient(baseUrl: string): LmsApiClient {
   return {
     async listCourses(tenant, idToken) {
-      const body = await requestJson(baseUrl, `/api/v2/${tenant}/admin/courses`, idToken);
+      const body = await requestJson(baseUrl, `/api/v2/${encodeURIComponent(tenant)}/admin/courses`, idToken);
       const courses = (body as { courses?: unknown })?.courses;
       if (!Array.isArray(courses)) {
         throw new LmsApiError("LMS APIの応答にcourses配列が含まれていません", undefined, undefined, false);
@@ -79,7 +79,11 @@ export function createLmsApiClient(baseUrl: string): LmsApiClient {
     },
 
     async listLessons(tenant, courseId, idToken) {
-      const body = await requestJson(baseUrl, `/api/v2/${tenant}/admin/courses/${courseId}/lessons`, idToken);
+      const body = await requestJson(
+        baseUrl,
+        `/api/v2/${encodeURIComponent(tenant)}/admin/courses/${encodeURIComponent(courseId)}/lessons`,
+        idToken
+      );
       const lessons = (body as { lessons?: unknown })?.lessons;
       if (!Array.isArray(lessons)) {
         throw new LmsApiError("LMS APIの応答にlessons配列が含まれていません", undefined, undefined, false);
@@ -88,7 +92,11 @@ export function createLmsApiClient(baseUrl: string): LmsApiClient {
     },
 
     async getQuiz(tenant, lessonId, idToken) {
-      const body = await requestJson(baseUrl, `/api/v2/${tenant}/admin/lessons/${lessonId}/quiz`, idToken);
+      const body = await requestJson(
+        baseUrl,
+        `/api/v2/${encodeURIComponent(tenant)}/admin/lessons/${encodeURIComponent(lessonId)}/quiz`,
+        idToken
+      );
       const quiz = (body as { quiz?: unknown })?.quiz;
       if (typeof quiz !== "object" || quiz === null) {
         throw new LmsApiError("LMS APIの応答にquizが含まれていません", undefined, undefined, false);
