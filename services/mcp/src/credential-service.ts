@@ -44,8 +44,17 @@ export interface CredentialServiceDeps {
   now?: () => number;
 }
 
+export interface GetFirebaseIdTokenOptions {
+  /**
+   * true の場合、有効なキャッシュがあっても無視し必ず新規exchangeを行う。
+   * LMS API呼び出しが401を返した際の1回リトライ用（Phase 2a、mcp-server.ts参照）。
+   * clock skew等でキャッシュ上は有効なのにAPI側では既に無効というタイミング差を想定。
+   */
+  forceRefresh?: boolean;
+}
+
 export interface CredentialService {
-  getFirebaseIdTokenForAccount(uid: string): Promise<string>;
+  getFirebaseIdTokenForAccount(uid: string, options?: GetFirebaseIdTokenOptions): Promise<string>;
 }
 
 export function createCredentialService(deps: CredentialServiceDeps): CredentialService {
@@ -136,10 +145,13 @@ export function createCredentialService(deps: CredentialServiceDeps): Credential
   }
 
   return {
-    async getFirebaseIdTokenForAccount(uid: string): Promise<string> {
-      const cached = cache.get(uid);
-      if (cached && cached.expiresAt > now()) {
-        return cached.idToken;
+    async getFirebaseIdTokenForAccount(uid: string, options?: GetFirebaseIdTokenOptions): Promise<string> {
+      const forceRefresh = options?.forceRefresh ?? false;
+      if (!forceRefresh) {
+        const cached = cache.get(uid);
+        if (cached && cached.expiresAt > now()) {
+          return cached.idToken;
+        }
       }
 
       const existingInflight = inflight.get(uid);
