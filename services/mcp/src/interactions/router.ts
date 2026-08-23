@@ -3,6 +3,36 @@ import type Provider from "oidc-provider";
 import { errors } from "oidc-provider";
 import { verifyGoogleIdToken, FirebaseSignInError } from "../firebase.js";
 import { renderLoginPage, renderConsentPage, renderErrorPage, type FirebaseWebConfig } from "./views.js";
+import type { CredentialStore } from "../storage/credential-store.js";
+import { encryptWithActiveKey, type CredentialKeyring } from "../credential-keys.js";
+import { logger } from "../logger.js";
+
+export interface CredentialOptions {
+  store: CredentialStore;
+  keyring: CredentialKeyring;
+}
+
+/**
+ * サインイン時に捕捉した Firebase リフレッシュトークンを暗号化して永続化する。
+ * 保存失敗はサインイン成功を阻害しない（ping 等トークンを使わない機能は
+ * 引き続き動作すべきため、rules/error-handling.md §1の独立防御パターンに準拠）。
+ */
+async function persistRefreshTokenBestEffort(
+  credentialOptions: CredentialOptions | undefined,
+  uid: string,
+  refreshToken: unknown
+): Promise<void> {
+  if (!credentialOptions || typeof refreshToken !== "string" || refreshToken.length === 0) {
+    return;
+  }
+  try {
+    const { store, keyring } = credentialOptions;
+    const encrypted = encryptWithActiveKey(refreshToken, keyring);
+    await store.save(uid, { encryptedRefreshToken: encrypted, keyVersion: keyring.activeVersion });
+  } catch (error) {
+    logger.error("Failed to persist Firebase refresh token", { error: String(error) });
+  }
+}
 
 /**
  * devInteractions（oidc-provider 組み込みのダミー同意画面）を置き換える、実
@@ -14,7 +44,11 @@ import { renderLoginPage, renderConsentPage, renderErrorPage, type FirebaseWebCo
  *
  * app.ts で `app.use(provider.callback())`（catch-all）より前に登録すること。
  */
-export function createInteractionRouter(provider: Provider, firebaseConfig: FirebaseWebConfig): Router {
+export function createInteractionRouter(
+  provider: Provider,
+  firebaseConfig: FirebaseWebConfig,
+  credentialOptions?: CredentialOptions
+): Router {
   const router = Router();
 
   router.get("/interaction/:uid", async (req, res, next) => {
@@ -60,6 +94,8 @@ export function createInteractionRouter(provider: Provider, firebaseConfig: Fire
         return;
       }
       const account = await verifyGoogleIdToken(idToken);
+      const refreshToken = (req.body as Record<string, unknown> | undefined)?.refreshToken;
+      await persistRefreshTokenBestEffort(credentialOptions, account.uid, refreshToken);
       const redirectTo = await provider.interactionResult(
         req,
         res,

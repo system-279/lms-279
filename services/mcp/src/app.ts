@@ -8,7 +8,7 @@ import rateLimit from "express-rate-limit";
 import { createOidcProvider, type OidcProviderOptions } from "./oidc.js";
 import { createTokenVerifier } from "./token-verifier.js";
 import { createMcpServer } from "./mcp-server.js";
-import { createInteractionRouter } from "./interactions/router.js";
+import { createInteractionRouter, type CredentialOptions } from "./interactions/router.js";
 import type { FirebaseWebConfig } from "./interactions/views.js";
 import { logger } from "./logger.js";
 
@@ -81,7 +81,10 @@ export async function createApp(
   },
   // Phase 1a PR2: Firestore adapter + Secret Manager 署名鍵を注入する場合に渡す。
   // 省略時は現行どおり oidc-provider 既定のインメモリ実装(既存テストとの後方互換)。
-  storageOptions: OidcProviderOptions = {}
+  storageOptions: OidcProviderOptions = {},
+  // Phase 1b-1: Firebaseリフレッシュトークンの暗号化永続化に使うstore/keyring。
+  // 省略時はサインイン時の永続化をスキップする(既存テストとの後方互換)。
+  credentialOptions?: CredentialOptions
 ): Promise<{ app: Express; provider: Provider }> {
   const provider = createOidcProvider(issuerUrl, storageOptions);
   const oauthMetadata = await fetchOidcMetadata(provider, issuerUrl, bindPort);
@@ -139,7 +142,7 @@ export async function createApp(
   // Phase 1a PR1: devInteractions を廃止した実 Firebase サインイン + 同意画面。
   // provider.callback()（下記 catch-all）より必ず前に登録する — 一致しなければ
   // catch-all の oidc-provider 側ルーティングに落ちてしまう。
-  app.use(createInteractionRouter(provider, firebaseConfig));
+  app.use(createInteractionRouter(provider, firebaseConfig, credentialOptions));
 
   // OAuth AS の全エンドポイント (/auth, /token, /reg, /jwks, /.well-known/openid-configuration 等)。
   // 上記の Express 固有ルートに一致しないリクエストのみここに落ちる。

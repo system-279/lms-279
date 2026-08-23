@@ -4,6 +4,8 @@ import type { Express } from "express";
 import * as crypto from "node:crypto";
 import { createFirestoreAdapterFactory } from "../storage/firestore-adapter.js";
 import { createFakeFirestore } from "../storage/__tests__/fake-firestore.js";
+import { createCredentialStore } from "../storage/credential-store.js";
+import { decryptWithKeyring } from "../crypto/aes-gcm.js";
 
 const mockVerifyIdToken = vi.fn();
 
@@ -124,7 +126,8 @@ async function obtainAuthorizationCode(
   codeChallenge: string,
   resource: string,
   scope?: string,
-  grantTypes: string[] = ["authorization_code"]
+  grantTypes: string[] = ["authorization_code"],
+  refreshToken?: string
 ): Promise<{ clientId: string; code: string }> {
   const { clientId, jar: startJar, uid: loginUid } = await startAuthorization(
     app,
@@ -140,7 +143,7 @@ async function obtainAuthorizationCode(
   const callbackRes = await request(app)
     .post(`/interaction/${loginUid}/firebase-callback`)
     .set("Cookie", cookieHeader(jar))
-    .send({ idToken: "fake-id-token" });
+    .send(refreshToken === undefined ? { idToken: "fake-id-token" } : { idToken: "fake-id-token", refreshToken });
   expect(callbackRes.status).toBe(200);
   jar = mergeCookies(jar, callbackRes.headers["set-cookie"] as unknown as string[]);
   let location = callbackRes.body.redirectTo as string;
@@ -653,5 +656,70 @@ describe("Phase 1a PR2: クロスインスタンス永続化（Firestore adapter
         params: { name: "ping", arguments: {} },
       });
     expect(mcpRes.status).toBe(200);
+  });
+});
+
+describe("Phase 1b-1: Firebaseリフレッシュトークンの暗号化永続化", () => {
+  function makeKeyring() {
+    const key = crypto.randomBytes(32);
+    return { keys: [{ version: 1, key }], activeVersion: 1 };
+  }
+
+  it("refreshTokenを送ると、暗号化されて mcp_user_credentials に保存される", async () => {
+    const store = createCredentialStore(createFakeFirestore());
+    const keyring = makeKeyring();
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+
+    const { app } = await createApp(ISSUER_URL, 8096, firebaseConfig, {}, { store, keyring });
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+
+    const stored = await store.find("test-firebase-uid");
+    expect(stored).toBeDefined();
+    expect(decryptWithKeyring(stored!.encryptedRefreshToken, keyring.keys)).toBe("my-refresh-token");
+  });
+
+  it("refreshTokenが未送信でもサインインは200で成功する（保存失敗はサインインを阻害しない）", async () => {
+    const store = createCredentialStore(createFakeFirestore());
+    const keyring = makeKeyring();
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(ISSUER_URL, 8097, firebaseConfig, {}, { store, keyring });
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const { code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+    expect(code).toBeTruthy();
+    const stored = await store.find("test-firebase-uid");
+    expect(stored).toBeUndefined();
+  });
+
+  it("credentialOptions未指定（従来どおり）でもサインインは影響を受けない", async () => {
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(ISSUER_URL, 8098, firebaseConfig, {});
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const { code } = await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+
+    expect(code).toBeTruthy();
   });
 });

@@ -251,6 +251,10 @@ jobs:
           # Phase 1a PR2: Firestore adapter + Secret Manager 署名鍵を導入し、DCR登録
           # クライアント・署名鍵の永続化を実現した(MCP_STORAGE=firestore、
           # MCP_SIGNING_SECRET_NAME、services/mcp/src/index.ts参照)。
+          #
+          # Phase 1b-1: Firebaseリフレッシュトークンの暗号化永続化を導入
+          # (MCP_CREDENTIAL_SECRET_NAME、mcp-oauth-signing-keyとは別シークレット
+          # mcp-credential-encryption-key。ローテーション影響範囲を分離するため)。
           # --max-instances=1 は adapter・署名鍵の永続化とは別の理由でまだ残す:
           # oidc-provider の Session/Interaction cookie は cookieKeys で署名されるが、
           # インスタンス間のスティッキーセッション保証がないため、複数インスタンスでの
@@ -271,7 +275,7 @@ jobs:
             --platform=managed \
             --allow-unauthenticated \
             --max-instances=1 \
-            --set-env-vars="^@^NODE_ENV=production@MCP_ISSUER_URL=https://mcp-3zcica5euq-an.a.run.app@MCP_STORAGE=firestore@MCP_SIGNING_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/mcp-oauth-signing-key/versions/latest@FIREBASE_PROJECT_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}@FIREBASE_WEB_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}@FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}"
+            --set-env-vars="^@^NODE_ENV=production@MCP_ISSUER_URL=https://mcp-3zcica5euq-an.a.run.app@MCP_STORAGE=firestore@MCP_SIGNING_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/mcp-oauth-signing-key/versions/latest@MCP_CREDENTIAL_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/mcp-credential-encryption-key/versions/latest@FIREBASE_PROJECT_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}@FIREBASE_WEB_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}@FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}"
 
   deploy-notification:
     name: Deploy Notification
