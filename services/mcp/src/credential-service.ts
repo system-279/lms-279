@@ -65,7 +65,26 @@ export function createCredentialService(deps: CredentialServiceDeps): Credential
       throw new CredentialNotFoundError(uid);
     }
 
-    const refreshToken = decryptWithKeyring(stored.encryptedRefreshToken, keyring.keys);
+    let refreshToken: string;
+    try {
+      refreshToken = decryptWithKeyring(stored.encryptedRefreshToken, keyring.keys);
+    } catch (error) {
+      // 破損データ・鍵バージョン喪失等で復号できない暗号文は、修復手段がなく
+      // 永久に同じ不透明なエラーを繰り返す（silent-failure-hunterセカンドオピニオン
+      // 指摘、2026-08-23）。ログを残し、revokedと同様に削除して次回以降は
+      // 明示的なCredentialNotFoundError（再認証が必要）にする。
+      logger.error("Failed to decrypt stored Firebase refresh token; treating credential as unusable", {
+        uid,
+        error: String(error),
+      });
+      try {
+        await store.delete(uid);
+      } catch (deleteError) {
+        logger.error("Failed to delete undecryptable credential", { uid, error: String(deleteError) });
+      }
+      throw new CredentialNotFoundError(uid);
+    }
+
     let exchanged: ExchangedTokens;
     try {
       exchanged = await exchange(refreshToken, firebaseWebApiKey);
@@ -92,7 +111,25 @@ export function createCredentialService(deps: CredentialServiceDeps): Credential
     }
 
     const reEncrypted = encryptWithActiveKey(exchanged.refreshToken, keyring);
-    await store.save(uid, { encryptedRefreshToken: reEncrypted, keyVersion: keyring.activeVersion });
+    try {
+      await store.save(uid, { encryptedRefreshToken: reEncrypted, keyVersion: keyring.activeVersion });
+    } catch (saveError) {
+      // exchange() が成功した時点で、Google側では古いrefresh tokenは既にローテート
+      // 済み(=無効)。ここでの保存失敗は「古い資格情報がゴミとして残る」だけでなく
+      // 「そのゴミは既に失効済みで二度と使えない」ことを意味する
+      // （silent-failure-hunterセカンドオピニオン指摘CRITICAL、2026-08-23）。
+      // 今回のリクエスト自体はidTokenを返せるためエラーにはしないが、次回以降が
+      // 同じ無効な暗号文で不可解に失敗し続けないよう、古い資格情報を削除しておく。
+      logger.error(
+        "Firebase refresh token was rotated at Google but failed to persist the new value; deleting stale credential",
+        { uid, error: String(saveError) }
+      );
+      try {
+        await store.delete(uid);
+      } catch (deleteError) {
+        logger.error("Failed to delete stale credential after persist failure", { uid, error: String(deleteError) });
+      }
+    }
 
     cache.set(uid, { idToken: exchanged.idToken, expiresAt: now() + exchanged.expiresIn * 1000 - CACHE_TTL_BUFFER_MS });
     return exchanged.idToken;

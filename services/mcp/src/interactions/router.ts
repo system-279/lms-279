@@ -43,7 +43,7 @@ async function persistRefreshTokenBestEffort(
       const encrypted = encryptWithActiveKey(refreshToken, keyring);
       await store.save(uid, { encryptedRefreshToken: encrypted, keyVersion: keyring.activeVersion });
     } catch (error) {
-      logger.error("Failed to persist Firebase refresh token", { error: String(error) });
+      logger.error("Failed to persist Firebase refresh token", { uid, error: String(error) });
     }
   })();
 

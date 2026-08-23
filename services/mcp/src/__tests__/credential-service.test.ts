@@ -221,4 +221,98 @@ describe("credential-service", () => {
     expect(result2).toBe("id-for-token-2");
     expect(exchangeMock).toHaveBeenCalledTimes(2);
   });
+
+  it("単一呼び出しでexchangeがrejectした後、次の呼び出しは再度exchangeを試行できる（pr-test-analyzerセカンドオピニオン指摘: in-flight解除後の再試行が未検証だった）", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    const encrypted = encryptWithKey("original-refresh-token", keyring.keys[0]!.key, 1);
+    await store.save("uid-1", { encryptedRefreshToken: encrypted, keyVersion: 1 });
+
+    exchangeMock
+      .mockRejectedValueOnce(new TokenExchangeError("503", true))
+      .mockResolvedValueOnce({ idToken: "id-after-retry", refreshToken: "rotated-1", expiresIn: 3600 });
+
+    const service = createCredentialService({ store, keyring, firebaseWebApiKey: "api-key", exchange: exchangeMock });
+
+    await expect(service.getFirebaseIdTokenForAccount("uid-1")).rejects.toThrow(TokenExchangeError);
+    const idToken = await service.getFirebaseIdTokenForAccount("uid-1");
+
+    expect(idToken).toBe("id-after-retry");
+    expect(exchangeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("同時呼び出しで合流したexchangeがrejectした場合、両呼び出しともrejectし、以後の呼び出しは新たにexchangeを試行できる（in-flightがrejectで永久に塞がれないことの検証）", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    const encrypted = encryptWithKey("original-refresh-token", keyring.keys[0]!.key, 1);
+    await store.save("uid-1", { encryptedRefreshToken: encrypted, keyVersion: 1 });
+
+    let rejectExchange: (error: unknown) => void;
+    const pendingExchange = new Promise<ExchangedTokens>((_resolve, reject) => {
+      rejectExchange = reject;
+    });
+    exchangeMock.mockReturnValueOnce(pendingExchange);
+    exchangeMock.mockResolvedValueOnce({ idToken: "id-after-retry", refreshToken: "rotated-1", expiresIn: 3600 });
+
+    const service = createCredentialService({ store, keyring, firebaseWebApiKey: "api-key", exchange: exchangeMock });
+
+    const call1 = service.getFirebaseIdTokenForAccount("uid-1");
+    const call2 = service.getFirebaseIdTokenForAccount("uid-1");
+
+    rejectExchange!(new TokenExchangeError("503", true));
+
+    await expect(call1).rejects.toThrow(TokenExchangeError);
+    await expect(call2).rejects.toThrow(TokenExchangeError);
+    expect(exchangeMock).toHaveBeenCalledTimes(1);
+
+    // in-flightが解除されていれば、この3件目の呼び出しは新たにexchangeを試行できる
+    // （解除漏れがあれば、settled済みの同じrejected promiseを返し続けてしまう）
+    const idToken = await service.getFirebaseIdTokenForAccount("uid-1");
+    expect(idToken).toBe("id-after-retry");
+    expect(exchangeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("exchange成功後にstore.saveが失敗しても、今回のリクエストにはidTokenを返す。保存済み資格情報は既にGoogle側でローテート済み(=無効)なため削除する（silent-failure-hunterセカンドオピニオン指摘CRITICAL: 保存失敗を無防備に放置すると失効済みトークンがゴミとして残り続ける）", async () => {
+    const keyring = makeKeyring();
+    const db = createFakeFirestore();
+    const store = createCredentialStore(db);
+    const encrypted = encryptWithKey("original-refresh-token", keyring.keys[0]!.key, 1);
+    await store.save("uid-1", { encryptedRefreshToken: encrypted, keyVersion: 1 });
+    exchangeMock.mockResolvedValue({ idToken: "fresh-id-token", refreshToken: "rotated-refresh-token", expiresIn: 3600 });
+
+    // save() だけ失敗させ、find/delete は同じ fakeFirestore(db) を見る実体のまま使う
+    const failingSaveStore = {
+      save: vi.fn().mockRejectedValue(new Error("firestore down")),
+      find: store.find,
+      delete: store.delete,
+    };
+
+    const service = createCredentialService({
+      store: failingSaveStore,
+      keyring,
+      firebaseWebApiKey: "api-key",
+      exchange: exchangeMock,
+    });
+
+    // exchange自体は成功しているので、今回のリクエストはidTokenを取得できる（メモリ上のキャッシュから）
+    const idToken = await service.getFirebaseIdTokenForAccount("uid-1");
+    expect(idToken).toBe("fresh-id-token");
+
+    // 保存に失敗した古い資格情報(既にGoogle側でローテート済み=無効)はゴミとして
+    // 残さず削除される
+    expect(await store.find("uid-1")).toBeUndefined();
+  });
+
+  it("保存済み暗号文が復号できない（破損・鍵バージョン喪失等）場合、資格情報を削除しCredentialNotFoundErrorを投げる（silent-failure-hunterセカンドオピニオン指摘: 復号失敗が無ログ・無限に同じ不透明なエラーを繰り返す状態だった）", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    // 意図的に壊れた（keyringで復号できない）暗号文を保存
+    await store.save("uid-1", { encryptedRefreshToken: "not-a-valid-envelope", keyVersion: 1 });
+
+    const service = createCredentialService({ store, keyring, firebaseWebApiKey: "api-key", exchange: exchangeMock });
+
+    await expect(service.getFirebaseIdTokenForAccount("uid-1")).rejects.toBeInstanceOf(CredentialNotFoundError);
+    expect(await store.find("uid-1")).toBeUndefined();
+    expect(exchangeMock).not.toHaveBeenCalled();
+  });
 });
