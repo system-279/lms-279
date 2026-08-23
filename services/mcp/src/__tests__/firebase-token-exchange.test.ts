@@ -53,13 +53,61 @@ describe("exchangeRefreshToken", () => {
     expect(body).toContain("refresh_token=my-refresh-token");
   });
 
-  it("400 invalid_grant（リフレッシュトークン失効）は permanent エラーを投げる", async () => {
+  it("400 TOKEN_EXPIRED（リフレッシュトークン失効）は permanent かつ revoked:true のエラーを投げる（codex review指摘: 失効判定に使う）", async () => {
     vi.mocked(global.fetch).mockResolvedValue(
       new Response(JSON.stringify({ error: { code: 400, message: "TOKEN_EXPIRED" } }), { status: 400 })
     );
 
     await expect(exchangeRefreshToken("expired-token", "api-key")).rejects.toMatchObject({
       transient: false,
+      revoked: true,
+    } satisfies Partial<TokenExchangeError>);
+  });
+
+  it.each(["USER_DISABLED", "USER_NOT_FOUND", "INVALID_REFRESH_TOKEN"])(
+    "400 %s は revoked:true のエラーを投げる（公式ドキュメント記載のトークン失効系エラーコード）",
+    async (code) => {
+      vi.mocked(global.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ error: { message: code } }), { status: 400 })
+      );
+
+      await expect(exchangeRefreshToken("token", "api-key")).rejects.toMatchObject({
+        transient: false,
+        revoked: true,
+      } satisfies Partial<TokenExchangeError>);
+    }
+  );
+
+  it("400 API key not valid（設定不備。トークン失効とは無関係）は revoked:false の permanent エラーを投げる（codex review指摘: 誤って資格情報を削除しないため）", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: "API key not valid. Please pass a valid API key." } }), {
+        status: 400,
+      })
+    );
+
+    await expect(exchangeRefreshToken("token", "api-key")).rejects.toMatchObject({
+      transient: false,
+      revoked: false,
+    } satisfies Partial<TokenExchangeError>);
+  });
+
+  it("400 PROJECT_NUMBER_MISMATCH（設定不備）は revoked:false の permanent エラーを投げる", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: "PROJECT_NUMBER_MISMATCH" } }), { status: 400 })
+    );
+
+    await expect(exchangeRefreshToken("token", "api-key")).rejects.toMatchObject({
+      transient: false,
+      revoked: false,
+    } satisfies Partial<TokenExchangeError>);
+  });
+
+  it("400だがエラー本文が空/パース不能の場合はrevoked:falseの permanent エラーを投げる（安全側=誤削除しない）", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response("", { status: 400 }));
+
+    await expect(exchangeRefreshToken("token", "api-key")).rejects.toMatchObject({
+      transient: false,
+      revoked: false,
     } satisfies Partial<TokenExchangeError>);
   });
 

@@ -787,4 +787,41 @@ describe("Phase 1b-1: Firebaseリフレッシュトークンの暗号化永続�
 
     expect(code).toBeTruthy();
   });
+
+  it("store.saveが応答しない（ハング）場合でも、persistTimeoutMsで打ち切りサインインをブロックしない（codex review指摘: Firestore劣化時に無期限に待たされない）", async () => {
+    const keyring = makeKeyring();
+    const hangingStore = {
+      save: () => new Promise<void>(() => {}), // 永久に解決しない
+      find: async () => undefined,
+      delete: async () => {},
+    };
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(
+      ISSUER_URL,
+      8101,
+      firebaseConfig,
+      {},
+      { store: hangingStore, keyring, persistTimeoutMs: 50 }
+    );
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const startedAt = Date.now();
+    const { code } = await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(code).toBeTruthy();
+    // persistTimeoutMs(50ms)で打ち切られるはず。DCR登録・複数HTTPラウンドトリップの
+    // オーバーヘッドを見込んでも、store.saveのハングに引きずられた場合の
+    // 「無期限」とは明確に区別できる余裕を持った閾値にする。
+    expect(elapsedMs).toBeLessThan(2000);
+  });
 });

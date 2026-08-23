@@ -70,12 +70,15 @@ export function createCredentialService(deps: CredentialServiceDeps): Credential
     try {
       exchanged = await exchange(refreshToken, firebaseWebApiKey);
     } catch (error) {
-      // permanent エラー（invalid_grant 等、refresh token 自体が失効）の場合、
+      // revoked:true（TOKEN_EXPIRED等、refresh token自体が失効）の場合のみ削除する。
       // 失効済みトークンを保存したままにすると次回以降も同じ失敗を繰り返し、
       // Firestore にゴミとして残り続ける（code reviewセカンドオピニオン指摘）。
       // 削除しておけば、次回呼び出しは CredentialNotFoundError で
       // 「再認証が必要」であることを一貫して呼び出し元へ伝えられる。
-      if (error instanceof TokenExchangeError && !error.transient) {
+      // permanentだがrevoked:falseの場合（API key不正等の設定不備）は削除しない
+      // — 設定ミス1件で全ユーザーの再認証を強制することを避けるため
+      // （codex review再指摘、2026-08-23）。
+      if (error instanceof TokenExchangeError && error.revoked) {
         try {
           await store.delete(uid);
         } catch (deleteError) {

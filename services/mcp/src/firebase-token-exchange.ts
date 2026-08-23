@@ -5,14 +5,26 @@
  *
  * エラー分類は rules/error-handling.md §3 準拠:
  * transient = ネットワーク/5xx/429、permanent = 400 invalid_grant（失効）等。
+ *
+ * `revoked` は「保存済み資格情報を削除してよいか」の判定に使う別軸のフラグ
+ * (credential-service.ts参照)。公式ドキュメント記載のエラーコード
+ * (https://docs.cloud.google.com/identity-platform/docs/use-rest-api) のうち
+ * TOKEN_EXPIRED/USER_DISABLED/USER_NOT_FOUND/INVALID_REFRESH_TOKEN の4つだけが
+ * 「このリフレッシュトークン自体が無効」を意味する。API key不正
+ * (`API key not valid`) や PROJECT_NUMBER_MISMATCH 等は permanent ではあるが
+ * 設定不備であり、誤って資格情報を削除すると設定ミス1件で全ユーザーの
+ * 再認証を強制してしまう（codex review指摘、2026-08-23）。
  */
 
 const TOKEN_ENDPOINT = "https://securetoken.googleapis.com/v1/token";
 
+const REVOCATION_ERROR_MESSAGES = new Set(["TOKEN_EXPIRED", "USER_DISABLED", "USER_NOT_FOUND", "INVALID_REFRESH_TOKEN"]);
+
 export class TokenExchangeError extends Error {
   constructor(
     message: string,
-    readonly transient: boolean
+    readonly transient: boolean,
+    readonly revoked: boolean = false
   ) {
     super(message);
   }
@@ -26,6 +38,15 @@ export interface ExchangedTokens {
 
 function isTransientStatus(status: number): boolean {
   return status === 429 || status >= 500;
+}
+
+async function extractErrorMessage(response: Response): Promise<string | undefined> {
+  try {
+    const body = (await response.json()) as { error?: { message?: unknown } };
+    return typeof body.error?.message === "string" ? body.error.message : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function exchangeRefreshToken(refreshToken: string, apiKey: string): Promise<ExchangedTokens> {
@@ -42,9 +63,12 @@ export async function exchangeRefreshToken(refreshToken: string, apiKey: string)
   }
 
   if (!response.ok) {
+    const errorMessage = await extractErrorMessage(response);
+    const revoked = errorMessage !== undefined && REVOCATION_ERROR_MESSAGES.has(errorMessage);
     throw new TokenExchangeError(
-      `Firebase refresh token交換が失敗しました (status=${response.status})`,
-      isTransientStatus(response.status)
+      `Firebase refresh token交換が失敗しました (status=${response.status}${errorMessage ? `, message=${errorMessage}` : ""})`,
+      revoked ? false : isTransientStatus(response.status),
+      revoked
     );
   }
 
@@ -63,6 +87,7 @@ export async function exchangeRefreshToken(refreshToken: string, apiKey: string)
  * (レビュー指摘: パース不能や必須フィールド欠落を無検証で通すと undefined を
  * 「成功」として返してしまい、以後の呼び出し元すべてに静かに伝播する)。
  * ここで必ず検証し、不正な応答は permanent な TokenExchangeError として扱う。
+ * revoked:false（既定値）— 応答形式の異常はトークン失効とは無関係。
  */
 function validateExchangedTokens(body: unknown): ExchangedTokens {
   if (typeof body !== "object" || body === null) {

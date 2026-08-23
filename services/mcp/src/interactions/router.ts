@@ -10,12 +10,23 @@ import { logger } from "../logger.js";
 export interface CredentialOptions {
   store: CredentialStore;
   keyring: CredentialKeyring;
+  /** 既定3000ms。Firestore劣化時にサインイン応答が無期限にブロックされないための上限（codex review指摘） */
+  persistTimeoutMs?: number;
 }
+
+const DEFAULT_PERSIST_TIMEOUT_MS = 3000;
 
 /**
  * サインイン時に捕捉した Firebase リフレッシュトークンを暗号化して永続化する。
  * 保存失敗はサインイン成功を阻害しない（ping 等トークンを使わない機能は
  * 引き続き動作すべきため、rules/error-handling.md §1の独立防御パターンに準拠）。
+ *
+ * 書き込みは persistTimeoutMs で上限を設ける。Firestoreが劣化しリトライを
+ * 繰り返している間、awaitしたままだとサインイン応答自体が無期限にブロックされ
+ * 「保存失敗はサインインを阻害しない」という設計意図に反する（codex review
+ * 指摘、2026-08-23）。タイムアウト後も書き込み自体はバックグラウンドで継続し
+ * (自身のtry/catchで保護済みのためunhandled rejectionにはならない)、完了すれば
+ * 通常どおり永続化される。
  */
 async function persistRefreshTokenBestEffort(
   credentialOptions: CredentialOptions | undefined,
@@ -25,13 +36,28 @@ async function persistRefreshTokenBestEffort(
   if (!credentialOptions || typeof refreshToken !== "string" || refreshToken.length === 0) {
     return;
   }
-  try {
-    const { store, keyring } = credentialOptions;
-    const encrypted = encryptWithActiveKey(refreshToken, keyring);
-    await store.save(uid, { encryptedRefreshToken: encrypted, keyVersion: keyring.activeVersion });
-  } catch (error) {
-    logger.error("Failed to persist Firebase refresh token", { error: String(error) });
-  }
+  const { store, keyring, persistTimeoutMs = DEFAULT_PERSIST_TIMEOUT_MS } = credentialOptions;
+
+  const writePromise = (async () => {
+    try {
+      const encrypted = encryptWithActiveKey(refreshToken, keyring);
+      await store.save(uid, { encryptedRefreshToken: encrypted, keyVersion: keyring.activeVersion });
+    } catch (error) {
+      logger.error("Failed to persist Firebase refresh token", { error: String(error) });
+    }
+  })();
+
+  const timeoutPromise = new Promise<void>((resolve) => {
+    setTimeout(() => {
+      logger.error("Persisting Firebase refresh token exceeded timeout; continuing sign-in without waiting", {
+        uid,
+        persistTimeoutMs,
+      });
+      resolve();
+    }, persistTimeoutMs).unref();
+  });
+
+  await Promise.race([writePromise, timeoutPromise]);
 }
 
 /**

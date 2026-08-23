@@ -67,13 +67,13 @@ describe("credential-service", () => {
     expect(exchangeMock).not.toHaveBeenCalled();
   });
 
-  it("permanentなTokenExchangeError（失効したrefresh token）の場合、保存済み資格情報を削除し以後CredentialNotFoundErrorになる（code review指摘: ゴミの永続残留・無限リトライ防止）", async () => {
+  it("revoked:trueなTokenExchangeError（失効したrefresh token）の場合、保存済み資格情報を削除し以後CredentialNotFoundErrorになる（code review指摘: ゴミの永続残留・無限リトライ防止）", async () => {
     const keyring = makeKeyring();
     const store = createCredentialStore(createFakeFirestore());
     const encrypted = encryptWithKey("revoked-refresh-token", keyring.keys[0]!.key, 1);
     await store.save("uid-1", { encryptedRefreshToken: encrypted, keyVersion: 1 });
 
-    exchangeMock.mockRejectedValue(new TokenExchangeError("invalid_grant", false));
+    exchangeMock.mockRejectedValue(new TokenExchangeError("TOKEN_EXPIRED", false, true));
 
     const service = createCredentialService({ store, keyring, firebaseWebApiKey: "api-key", exchange: exchangeMock });
 
@@ -93,6 +93,21 @@ describe("credential-service", () => {
     await store.save("uid-1", { encryptedRefreshToken: encrypted, keyVersion: 1 });
 
     exchangeMock.mockRejectedValue(new TokenExchangeError("503", true));
+
+    const service = createCredentialService({ store, keyring, firebaseWebApiKey: "api-key", exchange: exchangeMock });
+
+    await expect(service.getFirebaseIdTokenForAccount("uid-1")).rejects.toThrow(TokenExchangeError);
+    const stored = await store.find("uid-1");
+    expect(stored?.encryptedRefreshToken).toBe(encrypted);
+  });
+
+  it("permanentだがrevoked:false（API key不正等の設定不備）のTokenExchangeErrorでは保存済み資格情報を削除しない（codex review指摘: 設定不備1件で全ユーザーの再認証を強制しないため）", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    const encrypted = encryptWithKey("still-valid-refresh-token", keyring.keys[0]!.key, 1);
+    await store.save("uid-1", { encryptedRefreshToken: encrypted, keyVersion: 1 });
+
+    exchangeMock.mockRejectedValue(new TokenExchangeError("API key not valid", false, false));
 
     const service = createCredentialService({ store, keyring, firebaseWebApiKey: "api-key", exchange: exchangeMock });
 
