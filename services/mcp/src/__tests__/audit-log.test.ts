@@ -91,4 +91,36 @@ describe("createAuditLog", () => {
     expect(errorSpy).toHaveBeenCalledWith("Failed to write mcp_audit_logs entry", expect.objectContaining({ actor: "uid-1" }));
     errorSpy.mockRestore();
   });
+
+  it("Firestore書き込みが応答しない（ハング）場合でも、timeoutMsで打ち切りrecord()呼び出し元をブロックしない（codex review P2指摘: 監査ログが本来ブロックしない設計のはずが、Firestore劣化時にツール呼び出し自体を巻き込んで待たせてしまっていた）", async () => {
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+    const hangingDb = {
+      collection: () => ({
+        doc: () => ({
+          set: () => new Promise<void>(() => {}), // 永久に解決しない
+        }),
+      }),
+    } as unknown as ReturnType<typeof createFakeFirestore>;
+    const auditLog = createAuditLog(hangingDb, { timeoutMs: 50 });
+
+    const startedAt = Date.now();
+    await auditLog.record({ actor: "uid-1", tenant: "tenant-a", tool: "list_courses", result: "success" });
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(elapsedMs).toBeLessThan(2000);
+    errorSpy.mockRestore();
+  });
+
+  it("Firestore書き込みがtimeoutMs内に成功した場合、タイムアウト後に偽の失敗ログを出さない（PR A router.tsの既知の落とし穴: タイマークリア漏れの再発防止）", async () => {
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+    const db = createFakeFirestore();
+    const auditLog = createAuditLog(db, { timeoutMs: 30 });
+
+    await auditLog.record({ actor: "uid-1", tenant: "tenant-a", tool: "list_courses", result: "success" });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const timeoutLogCalls = errorSpy.mock.calls.filter((call) => String(call[0]).includes("exceeded timeout"));
+    expect(timeoutLogCalls).toHaveLength(0);
+    errorSpy.mockRestore();
+  });
 });
