@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-23 (Phase 1b-1 PR A完了・マージ・デプロイ・実機確認済み。Phase 2a (PR B) 着手が次のタスク)
+updated: 2026-08-23 (Phase 2a PR Bコード完了・codex review 6巡+pr-review-toolkit 3系統セカンドオピニオン反映済み。マージ承認待ち)
 ---
 
 ## 現在のミッション
@@ -39,10 +39,11 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
 - [x] Phase 1以降 着手前調査: MCPアクセストークンがFirebase UIDのみ保持し、ユーザー本人としてservices/apiを呼ぶ手段が存在しないことが判明（Phase 2着手前のブロッカー）。plan modeで対処方針を決裁者確認（① refresh token永続化方式を採用 ② 読み取り専用ツール先行 ③ super admin対策はv1見送り・残存リスク記録 ④ get_quizは正解・解説含む全情報を返す）。計画ファイル `/Users/yyyhhh/.claude/plans/linear-zooming-conway.md`、grip HTMLでレビュー済み
 - [x] Step 0スパイク: Firebaseリフレッシュトークンをsecuretoken.googleapis.comで交換した後のIDトークンが`firebase.sign_in_provider === "google.com"`を保持し続けるかを実機検証 → PASS（実Googleアカウント`system@279279.net`でサインイン→ネットワーク応答からrefreshToken捕捉→curlで交換→デコードしたIDトークンで`sign_in_provider: "google.com"`, `email_verified: true`を確認。PR A設計の前提が成立）
 - [x] Phase 1b-1 (PR A): Firebaseリフレッシュトークンの暗号化永続化（AES-GCM、鍵バージョン管理、Firestoreストア、トークン交換クライアント）。計画linear-zooming-conway.md参照 → 済（PR #660、テスト107件PASS/5skip、lint/type-check/build全PASS。デプロイ前手動作業: Secret Manager `mcp-credential-encryption-key` 作成 + Cloud Run既定compute SAへ`secretAccessor`付与済み〔`mcp-oauth-signing-key`と同型〕。codex review計6回（`--strict-config`含む）+ pr-review-toolkit正式プラグイン3系統×2ラウンド〔当初general-purpose代替→後半で実プラグインエージェントに切替、model:sonnet明示〕で収斂。修正内容: 同一uid同時exchange競合(P2)/応答未検証によるundefined成功扱い/失効判定の粒度誤り(revoked vs 設定不備)/Firestore書き込みブロッキング(P1)/タイマークリア漏れ(P2)/exchange成功後のstore.save失敗が無防備(CRITICAL)/復号失敗が無防備。credential-service.tsは本PR時点で未配線、Phase 2aで実際に呼び出される。マージ→デプロイ成功（`deploy-mcp`含む全job success）→**デプロイ後実機確認も完了**（2026-08-23、決裁者のブラウザで`_session` Cookie削除→完全新規Googleサインイン実行→`POST /interaction/.../firebase-callback`の0.4秒後に`mcp_user_credentials/{uid}`ドキュメントが作成されたことをFirestore REST APIで確認、`encryptedRefreshToken`は暗号化済みblobで平文露出なし。当初1-2回目の`/mcp` reconnectはPhase 1a PR2のセッション永続化によりGoogleサインインがスキップされ`firebase-callback`が呼ばれなかった＝ブラウザCookie削除が必須と判明）
-- [ ] Phase 2a (PR B): 読み取り専用quizツール3種（list_courses/list_lessons/get_quiz） + LMS APIクライアント + 監査ログ。PR A完了後に着手
+- [x] Phase 2a (PR B): 読み取り専用quizツール3種（list_courses/list_lessons/get_quiz） + LMS APIクライアント + 監査ログ。計画linear-zooming-conway.md「PR B」節参照 → 済（ブランチ`feat/mcp-quiz-readonly-tools`、テスト151件PASS/5skip、lint/type-check/build全PASS）。codex review計6回で収斂: P1×3件（①資格情報喪失時にoidc-providerのセッションCookieが有効な限りFirebaseログインがスキップされ自己回復できない問題→Session/Grant/RefreshTokenのTTLを14日→24時間へ短縮する緩和策を実装〔根治ではない、下記監視項目参照〕、②Cloud Run CPUスロットリングによる書き込み中断リスクがPR Bで実配線され「起きても実害なし」から「実害あり」に格上げ→decision-maker確認済みで対応は監視継続、③`@lms-279/shared-types`依存追加によりservices/mcp単体ディレクトリをビルドコンテキストとする従来のDockerfile/CIではワークスペース依存を解決できずビルドが壊れる→services/api同型のworkspace-root-buildへ変更、ローカルで実際にdocker build+コンテナ起動+discoveryエンドポイント200応答まで実証確認〔副次的に発見: ローカルの古い`tsconfig.tsbuildinfo`がDockerビルドコンテキストへ混入しcomposite TypeScriptビルドの.d.ts出力を破壊する再現性ある問題を検出、`.dockerignore`に`**/*.tsbuildinfo`追加で再発防止〕）、P2×4件（監査ログ欠落2箇所、パスセグメント未エンコードによるインジェクション、audit-log書き込みの無期限ブロック、いずれも修正）。加えてpr-review-toolkit正式プラグイン3系統セカンドオピニオン（code-reviewer/silent-failure-hunter/pr-test-analyzer、model:sonnet明示）でCRITICAL信頼度2件（呼称ルール違反「決裁者」→「開発者」、shared-types DTOが定義のみで実際は`unknown`型のまま未配線だった問題→型を実配線しAdminCourseSummaryのフィールドも実際のAPIレスポンス形状に合わせて修正）+MEDIUM2件（extractUid失敗時の監査ログ欠落、transientエラーの内部詳細がMCPクライアントへ露出）+テストカバレッジgap複数（401リトライ枯渇パス・transientでのリトライ不発生・forceRefreshのキャッシュ再反映・courseId/lessonIdのURLエンコード）を反映
+- [ ] PR B デプロイ後の残作業（マージ後）: LMS_API_BASE_URL等の新規env varを含むdeploy-mcp実行結果の確認、実機での`list_courses`/`list_lessons`/`get_quiz`呼び出し確認（AUTH_MODE=devローカルapi+mcpでの動作確認、または本番実機）
 
 ## 🔄 中断点（in-flight）
-なし（PR Aは完全マージ・デプロイ・実機確認まで完了。次の作業単位はPhase 2a (PR B) の新規着手）
+なし（PR A/PR Bともにコード面は完全に完了。PR Bはブランチ`feat/mcp-quiz-readonly-tools`にpush済み・codex review round 6 findings 0件でクリーン・マージ承認待ち）
 
 ## Phase 0完了の経緯（本セッション、2026-08-21）
 実クライアント接続で当初の想定になかった不具合が2件連続発覚し、いずれも修正・実機再検証済み。
