@@ -824,4 +824,44 @@ describe("Phase 1b-1: Firebaseリフレッシュトークンの暗号化永続�
     // 「無期限」とは明確に区別できる余裕を持った閾値にする。
     expect(elapsedMs).toBeLessThan(2000);
   });
+
+  it("store.saveがpersistTimeoutMs内に成功した場合、タイムアウト後に偽の失敗ログを出さない（codex review再指摘: setTimeoutのクリア漏れでタイムアウト成功時にも誤ってタイムアウトログが出ていた）", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(
+      ISSUER_URL,
+      8102,
+      firebaseConfig,
+      {},
+      { store, keyring, persistTimeoutMs: 30 }
+    );
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { code } = await obtainAuthorizationCode(
+        app,
+        redirectUri,
+        codeChallenge,
+        `${ISSUER_URL}/mcp`,
+        "openid",
+        ["authorization_code"],
+        "my-refresh-token"
+      );
+      expect(code).toBeTruthy();
+
+      // persistTimeoutMs(30ms)を確実に超えるまで待ち、それでも「timeout exceeded」
+      // ログが遅延発火しないことを確認する（setTimeoutが正しくclearされていれば発火しない）
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      const timeoutLogCalls = consoleErrorSpy.mock.calls.filter((call) =>
+        String(call[0]).includes("exceeded timeout")
+      );
+      expect(timeoutLogCalls).toHaveLength(0);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
 });

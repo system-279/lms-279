@@ -47,17 +47,22 @@ async function persistRefreshTokenBestEffort(
     }
   })();
 
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<void>((resolve) => {
-    setTimeout(() => {
+    timeoutHandle = setTimeout(() => {
       logger.error("Persisting Firebase refresh token exceeded timeout; continuing sign-in without waiting", {
         uid,
         persistTimeoutMs,
       });
       resolve();
-    }, persistTimeoutMs).unref();
+    }, persistTimeoutMs);
+    timeoutHandle.unref();
   });
 
   await Promise.race([writePromise, timeoutPromise]);
+  // writePromise が先に解決した場合、タイマーを止めないと persistTimeoutMs 後に
+  // 「タイムアウトした」という偽のログが遅延発火する（codex review再指摘、2026-08-23）。
+  clearTimeout(timeoutHandle);
 }
 
 /**
