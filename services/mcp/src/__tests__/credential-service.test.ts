@@ -116,4 +116,60 @@ describe("credential-service", () => {
     expect(second).toBe("id-2");
     expect(exchangeMock).toHaveBeenCalledTimes(2);
   });
+
+  it("同一uidへの同時呼び出しはexchangeを1回だけに合流させる（P2: レースコンディション対策）", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    const encrypted = encryptWithKey("original-refresh-token", keyring.keys[0]!.key, 1);
+    await store.save("uid-1", { encryptedRefreshToken: encrypted, keyVersion: 1 });
+
+    let resolveExchange: (value: { idToken: string; refreshToken: string; expiresIn: number }) => void;
+    const pendingExchange = new Promise<{ idToken: string; refreshToken: string; expiresIn: number }>((resolve) => {
+      resolveExchange = resolve;
+    });
+    exchangeMock.mockReturnValue(pendingExchange);
+
+    const service = createCredentialService({ store, keyring, firebaseWebApiKey: "api-key", exchange: exchangeMock });
+
+    // キャッシュもinflightも無い状態で2つの呼び出しをほぼ同時に開始する。
+    // exchangeがまだ解決していない間に2件目のリクエストが来た場合の挙動を検証する。
+    const call1 = service.getFirebaseIdTokenForAccount("uid-1");
+    const call2 = service.getFirebaseIdTokenForAccount("uid-1");
+
+    resolveExchange!({ idToken: "shared-id-token", refreshToken: "rotated-refresh-token", expiresIn: 3600 });
+    const [result1, result2] = await Promise.all([call1, call2]);
+
+    expect(result1).toBe("shared-id-token");
+    expect(result2).toBe("shared-id-token");
+    expect(exchangeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("異なるuidへの同時呼び出しはそれぞれ独立してexchangeされる", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    await store.save("uid-1", {
+      encryptedRefreshToken: encryptWithKey("token-1", keyring.keys[0]!.key, 1),
+      keyVersion: 1,
+    });
+    await store.save("uid-2", {
+      encryptedRefreshToken: encryptWithKey("token-2", keyring.keys[0]!.key, 1),
+      keyVersion: 1,
+    });
+    exchangeMock.mockImplementation(async (refreshToken: string) => ({
+      idToken: `id-for-${refreshToken}`,
+      refreshToken: `rotated-${refreshToken}`,
+      expiresIn: 3600,
+    }));
+
+    const service = createCredentialService({ store, keyring, firebaseWebApiKey: "api-key", exchange: exchangeMock });
+
+    const [result1, result2] = await Promise.all([
+      service.getFirebaseIdTokenForAccount("uid-1"),
+      service.getFirebaseIdTokenForAccount("uid-2"),
+    ]);
+
+    expect(result1).toBe("id-for-token-1");
+    expect(result2).toBe("id-for-token-2");
+    expect(exchangeMock).toHaveBeenCalledTimes(2);
+  });
 });

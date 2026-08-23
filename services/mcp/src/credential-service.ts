@@ -43,6 +43,27 @@ export function createCredentialService(deps: CredentialServiceDeps): Credential
   const exchange = deps.exchange ?? defaultExchangeRefreshToken;
   const now = deps.now ?? (() => Date.now());
   const cache = new Map<string, CacheEntry>();
+  // 同一uidへの同時呼び出しがそれぞれ独立にrefresh tokenを読んで交換すると、
+  // 交換のたびにGoogle側でrefresh tokenがローテートされるため、後発の呼び出しが
+  // 既に無効化されたrefresh tokenでinvalid_grantになりうる（Codex review指摘、P2）。
+  // 進行中の交換をuid単位で1本化し、後続の呼び出しは同じPromiseを待つ。
+  const inflight = new Map<string, Promise<string>>();
+
+  async function refreshAndCache(uid: string): Promise<string> {
+    const stored = await store.find(uid);
+    if (!stored) {
+      throw new CredentialNotFoundError(uid);
+    }
+
+    const refreshToken = decryptWithKeyring(stored.encryptedRefreshToken, keyring.keys);
+    const exchanged = await exchange(refreshToken, firebaseWebApiKey);
+
+    const reEncrypted = encryptWithActiveKey(exchanged.refreshToken, keyring);
+    await store.save(uid, { encryptedRefreshToken: reEncrypted, keyVersion: keyring.activeVersion });
+
+    cache.set(uid, { idToken: exchanged.idToken, expiresAt: now() + exchanged.expiresIn * 1000 - CACHE_TTL_BUFFER_MS });
+    return exchanged.idToken;
+  }
 
   return {
     async getFirebaseIdTokenForAccount(uid: string): Promise<string> {
@@ -51,19 +72,16 @@ export function createCredentialService(deps: CredentialServiceDeps): Credential
         return cached.idToken;
       }
 
-      const stored = await store.find(uid);
-      if (!stored) {
-        throw new CredentialNotFoundError(uid);
+      const existingInflight = inflight.get(uid);
+      if (existingInflight) {
+        return existingInflight;
       }
 
-      const refreshToken = decryptWithKeyring(stored.encryptedRefreshToken, keyring.keys);
-      const exchanged = await exchange(refreshToken, firebaseWebApiKey);
-
-      const reEncrypted = encryptWithActiveKey(exchanged.refreshToken, keyring);
-      await store.save(uid, { encryptedRefreshToken: reEncrypted, keyVersion: keyring.activeVersion });
-
-      cache.set(uid, { idToken: exchanged.idToken, expiresAt: now() + exchanged.expiresIn * 1000 - CACHE_TTL_BUFFER_MS });
-      return exchanged.idToken;
+      const promise = refreshAndCache(uid).finally(() => {
+        inflight.delete(uid);
+      });
+      inflight.set(uid, promise);
+      return promise;
     },
   };
 }
