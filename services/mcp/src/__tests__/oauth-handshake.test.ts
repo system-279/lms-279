@@ -6,6 +6,7 @@ import { createFirestoreAdapterFactory } from "../storage/firestore-adapter.js";
 import { createFakeFirestore } from "../storage/__tests__/fake-firestore.js";
 import { createCredentialStore } from "../storage/credential-store.js";
 import { decryptWithKeyring } from "../crypto/aes-gcm.js";
+import { createCredentialService } from "../credential-service.js";
 
 const mockVerifyIdToken = vi.fn();
 
@@ -689,7 +690,7 @@ describe("Phase 1b-1: Firebaseリフレッシュトークンの暗号化永続�
     expect(decryptWithKeyring(stored!.encryptedRefreshToken, keyring.keys)).toBe("my-refresh-token");
   });
 
-  it("refreshTokenが未送信でもサインインは200で成功する（保存失敗はサインインを阻害しない）", async () => {
+  it("refreshTokenが未送信でもサインインは200で成功する（credential-storeは呼ばれない）", async () => {
     const store = createCredentialStore(createFakeFirestore());
     const keyring = makeKeyring();
     const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
@@ -702,6 +703,70 @@ describe("Phase 1b-1: Firebaseリフレッシュトークンの暗号化永続�
     expect(code).toBeTruthy();
     const stored = await store.find("test-firebase-uid");
     expect(stored).toBeUndefined();
+  });
+
+  it("store.saveが失敗してもサインインは200で成功する（保存失敗はサインインを阻害しない。pr-review-toolkitセカンドオピニオン指摘: 実際にstore.saveがthrowする経路の検証）", async () => {
+    const keyring = makeKeyring();
+    const failingStore = {
+      save: async () => {
+        throw new Error("firestore down");
+      },
+      find: async () => undefined,
+      delete: async () => {},
+    };
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(ISSUER_URL, 8099, firebaseConfig, {}, { store: failingStore, keyring });
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const { code } = await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+
+    expect(code).toBeTruthy();
+  });
+
+  it("サインイン時に暗号化保存されたrefreshTokenを、credential-service.tsが復号・交換して実際にidTokenを取得できる（write経路とread経路のE2E結合。pr-test-analyzerセカンドオピニオン指摘: 両者が別々の低レベルプリミティブに対してしかテストされておらず結合されていなかった）", async () => {
+    const store = createCredentialStore(createFakeFirestore());
+    const keyring = makeKeyring();
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+
+    const { app } = await createApp(ISSUER_URL, 8100, firebaseConfig, {}, { store, keyring });
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+
+    const exchangeMock = vi
+      .fn()
+      .mockResolvedValue({ idToken: "fresh-id-token", refreshToken: "rotated-refresh-token", expiresIn: 3600 });
+    const credentialService = createCredentialService({
+      store,
+      keyring,
+      firebaseWebApiKey: "api-key",
+      exchange: exchangeMock,
+    });
+
+    const idToken = await credentialService.getFirebaseIdTokenForAccount("test-firebase-uid");
+
+    expect(idToken).toBe("fresh-id-token");
+    // router.ts が保存した暗号文を credential-service.ts が正しく復号できたことの証明
+    // （decryptWithKeyringへ渡された平文が、サインイン時に送った値と一致）
+    expect(exchangeMock).toHaveBeenCalledWith("my-refresh-token", "api-key");
   });
 
   it("credentialOptions未指定（従来どおり）でもサインインは影響を受けない", async () => {

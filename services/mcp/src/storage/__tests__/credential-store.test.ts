@@ -39,4 +39,36 @@ describe("CredentialStore（Firestore mcp_user_credentials）", () => {
     expect(await store.find("uid-1")).toEqual({ encryptedRefreshToken: "cipher-1", keyVersion: 1 });
     expect(await store.find("uid-2")).toEqual({ encryptedRefreshToken: "cipher-2", keyVersion: 1 });
   });
+
+  it("delete後の find は undefined を返す", async () => {
+    const store = createCredentialStore(createFakeFirestore());
+    await store.save("uid-1", { encryptedRefreshToken: "cipher-1", keyVersion: 1 });
+
+    await store.delete("uid-1");
+
+    expect(await store.find("uid-1")).toBeUndefined();
+  });
+
+  it("存在しない uid への delete は例外を投げない", async () => {
+    const store = createCredentialStore(createFakeFirestore());
+
+    await expect(store.delete("nonexistent-uid")).resolves.toBeUndefined();
+  });
+
+  it("破損したドキュメント（encryptedRefreshTokenが文字列でない）の find は undefined を返す（firestore-adapter.tsのparsePayloadと同型の防御）", async () => {
+    const db = createFakeFirestore();
+    const store = createCredentialStore(db);
+    // store.save()を経由せず、破損データを直接書き込む
+    await db.collection("mcp_user_credentials").doc("uid-broken").set({ keyVersion: 1 });
+
+    expect(await store.find("uid-broken")).toBeUndefined();
+  });
+
+  it("破損したドキュメント（keyVersionが数値でない）の find は undefined を返す", async () => {
+    const db = createFakeFirestore();
+    const store = createCredentialStore(db);
+    await db.collection("mcp_user_credentials").doc("uid-broken").set({ encryptedRefreshToken: "cipher-1", keyVersion: "not-a-number" });
+
+    expect(await store.find("uid-broken")).toBeUndefined();
+  });
 });

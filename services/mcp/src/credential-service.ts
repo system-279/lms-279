@@ -1,7 +1,12 @@
 import { decryptWithKeyring } from "./crypto/aes-gcm.js";
 import type { CredentialStore } from "./storage/credential-store.js";
 import { encryptWithActiveKey, type CredentialKeyring } from "./credential-keys.js";
-import { exchangeRefreshToken as defaultExchangeRefreshToken, type ExchangedTokens } from "./firebase-token-exchange.js";
+import {
+  exchangeRefreshToken as defaultExchangeRefreshToken,
+  TokenExchangeError,
+  type ExchangedTokens,
+} from "./firebase-token-exchange.js";
+import { logger } from "./logger.js";
 
 /**
  * uid（Firebase UID）を起点に、保存済み暗号化リフレッシュトークンを復号 →
@@ -11,6 +16,11 @@ import { exchangeRefreshToken as defaultExchangeRefreshToken, type ExchangedToke
  * 同一プロセス内の短期キャッシュ(既定55分、IDトークンの実TTLは60分)を持ち、
  * `createApp`スコープで一度だけ生成されるため同一Cloud Runインスタンス内の
  * 複数リクエストで有効（計画 linear-zooming-conway.md「PR A」節参照）。
+ *
+ * 本PR時点では app.ts / index.ts / mcp-server.ts のどこからも呼ばれていない
+ * （書き込み経路=サインイン時のrefreshToken捕捉のみが本PRのスコープ）。
+ * quiz読み取りツール実装PR（Phase 2a）で mcp-server.ts のツールハンドラから
+ * 呼び出される想定（pr-review-toolkitセカンドオピニオン指摘、2026-08-23）。
  */
 
 const CACHE_TTL_BUFFER_MS = 5 * 60 * 1000;
@@ -56,7 +66,27 @@ export function createCredentialService(deps: CredentialServiceDeps): Credential
     }
 
     const refreshToken = decryptWithKeyring(stored.encryptedRefreshToken, keyring.keys);
-    const exchanged = await exchange(refreshToken, firebaseWebApiKey);
+    let exchanged: ExchangedTokens;
+    try {
+      exchanged = await exchange(refreshToken, firebaseWebApiKey);
+    } catch (error) {
+      // permanent エラー（invalid_grant 等、refresh token 自体が失効）の場合、
+      // 失効済みトークンを保存したままにすると次回以降も同じ失敗を繰り返し、
+      // Firestore にゴミとして残り続ける（code reviewセカンドオピニオン指摘）。
+      // 削除しておけば、次回呼び出しは CredentialNotFoundError で
+      // 「再認証が必要」であることを一貫して呼び出し元へ伝えられる。
+      if (error instanceof TokenExchangeError && !error.transient) {
+        try {
+          await store.delete(uid);
+        } catch (deleteError) {
+          logger.error("Failed to delete stale credential after permanent exchange error", {
+            uid,
+            error: String(deleteError),
+          });
+        }
+      }
+      throw error;
+    }
 
     const reEncrypted = encryptWithActiveKey(exchanged.refreshToken, keyring);
     await store.save(uid, { encryptedRefreshToken: reEncrypted, keyVersion: keyring.activeVersion });

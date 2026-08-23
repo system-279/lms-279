@@ -86,4 +86,59 @@ describe("exchangeRefreshToken", () => {
       transient: true,
     } satisfies Partial<TokenExchangeError>);
   });
+
+  it("422（バリデーションエラー）は permanent エラーを投げる", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response("", { status: 422 }));
+
+    await expect(exchangeRefreshToken("token", "api-key")).rejects.toMatchObject({
+      transient: false,
+    } satisfies Partial<TokenExchangeError>);
+  });
+
+  it("500（サーバーエラー境界値）は transient エラーを投げる", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response("", { status: 500 }));
+
+    await expect(exchangeRefreshToken("token", "api-key")).rejects.toMatchObject({
+      transient: true,
+    } satisfies Partial<TokenExchangeError>);
+  });
+
+  it("200応答だがJSONとしてパースできない場合はpermanentなTokenExchangeErrorを投げる（生のSyntaxErrorを漏らさない）", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response("not json", { status: 200 }));
+
+    await expect(exchangeRefreshToken("token", "api-key")).rejects.toBeInstanceOf(TokenExchangeError);
+    await expect(exchangeRefreshToken("token", "api-key")).rejects.toMatchObject({
+      transient: false,
+    } satisfies Partial<TokenExchangeError>);
+  });
+
+  it("200応答だがid_tokenが欠落している場合はpermanentなTokenExchangeErrorを投げる（undefinedを成功として返さない）", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ refresh_token: "y", expires_in: "3600" }), { status: 200 })
+    );
+
+    await expect(exchangeRefreshToken("token", "api-key")).rejects.toMatchObject({
+      transient: false,
+    } satisfies Partial<TokenExchangeError>);
+  });
+
+  it("200応答だがrefresh_tokenが欠落している場合はpermanentなTokenExchangeErrorを投げる", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ id_token: "x", expires_in: "3600" }), { status: 200 })
+    );
+
+    await expect(exchangeRefreshToken("token", "api-key")).rejects.toMatchObject({
+      transient: false,
+    } satisfies Partial<TokenExchangeError>);
+  });
+
+  it("200応答だがexpires_inが数値化できない場合はpermanentなTokenExchangeErrorを投げる", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ id_token: "x", refresh_token: "y", expires_in: "not-a-number" }), { status: 200 })
+    );
+
+    await expect(exchangeRefreshToken("token", "api-key")).rejects.toMatchObject({
+      transient: false,
+    } satisfies Partial<TokenExchangeError>);
+  });
 });

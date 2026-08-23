@@ -3,7 +3,7 @@ import { createCredentialService, CredentialNotFoundError } from "../credential-
 import { createCredentialStore } from "../storage/credential-store.js";
 import { createFakeFirestore } from "../storage/__tests__/fake-firestore.js";
 import { encryptWithKey } from "../crypto/aes-gcm.js";
-import type { ExchangedTokens } from "../firebase-token-exchange.js";
+import { TokenExchangeError, type ExchangedTokens } from "../firebase-token-exchange.js";
 import { randomBytes } from "node:crypto";
 
 function makeKeyring() {
@@ -65,6 +65,40 @@ describe("credential-service", () => {
 
     await expect(service.getFirebaseIdTokenForAccount("unknown-uid")).rejects.toBeInstanceOf(CredentialNotFoundError);
     expect(exchangeMock).not.toHaveBeenCalled();
+  });
+
+  it("permanentなTokenExchangeError（失効したrefresh token）の場合、保存済み資格情報を削除し以後CredentialNotFoundErrorになる（code review指摘: ゴミの永続残留・無限リトライ防止）", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    const encrypted = encryptWithKey("revoked-refresh-token", keyring.keys[0]!.key, 1);
+    await store.save("uid-1", { encryptedRefreshToken: encrypted, keyVersion: 1 });
+
+    exchangeMock.mockRejectedValue(new TokenExchangeError("invalid_grant", false));
+
+    const service = createCredentialService({ store, keyring, firebaseWebApiKey: "api-key", exchange: exchangeMock });
+
+    await expect(service.getFirebaseIdTokenForAccount("uid-1")).rejects.toThrow(TokenExchangeError);
+    expect(await store.find("uid-1")).toBeUndefined();
+
+    // 削除後の再呼び出しは「再認証が必要」を明示するCredentialNotFoundErrorになり、
+    // 失効済みトークンでの無意味なexchange再試行を繰り返さない
+    await expect(service.getFirebaseIdTokenForAccount("uid-1")).rejects.toBeInstanceOf(CredentialNotFoundError);
+    expect(exchangeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("transientなTokenExchangeError（一時的な障害）の場合、保存済み資格情報は削除しない", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    const encrypted = encryptWithKey("still-valid-refresh-token", keyring.keys[0]!.key, 1);
+    await store.save("uid-1", { encryptedRefreshToken: encrypted, keyVersion: 1 });
+
+    exchangeMock.mockRejectedValue(new TokenExchangeError("503", true));
+
+    const service = createCredentialService({ store, keyring, firebaseWebApiKey: "api-key", exchange: exchangeMock });
+
+    await expect(service.getFirebaseIdTokenForAccount("uid-1")).rejects.toThrow(TokenExchangeError);
+    const stored = await store.find("uid-1");
+    expect(stored?.encryptedRefreshToken).toBe(encrypted);
   });
 
   it("同一uidへの短時間内の連続呼び出しはキャッシュを使い、exchangeを再度呼ばない", async () => {
