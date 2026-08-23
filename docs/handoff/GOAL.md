@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-23 (Phase 1b-1/Phase 2a計画策定完了・Step0スパイクPASS。PR A実装が次の着手)
+updated: 2026-08-23 (Phase 1b-1 PR A完了・マージ・デプロイ・実機確認済み。Phase 2a (PR B) 着手が次のタスク)
 ---
 
 ## 現在のミッション
@@ -38,11 +38,11 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
 - [x] Phase 1a PR2 検証項目6: Cloud Runリビジョン再デプロイ後もクライアント登録が失効しないことの実機確認 → 済（テストクライアントをDCR登録→ベースライン`/auth`→303確認→空コミットpushで再デプロイ→リビジョン`mcp-00011-vkw`→`mcp-00012-fb5`切替を`gcloud run revisions list`で確認→同一client_idで`/auth`→303を再確認。PR2の存在意義そのものを実証。**テストクライアントの後片付け未完了**: `registrationManagement`feature未有効化のためDELETE /reg/{client_id}が404、Firestore直接削除も403で失敗。実害は極小（無認証DCRの既知リスクの範囲内、上記監視項目参照）だが要因未調査のまま残存）
 - [x] Phase 1以降 着手前調査: MCPアクセストークンがFirebase UIDのみ保持し、ユーザー本人としてservices/apiを呼ぶ手段が存在しないことが判明（Phase 2着手前のブロッカー）。plan modeで対処方針を決裁者確認（① refresh token永続化方式を採用 ② 読み取り専用ツール先行 ③ super admin対策はv1見送り・残存リスク記録 ④ get_quizは正解・解説含む全情報を返す）。計画ファイル `/Users/yyyhhh/.claude/plans/linear-zooming-conway.md`、grip HTMLでレビュー済み
 - [x] Step 0スパイク: Firebaseリフレッシュトークンをsecuretoken.googleapis.comで交換した後のIDトークンが`firebase.sign_in_provider === "google.com"`を保持し続けるかを実機検証 → PASS（実Googleアカウント`system@279279.net`でサインイン→ネットワーク応答からrefreshToken捕捉→curlで交換→デコードしたIDトークンで`sign_in_provider: "google.com"`, `email_verified: true`を確認。PR A設計の前提が成立）
-- [x] Phase 1b-1 (PR A): Firebaseリフレッシュトークンの暗号化永続化（AES-GCM、鍵バージョン管理、Firestoreストア、トークン交換クライアント）。計画linear-zooming-conway.md参照 → 済（PR #660、テスト107件PASS/5skip、lint/type-check/build全PASS。デプロイ前手動作業: Secret Manager `mcp-credential-encryption-key` 作成 + Cloud Run既定compute SAへ`secretAccessor`付与済み〔`mcp-oauth-signing-key`と同型〕。codex review計6回（`--strict-config`含む）+ pr-review-toolkit正式プラグイン3系統×2ラウンド〔当初general-purpose代替→後半で実プラグインエージェントに切替、model:sonnet明示〕で収斂。修正内容: 同一uid同時exchange競合(P2)/応答未検証によるundefined成功扱い/失効判定の粒度誤り(revoked vs 設定不備)/Firestore書き込みブロッキング(P1)/タイマークリア漏れ(P2)/exchange成功後のstore.save失敗が無防備(CRITICAL)/復号失敗が無防備。credential-service.tsは本PR時点で未配線、Phase 2aで実際に呼び出される）
+- [x] Phase 1b-1 (PR A): Firebaseリフレッシュトークンの暗号化永続化（AES-GCM、鍵バージョン管理、Firestoreストア、トークン交換クライアント）。計画linear-zooming-conway.md参照 → 済（PR #660、テスト107件PASS/5skip、lint/type-check/build全PASS。デプロイ前手動作業: Secret Manager `mcp-credential-encryption-key` 作成 + Cloud Run既定compute SAへ`secretAccessor`付与済み〔`mcp-oauth-signing-key`と同型〕。codex review計6回（`--strict-config`含む）+ pr-review-toolkit正式プラグイン3系統×2ラウンド〔当初general-purpose代替→後半で実プラグインエージェントに切替、model:sonnet明示〕で収斂。修正内容: 同一uid同時exchange競合(P2)/応答未検証によるundefined成功扱い/失効判定の粒度誤り(revoked vs 設定不備)/Firestore書き込みブロッキング(P1)/タイマークリア漏れ(P2)/exchange成功後のstore.save失敗が無防備(CRITICAL)/復号失敗が無防備。credential-service.tsは本PR時点で未配線、Phase 2aで実際に呼び出される。マージ→デプロイ成功（`deploy-mcp`含む全job success）→**デプロイ後実機確認も完了**（2026-08-23、決裁者のブラウザで`_session` Cookie削除→完全新規Googleサインイン実行→`POST /interaction/.../firebase-callback`の0.4秒後に`mcp_user_credentials/{uid}`ドキュメントが作成されたことをFirestore REST APIで確認、`encryptedRefreshToken`は暗号化済みblobで平文露出なし。当初1-2回目の`/mcp` reconnectはPhase 1a PR2のセッション永続化によりGoogleサインインがスキップされ`firebase-callback`が呼ばれなかった＝ブラウザCookie削除が必須と判明）
 - [ ] Phase 2a (PR B): 読み取り専用quizツール3種（list_courses/list_lessons/get_quiz） + LMS APIクライアント + 監査ログ。PR A完了後に着手
 
 ## 🔄 中断点（in-flight）
-なし（PR1は完全マージ済み。次の作業単位はPhase 1a PR1のデプロイ後手動作業、またはPhase 1a PR2の新規着手のいずれも未着手の独立タスク）
+なし（PR Aは完全マージ・デプロイ・実機確認まで完了。次の作業単位はPhase 2a (PR B) の新規着手）
 
 ## Phase 0完了の経緯（本セッション、2026-08-21）
 実クライアント接続で当初の想定になかった不具合が2件連続発覚し、いずれも修正・実機再検証済み。
@@ -79,3 +79,4 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
 - **⚠️ AI運用ミス記録（2026-08-22）**: 検証項目6の空コミットを`main`へ直接pushしてしまった（`~/.claude/CLAUDE.md` 4原則§4違反、コミット`83cf195`）。コード変更を伴わない空コミットのため実害はないが、本来はfeatureブランチ+PR経由すべきだった。今後デプロイトリガー目的の運用操作を行う際はブランチ運用方針を事前に確認すること
 - **PR #660（Phase 1b-1）レビューで判明したCloud Run実行環境依存リスク（decision-maker判断待ち、2026-08-23）**: `router.ts`の`persistRefreshTokenBestEffort`はサインイン応答を即座に返すため、リフレッシュトークンのFirestore書き込みはHTTPレスポンス送信後もバックグラウンドで完了する設計（`persistTimeoutMs`既定3000msで応答自体はブロックしない）。しかし現行の`.github/workflows/deploy.yml`の`deploy-mcp` jobには`--no-cpu-throttling`/`--cpu-boost`/`--min-instances`のいずれも設定がなく、Cloud Runの既定動作（レスポンス送信後にCPUが絞られる）下ではバックグラウンド書き込みが完了前に中断されうる（silent-failure-hunterセカンドオピニオンHIGH指摘）。対応は「`--no-cpu-throttling`等の恒常的インフラコスト増」or「書き込みをブロッキングに戻しP1問題を再導入」のいずれかのトレードオフで、AI側のコード修正では解決しない意思決定事項（4原則§1）。Phase 2aで`credential-service.ts`が実配線され実害が顕在化しうる前に、decision-makerの判断を仰ぐこと
 - **PR #660で見送った低優先度テストギャップ**（実害なしと判断・対応不要、参考記録のみ）: `persistTimeoutMs`のちょうど境界値テスト（fake timers切替が必要で費用対効果が低いと判断）／`credential-service.ts`の`store.delete()`失敗パステスト／`getCredentialKeysFromSecretManager`のSecret Manager応答Buffer-vs-string分岐テスト（既存`signing-keys.ts`と共有する既存ギャップで本PRによる新規リグレッションではない、と担当エージェント指摘）
+- **同意画面(`/confirm`)でのSessionNotFound(500)を実機で新規観測（2026-08-23、decision-maker確認済み・監視のみで対応不要と判断）**: PR A実機確認中、同一interactionへ`/interaction/:uid/confirm`が2回POSTされ2回目が`SessionNotFound`で500になる事象を1回観測（ログ: `10:11:56.125` 1回目200 → `10:11:56.615` 2回目500）。最終的に`/token`は200で発行されサインイン自体は成功。この`/confirm`ハンドラはPR Aのスコープ外（Phase 1a PR2以前から存在する既存の同意画面処理）で、二重送信の原因（consent画面側JSの二重fetch疑い、未調査）は未特定。発生1回のみでtriage基準（実害・再現性）未達のためIssue化は見送り、次回同一事象が発生した場合にIssue化を検討
