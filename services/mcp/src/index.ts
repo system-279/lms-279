@@ -4,6 +4,9 @@ import { loadConfig } from "./config.js";
 import { getFirestoreDb } from "./firebase.js";
 import { createFirestoreAdapterFactory } from "./storage/firestore-adapter.js";
 import { getSigningKeysFromSecretManager } from "./signing-keys.js";
+import { getCredentialKeysFromSecretManager } from "./credential-keys.js";
+import { createCredentialStore } from "./storage/credential-store.js";
+import type { CredentialOptions } from "./interactions/router.js";
 
 async function buildStorageOptions(config: ReturnType<typeof loadConfig>): Promise<OidcProviderOptions> {
   if (config.storage !== "firestore") {
@@ -28,9 +31,29 @@ async function buildStorageOptions(config: ReturnType<typeof loadConfig>): Promi
   };
 }
 
+/**
+ * Phase 1b-1: MCP_STORAGE=firestore の場合のみ、Firebaseリフレッシュトークン
+ * 暗号化用の鍵環を取得する。buildStorageOptions と同じ理由でここでも独立して
+ * MCP_CREDENTIAL_SECRET_NAME の欠落をチェックする。
+ */
+async function buildCredentialOptions(config: ReturnType<typeof loadConfig>): Promise<CredentialOptions | undefined> {
+  if (config.storage !== "firestore") {
+    return undefined;
+  }
+  if (!config.mcpCredentialSecretName) {
+    throw new Error(
+      "FATAL: MCP_STORAGE=firestore requires MCP_CREDENTIAL_SECRET_NAME to be set (services/mcp/src/config.ts)。"
+    );
+  }
+  const keyring = await getCredentialKeysFromSecretManager(config.mcpCredentialSecretName);
+  const db = getFirestoreDb();
+  return { store: createCredentialStore(db), keyring };
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const storageOptions = await buildStorageOptions(config);
+  const credentialOptions = await buildCredentialOptions(config);
 
   const { app } = await createApp(
     config.issuerUrl,
@@ -40,7 +63,8 @@ async function main(): Promise<void> {
       authDomain: config.firebaseAuthDomain ?? "",
       projectId: config.firebaseProjectId ?? "",
     },
-    storageOptions
+    storageOptions,
+    credentialOptions
   );
 
   app.listen(config.port, () => {

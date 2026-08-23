@@ -4,6 +4,9 @@ import type { Express } from "express";
 import * as crypto from "node:crypto";
 import { createFirestoreAdapterFactory } from "../storage/firestore-adapter.js";
 import { createFakeFirestore } from "../storage/__tests__/fake-firestore.js";
+import { createCredentialStore } from "../storage/credential-store.js";
+import { decryptWithKeyring } from "../crypto/aes-gcm.js";
+import { createCredentialService } from "../credential-service.js";
 
 const mockVerifyIdToken = vi.fn();
 
@@ -124,7 +127,8 @@ async function obtainAuthorizationCode(
   codeChallenge: string,
   resource: string,
   scope?: string,
-  grantTypes: string[] = ["authorization_code"]
+  grantTypes: string[] = ["authorization_code"],
+  refreshToken?: string
 ): Promise<{ clientId: string; code: string }> {
   const { clientId, jar: startJar, uid: loginUid } = await startAuthorization(
     app,
@@ -140,7 +144,7 @@ async function obtainAuthorizationCode(
   const callbackRes = await request(app)
     .post(`/interaction/${loginUid}/firebase-callback`)
     .set("Cookie", cookieHeader(jar))
-    .send({ idToken: "fake-id-token" });
+    .send(refreshToken === undefined ? { idToken: "fake-id-token" } : { idToken: "fake-id-token", refreshToken });
   expect(callbackRes.status).toBe(200);
   jar = mergeCookies(jar, callbackRes.headers["set-cookie"] as unknown as string[]);
   let location = callbackRes.body.redirectTo as string;
@@ -653,5 +657,211 @@ describe("Phase 1a PR2: クロスインスタンス永続化（Firestore adapter
         params: { name: "ping", arguments: {} },
       });
     expect(mcpRes.status).toBe(200);
+  });
+});
+
+describe("Phase 1b-1: Firebaseリフレッシュトークンの暗号化永続化", () => {
+  function makeKeyring() {
+    const key = crypto.randomBytes(32);
+    return { keys: [{ version: 1, key }], activeVersion: 1 };
+  }
+
+  it("refreshTokenを送ると、暗号化されて mcp_user_credentials に保存される", async () => {
+    const store = createCredentialStore(createFakeFirestore());
+    const keyring = makeKeyring();
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+
+    const { app } = await createApp(ISSUER_URL, 8096, firebaseConfig, {}, { store, keyring });
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+
+    const stored = await store.find("test-firebase-uid");
+    expect(stored).toBeDefined();
+    expect(decryptWithKeyring(stored!.encryptedRefreshToken, keyring.keys)).toBe("my-refresh-token");
+  });
+
+  it("refreshTokenが未送信でもサインインは200で成功する（credential-storeは呼ばれない）", async () => {
+    const store = createCredentialStore(createFakeFirestore());
+    const keyring = makeKeyring();
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(ISSUER_URL, 8097, firebaseConfig, {}, { store, keyring });
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const { code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+    expect(code).toBeTruthy();
+    const stored = await store.find("test-firebase-uid");
+    expect(stored).toBeUndefined();
+  });
+
+  it("store.saveが失敗してもサインインは200で成功する（保存失敗はサインインを阻害しない。pr-review-toolkitセカンドオピニオン指摘: 実際にstore.saveがthrowする経路の検証）", async () => {
+    const keyring = makeKeyring();
+    const failingStore = {
+      save: async () => {
+        throw new Error("firestore down");
+      },
+      find: async () => undefined,
+      delete: async () => {},
+    };
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(ISSUER_URL, 8099, firebaseConfig, {}, { store: failingStore, keyring });
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const { code } = await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+
+    expect(code).toBeTruthy();
+  });
+
+  it("サインイン時に暗号化保存されたrefreshTokenを、credential-service.tsが復号・交換して実際にidTokenを取得できる（write経路とread経路のE2E結合。pr-test-analyzerセカンドオピニオン指摘: 両者が別々の低レベルプリミティブに対してしかテストされておらず結合されていなかった）", async () => {
+    const store = createCredentialStore(createFakeFirestore());
+    const keyring = makeKeyring();
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+
+    const { app } = await createApp(ISSUER_URL, 8100, firebaseConfig, {}, { store, keyring });
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+
+    const exchangeMock = vi
+      .fn()
+      .mockResolvedValue({ idToken: "fresh-id-token", refreshToken: "rotated-refresh-token", expiresIn: 3600 });
+    const credentialService = createCredentialService({
+      store,
+      keyring,
+      firebaseWebApiKey: "api-key",
+      exchange: exchangeMock,
+    });
+
+    const idToken = await credentialService.getFirebaseIdTokenForAccount("test-firebase-uid");
+
+    expect(idToken).toBe("fresh-id-token");
+    // router.ts が保存した暗号文を credential-service.ts が正しく復号できたことの証明
+    // （decryptWithKeyringへ渡された平文が、サインイン時に送った値と一致）
+    expect(exchangeMock).toHaveBeenCalledWith("my-refresh-token", "api-key");
+  });
+
+  it("credentialOptions未指定（従来どおり）でもサインインは影響を受けない", async () => {
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(ISSUER_URL, 8098, firebaseConfig, {});
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const { code } = await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+
+    expect(code).toBeTruthy();
+  });
+
+  it("store.saveが応答しない（ハング）場合でも、persistTimeoutMsで打ち切りサインインをブロックしない（codex review指摘: Firestore劣化時に無期限に待たされない）", async () => {
+    const keyring = makeKeyring();
+    const hangingStore = {
+      save: () => new Promise<void>(() => {}), // 永久に解決しない
+      find: async () => undefined,
+      delete: async () => {},
+    };
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(
+      ISSUER_URL,
+      8101,
+      firebaseConfig,
+      {},
+      { store: hangingStore, keyring, persistTimeoutMs: 50 }
+    );
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const startedAt = Date.now();
+    const { code } = await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(code).toBeTruthy();
+    // persistTimeoutMs(50ms)で打ち切られるはず。DCR登録・複数HTTPラウンドトリップの
+    // オーバーヘッドを見込んでも、store.saveのハングに引きずられた場合の
+    // 「無期限」とは明確に区別できる余裕を持った閾値にする。
+    expect(elapsedMs).toBeLessThan(2000);
+  });
+
+  it("store.saveがpersistTimeoutMs内に成功した場合、タイムアウト後に偽の失敗ログを出さない（codex review再指摘: setTimeoutのクリア漏れでタイムアウト成功時にも誤ってタイムアウトログが出ていた）", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(
+      ISSUER_URL,
+      8102,
+      firebaseConfig,
+      {},
+      { store, keyring, persistTimeoutMs: 30 }
+    );
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { code } = await obtainAuthorizationCode(
+        app,
+        redirectUri,
+        codeChallenge,
+        `${ISSUER_URL}/mcp`,
+        "openid",
+        ["authorization_code"],
+        "my-refresh-token"
+      );
+      expect(code).toBeTruthy();
+
+      // persistTimeoutMs(30ms)を確実に超えるまで待ち、それでも「timeout exceeded」
+      // ログが遅延発火しないことを確認する（setTimeoutが正しくclearされていれば発火しない）
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      const timeoutLogCalls = consoleErrorSpy.mock.calls.filter((call) =>
+        String(call[0]).includes("exceeded timeout")
+      );
+      expect(timeoutLogCalls).toHaveLength(0);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 });

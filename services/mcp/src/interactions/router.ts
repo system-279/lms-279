@@ -3,6 +3,67 @@ import type Provider from "oidc-provider";
 import { errors } from "oidc-provider";
 import { verifyGoogleIdToken, FirebaseSignInError } from "../firebase.js";
 import { renderLoginPage, renderConsentPage, renderErrorPage, type FirebaseWebConfig } from "./views.js";
+import type { CredentialStore } from "../storage/credential-store.js";
+import { encryptWithActiveKey, type CredentialKeyring } from "../credential-keys.js";
+import { logger } from "../logger.js";
+
+export interface CredentialOptions {
+  store: CredentialStore;
+  keyring: CredentialKeyring;
+  /** 既定3000ms。Firestore劣化時にサインイン応答が無期限にブロックされないための上限（codex review指摘） */
+  persistTimeoutMs?: number;
+}
+
+const DEFAULT_PERSIST_TIMEOUT_MS = 3000;
+
+/**
+ * サインイン時に捕捉した Firebase リフレッシュトークンを暗号化して永続化する。
+ * 保存失敗はサインイン成功を阻害しない（ping 等トークンを使わない機能は
+ * 引き続き動作すべきため、rules/error-handling.md §1の独立防御パターンに準拠）。
+ *
+ * 書き込みは persistTimeoutMs で上限を設ける。Firestoreが劣化しリトライを
+ * 繰り返している間、awaitしたままだとサインイン応答自体が無期限にブロックされ
+ * 「保存失敗はサインインを阻害しない」という設計意図に反する（codex review
+ * 指摘、2026-08-23）。タイムアウト後も書き込み自体はバックグラウンドで継続し
+ * (自身のtry/catchで保護済みのためunhandled rejectionにはならない)、完了すれば
+ * 通常どおり永続化される。
+ */
+async function persistRefreshTokenBestEffort(
+  credentialOptions: CredentialOptions | undefined,
+  uid: string,
+  refreshToken: unknown
+): Promise<void> {
+  if (!credentialOptions || typeof refreshToken !== "string" || refreshToken.length === 0) {
+    return;
+  }
+  const { store, keyring, persistTimeoutMs = DEFAULT_PERSIST_TIMEOUT_MS } = credentialOptions;
+
+  const writePromise = (async () => {
+    try {
+      const encrypted = encryptWithActiveKey(refreshToken, keyring);
+      await store.save(uid, { encryptedRefreshToken: encrypted, keyVersion: keyring.activeVersion });
+    } catch (error) {
+      logger.error("Failed to persist Firebase refresh token", { uid, error: String(error) });
+    }
+  })();
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<void>((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      logger.error("Persisting Firebase refresh token exceeded timeout; continuing sign-in without waiting", {
+        uid,
+        persistTimeoutMs,
+      });
+      resolve();
+    }, persistTimeoutMs);
+    timeoutHandle.unref();
+  });
+
+  await Promise.race([writePromise, timeoutPromise]);
+  // writePromise が先に解決した場合、タイマーを止めないと persistTimeoutMs 後に
+  // 「タイムアウトした」という偽のログが遅延発火する（codex review再指摘、2026-08-23）。
+  clearTimeout(timeoutHandle);
+}
 
 /**
  * devInteractions（oidc-provider 組み込みのダミー同意画面）を置き換える、実
@@ -14,7 +75,11 @@ import { renderLoginPage, renderConsentPage, renderErrorPage, type FirebaseWebCo
  *
  * app.ts で `app.use(provider.callback())`（catch-all）より前に登録すること。
  */
-export function createInteractionRouter(provider: Provider, firebaseConfig: FirebaseWebConfig): Router {
+export function createInteractionRouter(
+  provider: Provider,
+  firebaseConfig: FirebaseWebConfig,
+  credentialOptions?: CredentialOptions
+): Router {
   const router = Router();
 
   router.get("/interaction/:uid", async (req, res, next) => {
@@ -60,6 +125,8 @@ export function createInteractionRouter(provider: Provider, firebaseConfig: Fire
         return;
       }
       const account = await verifyGoogleIdToken(idToken);
+      const refreshToken = (req.body as Record<string, unknown> | undefined)?.refreshToken;
+      await persistRefreshTokenBestEffort(credentialOptions, account.uid, refreshToken);
       const redirectTo = await provider.interactionResult(
         req,
         res,

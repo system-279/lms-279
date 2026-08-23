@@ -81,10 +81,16 @@ document.getElementById("signin").addEventListener("click", async () => {
     const provider = new GoogleAuthProvider();
     const result = await signInWithPopup(auth, provider);
     const idToken = await result.user.getIdToken();
+    // refreshToken はサーバー側で暗号化しFirestoreへ永続化し、以後のLMS API呼出時に
+    // 新しいIDトークンへ交換するために使う（quiz CRUDツール実装のためのPhase 1b-1）。
+    // 公式JS SDKの User.refreshToken は文書化されたプロパティ(readonly refreshToken: string)。
+    // 「直接使うのは避けgetIdToken()を使え」という公式注記はクライアント側再利用の話であり、
+    // このサーバー保存目的とは別軸。
+    const refreshToken = result.user.refreshToken;
     const res = await fetch(${toScriptJson(`/interaction/${uid}/firebase-callback`)}, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ idToken }),
+      body: JSON.stringify({ idToken, refreshToken }),
     });
     const data = await res.json();
     if (res.ok && data.redirectTo) {

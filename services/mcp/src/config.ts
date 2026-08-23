@@ -13,6 +13,8 @@ export interface McpConfig {
   /** "firestore" のとき永続adapter+Secret Manager署名鍵を使う。それ以外は既定のインメモリ実装 */
   storage: "firestore" | "memory";
   mcpSigningSecretName: string | undefined;
+  /** Phase 1b-1: Firebaseリフレッシュトークン暗号化用の鍵環（OIDC署名鍵とは別シークレット） */
+  mcpCredentialSecretName: string | undefined;
 }
 
 function isProductionRuntime(): boolean {
@@ -31,6 +33,7 @@ export function loadConfig(): McpConfig {
   const firebaseAuthDomain = process.env.FIREBASE_AUTH_DOMAIN;
   const storage: "firestore" | "memory" = process.env.MCP_STORAGE === "firestore" ? "firestore" : "memory";
   const mcpSigningSecretName = process.env.MCP_SIGNING_SECRET_NAME;
+  const mcpCredentialSecretName = process.env.MCP_CREDENTIAL_SECRET_NAME;
 
   if (isProductionRuntime()) {
     const missing = [
@@ -63,7 +66,22 @@ export function loadConfig(): McpConfig {
           "(services/mcp/src/config.ts、.github/workflows/deploy.yml の deploy-mcp job を確認)。"
       );
     }
+    if (!mcpCredentialSecretName) {
+      throw new Error(
+        "FATAL: missing required env var MCP_CREDENTIAL_SECRET_NAME in production runtime " +
+          "(services/mcp/src/config.ts、.github/workflows/deploy.yml の deploy-mcp job を確認)。"
+      );
+    }
   }
 
-  return { port, issuerUrl, firebaseProjectId, firebaseWebApiKey, firebaseAuthDomain, storage, mcpSigningSecretName };
+  return {
+    port,
+    issuerUrl,
+    firebaseProjectId,
+    firebaseWebApiKey,
+    firebaseAuthDomain,
+    storage,
+    mcpSigningSecretName,
+    mcpCredentialSecretName,
+  };
 }
