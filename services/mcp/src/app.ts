@@ -7,7 +7,7 @@ import type Provider from "oidc-provider";
 import rateLimit from "express-rate-limit";
 import { createOidcProvider, type OidcProviderOptions } from "./oidc.js";
 import { createTokenVerifier } from "./token-verifier.js";
-import { createMcpServer } from "./mcp-server.js";
+import { createMcpServer, type McpServerDeps } from "./mcp-server.js";
 import { createInteractionRouter, type CredentialOptions } from "./interactions/router.js";
 import type { FirebaseWebConfig } from "./interactions/views.js";
 import { logger } from "./logger.js";
@@ -84,7 +84,10 @@ export async function createApp(
   storageOptions: OidcProviderOptions = {},
   // Phase 1b-1: Firebaseリフレッシュトークンの暗号化永続化に使うstore/keyring。
   // 省略時はサインイン時の永続化をスキップする(既存テストとの後方互換)。
-  credentialOptions?: CredentialOptions
+  credentialOptions?: CredentialOptions,
+  // Phase 2a: quizツール（list_courses/list_lessons/get_quiz）が依存するサービス群。
+  // 省略時は ping のみ登録する(既存テストとの後方互換)。
+  mcpServerDeps?: McpServerDeps
 ): Promise<{ app: Express; provider: Provider }> {
   const provider = createOidcProvider(issuerUrl, storageOptions);
   const oauthMetadata = await fetchOidcMetadata(provider, issuerUrl, bindPort);
@@ -133,7 +136,7 @@ export async function createApp(
       // アクティブトランスポートが奪い合いになりレスポンスが取り違わる/消失しうる
       // (Codex review PR #636 指摘)。ping 程度の軽量サーバーなのでコストは無視できる。
       const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const mcpServer = createMcpServer();
+      const mcpServer = createMcpServer(mcpServerDeps);
       await mcpServer.connect(transport);
       await transport.handleRequest(req, res, req.body);
     }

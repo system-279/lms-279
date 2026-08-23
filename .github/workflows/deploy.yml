@@ -233,9 +233,11 @@ jobs:
         run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
 
       - name: Build and push MCP image
-        working-directory: services/mcp
         run: |
-          docker build -t ${{ env.ARTIFACT_REGISTRY }}/mcp:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/mcp:latest .
+          # Phase 2aで@lms-279/shared-typesへ依存したため、services/api同様
+          # リポジトリルートをビルドコンテキストにする（codex review P1指摘、2026-08-23。
+          # services/mcp/Dockerfile参照）。
+          docker build -f services/mcp/Dockerfile -t ${{ env.ARTIFACT_REGISTRY }}/mcp:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/mcp:latest .
           docker push ${{ env.ARTIFACT_REGISTRY }}/mcp:${{ github.sha }}
           docker push ${{ env.ARTIFACT_REGISTRY }}/mcp:latest
 
@@ -275,7 +277,7 @@ jobs:
             --platform=managed \
             --allow-unauthenticated \
             --max-instances=1 \
-            --set-env-vars="^@^NODE_ENV=production@MCP_ISSUER_URL=https://mcp-3zcica5euq-an.a.run.app@MCP_STORAGE=firestore@MCP_SIGNING_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/mcp-oauth-signing-key/versions/latest@MCP_CREDENTIAL_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/mcp-credential-encryption-key/versions/latest@FIREBASE_PROJECT_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}@FIREBASE_WEB_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}@FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}"
+            --set-env-vars="^@^NODE_ENV=production@MCP_ISSUER_URL=https://mcp-3zcica5euq-an.a.run.app@MCP_STORAGE=firestore@MCP_SIGNING_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/mcp-oauth-signing-key/versions/latest@MCP_CREDENTIAL_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/mcp-credential-encryption-key/versions/latest@FIREBASE_PROJECT_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}@FIREBASE_WEB_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}@FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}@LMS_API_BASE_URL=https://api-3zcica5euq-an.a.run.app"
 
   deploy-notification:
     name: Deploy Notification

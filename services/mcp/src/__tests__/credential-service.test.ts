@@ -303,6 +303,64 @@ describe("credential-service", () => {
     expect(await store.find("uid-1")).toBeUndefined();
   });
 
+  it("forceRefresh:trueを指定すると、キャッシュが有効期限内でもexchangeを再実行する（Phase 2a: LMS API 401時の再取得用）", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    const encrypted = encryptWithKey("original-refresh-token", keyring.keys[0]!.key, 1);
+    await store.save("uid-1", { encryptedRefreshToken: encrypted, keyVersion: 1 });
+    exchangeMock
+      .mockResolvedValueOnce({ idToken: "id-1", refreshToken: "rotated-1", expiresIn: 3600 })
+      .mockResolvedValueOnce({ idToken: "id-2-forced", refreshToken: "rotated-2", expiresIn: 3600 });
+
+    const service = createCredentialService({ store, keyring, firebaseWebApiKey: "api-key", exchange: exchangeMock });
+
+    const first = await service.getFirebaseIdTokenForAccount("uid-1");
+    const forced = await service.getFirebaseIdTokenForAccount("uid-1", { forceRefresh: true });
+
+    expect(first).toBe("id-1");
+    expect(forced).toBe("id-2-forced");
+    expect(exchangeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("forceRefresh:trueでも同時呼び出しはexchangeを1回だけに合流させる", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    const encrypted = encryptWithKey("original-refresh-token", keyring.keys[0]!.key, 1);
+    await store.save("uid-1", { encryptedRefreshToken: encrypted, keyVersion: 1 });
+    exchangeMock.mockResolvedValue({ idToken: "id-forced", refreshToken: "rotated-1", expiresIn: 3600 });
+
+    const service = createCredentialService({ store, keyring, firebaseWebApiKey: "api-key", exchange: exchangeMock });
+
+    const [result1, result2] = await Promise.all([
+      service.getFirebaseIdTokenForAccount("uid-1", { forceRefresh: true }),
+      service.getFirebaseIdTokenForAccount("uid-1", { forceRefresh: true }),
+    ]);
+
+    expect(result1).toBe("id-forced");
+    expect(result2).toBe("id-forced");
+    expect(exchangeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("forceRefresh:trueで取得したidTokenはキャッシュに反映され、続く通常呼び出し(forceRefresh省略)はexchangeを再実行しない（pr-test-analyzerセカンドオピニオン指摘: 401リトライ後にキャッシュが正しく更新されているかが未検証だった。これが崩れているとmcp-server.ts側の401リトライのたび毎回exchangeが走ってしまう）", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    const encrypted = encryptWithKey("original-refresh-token", keyring.keys[0]!.key, 1);
+    await store.save("uid-1", { encryptedRefreshToken: encrypted, keyVersion: 1 });
+    exchangeMock
+      .mockResolvedValueOnce({ idToken: "id-1", refreshToken: "rotated-1", expiresIn: 3600 })
+      .mockResolvedValueOnce({ idToken: "id-2-forced", refreshToken: "rotated-2", expiresIn: 3600 });
+
+    const service = createCredentialService({ store, keyring, firebaseWebApiKey: "api-key", exchange: exchangeMock });
+
+    await service.getFirebaseIdTokenForAccount("uid-1");
+    const forced = await service.getFirebaseIdTokenForAccount("uid-1", { forceRefresh: true });
+    const afterForced = await service.getFirebaseIdTokenForAccount("uid-1");
+
+    expect(forced).toBe("id-2-forced");
+    expect(afterForced).toBe("id-2-forced");
+    expect(exchangeMock).toHaveBeenCalledTimes(2);
+  });
+
   it("保存済み暗号文が復号できない（破損・鍵バージョン喪失等）場合、資格情報を削除しCredentialNotFoundErrorを投げる（silent-failure-hunterセカンドオピニオン指摘: 復号失敗が無ログ・無限に同じ不透明なエラーを繰り返す状態だった）", async () => {
     const keyring = makeKeyring();
     const store = createCredentialStore(createFakeFirestore());

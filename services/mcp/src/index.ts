@@ -7,6 +7,10 @@ import { getSigningKeysFromSecretManager } from "./signing-keys.js";
 import { getCredentialKeysFromSecretManager } from "./credential-keys.js";
 import { createCredentialStore } from "./storage/credential-store.js";
 import type { CredentialOptions } from "./interactions/router.js";
+import { createCredentialService } from "./credential-service.js";
+import { createLmsApiClient } from "./lms-api-client.js";
+import { createAuditLog } from "./audit-log.js";
+import type { McpServerDeps } from "./mcp-server.js";
 
 async function buildStorageOptions(config: ReturnType<typeof loadConfig>): Promise<OidcProviderOptions> {
   if (config.storage !== "firestore") {
@@ -50,10 +54,37 @@ async function buildCredentialOptions(config: ReturnType<typeof loadConfig>): Pr
   return { store: createCredentialStore(db), keyring };
 }
 
+/**
+ * Phase 2a: quizツール（list_courses/list_lessons/get_quiz）が依存するサービス群を
+ * 組み立てる。credentialOptions（PR A、Firestore永続化）が無ければ資格情報を
+ * 交換する手段がなくツールを提供できないため、その場合は undefined を返し
+ * mcp-server.ts 側で ping のみ登録させる。
+ */
+async function buildMcpServerDeps(
+  config: ReturnType<typeof loadConfig>,
+  credentialOptions: CredentialOptions | undefined
+): Promise<McpServerDeps | undefined> {
+  if (config.storage !== "firestore" || !credentialOptions) {
+    return undefined;
+  }
+  if (!config.lmsApiBaseUrl) {
+    throw new Error("FATAL: MCP_STORAGE=firestore requires LMS_API_BASE_URL to be set (services/mcp/src/config.ts)。");
+  }
+  const credentialService = createCredentialService({
+    store: credentialOptions.store,
+    keyring: credentialOptions.keyring,
+    firebaseWebApiKey: config.firebaseWebApiKey ?? "",
+  });
+  const lmsApiClient = createLmsApiClient(config.lmsApiBaseUrl);
+  const auditLog = createAuditLog(getFirestoreDb());
+  return { lmsApiClient, credentialService, auditLog };
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const storageOptions = await buildStorageOptions(config);
   const credentialOptions = await buildCredentialOptions(config);
+  const mcpServerDeps = await buildMcpServerDeps(config, credentialOptions);
 
   const { app } = await createApp(
     config.issuerUrl,
@@ -64,7 +95,8 @@ async function main(): Promise<void> {
       projectId: config.firebaseProjectId ?? "",
     },
     storageOptions,
-    credentialOptions
+    credentialOptions,
+    mcpServerDeps
   );
 
   app.listen(config.port, () => {

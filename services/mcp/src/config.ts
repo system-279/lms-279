@@ -15,6 +15,8 @@ export interface McpConfig {
   mcpSigningSecretName: string | undefined;
   /** Phase 1b-1: Firebaseリフレッシュトークン暗号化用の鍵環（OIDC署名鍵とは別シークレット） */
   mcpCredentialSecretName: string | undefined;
+  /** Phase 2a: quizツールが呼び出す services/api のベースURL（Cloud RunのURL） */
+  lmsApiBaseUrl: string | undefined;
 }
 
 function isProductionRuntime(): boolean {
@@ -34,12 +36,14 @@ export function loadConfig(): McpConfig {
   const storage: "firestore" | "memory" = process.env.MCP_STORAGE === "firestore" ? "firestore" : "memory";
   const mcpSigningSecretName = process.env.MCP_SIGNING_SECRET_NAME;
   const mcpCredentialSecretName = process.env.MCP_CREDENTIAL_SECRET_NAME;
+  const lmsApiBaseUrl = process.env.LMS_API_BASE_URL;
 
   if (isProductionRuntime()) {
     const missing = [
       ["FIREBASE_PROJECT_ID", firebaseProjectId],
       ["FIREBASE_WEB_API_KEY", firebaseWebApiKey],
       ["FIREBASE_AUTH_DOMAIN", firebaseAuthDomain],
+      ["LMS_API_BASE_URL", lmsApiBaseUrl],
     ]
       .filter(([, value]) => !value)
       .map(([name]) => name);
@@ -83,5 +87,6 @@ export function loadConfig(): McpConfig {
     storage,
     mcpSigningSecretName,
     mcpCredentialSecretName,
+    lmsApiBaseUrl,
   };
 }

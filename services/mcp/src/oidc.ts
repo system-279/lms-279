@@ -22,6 +22,24 @@ export interface OidcProviderOptions {
   cookieKeys?: string[];
 }
 
+/**
+ * Session/Grant/RefreshToken の既定TTL(oidc-providerの既定値、全て14日)を24時間へ短縮する。
+ *
+ * Phase 2a: quizツールがcredential-service.ts（Phase 1b-1で永続化したFirebase
+ * リフレッシュトークン）に依存するようになったため、その資格情報が何らかの理由で
+ * 失われた場合（デコード不能・Firestore書き込み中断等）の影響が「起きても実害なし」
+ * から「実際に起きうる障害」に格上げされた（codex review P1指摘、2026-08-23）。
+ *
+ * 資格情報喪失時に返す CredentialNotFoundError の「再認証してください」という
+ * 案内は、oidc-providerのセッションCookieが有効な間はブラウザで再接続しても
+ * Firebaseログイン自体がスキップされ実質的に自己回復できないことが実機確認で
+ * 判明した（既存Sessionがあると"login" promptがスキップされる仕様）。既定の
+ * Session/Grant/RefreshToken TTL(14日)のままだと最悪14日間ツールが使えない。
+ * 24時間へ短縮することで、この「自己回復できない」ウィンドウの上限を大幅に
+ * 縮める（根治ではなく緩和策 — 明示的なreconnectフローの実装は将来検討）。
+ */
+const SHORT_LIVED_TTL_SECONDS = 24 * 60 * 60;
+
 export function createOidcProvider(issuerUrl: string, options: OidcProviderOptions = {}): Provider {
   const resourceIdentifier = new URL(`${issuerUrl}/mcp`).href;
 
@@ -73,6 +91,24 @@ export function createOidcProvider(issuerUrl: string, options: OidcProviderOptio
     },
     claims: {
       openid: ["sub"],
+    },
+    ttl: {
+      Session: () => SHORT_LIVED_TTL_SECONDS,
+      Grant: () => SHORT_LIVED_TTL_SECONDS,
+      // ローテーション時は oidc-provider 既定と同じくローテート元の残余TTLを引き継ぐ
+      // (非スライディング。ローテーションのたびに寿命が延びる挙動を避けるための
+      // 既定の設計であり、ここでは基準値だけを短縮する)。
+      RefreshToken: (ctx, token, client) => {
+        if (
+          ctx?.oidc?.entities.RotatedRefreshToken &&
+          client.applicationType === "web" &&
+          client.clientAuthMethod === "none" &&
+          !token.isSenderConstrained()
+        ) {
+          return ctx.oidc.entities.RotatedRefreshToken.remainingTTL;
+        }
+        return SHORT_LIVED_TTL_SECONDS;
+      },
     },
   });
 
