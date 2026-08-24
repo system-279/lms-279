@@ -236,6 +236,16 @@ function mapErrorToResult(tool: string, error: unknown): CallToolResult {
       // 詳細はサーバー側ログにのみ残し、クライアントへは汎用メッセージのみ返す
       // （silent-failure-hunterセカンドオピニオン指摘）。
       logger.error(`${tool}: LMS API呼び出しが一時的に失敗しました`, { error: error.message });
+      // create_quiz/delete_quizはquiz本体の書き込み+lesson.hasQuiz更新の非トランザクション
+      // 2段書き込み（services/api側、非改変の制約により修正不可）。後段のみ失敗しても
+      // このtransient分岐に落ちるため、「一時的失敗・再試行可能」という汎用文言のままでは
+      // 実際には既に完了している破壊的操作（作成/物理削除）を安全な再試行対象と誤読させる
+      // （silent-failure-hunterセカンドオピニオン2巡目指摘・CRITICAL）。
+      if (tool === "create_quiz" || tool === "delete_quiz") {
+        return errorResult(
+          "LMS APIとの通信でエラーが発生しました。このエラーだけでは、テスト自体の作成/削除処理が完了しているかどうかを判別できません。同じ操作を再試行する前に、必ずget_quizで現在の状態を確認してください。"
+        );
+      }
       return errorResult("LMS APIへの接続に一時的に失敗しました。しばらくしてから再度お試しください。");
     }
     return errorResult(`LMS APIの呼び出しに失敗しました: ${error.message}`);

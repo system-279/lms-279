@@ -1509,6 +1509,27 @@ describe("Phase 2b PR C2: 書き込み系quizツール（create_quiz/update_quiz
       expect(result.content[0]!.text).toContain("A quiz already exists");
     });
 
+    it("transientエラー(5xx等)の場合、単純な「再試行してください」ではなく状態不明を明示するメッセージになる（silent-failure-hunterセカンドオピニオン指摘・CRITICAL: create_quizはquiz本体作成+lesson.hasQuiz更新の非トランザクション2段書き込みのため、後段だけ失敗してもこの分岐に落ち、実際には既にquizが作成済みの可能性がある）", async () => {
+      const createQuiz = vi
+        .fn()
+        .mockRejectedValue(new LmsApiError("LMS APIがエラーを返しました (status=500)", undefined, 500, true));
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8178, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [validQuestion],
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).not.toContain("しばらくしてから再度お試しください");
+      expect(result.content[0]!.text).toContain("get_quiz");
+    });
+
     it("51問を渡すとzodバリデーションで即座に拒否されlmsApiClientが呼ばれない（API側50問上限のMCP側事前チェック）", async () => {
       const createQuiz = vi.fn();
       const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
@@ -1568,6 +1589,78 @@ describe("Phase 2b PR C2: 書き込み系quizツール（create_quiz/update_quiz
       expectInputValidationError(mcpRes);
       expect(createQuiz).not.toHaveBeenCalled();
     });
+
+    it("questionsが0問（空配列）の場合、zodバリデーションで即座に拒否されlmsApiClientが呼ばれない", async () => {
+      const createQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8173, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [],
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(createQuiz).not.toHaveBeenCalled();
+    });
+
+    it("questionsがちょうど50問の場合はzodバリデーションを通過しlmsApiClientが呼ばれる（API側validateQuestionsの上限50問との境界一致確認）", async () => {
+      const createQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "新テスト" });
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8174, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const questions = Array.from({ length: 50 }, (_, i) => ({ ...validQuestion, id: `q${i}` }));
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions,
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBeUndefined();
+      expect(createQuiz).toHaveBeenCalledTimes(1);
+    });
+
+    it("maxAttemptsに負値を渡すとzodバリデーションで即座に拒否される", async () => {
+      const createQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8175, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [validQuestion],
+        maxAttempts: -1,
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(createQuiz).not.toHaveBeenCalled();
+    });
+
+    it("timeLimitSecに0を渡すとzodバリデーションで即座に拒否される（positive制約、0は無制限扱いと誤読されうるため許容しない）", async () => {
+      const createQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8176, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [validQuestion],
+        timeLimitSec: 0,
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(createQuiz).not.toHaveBeenCalled();
+    });
   });
 
   describe("update_quiz", () => {
@@ -1600,7 +1693,42 @@ describe("Phase 2b PR C2: 書き込み系quizツール（create_quiz/update_quiz
       );
     });
 
-    it("expectedUpdatedAtが実際のupdatedAtと不一致なら中止し、updateQuizが呼ばれない", async () => {
+    it("updateQuizが401を返した場合、GET+PATCHのペア全体（assertQuizMatchesExpected含む）がforceRefreshした新しいidTokenで再実行される（pr-test-analyzerセカンドオピニオン指摘: 401リトライ経路が未テストだった。callToolWithAuthはfn全体を再実行する設計のため、getQuizも2回呼ばれる）", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "旧タイトル", updatedAt: "2026-01-01T00:00:00.000Z" });
+      const updateQuiz = vi
+        .fn()
+        .mockRejectedValueOnce(new LmsApiError("unauthorized", "unauthorized", 401, false))
+        .mockResolvedValueOnce({ id: "q1", title: "新タイトル" });
+      const getFirebaseIdTokenForAccount = vi
+        .fn()
+        .mockResolvedValueOnce("stale-id-token")
+        .mockResolvedValueOnce("fresh-retried-id-token");
+      const deps = makeMcpServerDeps({
+        lmsApiClient: { getQuiz, updateQuiz },
+        credentialService: { getFirebaseIdTokenForAccount },
+      });
+      const { app } = await createApp(ISSUER_URL, 8177, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "update_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        title: "新タイトル",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ quiz: { id: "q1", title: "新タイトル" } });
+      expect(getQuiz).toHaveBeenCalledTimes(2);
+      expect(getQuiz).toHaveBeenNthCalledWith(1, "tenant-a", "lesson-1", "stale-id-token");
+      expect(getQuiz).toHaveBeenNthCalledWith(2, "tenant-a", "lesson-1", "fresh-retried-id-token");
+      expect(updateQuiz).toHaveBeenCalledTimes(2);
+      expect(updateQuiz).toHaveBeenNthCalledWith(1, "tenant-a", "lesson-1", expect.objectContaining({ title: "新タイトル" }), "stale-id-token");
+      expect(updateQuiz).toHaveBeenNthCalledWith(2, "tenant-a", "lesson-1", expect.objectContaining({ title: "新タイトル" }), "fresh-retried-id-token");
+    });
+
+    it("expectedUpdatedAtが実際のupdatedAtと不一致なら中止し、updateQuizが呼ばれず監査ログにerrorを記録する", async () => {
       const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "旧タイトル", updatedAt: "2026-02-01T00:00:00.000Z" });
       const updateQuiz = vi.fn();
       const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, updateQuiz } });
@@ -1618,6 +1746,9 @@ describe("Phase 2b PR C2: 書き込み系quizツール（create_quiz/update_quiz
       expect(result.isError).toBe(true);
       expect(result.content[0]!.text).toContain("変更されています");
       expect(updateQuiz).not.toHaveBeenCalled();
+      expect(deps.auditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant: "tenant-a", tool: "update_quiz", targetId: "lesson-1", result: "error" })
+      );
     });
 
     it("expectedUpdatedAtのみ（実更新フィールドなし）はzodバリデーションで即座に拒否され、getQuizすら呼ばれない（applyUpdateが空更新でもupdatedAtを無条件更新するため他クライアントのexpectedUpdatedAtを失効させてしまう対策）", async () => {
@@ -1701,6 +1832,9 @@ describe("Phase 2b PR C2: 書き込み系quizツール（create_quiz/update_quiz
       expect(result.isError).toBe(true);
       expect(result.content[0]!.text).toContain("confirmTitle");
       expect(deleteQuiz).not.toHaveBeenCalled();
+      expect(deps.auditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant: "tenant-a", tool: "delete_quiz", targetId: "lesson-1", result: "error" })
+      );
     });
 
     it("expectedUpdatedAtが不一致の場合、confirmTitleの一致有無に関わらず中止しdeleteQuizが呼ばれない", async () => {
@@ -1741,6 +1875,28 @@ describe("Phase 2b PR C2: 書き込み系quizツール（create_quiz/update_quiz
       expect(result.isError).toBe(true);
       expect(result.content[0]!.text).toContain("Quiz not found for this lesson");
       expect(deleteQuiz).not.toHaveBeenCalled();
+    });
+
+    it("transientエラー(5xx等)の場合、単純な「再試行してください」ではなく状態不明を明示するメッセージになる（silent-failure-hunterセカンドオピニオン指摘・CRITICAL: delete_quizは物理削除+lesson.hasQuiz更新の非トランザクション2段書き込みのため、後段だけ失敗してもこの分岐に落ち、実際には既にquizが削除済みの可能性がある）", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "削除対象", updatedAt: "2026-01-01T00:00:00.000Z" });
+      const deleteQuiz = vi
+        .fn()
+        .mockRejectedValue(new LmsApiError("LMS APIがエラーを返しました (status=500)", undefined, 500, true));
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, deleteQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8179, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "delete_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        confirmTitle: "削除対象",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).not.toContain("しばらくしてから再度お試しください");
+      expect(result.content[0]!.text).toContain("get_quiz");
     });
   });
 });

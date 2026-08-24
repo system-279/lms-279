@@ -38,6 +38,10 @@ export interface LmsApiClient {
     payload: AdminQuizCreateRequest,
     idToken: string
   ): Promise<AdminQuizResponse["quiz"]>;
+  /**
+   * 呼び出し前提: payloadは最低1フィールドを持つこと。この関数自体はチェックしない
+   * （呼び出し元のzodスキーマ`updateQuizSchema`で強制する設計、AdminQuizUpdateRequest参照）。
+   */
   updateQuiz(
     tenant: string,
     lessonId: string,
