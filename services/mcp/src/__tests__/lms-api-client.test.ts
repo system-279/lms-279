@@ -231,4 +231,153 @@ describe("createLmsApiClient", () => {
       );
     });
   });
+
+  describe("createQuiz", () => {
+    const payload = { title: "New Quiz", questions: [{ id: "q1", text: "Q", type: "single" as const, options: [{ id: "o1", text: "A", isCorrect: true }], points: 10, explanation: "" }] };
+
+    it("POSTでContent-Type: application/jsonヘッダ + JSON文字列化したボディを送り、201のquizを返す", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ quiz: { id: "q1", title: "New Quiz" } }), { status: 201 })
+      );
+
+      const result = await client.createQuiz("tenant-a", "lesson-1", payload, "id-token-1");
+
+      expect(result).toEqual({ id: "q1", title: "New Quiz" });
+      expect(global.fetch).toHaveBeenCalledWith(
+        "https://api.example.test/api/v2/tenant-a/admin/lessons/lesson-1/quiz",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({ Authorization: "Bearer id-token-1", "Content-Type": "application/json" }),
+          body: JSON.stringify(payload),
+        })
+      );
+    });
+
+    it("409(quiz_already_exists)はpermanentなLmsApiErrorを投げる", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ error: "quiz_already_exists", message: "A quiz already exists for this lesson" }), {
+          status: 409,
+        })
+      );
+
+      await expect(client.createQuiz("tenant-a", "lesson-1", payload, "id-token-1")).rejects.toMatchObject({
+        code: "quiz_already_exists",
+        httpStatus: 409,
+        transient: false,
+      } satisfies Partial<LmsApiError>);
+    });
+
+    it("400(invalid_title等)はpermanentなLmsApiErrorを投げる", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ error: "invalid_title", message: "title is required" }), { status: 400 })
+      );
+
+      await expect(client.createQuiz("tenant-a", "lesson-1", payload, "id-token-1")).rejects.toMatchObject({
+        code: "invalid_title",
+        httpStatus: 400,
+        transient: false,
+      } satisfies Partial<LmsApiError>);
+    });
+
+    it("応答のquizがnullの場合はエラーとして扱う（PATCHのレース条件バグ対策と同一パターン）", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ quiz: null }), { status: 201 }));
+
+      await expect(client.createQuiz("tenant-a", "lesson-1", payload, "id-token-1")).rejects.toMatchObject({
+        transient: false,
+      } satisfies Partial<LmsApiError>);
+    });
+  });
+
+  describe("updateQuiz", () => {
+    const payload = { title: "Updated Title" };
+
+    it("PATCHでContent-Type: application/jsonヘッダ + JSON文字列化したボディを送り、200のquizを返す", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ quiz: { id: "q1", title: "Updated Title" } }), { status: 200 })
+      );
+
+      const result = await client.updateQuiz("tenant-a", "lesson-1", payload, "id-token-1");
+
+      expect(result).toEqual({ id: "q1", title: "Updated Title" });
+      expect(global.fetch).toHaveBeenCalledWith(
+        "https://api.example.test/api/v2/tenant-a/admin/lessons/lesson-1/quiz",
+        expect.objectContaining({
+          method: "PATCH",
+          headers: expect.objectContaining({ Authorization: "Bearer id-token-1", "Content-Type": "application/json" }),
+          body: JSON.stringify(payload),
+        })
+      );
+    });
+
+    it("404(quiz未設定)はpermanentなLmsApiErrorを投げる", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ error: "not_found", message: "Quiz not found for this lesson" }), {
+          status: 404,
+        })
+      );
+
+      await expect(client.updateQuiz("tenant-a", "lesson-1", payload, "id-token-1")).rejects.toMatchObject({
+        httpStatus: 404,
+        transient: false,
+      } satisfies Partial<LmsApiError>);
+    });
+
+    it("応答が200 {quiz:null}の場合はエラーとして扱う（レース条件でquizが削除された既存APIのバグへの対策、Codexセカンドオピニオンで発覚）", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ quiz: null }), { status: 200 }));
+
+      await expect(client.updateQuiz("tenant-a", "lesson-1", payload, "id-token-1")).rejects.toMatchObject({
+        transient: false,
+      } satisfies Partial<LmsApiError>);
+    });
+  });
+
+  describe("deleteQuiz", () => {
+    it("DELETEでリクエストし、204の空応答を成功として扱う", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 204 }));
+
+      await expect(client.deleteQuiz("tenant-a", "lesson-1", "id-token-1")).resolves.toBeUndefined();
+      expect(global.fetch).toHaveBeenCalledWith(
+        "https://api.example.test/api/v2/tenant-a/admin/lessons/lesson-1/quiz",
+        expect.objectContaining({
+          method: "DELETE",
+          headers: expect.objectContaining({ Authorization: "Bearer id-token-1" }),
+        })
+      );
+      // DELETEはボディを送らないため Content-Type ヘッダも付かない
+      const callHeaders = vi.mocked(global.fetch).mock.calls[0]?.[1]?.headers as Record<string, string>;
+      expect(callHeaders["Content-Type"]).toBeUndefined();
+    });
+
+    it("404(quiz未設定)はpermanentなLmsApiErrorを投げる", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ error: "not_found", message: "Quiz not found for this lesson" }), {
+          status: 404,
+        })
+      );
+
+      await expect(client.deleteQuiz("tenant-a", "lesson-1", "id-token-1")).rejects.toMatchObject({
+        httpStatus: 404,
+        transient: false,
+      } satisfies Partial<LmsApiError>);
+    });
+  });
+
+  describe("空応答の許容範囲（204限定であることの回帰テスト）", () => {
+    it("GETで異常な空200応答が来た場合、引き続きJSONパースエラーとして扱う（一般化しなかったことの確認）", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }));
+
+      await expect(client.listCourses("tenant-a", "id-token-1")).rejects.toMatchObject({
+        transient: false,
+      } satisfies Partial<LmsApiError>);
+    });
+
+    it("POSTで異常な空200応答が来た場合、引き続きJSONパースエラーとして扱う（一般化しなかったことの確認）", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }));
+      const payload = { title: "x", questions: [] };
+
+      await expect(client.createQuiz("tenant-a", "lesson-1", payload, "id-token-1")).rejects.toMatchObject({
+        transient: false,
+      } satisfies Partial<LmsApiError>);
+    });
+  });
 });

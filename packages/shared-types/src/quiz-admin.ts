@@ -38,6 +38,12 @@ export interface AdminQuizOption {
   isCorrect: boolean;
 }
 
+/**
+ * type: "single" の場合、options中のisCorrect:trueがちょうど1つでなければならない。
+ * この不変条件は型では表現されず、MCPコネクタ境界のzodスキーマ（services/mcp/src/
+ * mcp-server.ts の quizQuestionSchema）でのみ検証される（API側 validateQuestions が
+ * 正典、二重実装のドリフトリスクを認識した上での意図的な選択）。
+ */
 export interface AdminQuizQuestion {
   id: string;
   text: string;
@@ -68,4 +74,40 @@ export interface AdminQuizResponse {
     createdAt: string;
     updatedAt: string;
   };
+}
+
+/**
+ * MCPコネクタ管理者向けクイズ作成リクエストDTO（Phase 2b PR C2）。
+ * ソース: POST /admin/lessons/:lessonId/quiz のリクエストボディ形状に一致。
+ */
+export interface AdminQuizCreateRequest {
+  title: string;
+  questions: AdminQuizQuestion[];
+  passThreshold?: number;
+  maxAttempts?: number;
+  timeLimitSec?: number | null;
+  randomizeQuestions?: boolean;
+  randomizeAnswers?: boolean;
+  requireVideoCompletion?: boolean;
+}
+
+/**
+ * MCPコネクタ管理者向けクイズ更新リクエストDTO（Phase 2b PR C2）。
+ * ソース: PATCH /admin/lessons/:lessonId/quiz のリクエストボディ形状に一致。全フィールド任意。
+ *
+ * 呼び出し規約: 全フィールドoptionalだが、最低1フィールドは値を持つこと。
+ * 空更新（全フィールド省略）はAPI側 applyUpdate が updatedAt を無条件に書き換えるため、
+ * 他クライアントの楽観的な差分検知（expectedUpdatedAt）を無意味に失効させる副作用がある。
+ * この制約は型では強制されず、呼び出し元（services/mcp/src/mcp-server.ts の
+ * updateQuizSchema）のzod .refine() でのみ強制される。
+ */
+export interface AdminQuizUpdateRequest {
+  title?: string;
+  questions?: AdminQuizQuestion[];
+  passThreshold?: number;
+  maxAttempts?: number;
+  timeLimitSec?: number | null;
+  randomizeQuestions?: boolean;
+  randomizeAnswers?: boolean;
+  requireVideoCompletion?: boolean;
 }
