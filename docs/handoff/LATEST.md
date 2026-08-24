@@ -1,4 +1,79 @@
-# Session Handoff — 2026-08-22 (Session 94)
+# Session Handoff — 2026-08-24 (Session 95)
+
+## TL;DR
+
+**前セッションから継続（compact跨ぎ）: Phase 1b-1 (PR A、Firebaseリフレッシュトークン暗号化永続化)のcodex review+デプロイ+実機確認完了 → GOAL.md反映PR #661マージ → Phase 2a (PR B、読み取り専用quizツール3種)を新規実装 → codex review計7回（P1×3件・P2×4件、最終ラウンド+`--strict-config`ラウンドともfindings 0件で収斂）+ pr-review-toolkit正式プラグイン3系統セカンドオピニオン（CRITICAL信頼度2件含む全指摘反映）→ PR #662作成・マージ・デプロイ成功 → 実機で`list_courses`→`list_lessons`→`get_quiz`を実行し正常応答・監査ログ記録を確認 → GOAL.md反映PR #663マージ → 開発者からチーム展開相談があり、読み取り専用のみの現状と2つの前提条件（周知・展開範囲判断）を提示 → 開発者「完成ゴールまで計画的に進めましょう」の指示を受けPhase 2b(書き込み系quizツール)着手を承認 → ctx逼迫のため`/handoff`実行。詳細は下表参照。**
+
+| 主要成果 | 結果 |
+|---|---|
+| Phase 1b-1 (PR A) 完了 | ✅ PR #660マージ・デプロイ成功。決裁者のブラウザで`_session` Cookie削除→完全新規Googleサインイン→`mcp_user_credentials/{uid}`作成をFirestore REST APIで実機確認（当初reconnect試行がPR2のセッション永続化によりFirebaseログイン自体スキップされる挙動を発見、これがPR Bのcodex review P1指摘の伏線になった） |
+| Phase 2a (PR B) 実装 | ✅ list_courses/list_lessons/get_quiz 3ツール、lms-api-client.ts（エラー分類・URLエンコード防御）、audit-log.ts（Firestoreタイムアウト付き監査ログ）、credential-service.tsへforceRefreshオプション追加（401リトライ用）、shared-types/quiz-admin.ts新設 |
+| codex review 7巡 | ✅ P1×3件（①資格情報喪失時の自己回復不能問題→Session/Grant/RefreshToken TTL 14日→24時間短縮、②Cloud Run CPUスロットリングリスクの格上げ→decision-maker確認済み監視継続、③`@lms-279/shared-types`依存追加によるDockerビルド破壊→workspace-root-build化、ローカル実証で副次的に`tsconfig.tsbuildinfo`混入バグも発見・`.dockerignore`修正）、P2×4件（監査ログ欠落2箇所・パスインジェクション・audit-log無期限ブロック）全修正。最終+`--strict-config`ラウンドともfindings 0件 |
+| pr-review-toolkit 3系統セカンドオピニオン | ✅ code-reviewer/silent-failure-hunter/pr-test-analyzer並列（model:sonnet明示・read-only）。CRITICAL信頼度2件（呼称ルール違反「決裁者」→「開発者」、shared-types DTO未配線でunknown型のまま使用されていた問題）+MEDIUM2件+テストカバレッジgap複数、全反映 |
+| PR #662マージ・実機確認 | ✅ デプロイ成功（Docker CI実ビルドでもworkspace-root-build成功を確認）。テナント`qos4c4ka`(TEST)で3ツール全て実行し正常応答、`mcp_audit_logs`に3件`result:"success"`記録を確認 |
+| チーム展開の事前相談 | ✅ 開発者から「Team plan/Claude Codeで共有可能か」の質問 → 計画時点の想定（quiz CRUD完了+決裁者承認まで展開しない）との差分を提示（現状は読み取り専用のみ）→ 2つの前提条件（展開範囲判断・Anthropicクラウド経由の周知）をGOAL.md「🔔チーム展開の前提条件」節に記録、decision-maker回答待ち |
+| Phase 2b着手承認 | ✅ 「完成ゴールまで計画的に進めましょう」の指示を受け、GOAL.mdに`[ ]`項目として追加。次アクションはplan mode着手（CLAUDE.md新機能判定基準） |
+
+- **Issue Net (本セッション)**: Close 0 + 起票 0 = **Net 0**（本ミッションはGOAL.md追跡のためIssue経由の進捗ではない）
+- **本セッションmerged PR**: 4件（#661「PR A実機確認反映」、#662「Phase 2a PR B」、#663「PR B実機確認反映」。#660はcompact前に着手・本セッションでcodex review/デプロイ/実機確認を継続）
+- **本セッション本番操作**: mainへのpush 2回（#662/#663マージ）によるCloud Run自動デプロイ2回（都度PR番号単位の明示認可取得）、gcloud認証再接続1回（decision-maker実行）、MCP再認証操作を決裁者に複数回依頼（デプロイ後のOIDCセッション失効に伴う。§後述の既知事象参照）
+- **意思決定確認事項**: PR #661/#662/#663マージ可否（個別確認）、codex review P1指摘2件への対応方針（TTL短縮のみ実施・CPU割当は監視継続、AskUserQuestionで選択取得）、Phase 2b着手可否 — いずれもAskUserQuestion/対話で個別確認取得
+
+## 既知事象（次セッション向け参考情報）
+- **デプロイ後のMCP再認証**: Cloud Run再デプロイのたびに、ローカルのMCPクライアント接続が「要再認証」になる。今回は2回発生（PR #660デプロイ後・PR #662デプロイ後）。TTL短縮（24時間）後もこの挙動自体は変わらない（デプロイ＝インスタンス入れ替わりでOIDCの実行時状態が失われるため、Firestore永続化があっても再認証は必要）。次セッションでも同様の対応（`/mcp`→`mcp`→Authenticate）が必要になる見込み
+- **`.claude/scheduled_tasks.lock`の未コミット削除**: 複数セッション継続で観測（Session 86/87でも記録済み、本セッションでも継続）。原因不明のまま操作すべきでない、実害なし
+
+## 同根再発スキャン（§4.6）/ 対症療法判定（§4.7）
+本セッションの`fix:`プレフィックスcommit（TTL短縮・audit-log欠落・Docker workspace-root化等）は全てPR #662の同一レビューサイクル内での指摘対応（squash前のiterative commit）であり、既にshipped済みの別PRへの再発修正ではない。過去7日のhandoff archiveを`TTL|tsbuildinfo|shared-types.*Docker`でgrepし0件（同根再発スキャン § 4.6 該当なし）。各修正は実際の根本原因調査を伴う（TTL: oidc-providerセッションスキップ挙動を実機ログで特定、Docker: ローカルで実際に`docker build`を再現しtsbuildinfo混入を突き止め）ため§4.7対症療法判定にも該当しない
+
+## 次のアクション（3分割構造）
+
+#### 即着手タスク
+| # | タスク | ROI | 想定工数 | 完了条件 | 関連ファイル / コマンド |
+|---|--------|-----|----------|-----|----------------------|
+| 1 | [GOAL.md] Phase 2b (書き込み系quizツール) のplan mode計画策定 | 決裁者から明示承認済み（「完成ゴールまで計画的に進めましょう」）。CLAUDE.md新機能判定基準（5ファイル以上見込み）に該当するためplan mode必須 | 30-60分 | plan mode でACワークフロー完了、ExitPlanMode承認取得 | `/Users/yyyhhh/.claude/plans/linear-zooming-conway.md`「スコープ外」節（create_quiz/update_quiz/delete_quiz、同時編集検知・delete確認ハッシュの設計要件が既述）、`docs/handoff/GOAL.md`のPhase 2b行 |
+
+#### 条件待ち（明示trigger付き）
+| # | 項目 | trigger（充足条件） | 充足時のタスク | 充足確認方法 |
+|---|------|------------------|--------------|------------|
+| 1 | チーム展開の実施可否・範囲決定 | 開発者からGOAL.md「🔔チーム展開の前提条件」節の2点（読み取り専用での先行展開可否／Anthropicクラウド経由の周知実施）への回答 | 回答内容に応じて展開作業（Team plan組織カスタムコネクタ登録は開発者自身の管理者操作、AIは実施不可）を支援 | `docs/handoff/GOAL.md`の該当節を確認 |
+| 2 | Cloud Run CPUスロットリング対応（`--no-cpu-throttling`等） | decision-makerからのインフラコスト増認可 | Cloud Run設定変更（`.github/workflows/deploy.yml`のdeploy-mcp job） | GOAL.md監視項目節を確認 |
+
+#### 却下候補（記録のみ）
+| # | 項目 | 検討経緯 | 着手しない理由 | 参照条件 |
+|---|------|---------|--------------|---------|
+| 1 | super admin横断操作の本格対策（`tenant-membership.ts`実装） | PR B codex review・計画時点から継続する既知の残存リスク | 計画で「Phase 1b（Phase 2bとは別）で対応」と位置付け済み、Phase 2b計画策定時に優先度を再確認する | Phase 2b plan mode時にdecision-makerと優先順位確認 |
+| 2 | DCR濫用対策の本実装（Client登録数上限・監視） | Phase 1a PR2段階から継続する既知の残存リスク | 同上、decision-maker確認済みでv1未対応の合意事項 | 同上 |
+| 3 | `.claude/scheduled_tasks.lock`の未コミット削除 | 複数セッション継続で観測 | 原因不明のまま操作すべきでない、実害なし | decision-makerからの明示指示時のみ |
+| 4 | PR #620（ロールバック用、待機状態）のmerge/close判断 | 前セッションから継続、無関係の既存backlog | 待機状態が意図的な設計、decision-maker判断待ち | decision-makerからの明示指示時のみ |
+| 5 | GitHub 24件の脆弱性(Dependabot、11 high/13 moderate) | 前セッションから継続観測、内容未調査 | 本セッションのスコープ外、triage未実施 | decision-makerからの明示指示時のみ |
+
+> ⚠️ 「優先順にすすめて」等の包括指示で次セッションが動けるのは即着手タスクのみ（本セッションは1件）。条件待ち・却下候補は包括指示の対象外。
+
+## Issue Net 変化
+- Close 数: 0 件
+- 起票数: 0 件
+- Net: 0 件
+
+## 再開可能性判定
+✅ **再開可能** - `docs/handoff/GOAL.md`のPhase 2b行と計画ファイル`linear-zooming-conway.md`「スコープ外」節から開発再開できます
+
+---
+
+## 最終結論
+
+✅ **セッション終了可** — 残作業ゼロ、クリーン状態達成
+- OPEN PR: 0件（本セッションのPR #661/#662/#663は全てマージ済み）
+- active Issue: 5件（#521/#405/#276/#275/#274、いずれも本セッション無関係の既存backlog、全てpostponed、Net変化0）
+- Git: `.claude/scheduled_tasks.lock`のみ変更あり（複数セッション継続の既存ランタイム残骸、対応不要）
+- 即着手タスク: 1件（Phase 2b plan mode着手、次セッション冒頭で実施） / 条件待ち: 2件（チーム展開判断・CPUスロットリング対応、いずれもdecision-maker回答待ちで本セッションでは対応不能）
+- 残留プロセス: なし
+- 既知のblocker: なし
+- §4.6同根再発スキャン: 候補0件 / §4.7対症療法判定: 該当なし（4項目とも非該当、上記参照）
+
+---
+
+
 
 ## TL;DR
 
