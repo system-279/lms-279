@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-24 (Phase 2a PR B完了・マージ・デプロイ・実機確認済み。次タスクは書き込み系quizツール等、決裁者確認から着手)
+updated: 2026-08-24 (Phase 2a PR B完了・マージ・デプロイ・実機確認済み。決裁者承認によりPhase 2b(書き込み系quizツール)へ進行、次アクションはplan mode着手。チーム展開はdecision-maker回答待ち)
 ---
 
 ## 現在のミッション
@@ -40,8 +40,17 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
 - [x] Step 0スパイク: Firebaseリフレッシュトークンをsecuretoken.googleapis.comで交換した後のIDトークンが`firebase.sign_in_provider === "google.com"`を保持し続けるかを実機検証 → PASS（実Googleアカウント`system@279279.net`でサインイン→ネットワーク応答からrefreshToken捕捉→curlで交換→デコードしたIDトークンで`sign_in_provider: "google.com"`, `email_verified: true`を確認。PR A設計の前提が成立）
 - [x] Phase 1b-1 (PR A): Firebaseリフレッシュトークンの暗号化永続化（AES-GCM、鍵バージョン管理、Firestoreストア、トークン交換クライアント）。計画linear-zooming-conway.md参照 → 済（PR #660、テスト107件PASS/5skip、lint/type-check/build全PASS。デプロイ前手動作業: Secret Manager `mcp-credential-encryption-key` 作成 + Cloud Run既定compute SAへ`secretAccessor`付与済み〔`mcp-oauth-signing-key`と同型〕。codex review計6回（`--strict-config`含む）+ pr-review-toolkit正式プラグイン3系統×2ラウンド〔当初general-purpose代替→後半で実プラグインエージェントに切替、model:sonnet明示〕で収斂。修正内容: 同一uid同時exchange競合(P2)/応答未検証によるundefined成功扱い/失効判定の粒度誤り(revoked vs 設定不備)/Firestore書き込みブロッキング(P1)/タイマークリア漏れ(P2)/exchange成功後のstore.save失敗が無防備(CRITICAL)/復号失敗が無防備。credential-service.tsは本PR時点で未配線、Phase 2aで実際に呼び出される。マージ→デプロイ成功（`deploy-mcp`含む全job success）→**デプロイ後実機確認も完了**（2026-08-23、決裁者のブラウザで`_session` Cookie削除→完全新規Googleサインイン実行→`POST /interaction/.../firebase-callback`の0.4秒後に`mcp_user_credentials/{uid}`ドキュメントが作成されたことをFirestore REST APIで確認、`encryptedRefreshToken`は暗号化済みblobで平文露出なし。当初1-2回目の`/mcp` reconnectはPhase 1a PR2のセッション永続化によりGoogleサインインがスキップされ`firebase-callback`が呼ばれなかった＝ブラウザCookie削除が必須と判明）
 - [x] Phase 2a (PR B): 読み取り専用quizツール3種（list_courses/list_lessons/get_quiz） + LMS APIクライアント + 監査ログ。計画linear-zooming-conway.md「PR B」節参照 → 済（ブランチ`feat/mcp-quiz-readonly-tools`、テスト151件PASS/5skip、lint/type-check/build全PASS）。codex review計6回で収斂: P1×3件（①資格情報喪失時にoidc-providerのセッションCookieが有効な限りFirebaseログインがスキップされ自己回復できない問題→Session/Grant/RefreshTokenのTTLを14日→24時間へ短縮する緩和策を実装〔根治ではない、下記監視項目参照〕、②Cloud Run CPUスロットリングによる書き込み中断リスクがPR Bで実配線され「起きても実害なし」から「実害あり」に格上げ→decision-maker確認済みで対応は監視継続、③`@lms-279/shared-types`依存追加によりservices/mcp単体ディレクトリをビルドコンテキストとする従来のDockerfile/CIではワークスペース依存を解決できずビルドが壊れる→services/api同型のworkspace-root-buildへ変更、ローカルで実際にdocker build+コンテナ起動+discoveryエンドポイント200応答まで実証確認〔副次的に発見: ローカルの古い`tsconfig.tsbuildinfo`がDockerビルドコンテキストへ混入しcomposite TypeScriptビルドの.d.ts出力を破壊する再現性ある問題を検出、`.dockerignore`に`**/*.tsbuildinfo`追加で再発防止〕）、P2×4件（監査ログ欠落2箇所、パスセグメント未エンコードによるインジェクション、audit-log書き込みの無期限ブロック、いずれも修正）。加えてpr-review-toolkit正式プラグイン3系統セカンドオピニオン（code-reviewer/silent-failure-hunter/pr-test-analyzer、model:sonnet明示）でCRITICAL信頼度2件（呼称ルール違反「決裁者」→「開発者」、shared-types DTOが定義のみで実際は`unknown`型のまま未配線だった問題→型を実配線しAdminCourseSummaryのフィールドも実際のAPIレスポンス形状に合わせて修正）+MEDIUM2件（extractUid失敗時の監査ログ欠落、transientエラーの内部詳細がMCPクライアントへ露出）+テストカバレッジgap複数（401リトライ枯渇パス・transientでのリトライ不発生・forceRefreshのキャッシュ再反映・courseId/lessonIdのURLエンコード）を反映。PR #662作成・codex review最終ラウンド+`--strict-config`ラウンドともfindings 0件→マージ→デプロイ成功（`deploy-mcp`のDocker workspace-root-build含む全job success、CI実環境でもローカル実証と同じくbuild成功を確認）→**実機確認も完了**（2026-08-24、テナント`qos4c4ka`(TEST)で`list_courses`→`list_lessons`→`get_quiz`を実際に実行し正常応答を確認〔get_quizは正解isCorrect・解説フィールド含む全情報を確認〕、`mcp_audit_logs`に3件とも`result:"success"`で記録されていることをFirestore REST APIで確認）
+- [ ] Phase 2b (PR C想定): 書き込み系quizツール（create_quiz/update_quiz/delete_quiz）。計画linear-zooming-conway.md「スコープ外」節に元々「次の増分」として記載済み（同時編集検知・delete確認ハッシュを含む設計が必要）。2026-08-24、決裁者「完成ゴールまで計画的に進めましょう」の指示により着手承認。**次アクションはplan mode でのフル計画策定から**（CLAUDE.md新機能判定基準に該当、5ファイル以上の変更見込み）。あわせて計画スコープ外節の残タスク（super admin横断操作対策の本実装＝`tenant-membership.ts`、DCR濫用対策）を新規PRに含めるか別増分にするかも計画時に整理する
+
+## 🔔 チーム展開の前提条件（decision-maker確認事項、2026-08-24）
+- 2026-08-24、開発者よりチーム展開（Team plan組織カスタムコネクタとしての恒久登録）の相談あり。計画時点の想定は「quiz CRUDツール完了＋decision-maker明示承認」までチーム展開しない方針だったが、現時点で完了しているのは読み取り専用のみ
+- 展開前に整理が必要な2点（AIから提示済み、decision-makerの意思決定待ち）:
+  1. 読み取り専用の現状でチーム展開してよいか、Phase 2b(CRUD)完了まで待つか
+  2. `get_quiz`がテスト正解・解説を含む全情報を返しAnthropicのクラウド基盤を経由することを、展開前にチームへ周知する（計画時点で決裁者確認済みの前提だが周知自体は未実施）
+- 副次的な既知リスク（新規に作る権限ではなく展開のブロッカーとはしていない、参考情報）: super admin権限保有メンバーはチャット経由で他テナントのquizデータも閲覧可能（既存Web管理画面と同じ権限）
+
 ## 🔄 中断点（in-flight）
-なし（PR A/PR Bともにマージ・デプロイ・実機確認まで完全に完了。次のタスクは書き込み系quizツール(create_quiz/update_quiz/delete_quiz、計画スコープ外の次増分)か、計画linear-zooming-conway.md「スコープ外」節に記載の残タスク〔super admin横断操作対策の本実装(Phase 1b)、DCR濫用対策等〕のいずれかで、決裁者への優先順位確認から着手）
+なし（PR A/PR Bともにマージ・デプロイ・実機確認まで完全に完了。次のタスクはPhase 2b(PR C)のplan mode着手。チーム展開判断は上記🔔節のdecision-maker回答待ち）
 
 ## Phase 0完了の経緯（本セッション、2026-08-21）
 実クライアント接続で当初の想定になかった不具合が2件連続発覚し、いずれも修正・実機再検証済み。
