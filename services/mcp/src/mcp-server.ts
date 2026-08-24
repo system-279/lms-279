@@ -83,6 +83,13 @@ async function getIdTokenAudited(
  * enforceモードで未所属ならブロックしTenantAccessDeniedErrorを投げる
  * （呼び出し元でこの関数自体を try/catch の外に置き、fn()呼び出し前に
  * 例外を伝播させることでAPIへ到達させない）。dry-runモードでは記録のみ。
+ *
+ * verifyGoogleIdToken自体が失敗した場合（clock skew等での検証エラー、Admin SDK
+ * 側の一時的な不調等）は「テナント不一致」とは別種の判定不能であり、ブロックしない
+ * （silent-failure-hunterセカンドオピニオン指摘: 元実装はここで例外がtry/catchなく
+ * 伝播し、監査ログから漏れたうえ、dry-runモードの「絶対にブロックしない」という
+ * 約束を破っていた）。判定不能な状態で通しても、fn()が実際に無効なidTokenで
+ * LMS APIを呼べば別途401で弾かれるため安全性は損なわれない。
  */
 async function verifyTenantMembershipAudited(
   deps: McpServerDeps,
@@ -92,8 +99,18 @@ async function verifyTenantMembershipAudited(
   targetId: string | undefined,
   idToken: string
 ): Promise<void> {
-  const account = await verifyGoogleIdToken(idToken);
-  const membership = await deps.tenantMembership.checkMembership(tenant, account.email);
+  let email: string;
+  try {
+    email = (await verifyGoogleIdToken(idToken)).email;
+  } catch (error) {
+    logger.error(`${tool}: テナント自己一致ガードのID検証に失敗しました（判定不能のためブロックしない）`, {
+      tenant,
+      error: String(error),
+    });
+    await deps.auditLog.record({ actor: uid, tenant, tool, targetId, result: "error" });
+    return;
+  }
+  const membership = await deps.tenantMembership.checkMembership(tenant, email);
   if (membership === "member") {
     return;
   }
