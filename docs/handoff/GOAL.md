@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-24 (Phase 2b PR C1〔テナント自己一致ガード〕完了・マージ・enforce切替・実機確認済み。31日納期のため観察期間を省略しenforce即時切替。次アクションはPR C2〔書き込み系quizツール本体〕実装)
+updated: 2026-08-25 (Phase 2b PR C2〔書き込み系quizツール本体〕完了・マージ・デプロイ・実機確認済み。ミッション「LMSのquiz CRUD操作をMCP経由で実行可能にする」のコア機能は全6ツールで完成。残るはチーム展開判断のみ)
 ---
 
 ## 現在のミッション
@@ -43,7 +43,12 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
 - [x] Phase 2b plan mode: フル計画策定（`/Users/yyyhhh/.claude/plans/magical-noodling-duckling.md`）。Codexセカンドオピニオン2巡（計12件反映、うち2件は自分でも実データ・実コードで独立検証）+ grip HTMLでの自己レビュー実施
 - [x] Phase 2b PR C1: テナント自己一致ガード（全6ツールへ、super admin横断操作対策=`tenant-membership.ts`）。`tenants/{tenant}/allowed_emails`未登録テナントはMCP経由アクセス不可（Web管理画面からは従来通り可能）。PR #665作成 → codex review(P1×1) + pr-review-toolkit:silent-failure-hunter(CRITICAL×1) + pr-review-toolkit:code-reviewer(Important×1)の3系統セカンドオピニオンで計3件反映（`verifyGoogleIdToken`失敗時の監査ログ漏れ・dry-run無害性違反、その修正が招いたfail-open→fail-closedへの是正、deploy.ymlの`--set-env-vars`全置換仕様によるenforce手動切替の巻き戻りリスク） → テスト162件PASS/5skip、lint/type-check/build全PASS → マージ・デプロイ（`MCP_TENANT_GUARD_MODE=dry-run`で開始）
 - [x] Phase 2b PR C1 enforce切替: 開発者より「31日までに全て本番で使える状況が必要」との納期指示を受け、数日の観察期間を省略。ブロッカーだった`atali82i`のallowed_emails未登録は、開発者の認証済みセッション下でAIがPlaywrightにより`system@279279.net`を追加し解消（2026-08-24）。PR #666（deploy.yml 1行変更）作成・マージ・デプロイ → **実機確認完了**: `qos4c4ka`/`atali82i`で成功、存在しないテナントで拒否メッセージ返却+`mcp_audit_logs`に`result:"denied"`記録を確認
-- [ ] Phase 2b PR C2: 書き込み系quizツール本体（create_quiz/update_quiz/delete_quiz）。設計は計画ファイル「PR C2」節に確定済み（zodでの数値範囲バリデーション、`expectedUpdatedAt`による差分検知、`confirmTitle`による削除確認、`quiz:null`応答のエラー扱い等）。**次アクションはこのPR C2の実装着手**
+- [x] Phase 2b PR C2: 書き込み系quizツール本体（create_quiz/update_quiz/delete_quiz）。設計は計画ファイル「PR C2」節に確定済み（zodでの数値範囲バリデーション、`expectedUpdatedAt`による差分検知、`confirmTitle`による削除確認、`quiz:null`応答のエラー扱い等）を実装通り反映。PR #667作成（6 files, +1033/-20）→ **codex review**(`--base main --strict-config -c model_reasoning_effort=high`、P2×1「create_quizの同時実行TOCTOUでレッスンに複数テストが作成されうる」→ツール説明文に明記して修正) + **pr-review-toolkit4エージェント並列**（model:sonnet、read-only）:
+  - code-reviewer: confidence≥80のfindings 0件（既存バグとの整合性を実ソースで再検証、lint/type-check/test再現確認）
+  - pr-test-analyzer: Critical Gap 1件（401リトライ時にGET+書き込みペア全体`assertQuizMatchesExpected`含むが再実行される挙動が未テストだった）+ Important 4件（新規エラークラスの監査ログ記録・questions境界値0問/50問・maxAttempts/timeLimitSec範囲外値が未テスト）→ 全て実コードで検証のうえテスト追加
+  - silent-failure-hunter: **CRITICAL×1**「`create_quiz`/`delete_quiz`はquiz本体書き込み+`lesson.hasQuiz`更新の非トランザクション2段書き込みのため、後段のみ失敗するとtransient(5xx)分岐で『しばらくして再試行』という汎用文言を返すが、実際には既に完了している破壊的操作（作成/物理削除）を安全な再試行対象と誤読させる」→ 該当箇所を実ソース（`services/api/quizzes.ts`のcreate/delete、`error-handler.ts`）で検証し正当と判断、両ツールのtransientエラー時にget_quizでの状態確認を促すメッセージへ修正。MEDIUM×1（401リトライ初回失敗の監査ログ欠落、Phase 2a由来の既存コードで本PR差分外、フォローアップとして下記監視項目に記録）、LOW×1（対応不要の記録用メモ）
+  - type-design-analyzer: ブロッカー級指摘なし。型で表現されない不変条件（`AdminQuizUpdateRequest`の最低1フィールド必須、`AdminQuizQuestion`のsingle型正解1つ、`LmsApiClient.updateQuiz`の呼び出し規約）をJSDocに明記
+  → テスト193件PASS/5skip（追加前186件から+7）、lint/type-check/build全ワークスペースPASS → PR #667マージ（squash、コミット45e74cf）→ CI/E2E Tests/Deploy to Cloud Run 全job success確認 → **実機確認完了**（2026-08-25、テナント`qos4c4ka`(TEST)のレッスン`T7cR92Cj3xc72H7xn1FR`で計画AC8の一巡フローを実施: 既存quizの内容を退避→delete_quiz→get_quizで404相当確認→2問のテストをcreate_quiz→get_quizで内容一致確認→update_quizでタイトル変更→**古いexpectedUpdatedAtでの再update_quizが期待通り拒否**〔最新updatedAtを案内するメッセージも確認〕→delete_quiz→get_quizで404相当確認→退避しておいた元の10問構成を`create_quiz`で完全復元し`get_quiz`で内容一致・`list_lessons`で`hasQuiz:true`を確認。全ステップ期待通りの応答）
 
 ## 🔔 チーム展開の前提条件（decision-maker確認事項、2026-08-24）
 - 2026-08-24、開発者よりチーム展開（Team plan組織カスタムコネクタとしての恒久登録）の相談あり。計画時点の想定は「quiz CRUDツール完了＋decision-maker明示承認」までチーム展開しない方針だったが、現時点で完了しているのは読み取り専用のみ
@@ -53,7 +58,7 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
 - 副次的な既知リスク（新規に作る権限ではなく展開のブロッカーとはしていない、参考情報）: super admin権限保有メンバーはチャット経由で他テナントのquizデータも閲覧可能（既存Web管理画面と同じ権限）
 
 ## 🔄 中断点（in-flight）
-なし（PR A/PR Bともにマージ・デプロイ・実機確認まで完全に完了。次のタスクはPhase 2b(PR C)のplan mode着手。チーム展開判断は上記🔔節のdecision-maker回答待ち）
+なし（PR A/PR B/PR C1/PR C2すべてマージ・デプロイ・実機確認まで完全に完了。quiz CRUD 6ツール全てが本番稼働中。残るアクションはチーム展開判断のみ、上記🔔節のdecision-maker回答待ち）
 
 ## Phase 0完了の経緯（本セッション、2026-08-21）
 実クライアント接続で当初の想定になかった不具合が2件連続発覚し、いずれも修正・実機再検証済み。
@@ -75,6 +80,14 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
 - PR #641作成 → CI全項目PASS → 決裁者承認 → squashマージ
 
 ## 🔔 監視中
+- **Phase 2b PR C2完了に伴う残存リスク（`services/api`非改変の制約による根治不能な限界、2026-08-25）**:
+  - `expectedUpdatedAt`は真の楽観ロックではない。API側に`version`フィールド・一意制約・トランザクションがないため、同時create・同一ミリ秒内の競合は理論上すり抜けうる
+  - `delete_quiz`後も`quiz_attempts`は孤立して残る（カスケード削除なし、既存API仕様）
+  - `delete_quiz`→`create_quiz`で作り直すと、過去合格者の`user_progress.quizPassed`（レッスン単位で管理）が残り続け新quizを受験できなくなる
+  - `create_quiz`/`delete_quiz`はquiz本体書き込み+`lesson.hasQuiz`更新が非トランザクションの2段書き込みで、後段のみ失敗すると状態不整合が生じうる（silent-failure-hunter指摘を受け、transientエラー時のメッセージでget_quizによる状態確認を促す対策済み、根治ではない）
+  - `create_quiz`の同時並行呼び出しはAPI側の既存チェック→作成がTOCTOUのため、同一レッスンに複数テストが作成されうる（ツール説明文に明記済み、根治ではない）
+- **PR #667 pr-review-toolkit:silent-failure-hunter指摘のMEDIUM（本PR差分外、フォローアップ）**: `callToolWithAuth`の401リトライ機構で、初回失敗が監査ログに記録されない（Phase 2a由来の既存コード、書き込み系ツール追加によりこの監査ログの空白が副作用を伴う操作にも波及するようになった）。次にこの経路を触る機会に合わせて監査ログ記録の追加を検討
+- **ローカル環境で観測した`services/api`の既存テストflaky（本PRと無関係、2026-08-24）**: `services/api/src/routes/__tests__/super-admin-tenants-gcip.test.ts`の「gcipTenantIdに空文字を指定すると400」テストが、ローカル実行で5000msタイムアウトにより断続的に失敗（`git diff main...HEAD`でservices/api配下の変更0件を確認済みで無関係、直近のmain CIはPASS済みのためローカル環境固有の可能性が高い）。CI破壊が確認されればIssue化を検討、現時点はtriage基準未達のため見送り
 - PR #620（`QUIZ_REQUIRE_ACTIVE_SESSION=true`本番切替のロールバック弁、2026-08-20作成）は観察期間を置いて維持する方針（2026-08-21、決裁者確認）。`/quizzes/:quizId/attempts`の409(`session_required`/`session_time_exceeded`)発生率異常、または正当な受講者からの問い合わせが確認されない限りmergeしない。観察期間終了の目安なし
 - **Phase 1a PR1マージ後、Cloud Run自動デプロイが進行中**（`Deploy to Cloud Run`ワークフロー、本セッション内で完了確認予定）。devInteractionsは本番で無効化されるが、**Firebase Console → Authentication → Authorized domainsに`mcp-3zcica5euq-an.a.run.app`を追加するまでは実Googleサインインが`auth/unauthorized-domain`で失敗する**（コード外の手動作業、次セッションの即着手候補）
 - **組織カスタムコネクタとしての恒久登録は上記手動作業+実機確認完了までまだ行わないこと**（Phase 1a PR2=Firestore永続化がまだ未着手のため、Cloud Run再デプロイで引き続きDCR登録クライアントが失効する制約が残っている）
