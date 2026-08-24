@@ -444,7 +444,7 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
     {
       title: "Create Quiz",
       description:
-        "指定レッスンに新しいテストを作成します。既にテストが存在する場合はエラーになります。questionsは最大50問、single型の問題は正解(isCorrect)がちょうど1つ必要です。",
+        "指定レッスンに新しいテストを作成します。既にテストが存在する場合はエラーになります。questionsは最大50問、single型の問題は正解(isCorrect)がちょうど1つ必要です。同一レッスンに対してこのツールを短時間に複数回・並行して呼び出すと、API側に排他制御がないため両方成功し同一レッスンに複数のテストが作成されてしまう場合があります（既存チェックと作成の間に排他がないTOCTOU）。同じレッスンへの作成は一度に1回だけ実行してください。",
       inputSchema: createQuizSchema,
     },
     async (
