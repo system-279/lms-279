@@ -10,6 +10,7 @@ import type { CredentialOptions } from "./interactions/router.js";
 import { createCredentialService } from "./credential-service.js";
 import { createLmsApiClient } from "./lms-api-client.js";
 import { createAuditLog } from "./audit-log.js";
+import { createTenantMembershipChecker } from "./tenant-membership.js";
 import type { McpServerDeps } from "./mcp-server.js";
 
 async function buildStorageOptions(config: ReturnType<typeof loadConfig>): Promise<OidcProviderOptions> {
@@ -59,6 +60,7 @@ async function buildCredentialOptions(config: ReturnType<typeof loadConfig>): Pr
  * 組み立てる。credentialOptions（PR A、Firestore永続化）が無ければ資格情報を
  * 交換する手段がなくツールを提供できないため、その場合は undefined を返し
  * mcp-server.ts 側で ping のみ登録させる。
+ * Phase 2b PR C1: テナント自己一致ガード（tenantMembership/tenantGuardMode）を追加。
  */
 async function buildMcpServerDeps(
   config: ReturnType<typeof loadConfig>,
@@ -76,8 +78,10 @@ async function buildMcpServerDeps(
     firebaseWebApiKey: config.firebaseWebApiKey ?? "",
   });
   const lmsApiClient = createLmsApiClient(config.lmsApiBaseUrl);
-  const auditLog = createAuditLog(getFirestoreDb());
-  return { lmsApiClient, credentialService, auditLog };
+  const db = getFirestoreDb();
+  const auditLog = createAuditLog(db);
+  const tenantMembership = createTenantMembershipChecker(db);
+  return { lmsApiClient, credentialService, auditLog, tenantMembership, tenantGuardMode: config.tenantGuardMode };
 }
 
 async function main(): Promise<void> {

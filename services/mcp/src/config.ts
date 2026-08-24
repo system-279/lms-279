@@ -17,6 +17,22 @@ export interface McpConfig {
   mcpCredentialSecretName: string | undefined;
   /** Phase 2a: quizツールが呼び出す services/api のベースURL（Cloud RunのURL） */
   lmsApiBaseUrl: string | undefined;
+  /**
+   * Phase 2b PR C1: テナント自己一致ガードの動作モード。
+   * "dry-run"（既定） = 拒否対象を検知しても実際にはブロックせず記録のみ。
+   * "enforce" = 実際にブロックする。本番影響範囲を確認してから手動で切り替える
+   * （計画magical-noodling-duckling.md「PR C1」節参照）。
+   */
+  tenantGuardMode: "dry-run" | "enforce";
+}
+
+function parseTenantGuardMode(): "dry-run" | "enforce" {
+  const raw = process.env.MCP_TENANT_GUARD_MODE;
+  if (raw === undefined || raw === "dry-run") return "dry-run";
+  if (raw === "enforce") return "enforce";
+  throw new Error(
+    `FATAL: invalid MCP_TENANT_GUARD_MODE "${raw}" (must be "dry-run" or "enforce", services/mcp/src/config.ts)。`
+  );
 }
 
 function isProductionRuntime(): boolean {
@@ -37,6 +53,7 @@ export function loadConfig(): McpConfig {
   const mcpSigningSecretName = process.env.MCP_SIGNING_SECRET_NAME;
   const mcpCredentialSecretName = process.env.MCP_CREDENTIAL_SECRET_NAME;
   const lmsApiBaseUrl = process.env.LMS_API_BASE_URL;
+  const tenantGuardMode = parseTenantGuardMode();
 
   if (isProductionRuntime()) {
     const missing = [
@@ -88,5 +105,6 @@ export function loadConfig(): McpConfig {
     mcpSigningSecretName,
     mcpCredentialSecretName,
     lmsApiBaseUrl,
+    tenantGuardMode,
   };
 }
