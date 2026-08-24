@@ -37,6 +37,23 @@ export class TenantAccessDeniedError extends Error {
   }
 }
 
+/**
+ * テナント自己一致ガードのID検証（verifyGoogleIdToken）自体が失敗した場合の
+ * enforceモードでのブロック。tenant-membership.ts の Firestoreクエリ失敗時と
+ * 同じfail-closed方針（pr-review-toolkit:code-reviewerセカンドオピニオン指摘:
+ * 「無効なidTokenなら別途401で弾かれる」という当初の安全性根拠は誤りで、
+ * verifyGoogleIdTokenの失敗はidToken自体の無効性を意味しない — Admin SDK側の
+ * 一時的な不調等でも起こりうり、その場合idTokenは有効なままfn()は普通に成功する。
+ * 判定不能を理由にsuper adminのテナント横断アクセスだけ素通りさせるのは、
+ * 他の一般ユーザーがFirestore障害時にfail-closedされるのと非対称になる）。
+ */
+export class TenantMembershipVerificationError extends Error {
+  constructor() {
+    super("本人確認に失敗しました。しばらくしてから再度お試しください。");
+    this.name = "TenantMembershipVerificationError";
+  }
+}
+
 function errorResult(message: string): CallToolResult {
   return { content: [{ type: "text", text: message }], isError: true };
 }
@@ -85,11 +102,14 @@ async function getIdTokenAudited(
  * 例外を伝播させることでAPIへ到達させない）。dry-runモードでは記録のみ。
  *
  * verifyGoogleIdToken自体が失敗した場合（clock skew等での検証エラー、Admin SDK
- * 側の一時的な不調等）は「テナント不一致」とは別種の判定不能であり、ブロックしない
- * （silent-failure-hunterセカンドオピニオン指摘: 元実装はここで例外がtry/catchなく
- * 伝播し、監査ログから漏れたうえ、dry-runモードの「絶対にブロックしない」という
- * 約束を破っていた）。判定不能な状態で通しても、fn()が実際に無効なidTokenで
- * LMS APIを呼べば別途401で弾かれるため安全性は損なわれない。
+ * 側の一時的な不調等）は「テナント不一致」とは別種の判定不能。dry-runモードでは
+ * 「絶対にブロックしない」という契約を守り記録のみに留めるが、enforceモードでは
+ * tenant-membership.tsのFirestoreクエリ失敗時と同じfail-closed方針を取り、
+ * TenantMembershipVerificationErrorでブロックする（元実装はここでfail-openにして
+ * いたが、pr-review-toolkit:code-reviewerセカンドオピニオンで「まさにガードが
+ * 機能してほしい瞬間に無効化される」と指摘され修正）。
+ * いずれのモードでも監査ログには残す（silent-failure-hunterセカンドオピニオン指摘:
+ * 元実装は例外がtry/catchなく伝播し監査ログから漏れていた）。
  */
 async function verifyTenantMembershipAudited(
   deps: McpServerDeps,
@@ -103,11 +123,15 @@ async function verifyTenantMembershipAudited(
   try {
     email = (await verifyGoogleIdToken(idToken)).email;
   } catch (error) {
-    logger.error(`${tool}: テナント自己一致ガードのID検証に失敗しました（判定不能のためブロックしない）`, {
+    logger.error(`${tool}: テナント自己一致ガードのID検証に失敗しました`, {
       tenant,
+      tenantGuardMode: deps.tenantGuardMode,
       error: String(error),
     });
     await deps.auditLog.record({ actor: uid, tenant, tool, targetId, result: "error" });
+    if (deps.tenantGuardMode === "enforce") {
+      throw new TenantMembershipVerificationError();
+    }
     return;
   }
   const membership = await deps.tenantMembership.checkMembership(tenant, email);
@@ -173,7 +197,7 @@ function mapErrorToResult(tool: string, error: unknown): CallToolResult {
   if (error instanceof CredentialNotFoundError) {
     return errorResult("再認証が必要です。改めてサインインしてください。");
   }
-  if (error instanceof TenantAccessDeniedError) {
+  if (error instanceof TenantAccessDeniedError || error instanceof TenantMembershipVerificationError) {
     return errorResult(error.message);
   }
   if (error instanceof LmsApiError) {

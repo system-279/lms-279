@@ -1350,12 +1350,12 @@ describe("Phase 2b PR C1: テナント自己一致ガード", () => {
     expect(checkMembership).toHaveBeenCalledTimes(2);
   });
 
-  it("verifyGoogleIdToken自体が失敗した場合（判定不能）、ブロックせずfnを実行し監査ログにerrorとして記録する（enforceモードでも。silent-failure-hunterセカンドオピニオン指摘: 元実装は監査ログから漏れ、dry-runの「絶対にブロックしない」約束も破っていた）", async () => {
+  it("dry-runモード: verifyGoogleIdToken自体が失敗した場合（判定不能）、ブロックせずfnを実行し監査ログにerrorとして記録する（dry-runの「絶対にブロックしない」契約を守る）", async () => {
     const checkMembership = vi.fn();
     const listCourses = vi.fn().mockResolvedValue([{ id: "c1", name: "Course 1" }]);
     const deps = makeMcpServerDeps({
       tenantMembership: { checkMembership },
-      tenantGuardMode: "enforce",
+      tenantGuardMode: "dry-run",
       lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
     });
     const { app } = await createApp(ISSUER_URL, 8154, firebaseConfig, {}, undefined, deps);
@@ -1372,6 +1372,35 @@ describe("Phase 2b PR C1: テナント自己一致ガード", () => {
     const result = parseMcpToolResult(mcpRes);
     expect(result.isError).toBeUndefined();
     expect(listCourses).toHaveBeenCalledWith("tenant-a", "fresh-id-token");
+    expect(checkMembership).not.toHaveBeenCalled();
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
+  });
+
+  it("enforceモード: verifyGoogleIdToken自体が失敗した場合（判定不能）、fail-closedでブロックし監査ログにerrorとして記録する（pr-review-toolkit:code-reviewerセカンドオピニオン指摘: 「無効なidTokenなら401で弾かれる」という当初の安全性根拠は誤りで、fail-openにするとまさにガードが機能してほしい瞬間に無効化されるため）", async () => {
+    const checkMembership = vi.fn();
+    const listCourses = vi.fn();
+    const deps = makeMcpServerDeps({
+      tenantMembership: { checkMembership },
+      tenantGuardMode: "enforce",
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8155, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    mockVerifyIdToken.mockRejectedValueOnce(new Error("token verification transiently failed"));
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("本人確認に失敗しました");
+    expect(listCourses).not.toHaveBeenCalled();
     expect(checkMembership).not.toHaveBeenCalled();
     expect(deps.auditLog.record).toHaveBeenCalledWith(
       expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
