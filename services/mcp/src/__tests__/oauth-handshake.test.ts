@@ -7,8 +7,11 @@ import { createFakeFirestore } from "../storage/__tests__/fake-firestore.js";
 import { createCredentialStore } from "../storage/credential-store.js";
 import { decryptWithKeyring } from "../crypto/aes-gcm.js";
 import { createCredentialService, CredentialNotFoundError } from "../credential-service.js";
-import { LmsApiError } from "../lms-api-client.js";
+import { LmsApiError, type LmsApiClient } from "../lms-api-client.js";
 import type { McpServerDeps } from "../mcp-server.js";
+import type { CredentialService } from "../credential-service.js";
+import type { AuditLog } from "../audit-log.js";
+import type { TenantMembershipChecker } from "../tenant-membership.js";
 
 const mockVerifyIdToken = vi.fn();
 
@@ -216,26 +219,44 @@ function parseMcpToolResult(res: request.Response): { content: Array<{ type: str
   return parsed.result;
 }
 
-function makeMcpServerDeps(overrides: Partial<McpServerDeps> = {}): McpServerDeps {
+interface McpServerDepsOverrides {
+  lmsApiClient?: Partial<LmsApiClient>;
+  credentialService?: Partial<CredentialService>;
+  auditLog?: Partial<AuditLog>;
+  tenantMembership?: Partial<TenantMembershipChecker>;
+  tenantGuardMode?: McpServerDeps["tenantGuardMode"];
+}
+
+function makeMcpServerDeps(overrides: McpServerDepsOverrides = {}): McpServerDeps {
   return {
     lmsApiClient: {
       listCourses: vi.fn().mockResolvedValue([]),
       listLessons: vi.fn().mockResolvedValue([]),
       getQuiz: vi.fn().mockResolvedValue({}),
+      createQuiz: vi.fn().mockResolvedValue({}),
+      updateQuiz: vi.fn().mockResolvedValue({}),
+      deleteQuiz: vi.fn().mockResolvedValue(undefined),
+      // 既存テストがlmsApiClientを部分的に(listCourses等の一部メソッドのみ)
+      // オーバーライドしても残りのメソッドが欠落しないよう、フィールド単位でマージする
+      // （Phase 2b PR C2でLmsApiClientにcreateQuiz/updateQuiz/deleteQuizが追加され、
+      // 丸ごと置換だと既存の全テストが型エラーになるため）。
+      ...overrides.lmsApiClient,
     },
     credentialService: {
       getFirebaseIdTokenForAccount: vi.fn().mockResolvedValue("fresh-id-token"),
+      ...overrides.credentialService,
     },
     auditLog: {
       record: vi.fn().mockResolvedValue(undefined),
+      ...overrides.auditLog,
     },
     // 既定はallowed_emails所属あり扱い（Phase 2a由来の既存テストが回帰しないよう）。
     // 非メンバー系のテストは checkMembership を "denied" にオーバーライドする。
     tenantMembership: {
       checkMembership: vi.fn().mockResolvedValue("member"),
+      ...overrides.tenantMembership,
     },
-    tenantGuardMode: "enforce",
-    ...overrides,
+    tenantGuardMode: overrides.tenantGuardMode ?? "enforce",
   };
 }
 
@@ -1405,6 +1426,322 @@ describe("Phase 2b PR C1: テナント自己一致ガード", () => {
     expect(deps.auditLog.record).toHaveBeenCalledWith(
       expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
     );
+  });
+});
+
+describe("Phase 2b PR C2: 書き込み系quizツール（create_quiz/update_quiz/delete_quiz）", () => {
+  const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+
+  const validQuestion = {
+    id: "q1",
+    text: "1+1は？",
+    type: "single" as const,
+    options: [
+      { id: "o1", text: "2", isCorrect: true },
+      { id: "o2", text: "3", isCorrect: false },
+    ],
+    points: 10,
+    explanation: "",
+  };
+
+  async function callTool(app: Express, accessToken: string, name: string, args: Record<string, unknown>) {
+    return request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
+  }
+
+  // SDKのinputSchemaバリデーションはハンドラ到達前に失敗し、isError:trueのツール結果として返る
+  // （JSON-RPCレベルのerrorオブジェクトにはならない。「未登録ツール呼び出し」の場合とは異なる形状）
+  function expectInputValidationError(mcpRes: request.Response) {
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("Input validation error");
+  }
+
+  describe("create_quiz", () => {
+    it("正常系: lmsApiClient.createQuizを呼び、作成されたquizを返し、監査ログにsuccessを記録する", async () => {
+      const createQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "新テスト" });
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8160, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [validQuestion],
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ quiz: { id: "q1", title: "新テスト" } });
+      expect(createQuiz).toHaveBeenCalledWith(
+        "tenant-a",
+        "lesson-1",
+        expect.objectContaining({ title: "新テスト", questions: [validQuestion] }),
+        "fresh-id-token"
+      );
+      expect(deps.auditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant: "tenant-a", tool: "create_quiz", targetId: "lesson-1", result: "success" })
+      );
+    });
+
+    it("409(quiz_already_exists)はisError:trueになる", async () => {
+      const createQuiz = vi
+        .fn()
+        .mockRejectedValue(new LmsApiError("A quiz already exists for this lesson", "quiz_already_exists", 409, false));
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8161, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [validQuestion],
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain("A quiz already exists");
+    });
+
+    it("51問を渡すとzodバリデーションで即座に拒否されlmsApiClientが呼ばれない（API側50問上限のMCP側事前チェック）", async () => {
+      const createQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8162, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const questions = Array.from({ length: 51 }, (_, i) => ({ ...validQuestion, id: `q${i}` }));
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions,
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(createQuiz).not.toHaveBeenCalled();
+    });
+
+    it("single型で正解(isCorrect)が2つある場合、zodバリデーションで即座に拒否されlmsApiClientが呼ばれない", async () => {
+      const createQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8163, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const badQuestion = {
+        ...validQuestion,
+        options: [
+          { id: "o1", text: "2", isCorrect: true },
+          { id: "o2", text: "3", isCorrect: true },
+        ],
+      };
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [badQuestion],
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(createQuiz).not.toHaveBeenCalled();
+    });
+
+    it("passThresholdに範囲外の値(負値)を渡すとzodバリデーションで即座に拒否される（Codexセカンドオピニオン2巡目指摘: API側は数値バリデーションをしないため、MCP側が最後の防波堤）", async () => {
+      const createQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8164, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [validQuestion],
+        passThreshold: -1,
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(createQuiz).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("update_quiz", () => {
+    it("正常系: 実行直前GETしupdatedAtが一致すればupdateQuizを呼び、監査ログにsuccessを記録する", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "旧タイトル", updatedAt: "2026-01-01T00:00:00.000Z" });
+      const updateQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "新タイトル" });
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, updateQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8165, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "update_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        title: "新タイトル",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ quiz: { id: "q1", title: "新タイトル" } });
+      expect(getQuiz).toHaveBeenCalledWith("tenant-a", "lesson-1", "fresh-id-token");
+      expect(updateQuiz).toHaveBeenCalledWith(
+        "tenant-a",
+        "lesson-1",
+        expect.objectContaining({ title: "新タイトル" }),
+        "fresh-id-token"
+      );
+      expect(deps.auditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant: "tenant-a", tool: "update_quiz", targetId: "lesson-1", result: "success" })
+      );
+    });
+
+    it("expectedUpdatedAtが実際のupdatedAtと不一致なら中止し、updateQuizが呼ばれない", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "旧タイトル", updatedAt: "2026-02-01T00:00:00.000Z" });
+      const updateQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, updateQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8166, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "update_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        title: "新タイトル",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain("変更されています");
+      expect(updateQuiz).not.toHaveBeenCalled();
+    });
+
+    it("expectedUpdatedAtのみ（実更新フィールドなし）はzodバリデーションで即座に拒否され、getQuizすら呼ばれない（applyUpdateが空更新でもupdatedAtを無条件更新するため他クライアントのexpectedUpdatedAtを失効させてしまう対策）", async () => {
+      const getQuiz = vi.fn();
+      const updateQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, updateQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8167, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "update_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(getQuiz).not.toHaveBeenCalled();
+      expect(updateQuiz).not.toHaveBeenCalled();
+    });
+
+    it("PATCH応答がquiz:nullの場合（レース条件）、isError:trueになる（lms-api-clientのnullチェックが機能していることのE2E確認）", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "旧タイトル", updatedAt: "2026-01-01T00:00:00.000Z" });
+      const updateQuiz = vi
+        .fn()
+        .mockRejectedValue(new LmsApiError("LMS APIの応答にquizが含まれていません（updateQuiz）", undefined, undefined, false));
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, updateQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8168, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "update_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        title: "新タイトル",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+    });
+  });
+
+  describe("delete_quiz", () => {
+    it("正常系: updatedAt一致・confirmTitle一致でdeleteQuizを呼び、監査ログにsuccessを記録する", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "削除対象", updatedAt: "2026-01-01T00:00:00.000Z" });
+      const deleteQuiz = vi.fn().mockResolvedValue(undefined);
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, deleteQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8169, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "delete_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        confirmTitle: "削除対象",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ deleted: true });
+      expect(deleteQuiz).toHaveBeenCalledWith("tenant-a", "lesson-1", "fresh-id-token");
+      expect(deps.auditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant: "tenant-a", tool: "delete_quiz", targetId: "lesson-1", result: "success" })
+      );
+    });
+
+    it("confirmTitleが実際のタイトルと一致しない場合、中止しdeleteQuizが呼ばれない", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "本当のタイトル", updatedAt: "2026-01-01T00:00:00.000Z" });
+      const deleteQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, deleteQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8170, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "delete_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        confirmTitle: "違うタイトル",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain("confirmTitle");
+      expect(deleteQuiz).not.toHaveBeenCalled();
+    });
+
+    it("expectedUpdatedAtが不一致の場合、confirmTitleの一致有無に関わらず中止しdeleteQuizが呼ばれない", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "削除対象", updatedAt: "2026-02-01T00:00:00.000Z" });
+      const deleteQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, deleteQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8171, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "delete_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        confirmTitle: "削除対象",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain("変更されています");
+      expect(deleteQuiz).not.toHaveBeenCalled();
+    });
+
+    it("404(quiz未設定)はisError:trueになる", async () => {
+      const getQuiz = vi.fn().mockRejectedValue(new LmsApiError("Quiz not found for this lesson", "not_found", 404, false));
+      const deleteQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, deleteQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8172, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "delete_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        confirmTitle: "何か",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain("Quiz not found for this lesson");
+      expect(deleteQuiz).not.toHaveBeenCalled();
+    });
   });
 });
 

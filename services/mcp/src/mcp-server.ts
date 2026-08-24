@@ -54,6 +54,29 @@ export class TenantMembershipVerificationError extends Error {
   }
 }
 
+/**
+ * Phase 2b PR C2: update_quiz/delete_quizの同時編集検知（expectedUpdatedAt不一致）。
+ * services/api非改変の制約により真の楽観ロックではなく、実行直前GETとの差分検知に
+ * 留まる（計画magical-noodling-duckling.md「PR C2」節参照。GETと書き込みの間の
+ * ごく短い競合、同一ミリ秒内の複数更新までは検知できない）。
+ */
+export class QuizConcurrencyError extends Error {
+  constructor(readonly actualUpdatedAt: string) {
+    super(
+      `テストの内容が最後に確認した時点から変更されています。get_quizで最新のupdatedAt（${actualUpdatedAt}）を確認し、expectedUpdatedAtに指定して再実行してください。`
+    );
+    this.name = "QuizConcurrencyError";
+  }
+}
+
+/** delete_quizのconfirmTitleが実際のタイトルと一致しない場合のブロック。 */
+export class QuizDeleteConfirmationError extends Error {
+  constructor(readonly actualTitle: string) {
+    super(`確認のため、confirmTitleには削除対象のテストの実際のタイトル（現在: 「${actualTitle}」）を指定してください。`);
+    this.name = "QuizDeleteConfirmationError";
+  }
+}
+
 function errorResult(message: string): CallToolResult {
   return { content: [{ type: "text", text: message }], isError: true };
 }
@@ -197,7 +220,12 @@ function mapErrorToResult(tool: string, error: unknown): CallToolResult {
   if (error instanceof CredentialNotFoundError) {
     return errorResult("再認証が必要です。改めてサインインしてください。");
   }
-  if (error instanceof TenantAccessDeniedError || error instanceof TenantMembershipVerificationError) {
+  if (
+    error instanceof TenantAccessDeniedError ||
+    error instanceof TenantMembershipVerificationError ||
+    error instanceof QuizConcurrencyError ||
+    error instanceof QuizDeleteConfirmationError
+  ) {
     return errorResult(error.message);
   }
   if (error instanceof LmsApiError) {
@@ -214,6 +242,124 @@ function mapErrorToResult(tool: string, error: unknown): CallToolResult {
   }
   logger.error(`${tool} failed`, { error: String(error) });
   return errorResult("予期しないエラーが発生しました。");
+}
+
+/**
+ * tenant引数の形式チェック。API側 validateTenantId（services/api/src/middleware/
+ * tenant.ts:26-27,33-50）と同じ正規表現・長さ制約・予約ID拒否を、MCP側でも
+ * 事前に課す。emailの正規化とは異なりtenantはtrim/lowercase等の変換をしない
+ * （Firestoreパス生成やAPI側の一致判定と食い違う余地を作らないため）。
+ */
+const tenantSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-zA-Z0-9_-]+$/, "テナントIDの形式が不正です")
+  .refine((v) => v !== "_master", { message: "予約されたテナントIDです" });
+
+const quizOptionSchema = z.object({
+  id: z.string().min(1),
+  text: z.string().min(1),
+  isCorrect: z.boolean(),
+});
+
+/**
+ * quiz構造・50問上限・single型は正解ちょうど1つ、をMCP側でも表現する。
+ * API側 validateQuestions（services/api/src/routes/shared/quizzes.ts:31-91）が
+ * 正典であることに変わりはなく、これは即時フィードバック用の事前チェック
+ * （二重実装のドリフトを認識した上での意図的な選択、計画「PR C2」節参照）。
+ */
+const quizQuestionSchema = z
+  .object({
+    id: z.string().min(1),
+    text: z.string().min(1),
+    type: z.enum(["single", "multi"]),
+    options: z.array(quizOptionSchema).min(1),
+    points: z.number().min(0),
+    explanation: z.string().default(""),
+  })
+  .refine(
+    (q) => q.type !== "single" || q.options.filter((o) => o.isCorrect).length === 1,
+    { message: "single型の問題は正解(isCorrect)がちょうど1つである必要があります" }
+  );
+
+const questionsSchema = z.array(quizQuestionSchema).min(1).max(50);
+
+/**
+ * passThreshold/maxAttempts/timeLimitSecの範囲は、API側が一切バリデーションしない
+ * （services/api非改変の制約下でMCP側zodが最後の防波堤。Codexセカンドオピニオン
+ * 2巡目指摘: passThresholdに負値を渡すと採点ロジックscore>=passThresholdにより
+ * 全員合格になりうる）。
+ */
+const optionalQuizFieldsShape = {
+  passThreshold: z.number().min(0).max(100).optional(),
+  maxAttempts: z.number().int().min(0).optional(),
+  timeLimitSec: z.number().int().positive().nullable().optional(),
+  randomizeQuestions: z.boolean().optional(),
+  randomizeAnswers: z.boolean().optional(),
+  requireVideoCompletion: z.boolean().optional(),
+};
+
+const createQuizSchema = z.object({
+  tenant: tenantSchema,
+  lessonId: z.string().min(1),
+  title: z.string().min(1),
+  questions: questionsSchema,
+  ...optionalQuizFieldsShape,
+});
+
+const updateQuizSchema = z
+  .object({
+    tenant: tenantSchema,
+    lessonId: z.string().min(1),
+    expectedUpdatedAt: z.string().min(1),
+    title: z.string().min(1).optional(),
+    questions: questionsSchema.optional(),
+    ...optionalQuizFieldsShape,
+  })
+  .refine(
+    (v) =>
+      v.title !== undefined ||
+      v.questions !== undefined ||
+      v.passThreshold !== undefined ||
+      v.maxAttempts !== undefined ||
+      v.timeLimitSec !== undefined ||
+      v.randomizeQuestions !== undefined ||
+      v.randomizeAnswers !== undefined ||
+      v.requireVideoCompletion !== undefined,
+    {
+      // applyUpdate(services/api/src/datasource/firestore.ts:171-178)は更新
+      // フィールドが空でも無条件にupdatedAtを書き込むため、意味のない呼び出しが
+      // 他クライアントのexpectedUpdatedAtを失効させてしまう（Codexセカンドオピニオン
+      // 2巡目指摘）。
+      message: "expectedUpdatedAt以外に少なくとも1つの更新フィールドを指定してください",
+    }
+  );
+
+const deleteQuizSchema = z.object({
+  tenant: tenantSchema,
+  lessonId: z.string().min(1),
+  expectedUpdatedAt: z.string().min(1),
+  confirmTitle: z.string().min(1),
+});
+
+/**
+ * update_quiz/delete_quizの実行直前GET→差分検知。真の楽観ロックではない
+ * （TOCTOUは残存、計画「PR C2」節参照）が、数分〜数時間スパンでの無言の
+ * 上書きは検知できる。
+ */
+async function assertQuizMatchesExpected(
+  lmsApiClient: LmsApiClient,
+  tenant: string,
+  lessonId: string,
+  expectedUpdatedAt: string,
+  idToken: string
+) {
+  const quiz = await lmsApiClient.getQuiz(tenant, lessonId, idToken);
+  if (quiz.updatedAt !== expectedUpdatedAt) {
+    throw new QuizConcurrencyError(quiz.updatedAt);
+  }
+  return quiz;
 }
 
 export function createMcpServer(deps?: McpServerDeps): McpServer {
@@ -240,7 +386,7 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
     {
       title: "List Courses",
       description: "指定テナントの講座一覧を取得します。tenant引数は必須です。",
-      inputSchema: z.object({ tenant: z.string() }),
+      inputSchema: z.object({ tenant: tenantSchema }),
     },
     async ({ tenant }, ctx): Promise<CallToolResult> => {
       try {
@@ -259,7 +405,7 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
     {
       title: "List Lessons",
       description: "指定講座配下のレッスン一覧を取得します（テストの有無 hasQuiz を含む）。",
-      inputSchema: z.object({ tenant: z.string(), courseId: z.string() }),
+      inputSchema: z.object({ tenant: tenantSchema, courseId: z.string() }),
     },
     async ({ tenant, courseId }, ctx): Promise<CallToolResult> => {
       try {
@@ -279,7 +425,7 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
       title: "Get Quiz",
       description:
         "指定レッスンのテスト内容を取得します。正解・解説を含む全情報が返り、この内容はAnthropicのクラウド基盤を経由します。取り扱いに注意してください。",
-      inputSchema: z.object({ tenant: z.string(), lessonId: z.string() }),
+      inputSchema: z.object({ tenant: tenantSchema, lessonId: z.string() }),
     },
     async ({ tenant, lessonId }, ctx): Promise<CallToolResult> => {
       try {
@@ -289,6 +435,87 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
         return textResult({ quiz });
       } catch (error) {
         return mapErrorToResult("get_quiz", error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "create_quiz",
+    {
+      title: "Create Quiz",
+      description:
+        "指定レッスンに新しいテストを作成します。既にテストが存在する場合はエラーになります。questionsは最大50問、single型の問題は正解(isCorrect)がちょうど1つ必要です。",
+      inputSchema: createQuizSchema,
+    },
+    async (
+      { tenant, lessonId, title, questions, passThreshold, maxAttempts, timeLimitSec, randomizeQuestions, randomizeAnswers, requireVideoCompletion },
+      ctx
+    ): Promise<CallToolResult> => {
+      try {
+        const quiz = await callToolWithAuth(deps, ctx, "create_quiz", tenant, lessonId, (idToken) =>
+          deps.lmsApiClient.createQuiz(
+            tenant,
+            lessonId,
+            { title, questions, passThreshold, maxAttempts, timeLimitSec, randomizeQuestions, randomizeAnswers, requireVideoCompletion },
+            idToken
+          )
+        );
+        return textResult({ quiz });
+      } catch (error) {
+        return mapErrorToResult("create_quiz", error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "update_quiz",
+    {
+      title: "Update Quiz",
+      description:
+        "指定レッスンのテストを更新します。expectedUpdatedAtには直前にget_quizで取得したupdatedAtの値を指定してください（一致しない場合、他の変更と衝突している可能性があるため更新を中止します）。questionsを渡すと配列全体が置換されるため、1問だけ直す場合も全問を送る必要があります。expectedUpdatedAt以外に少なくとも1つの更新フィールドが必要です。",
+      inputSchema: updateQuizSchema,
+    },
+    async (
+      { tenant, lessonId, expectedUpdatedAt, title, questions, passThreshold, maxAttempts, timeLimitSec, randomizeQuestions, randomizeAnswers, requireVideoCompletion },
+      ctx
+    ): Promise<CallToolResult> => {
+      try {
+        const quiz = await callToolWithAuth(deps, ctx, "update_quiz", tenant, lessonId, async (idToken) => {
+          await assertQuizMatchesExpected(deps.lmsApiClient, tenant, lessonId, expectedUpdatedAt, idToken);
+          return deps.lmsApiClient.updateQuiz(
+            tenant,
+            lessonId,
+            { title, questions, passThreshold, maxAttempts, timeLimitSec, randomizeQuestions, randomizeAnswers, requireVideoCompletion },
+            idToken
+          );
+        });
+        return textResult({ quiz });
+      } catch (error) {
+        return mapErrorToResult("update_quiz", error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "delete_quiz",
+    {
+      title: "Delete Quiz",
+      description:
+        "指定レッスンのテストを削除します（物理削除、元に戻せません。関連する受験記録quiz_attemptsは孤立して残ります）。expectedUpdatedAtとconfirmTitle（削除対象の実際のタイトルと完全一致）の両方が必要です。削除後に同じレッスンへテストを作り直しても、過去にそのレッスンで合格していた受講者は新テストを受験できません。",
+      inputSchema: deleteQuizSchema,
+    },
+    async ({ tenant, lessonId, expectedUpdatedAt, confirmTitle }, ctx): Promise<CallToolResult> => {
+      try {
+        await callToolWithAuth(deps, ctx, "delete_quiz", tenant, lessonId, async (idToken) => {
+          const quiz = await assertQuizMatchesExpected(deps.lmsApiClient, tenant, lessonId, expectedUpdatedAt, idToken);
+          if (quiz.title !== confirmTitle) {
+            throw new QuizDeleteConfirmationError(quiz.title);
+          }
+          await deps.lmsApiClient.deleteQuiz(tenant, lessonId, idToken);
+        });
+        return textResult({ deleted: true });
+      } catch (error) {
+        return mapErrorToResult("delete_quiz", error);
       }
     }
   );

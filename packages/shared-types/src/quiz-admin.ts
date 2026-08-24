@@ -69,3 +69,33 @@ export interface AdminQuizResponse {
     updatedAt: string;
   };
 }
+
+/**
+ * MCPコネクタ管理者向けクイズ作成リクエストDTO（Phase 2b PR C2）。
+ * ソース: POST /admin/lessons/:lessonId/quiz のリクエストボディ形状に一致。
+ */
+export interface AdminQuizCreateRequest {
+  title: string;
+  questions: AdminQuizQuestion[];
+  passThreshold?: number;
+  maxAttempts?: number;
+  timeLimitSec?: number | null;
+  randomizeQuestions?: boolean;
+  randomizeAnswers?: boolean;
+  requireVideoCompletion?: boolean;
+}
+
+/**
+ * MCPコネクタ管理者向けクイズ更新リクエストDTO（Phase 2b PR C2）。
+ * ソース: PATCH /admin/lessons/:lessonId/quiz のリクエストボディ形状に一致。全フィールド任意。
+ */
+export interface AdminQuizUpdateRequest {
+  title?: string;
+  questions?: AdminQuizQuestion[];
+  passThreshold?: number;
+  maxAttempts?: number;
+  timeLimitSec?: number | null;
+  randomizeQuestions?: boolean;
+  randomizeAnswers?: boolean;
+  requireVideoCompletion?: boolean;
+}
