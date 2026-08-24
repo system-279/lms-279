@@ -271,13 +271,19 @@ jobs:
           # 時に未捕捉エラーのスタックトレースをレスポンスボディへ含めてしまい、
           # --allow-unauthenticated な本サービスでは誰でも閲覧できてしまう
           # (pr-review-toolkit 2系統のセカンドオピニオンが独立に指摘、実ソースで検証済み)。
+          #
+          # MCP_TENANT_GUARD_MODE(Phase 2b PR C1)を dry-run → enforce へ切り替える際は、
+          # 必ずこの行を編集してPR経由でデプロイすること。`gcloud run services update
+          # --update-env-vars` 等での手動切り替えは、上記の通り --set-env-vars が
+          # 次回デプロイ時に環境変数を全置換する仕様のため、無関係な後続pushの
+          # デプロイで無言で dry-run に巻き戻る（Codex review PR #665 指摘）。
           gcloud run deploy mcp \
             --image=${{ env.ARTIFACT_REGISTRY }}/mcp:${{ github.sha }} \
             --region=${{ env.GCP_REGION }} \
             --platform=managed \
             --allow-unauthenticated \
             --max-instances=1 \
-            --set-env-vars="^@^NODE_ENV=production@MCP_ISSUER_URL=https://mcp-3zcica5euq-an.a.run.app@MCP_STORAGE=firestore@MCP_SIGNING_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/mcp-oauth-signing-key/versions/latest@MCP_CREDENTIAL_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/mcp-credential-encryption-key/versions/latest@FIREBASE_PROJECT_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}@FIREBASE_WEB_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}@FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}@LMS_API_BASE_URL=https://api-3zcica5euq-an.a.run.app"
+            --set-env-vars="^@^NODE_ENV=production@MCP_ISSUER_URL=https://mcp-3zcica5euq-an.a.run.app@MCP_STORAGE=firestore@MCP_SIGNING_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/mcp-oauth-signing-key/versions/latest@MCP_CREDENTIAL_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/mcp-credential-encryption-key/versions/latest@FIREBASE_PROJECT_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}@FIREBASE_WEB_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}@FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}@LMS_API_BASE_URL=https://api-3zcica5euq-an.a.run.app@MCP_TENANT_GUARD_MODE=dry-run"
 
   deploy-notification:
     name: Deploy Notification

@@ -19,7 +19,12 @@ export interface AuditLogEntry {
   tool: string;
   targetId?: string;
   correlationId?: string;
-  result: "success" | "error";
+  /**
+   * "denied" = テナント自己一致ガード(enforce)によるブロック。
+   * "would_deny" = 同ガード(dry-run)が拒否対象を検知したが実際にはブロックしなかった記録
+   * （Phase 2b PR C1、計画magical-noodling-duckling.md参照）。
+   */
+  result: "success" | "error" | "denied" | "would_deny";
 }
 
 export interface AuditLogOptions {

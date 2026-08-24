@@ -229,11 +229,25 @@ function makeMcpServerDeps(overrides: Partial<McpServerDeps> = {}): McpServerDep
     auditLog: {
       record: vi.fn().mockResolvedValue(undefined),
     },
+    // 既定はallowed_emails所属あり扱い（Phase 2a由来の既存テストが回帰しないよう）。
+    // 非メンバー系のテストは checkMembership を "denied" にオーバーライドする。
+    tenantMembership: {
+      checkMembership: vi.fn().mockResolvedValue("member"),
+    },
+    tenantGuardMode: "enforce",
     ...overrides,
   };
 }
 
-/** Phase 2aツール呼び出しテスト共通: DCR登録〜同意〜token取得までを行いaccessTokenを返す。 */
+/**
+ * Phase 2aツール呼び出しテスト共通: DCR登録〜同意〜token取得までを行いaccessTokenを返す。
+ *
+ * Phase 2b PR C1: ツール呼び出し経路でも callToolWithAuth が verifyGoogleIdToken を
+ * （テナント自己一致ガードのemail解決のため）呼ぶようになったため、サインイン時に
+ * 一度だけ消費される mockResolvedValueOnce とは別に、以降のツール呼び出しで
+ * 何度でも解決できる既定値を mockResolvedValue で armする（一度だけの値は常に
+ * 優先消費されるため、個別テストでの mockResolvedValueOnce による上書きは引き続き有効）。
+ */
 async function obtainAccessToken(app: Express): Promise<string> {
   const redirectUri = "http://localhost:1234/callback";
   const { codeVerifier, codeChallenge } = generatePkcePair();
@@ -248,6 +262,7 @@ async function obtainAccessToken(app: Express): Promise<string> {
       client_id: clientId,
       code_verifier: codeVerifier,
     });
+  mockVerifyIdToken.mockResolvedValue(makeDecodedToken());
   return tokenRes.body.access_token as string;
 }
 
@@ -1222,6 +1237,174 @@ describe("Phase 2a: 読み取り専用quizツール（list_courses/list_lessons/
     const dataLine = mcpRes.text.split("\n").find((line) => line.startsWith("data: "));
     const parsed = JSON.parse(dataLine!.slice("data: ".length)) as { error?: { message?: string } };
     expect(parsed.error).toBeDefined();
+  });
+});
+
+describe("Phase 2b PR C1: テナント自己一致ガード", () => {
+  const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+
+  it("dry-runモード: 非メンバーテナントでもlmsApiClientが呼ばれ成功し、監査ログにwould_denyが記録される", async () => {
+    const checkMembership = vi.fn().mockResolvedValue("denied");
+    const listCourses = vi.fn().mockResolvedValue([{ id: "c1", name: "Course 1" }]);
+    const deps = makeMcpServerDeps({
+      tenantMembership: { checkMembership },
+      tenantGuardMode: "dry-run",
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8150, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBeUndefined();
+    expect(listCourses).toHaveBeenCalledWith("tenant-a", "fresh-id-token");
+    expect(checkMembership).toHaveBeenCalledWith("tenant-a", "quiz-editor@example.com");
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "would_deny" })
+    );
+  });
+
+  it("enforceモード: 非メンバーテナントではlmsApiClientが呼ばれず、監査ログにdeniedが記録され、isError:trueになる", async () => {
+    const checkMembership = vi.fn().mockResolvedValue("denied");
+    const listCourses = vi.fn();
+    const deps = makeMcpServerDeps({
+      tenantMembership: { checkMembership },
+      tenantGuardMode: "enforce",
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8151, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("割り当てられていません");
+    expect(listCourses).not.toHaveBeenCalled();
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "denied" })
+    );
+  });
+
+  it("enforceモードでもメンバーであるテナントでは従来通り成功する（Phase 2a既存挙動の回帰なし）", async () => {
+    const deps = makeMcpServerDeps({
+      lmsApiClient: {
+        listCourses: vi.fn().mockResolvedValue([{ id: "c1", name: "Course 1" }]),
+        listLessons: vi.fn(),
+        getQuiz: vi.fn(),
+      },
+    });
+    const { app } = await createApp(ISSUER_URL, 8152, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBeUndefined();
+    expect(deps.tenantMembership.checkMembership).toHaveBeenCalledWith("tenant-a", "quiz-editor@example.com");
+  });
+
+  it("401リトライ経路でもforceRefresh後のidTokenで再度テナント一致を検証する（1回目の検証だけだとリトライがガード外になる問題の回帰テスト）", async () => {
+    const getFirebaseIdTokenForAccount = vi
+      .fn()
+      .mockResolvedValueOnce("stale-id-token")
+      .mockResolvedValueOnce("fresh-retried-id-token");
+    const listCourses = vi
+      .fn()
+      .mockRejectedValueOnce(new LmsApiError("unauthorized", "unauthorized", 401, false))
+      .mockResolvedValueOnce([{ id: "c1", name: "Course 1" }]);
+    const checkMembership = vi.fn().mockResolvedValue("member");
+    const deps = makeMcpServerDeps({
+      credentialService: { getFirebaseIdTokenForAccount },
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+      tenantMembership: { checkMembership },
+    });
+    const { app } = await createApp(ISSUER_URL, 8153, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBeUndefined();
+    expect(checkMembership).toHaveBeenCalledTimes(2);
+  });
+
+  it("dry-runモード: verifyGoogleIdToken自体が失敗した場合（判定不能）、ブロックせずfnを実行し監査ログにerrorとして記録する（dry-runの「絶対にブロックしない」契約を守る）", async () => {
+    const checkMembership = vi.fn();
+    const listCourses = vi.fn().mockResolvedValue([{ id: "c1", name: "Course 1" }]);
+    const deps = makeMcpServerDeps({
+      tenantMembership: { checkMembership },
+      tenantGuardMode: "dry-run",
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8154, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    mockVerifyIdToken.mockRejectedValueOnce(new Error("token verification transiently failed"));
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBeUndefined();
+    expect(listCourses).toHaveBeenCalledWith("tenant-a", "fresh-id-token");
+    expect(checkMembership).not.toHaveBeenCalled();
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
+  });
+
+  it("enforceモード: verifyGoogleIdToken自体が失敗した場合（判定不能）、fail-closedでブロックし監査ログにerrorとして記録する（pr-review-toolkit:code-reviewerセカンドオピニオン指摘: 「無効なidTokenなら401で弾かれる」という当初の安全性根拠は誤りで、fail-openにするとまさにガードが機能してほしい瞬間に無効化されるため）", async () => {
+    const checkMembership = vi.fn();
+    const listCourses = vi.fn();
+    const deps = makeMcpServerDeps({
+      tenantMembership: { checkMembership },
+      tenantGuardMode: "enforce",
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8155, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    mockVerifyIdToken.mockRejectedValueOnce(new Error("token verification transiently failed"));
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("本人確認に失敗しました");
+    expect(listCourses).not.toHaveBeenCalled();
+    expect(checkMembership).not.toHaveBeenCalled();
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
   });
 });
 

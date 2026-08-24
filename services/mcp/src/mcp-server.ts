@@ -8,16 +8,50 @@ import {
 } from "./credential-service.js";
 import { LmsApiError, type LmsApiClient } from "./lms-api-client.js";
 import type { AuditLog } from "./audit-log.js";
+import { verifyGoogleIdToken } from "./firebase.js";
+import type { TenantMembershipChecker } from "./tenant-membership.js";
 import { logger } from "./logger.js";
 
 /**
  * Phase 2a: 読み取り専用quizツール（list_courses/list_lessons/get_quiz）が依存する
  * サービス群。省略時（Phase 0/Phase 1a時点の既存テスト後方互換）は ping のみ登録する。
+ * Phase 2b PR C1: tenantMembership/tenantGuardModeを追加（テナント自己一致ガード）。
  */
 export interface McpServerDeps {
   lmsApiClient: LmsApiClient;
   credentialService: CredentialService;
   auditLog: AuditLog;
+  tenantMembership: TenantMembershipChecker;
+  tenantGuardMode: "dry-run" | "enforce";
+}
+
+/**
+ * テナント自己一致ガード(enforce)によるブロック。計画magical-noodling-duckling.md
+ * 「PR C1」節参照。super adminであっても、MCP経由ではallowed_emails未登録の
+ * テナントを操作できない（Web管理画面からは従来通り操作可能）。
+ */
+export class TenantAccessDeniedError extends Error {
+  constructor(readonly tenant: string) {
+    super(`テナント「${tenant}」はあなたのアカウントに割り当てられていません。Web管理画面をご利用ください。`);
+    this.name = "TenantAccessDeniedError";
+  }
+}
+
+/**
+ * テナント自己一致ガードのID検証（verifyGoogleIdToken）自体が失敗した場合の
+ * enforceモードでのブロック。tenant-membership.ts の Firestoreクエリ失敗時と
+ * 同じfail-closed方針（pr-review-toolkit:code-reviewerセカンドオピニオン指摘:
+ * 「無効なidTokenなら別途401で弾かれる」という当初の安全性根拠は誤りで、
+ * verifyGoogleIdTokenの失敗はidToken自体の無効性を意味しない — Admin SDK側の
+ * 一時的な不調等でも起こりうり、その場合idTokenは有効なままfn()は普通に成功する。
+ * 判定不能を理由にsuper adminのテナント横断アクセスだけ素通りさせるのは、
+ * 他の一般ユーザーがFirestore障害時にfail-closedされるのと非対称になる）。
+ */
+export class TenantMembershipVerificationError extends Error {
+  constructor() {
+    super("本人確認に失敗しました。しばらくしてから再度お試しください。");
+    this.name = "TenantMembershipVerificationError";
+  }
 }
 
 function errorResult(message: string): CallToolResult {
@@ -57,10 +91,66 @@ async function getIdTokenAudited(
 }
 
 /**
+ * テナント自己一致ガード。実際にAPI呼び出しに使うidTokenからemailを解決し、
+ * tenants/{tenant}/allowed_emails への所属を確認する。401リトライ時の
+ * forceRefreshで取得し直したidTokenについても、この関数を呼び出し元で
+ * 毎回再実行することで再検証する（1回目の検証だけだとリトライ経路がガード外に
+ * なる問題をCodexセカンドオピニオンで指摘されたため）。
+ *
+ * enforceモードで未所属ならブロックしTenantAccessDeniedErrorを投げる
+ * （呼び出し元でこの関数自体を try/catch の外に置き、fn()呼び出し前に
+ * 例外を伝播させることでAPIへ到達させない）。dry-runモードでは記録のみ。
+ *
+ * verifyGoogleIdToken自体が失敗した場合（clock skew等での検証エラー、Admin SDK
+ * 側の一時的な不調等）は「テナント不一致」とは別種の判定不能。dry-runモードでは
+ * 「絶対にブロックしない」という契約を守り記録のみに留めるが、enforceモードでは
+ * tenant-membership.tsのFirestoreクエリ失敗時と同じfail-closed方針を取り、
+ * TenantMembershipVerificationErrorでブロックする（元実装はここでfail-openにして
+ * いたが、pr-review-toolkit:code-reviewerセカンドオピニオンで「まさにガードが
+ * 機能してほしい瞬間に無効化される」と指摘され修正）。
+ * いずれのモードでも監査ログには残す（silent-failure-hunterセカンドオピニオン指摘:
+ * 元実装は例外がtry/catchなく伝播し監査ログから漏れていた）。
+ */
+async function verifyTenantMembershipAudited(
+  deps: McpServerDeps,
+  uid: string,
+  tenant: string,
+  tool: string,
+  targetId: string | undefined,
+  idToken: string
+): Promise<void> {
+  let email: string;
+  try {
+    email = (await verifyGoogleIdToken(idToken)).email;
+  } catch (error) {
+    logger.error(`${tool}: テナント自己一致ガードのID検証に失敗しました`, {
+      tenant,
+      tenantGuardMode: deps.tenantGuardMode,
+      error: String(error),
+    });
+    await deps.auditLog.record({ actor: uid, tenant, tool, targetId, result: "error" });
+    if (deps.tenantGuardMode === "enforce") {
+      throw new TenantMembershipVerificationError();
+    }
+    return;
+  }
+  const membership = await deps.tenantMembership.checkMembership(tenant, email);
+  if (membership === "member") {
+    return;
+  }
+  if (deps.tenantGuardMode === "enforce") {
+    await deps.auditLog.record({ actor: uid, tenant, tool, targetId, result: "denied" });
+    throw new TenantAccessDeniedError(tenant);
+  }
+  await deps.auditLog.record({ actor: uid, tenant, tool, targetId, result: "would_deny" });
+}
+
+/**
  * アクセストークンからuidを取得 → credentialServiceでFirebase IDトークンを取得 →
- * fnを実行 → 結果に応じて監査ログを記録する。LMS APIが401を返した場合のみ、
- * forceRefreshで新規exchangeしたIDトークンで1回だけリトライする（ID交換の
- * タイミング起因のclock skew等を想定。計画linear-zooming-conway.md「PR B」節参照）。
+ * テナント自己一致ガードを検証 → fnを実行 → 結果に応じて監査ログを記録する。
+ * LMS APIが401を返した場合のみ、forceRefreshで新規exchangeしたIDトークンで
+ * 1回だけリトライする（ID交換のタイミング起因のclock skew等を想定。
+ * 計画linear-zooming-conway.md「PR B」節参照）。
  */
 async function callToolWithAuth<T>(
   deps: McpServerDeps,
@@ -80,6 +170,7 @@ async function callToolWithAuth<T>(
   }
 
   const idToken = await getIdTokenAudited(deps, uid, tenant, tool, targetId);
+  await verifyTenantMembershipAudited(deps, uid, tenant, tool, targetId, idToken);
   try {
     const result = await fn(idToken);
     await deps.auditLog.record({ actor: uid, tenant, tool, targetId, result: "success" });
@@ -87,6 +178,7 @@ async function callToolWithAuth<T>(
   } catch (error) {
     if (error instanceof LmsApiError && error.httpStatus === 401) {
       const retriedIdToken = await getIdTokenAudited(deps, uid, tenant, tool, targetId, { forceRefresh: true });
+      await verifyTenantMembershipAudited(deps, uid, tenant, tool, targetId, retriedIdToken);
       try {
         const result = await fn(retriedIdToken);
         await deps.auditLog.record({ actor: uid, tenant, tool, targetId, result: "success" });
@@ -104,6 +196,9 @@ async function callToolWithAuth<T>(
 function mapErrorToResult(tool: string, error: unknown): CallToolResult {
   if (error instanceof CredentialNotFoundError) {
     return errorResult("再認証が必要です。改めてサインインしてください。");
+  }
+  if (error instanceof TenantAccessDeniedError || error instanceof TenantMembershipVerificationError) {
+    return errorResult(error.message);
   }
   if (error instanceof LmsApiError) {
     if (error.transient) {
