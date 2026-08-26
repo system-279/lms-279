@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-25 (Phase 2b PR C2〔書き込み系quizツール本体〕完了・マージ・デプロイ・実機確認済み。ミッション「LMSのquiz CRUD操作をMCP経由で実行可能にする」のコア機能は全6ツールで完成。残るはチーム展開判断のみ)
+updated: 2026-08-26 (Phase 2b完了に続き、チーム展開の実務着手。ノンエンジニア向け周知文書を作成・送信済み、Owner候補`y.tsukuda@279279.net`のLMS側アクセス権限を全4テナントに付与済み。残るは組織カスタムコネクタのOwner登録完了確認のみ)
 ---
 
 ## 現在のミッション
@@ -50,15 +50,16 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
   - type-design-analyzer: ブロッカー級指摘なし。型で表現されない不変条件（`AdminQuizUpdateRequest`の最低1フィールド必須、`AdminQuizQuestion`のsingle型正解1つ、`LmsApiClient.updateQuiz`の呼び出し規約）をJSDocに明記
   → テスト193件PASS/5skip（追加前186件から+7）、lint/type-check/build全ワークスペースPASS → PR #667マージ（squash、コミット45e74cf）→ CI/E2E Tests/Deploy to Cloud Run 全job success確認 → **実機確認完了**（2026-08-25、テナント`qos4c4ka`(TEST)のレッスン`T7cR92Cj3xc72H7xn1FR`で計画AC8の一巡フローを実施: 既存quizの内容を退避→delete_quiz→get_quizで404相当確認→2問のテストをcreate_quiz→get_quizで内容一致確認→update_quizでタイトル変更→**古いexpectedUpdatedAtでの再update_quizが期待通り拒否**〔最新updatedAtを案内するメッセージも確認〕→delete_quiz→get_quizで404相当確認→退避しておいた元の10問構成を`create_quiz`で完全復元し`get_quiz`で内容一致・`list_lessons`で`hasQuiz:true`を確認。全ステップ期待通りの応答）
 
-## 🔔 チーム展開の前提条件（decision-maker確認事項、2026-08-24）
-- 2026-08-24、開発者よりチーム展開（Team plan組織カスタムコネクタとしての恒久登録）の相談あり。計画時点の想定は「quiz CRUDツール完了＋decision-maker明示承認」までチーム展開しない方針だったが、現時点で完了しているのは読み取り専用のみ
-- 展開前に整理が必要な2点（AIから提示済み、decision-makerの意思決定待ち）:
-  1. 読み取り専用の現状でチーム展開してよいか、Phase 2b(CRUD)完了まで待つか
-  2. `get_quiz`がテスト正解・解説を含む全情報を返しAnthropicのクラウド基盤を経由することを、展開前にチームへ周知する（計画時点で決裁者確認済みの前提だが周知自体は未実施）
+- [x] チーム展開の実務着手（2026-08-25/26）: 開発者よりPhase 2b完了を受けてチーム展開を進める決定（下記🔔節の前提条件1点目は解消）。ノンエンジニアのLMS運営スタッフ向け説明文書（図解3点+セクション6つ: 概要/管理者向け組織登録手順/接続方法〔claude.ai・Desktop用Connect手順 + Claude Code用`claude mcp add`コマンド〕/実際の使い方/注意点〔Anthropicクラウド経由の周知、前提条件2点目〕/問い合わせ先）をhtml-briefスキルで作成、Playwright実機確認（コピー機能・図解レンダリング・非エンジニア可読性）ののち開発者へ送信済み。組織カスタムコネクタのOwner登録権限を持つ`y.tsukuda@279279.net`について、LMS側の`allowed_emails`登録状況を実際にWeb管理画面で確認したところ4テナント全てで未登録と判明（当初「ドメイン全体で許可されているのでは」という開発者の推測をコードで検証し誤りと確認: `allowed_emails`はロール非依存のログイン可否ゲート、実際の管理者機能可否は別途ユーザーレコードの`role`フィールドで判定される二段構造であることも実データで確認）。開発者の指示（全4テナント）に基づき、`y.tsukuda@279279.net`を4テナント（`qos4c4ka`/`8vexhzpc`/`atali82i`/`rqqvzsfs`）全てに`allowed_emails`登録+ユーザーレコード`role: 管理者`で新規作成、各テナントのユーザー管理画面で反映を実機確認済み
+
+## 🔔 チーム展開の前提条件（decision-maker確認事項、2026-08-24 提示 → 2026-08-25/26 進捗）
+- 2026-08-24、開発者よりチーム展開（Team plan組織カスタムコネクタとしての恒久登録）の相談あり。前提条件2点のうち:
+  1. ~~読み取り専用の現状でチーム展開してよいか、Phase 2b(CRUD)完了まで待つか~~ → **解消**: Phase 2b完了（quiz CRUD全6ツール）を受けてチーム展開を進める決定済み
+  2. ~~`get_quiz`がテスト正解・解説を含む全情報を返しAnthropicのクラウド基盤を経由することを、展開前にチームへ周知する~~ → **対応済み**: 上記ノンエンジニア向け説明文書に明記のうえ送信済み
 - 副次的な既知リスク（新規に作る権限ではなく展開のブロッカーとはしていない、参考情報）: super admin権限保有メンバーはチャット経由で他テナントのquizデータも閲覧可能（既存Web管理画面と同じ権限）
 
 ## 🔄 中断点（in-flight）
-なし（PR A/PR B/PR C1/PR C2すべてマージ・デプロイ・実機確認まで完全に完了。quiz CRUD 6ツール全てが本番稼働中。残るアクションはチーム展開判断のみ、上記🔔節のdecision-maker回答待ち）
+**チーム展開の最終確認待ち**: Owner権限を持つ`y.tsukuda@279279.net`によるclaude.ai組織カスタムコネクタ登録（`Organization settings > Connectors > Add > Custom > Web`、URL: `https://mcp-3zcica5euq-an.a.run.app/mcp`。手順は上記説明文書のsec-2に記載済み、開発者へ送信済み）が**実行完了したかをAIからは確認できない**（claude.ai管理画面はAIの操作・観測範囲外）。次セッションでは開発者に完了状況を確認し、完了していればチーム展開ミッション全体が完了する見込み。未完了の場合は完了を待つのみで、AI側に追加のアクションはない（次の一手＝decision-makerへの確認、それ以上の技術作業は発生しない見込み）
 
 ## Phase 0完了の経緯（本セッション、2026-08-21）
 実クライアント接続で当初の想定になかった不具合が2件連続発覚し、いずれも修正・実機再検証済み。
