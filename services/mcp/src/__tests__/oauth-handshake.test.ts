@@ -1182,6 +1182,17 @@ describe("Phase 2a: 読み取り専用quizツール（list_courses/list_lessons/
     expect(listCourses).toHaveBeenNthCalledWith(1, "tenant-a", "stale-id-token");
     expect(listCourses).toHaveBeenNthCalledWith(2, "tenant-a", "fresh-retried-id-token");
     expect(getFirebaseIdTokenForAccount).toHaveBeenNthCalledWith(2, "test-firebase-uid", { forceRefresh: true });
+    // リトライが成功しても、初回401失敗そのものが監査ログから消えないことを確認する
+    // （直近のレビュー指摘: 成功ログ1件のみだと初回の認可エラーが読み取れなかった）
+    expect(deps.auditLog.record).toHaveBeenCalledTimes(2);
+    expect(deps.auditLog.record).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
+    expect(deps.auditLog.record).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "success" })
+    );
   });
 
   it("401リトライ後の再試行自体も401で失敗した場合、そこで打ち切りisError:trueを返す（無限リトライしない。pr-test-analyzerセカンドオピニオン指摘: リトライ枯渇パスが未テストだった）", async () => {
@@ -1212,7 +1223,15 @@ describe("Phase 2a: 読み取り専用quizツール（list_courses/list_lessons/
     // ちょうど2回（初回+1回だけのリトライ）で打ち切られ、3回目は呼ばれない
     expect(listCourses).toHaveBeenCalledTimes(2);
     expect(getFirebaseIdTokenForAccount).toHaveBeenCalledTimes(2);
-    expect(deps.auditLog.record).toHaveBeenCalledWith(
+    // 初回401失敗とリトライ失敗の両方が監査ログに残ること（1件だけだと
+    // どちらの失敗が記録されたのか区別できない）
+    expect(deps.auditLog.record).toHaveBeenCalledTimes(2);
+    expect(deps.auditLog.record).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
+    expect(deps.auditLog.record).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
     );
   });
