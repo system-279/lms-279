@@ -200,6 +200,9 @@ async function callToolWithAuth<T>(
     return result;
   } catch (error) {
     if (error instanceof LmsApiError && error.httpStatus === 401) {
+      // 初回401失敗そのものを記録する（PR #667レビュー指摘: リトライ成功時に
+      // 成功ログ1件のみが残り、初回の認可エラーが監査ログから読み取れなかった）。
+      await deps.auditLog.record({ actor: uid, tenant, tool, targetId, result: "error" });
       const retriedIdToken = await getIdTokenAudited(deps, uid, tenant, tool, targetId, { forceRefresh: true });
       await verifyTenantMembershipAudited(deps, uid, tenant, tool, targetId, retriedIdToken);
       try {
