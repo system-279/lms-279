@@ -1,11 +1,49 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import request from "supertest";
 import type { Express } from "express";
 import * as crypto from "node:crypto";
-import { createApp } from "../app.js";
+import { createFirestoreAdapterFactory } from "../storage/firestore-adapter.js";
+import { createFakeFirestore } from "../storage/__tests__/fake-firestore.js";
+import { createCredentialStore } from "../storage/credential-store.js";
+import { decryptWithKeyring } from "../crypto/aes-gcm.js";
+import { createCredentialService, CredentialNotFoundError } from "../credential-service.js";
+import { LmsApiError, type LmsApiClient } from "../lms-api-client.js";
+import type { McpServerDeps } from "../mcp-server.js";
+import type { CredentialService } from "../credential-service.js";
+import type { AuditLog } from "../audit-log.js";
+import type { TenantMembershipChecker } from "../tenant-membership.js";
+
+const mockVerifyIdToken = vi.fn();
+
+vi.mock("firebase-admin/auth", () => ({
+  getAuth: () => ({
+    verifyIdToken: mockVerifyIdToken,
+  }),
+}));
+
+vi.mock("firebase-admin/app", () => ({
+  getApps: () => [{ name: "[DEFAULT]" }],
+  initializeApp: vi.fn(),
+}));
+
+const { createApp } = await import("../app.js");
 
 const ISSUER_URL = "http://127.0.0.1:8082";
 const BIND_PORT = 8082;
+
+/**
+ * Google プロバイダ + 検証済みメールの標準 decodedToken を生成するヘルパー。
+ * services/api/src/middleware/__tests__/super-admin-firebase.test.ts と同じパターン。
+ */
+function makeDecodedToken(overrides: Record<string, unknown> = {}) {
+  return {
+    uid: "test-firebase-uid",
+    email: "quiz-editor@example.com",
+    email_verified: true,
+    firebase: { sign_in_provider: "google.com", identities: {} },
+    ...overrides,
+  };
+}
 
 /**
  * 簡易 Cookie jar。Set-Cookie の属性(Path/HttpOnly/SameSite等)を除いた
@@ -28,25 +66,25 @@ function cookieHeader(jar: Map<string, string>): string {
 }
 
 /**
- * DCR でクライアント登録し、devInteractions のダミー同意画面(login → consent と
- * 複数プロンプトを踏みうる)を追従して、PKCE付き認可コードを取得するまでを行う。
- * GET/POST とも同一パス /interaction/:uid（フォームの hidden field `prompt` で
- * 分岐、oidc-provider lib/actions/interaction.js 実装に準拠）。
+ * DCR でクライアント登録し、/auth を叩いて最初の interaction（常に login prompt。
+ * フレッシュな cookie jar なので有効なセッションが存在しない）まで遷移する。
+ * ログイン拒否系のテストと、正常系ヘルパー(obtainAuthorizationCode)の両方から使う。
  */
-async function obtainAuthorizationCode(
+async function startAuthorization(
   app: Express,
   redirectUri: string,
   codeChallenge: string,
   resource: string,
-  scope?: string
-): Promise<{ clientId: string; code: string }> {
+  scope?: string,
+  grantTypes: string[] = ["authorization_code"]
+): Promise<{ clientId: string; jar: Map<string, string>; uid: string }> {
   const reg = await request(app)
     .post("/reg")
     .set("Content-Type", "application/json")
     .send({
       redirect_uris: [redirectUri],
       token_endpoint_auth_method: "none",
-      grant_types: ["authorization_code"],
+      grant_types: grantTypes,
       response_types: ["code"],
     });
   expect(reg.status).toBe(201);
@@ -71,31 +109,72 @@ async function obtainAuthorizationCode(
   expect([302, 303]).toContain(authRes.status);
 
   let jar = mergeCookies(new Map(), authRes.headers["set-cookie"] as unknown as string[]);
-  let location = authRes.headers.location as string;
+  const location = authRes.headers.location as string;
+  const url = new URL(location, ISSUER_URL);
+  expect(url.pathname.startsWith("/interaction/")).toBe(true);
+  const uid = url.pathname.slice("/interaction/".length).split("/")[0];
+
+  const page = await request(app).get(url.pathname + url.search).set("Cookie", cookieHeader(jar));
+  expect(page.status).toBe(200);
+  jar = mergeCookies(jar, page.headers["set-cookie"] as unknown as string[]);
+  expect(page.text).toContain('id="signin"'); // 常に login prompt であることの前提確認
+
+  return { clientId, jar, uid };
+}
+
+/**
+ * 実 Firebase Google サインイン（verifyIdTokenをモック）→ 同意画面 の一連を追従して、
+ * PKCE付き認可コードを取得するまでを行う。
+ */
+async function obtainAuthorizationCode(
+  app: Express,
+  redirectUri: string,
+  codeChallenge: string,
+  resource: string,
+  scope?: string,
+  grantTypes: string[] = ["authorization_code"],
+  refreshToken?: string
+): Promise<{ clientId: string; code: string }> {
+  const { clientId, jar: startJar, uid: loginUid } = await startAuthorization(
+    app,
+    redirectUri,
+    codeChallenge,
+    resource,
+    scope,
+    grantTypes
+  );
+  let jar = startJar;
+
+  mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken());
+  const callbackRes = await request(app)
+    .post(`/interaction/${loginUid}/firebase-callback`)
+    .set("Cookie", cookieHeader(jar))
+    .send(refreshToken === undefined ? { idToken: "fake-id-token" } : { idToken: "fake-id-token", refreshToken });
+  expect(callbackRes.status).toBe(200);
+  jar = mergeCookies(jar, callbackRes.headers["set-cookie"] as unknown as string[]);
+  let location = callbackRes.body.redirectTo as string;
+
   let code: string | null = null;
   const redirectOrigin = new URL(redirectUri).origin;
 
-  for (let hop = 0; hop < 6 && !code; hop += 1) {
-    const path = new URL(location, ISSUER_URL).pathname + new URL(location, ISSUER_URL).search;
+  for (let hop = 0; hop < 8 && !code; hop += 1) {
+    const url = new URL(location, ISSUER_URL);
+    const path = url.pathname + url.search;
 
-    if (path.startsWith("/interaction/")) {
-      const uid = path.slice("/interaction/".length).split("/")[0];
+    if (url.pathname.startsWith("/interaction/")) {
+      const uid = url.pathname.slice("/interaction/".length).split("/")[0];
       const page = await request(app).get(path).set("Cookie", cookieHeader(jar));
       expect(page.status).toBe(200);
       jar = mergeCookies(jar, page.headers["set-cookie"] as unknown as string[]);
-      const isLoginPrompt = page.text.includes('name="login"');
-      const submitRes = await request(app)
-        .post(`/interaction/${uid}`)
+      expect(page.text).toContain('id="approve"'); // login後は常に consent prompt の前提確認
+
+      const confirmRes = await request(app)
+        .post(`/interaction/${uid}/confirm`)
         .set("Cookie", cookieHeader(jar))
-        .type("form")
-        .send(
-          isLoginPrompt
-            ? { prompt: "login", login: "phase0-test-account", password: "any" }
-            : { prompt: "consent" }
-        );
-      expect([302, 303]).toContain(submitRes.status);
-      location = submitRes.headers.location as string;
-      jar = mergeCookies(jar, submitRes.headers["set-cookie"] as unknown as string[]);
+        .send({});
+      expect(confirmRes.status).toBe(200);
+      jar = mergeCookies(jar, confirmRes.headers["set-cookie"] as unknown as string[]);
+      location = confirmRes.body.redirectTo as string;
       continue;
     }
 
@@ -121,11 +200,102 @@ function generatePkcePair() {
   return { codeVerifier, codeChallenge };
 }
 
-describe("Phase 0: OAuth ハンドシェイク疎通", () => {
+/**
+ * POST /mcp のレスポンスは text/event-stream（`event: message\ndata: {...}\n\n`）。
+ * 既存のping呼び出しテストはstatus===200のみ確認していたが（本文非検証だった）、
+ * Phase 2aの新ツールでは実際にJSON-RPC本文をパースしcontent/isErrorを検証する。
+ */
+function parseMcpToolResult(res: request.Response): { content: Array<{ type: string; text: string }>; isError?: boolean } {
+  const dataLine = res.text.split("\n").find((line) => line.startsWith("data: "));
+  if (!dataLine) {
+    throw new Error(`SSEレスポンスにdata行が見つかりません: ${res.text}`);
+  }
+  const parsed = JSON.parse(dataLine.slice("data: ".length)) as {
+    result?: { content: Array<{ type: string; text: string }>; isError?: boolean };
+  };
+  if (!parsed.result) {
+    throw new Error(`JSON-RPCレスポンスにresultが含まれていません: ${res.text}`);
+  }
+  return parsed.result;
+}
+
+interface McpServerDepsOverrides {
+  lmsApiClient?: Partial<LmsApiClient>;
+  credentialService?: Partial<CredentialService>;
+  auditLog?: Partial<AuditLog>;
+  tenantMembership?: Partial<TenantMembershipChecker>;
+  tenantGuardMode?: McpServerDeps["tenantGuardMode"];
+}
+
+function makeMcpServerDeps(overrides: McpServerDepsOverrides = {}): McpServerDeps {
+  return {
+    lmsApiClient: {
+      listCourses: vi.fn().mockResolvedValue([]),
+      listLessons: vi.fn().mockResolvedValue([]),
+      getQuiz: vi.fn().mockResolvedValue({}),
+      createQuiz: vi.fn().mockResolvedValue({}),
+      updateQuiz: vi.fn().mockResolvedValue({}),
+      deleteQuiz: vi.fn().mockResolvedValue(undefined),
+      // 既存テストがlmsApiClientを部分的に(listCourses等の一部メソッドのみ)
+      // オーバーライドしても残りのメソッドが欠落しないよう、フィールド単位でマージする
+      // （Phase 2b PR C2でLmsApiClientにcreateQuiz/updateQuiz/deleteQuizが追加され、
+      // 丸ごと置換だと既存の全テストが型エラーになるため）。
+      ...overrides.lmsApiClient,
+    },
+    credentialService: {
+      getFirebaseIdTokenForAccount: vi.fn().mockResolvedValue("fresh-id-token"),
+      ...overrides.credentialService,
+    },
+    auditLog: {
+      record: vi.fn().mockResolvedValue(undefined),
+      ...overrides.auditLog,
+    },
+    // 既定はallowed_emails所属あり扱い（Phase 2a由来の既存テストが回帰しないよう）。
+    // 非メンバー系のテストは checkMembership を "denied" にオーバーライドする。
+    tenantMembership: {
+      checkMembership: vi.fn().mockResolvedValue("member"),
+      ...overrides.tenantMembership,
+    },
+    tenantGuardMode: overrides.tenantGuardMode ?? "enforce",
+  };
+}
+
+/**
+ * Phase 2aツール呼び出しテスト共通: DCR登録〜同意〜token取得までを行いaccessTokenを返す。
+ *
+ * Phase 2b PR C1: ツール呼び出し経路でも callToolWithAuth が verifyGoogleIdToken を
+ * （テナント自己一致ガードのemail解決のため）呼ぶようになったため、サインイン時に
+ * 一度だけ消費される mockResolvedValueOnce とは別に、以降のツール呼び出しで
+ * 何度でも解決できる既定値を mockResolvedValue で armする（一度だけの値は常に
+ * 優先消費されるため、個別テストでの mockResolvedValueOnce による上書きは引き続き有効）。
+ */
+async function obtainAccessToken(app: Express): Promise<string> {
+  const redirectUri = "http://localhost:1234/callback";
+  const { codeVerifier, codeChallenge } = generatePkcePair();
+  const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+  const tokenRes = await request(app)
+    .post("/token")
+    .type("form")
+    .send({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+      client_id: clientId,
+      code_verifier: codeVerifier,
+    });
+  mockVerifyIdToken.mockResolvedValue(makeDecodedToken());
+  return tokenRes.body.access_token as string;
+}
+
+describe("Phase 1a PR1: OAuth ハンドシェイク疎通（実Firebaseサインイン経由）", () => {
   let app: Express;
 
   beforeAll(async () => {
     ({ app } = await createApp(ISSUER_URL, BIND_PORT));
+  });
+
+  beforeEach(() => {
+    mockVerifyIdToken.mockReset();
   });
 
   it("RFC 9728 保護リソースメタデータを配信する", async () => {
@@ -166,7 +336,7 @@ describe("Phase 0: OAuth ハンドシェイク疎通", () => {
     expect(res.body.redirect_uris).toContain("http://localhost:0/callback");
   });
 
-  it("PKCE付き認可コードフローでトークンを取得し、それを使って ping ツールを呼べる（devInteractionsのダミー同意画面経由）", async () => {
+  it("PKCE付き認可コードフローでトークンを取得し、それを使って ping ツールを呼べる（実Firebaseサインイン経由）", async () => {
     const redirectUri = "http://localhost:1234/callback";
     const { codeVerifier, codeChallenge } = generatePkcePair();
     const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
@@ -202,7 +372,7 @@ describe("Phase 0: OAuth ハンドシェイク疎通", () => {
   it("実クライアント同様 scope パラメータを省略しても(resourceのみで)認可コードとトークンを取得できる", async () => {
     // 実クライアント(Claude)は /auth に scope を一切送らず resource のみ送る。
     // oidc-provider は要求 scope が空だと consent 後も grant に何も追加されず
-    // 「no scope was granted」で access_denied になる回帰があった(実クライアント接続で発覚)。
+    // 「no scope was granted」で access_denied になる回帰があった(実クライアント接続で発覚、PR #639)。
     const redirectUri = "http://localhost:1234/callback";
     const { codeVerifier, codeChallenge } = generatePkcePair();
     const { clientId, code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`);
@@ -281,6 +451,238 @@ describe("Phase 0: OAuth ハンドシェイク疎通", () => {
       .send({});
     expect(res.status).toBe(401);
   });
+
+  it("offline_access を明示要求しても refresh_token は発行されない", async () => {
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeVerifier, codeChallenge } = generatePkcePair();
+    const { clientId, code } = await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid offline_access",
+      ["authorization_code", "refresh_token"]
+    );
+
+    const tokenRes = await request(app)
+      .post("/token")
+      .type("form")
+      .send({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: redirectUri,
+        client_id: clientId,
+        code_verifier: codeVerifier,
+      });
+    expect(tokenRes.status).toBe(200);
+    expect(tokenRes.body.access_token).toBeTruthy();
+    expect(tokenRes.body.refresh_token).toBeUndefined();
+  });
+
+  describe("サインイン拒否系", () => {
+    it("email_verified が false の場合、firebase-callback は403を返しサインインを完了させない", async () => {
+      const redirectUri = "http://localhost:1234/callback";
+      const { codeChallenge } = generatePkcePair();
+      const { jar, uid } = await startAuthorization(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+      mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken({ email_verified: false }));
+      const res = await request(app)
+        .post(`/interaction/${uid}/firebase-callback`)
+        .set("Cookie", cookieHeader(jar))
+        .send({ idToken: "fake-id-token" });
+      expect(res.status).toBe(403);
+
+      // サインインが完了していない(=interactionがloginプロンプトのまま)ことを確認。
+      // verifyGoogleIdTokenがinteractionResultより前にthrowしていることの回帰検知。
+      const page = await request(app).get(`/interaction/${uid}`).set("Cookie", cookieHeader(jar));
+      expect(page.status).toBe(200);
+      expect(page.text).toContain('id="signin"');
+    });
+
+    it("Google以外のプロバイダの場合、firebase-callback は403を返しサインインを完了させない", async () => {
+      const redirectUri = "http://localhost:1234/callback";
+      const { codeChallenge } = generatePkcePair();
+      const { jar, uid } = await startAuthorization(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+      mockVerifyIdToken.mockResolvedValueOnce(
+        makeDecodedToken({ firebase: { sign_in_provider: "password", identities: {} } })
+      );
+      const res = await request(app)
+        .post(`/interaction/${uid}/firebase-callback`)
+        .set("Cookie", cookieHeader(jar))
+        .send({ idToken: "fake-id-token" });
+      expect(res.status).toBe(403);
+    });
+
+    it("メールアドレスが取得できない場合、firebase-callback は403を返しサインインを完了させない", async () => {
+      const redirectUri = "http://localhost:1234/callback";
+      const { codeChallenge } = generatePkcePair();
+      const { jar, uid } = await startAuthorization(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+      mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken({ email: undefined }));
+      const res = await request(app)
+        .post(`/interaction/${uid}/firebase-callback`)
+        .set("Cookie", cookieHeader(jar))
+        .send({ idToken: "fake-id-token" });
+      expect(res.status).toBe(403);
+    });
+
+    it("idToken が未指定の場合、firebase-callback は400を返す", async () => {
+      const redirectUri = "http://localhost:1234/callback";
+      const { codeChallenge } = generatePkcePair();
+      const { jar, uid } = await startAuthorization(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+      const res = await request(app).post(`/interaction/${uid}/firebase-callback`).set("Cookie", cookieHeader(jar)).send({});
+      expect(res.status).toBe(400);
+    });
+  });
+
+  it("ログイン未完了(まだloginプロンプト)の状態で /confirm を呼ぶと400を返す", async () => {
+    // /confirm は consent プロンプトの時のみ有効。firebase-callback を経ずに
+    // 直接 /confirm を呼ぶ(順序異常・古いconsent画面のブックマーク再訪等)場合の
+    // router.ts の防御ロジック(name !== "consent" ガード)を検証する。
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+    const { jar, uid } = await startAuthorization(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+    const res = await request(app).post(`/interaction/${uid}/confirm`).set("Cookie", cookieHeader(jar)).send({});
+    expect(res.status).toBe(400);
+  });
+
+  it("interaction cookieが無い状態でconfirmを呼んでも、スタックトレースを含まない汎用エラーが返る", async () => {
+    // Cloud Runインスタンス再起動等でinteraction sessionが失われた状態を模して
+    // cookie無しで直接叩く。oidc-providerはSessionNotFoundを投げ、router.tsの
+    // next(err)経由でapp.ts末尾の汎用エラーハンドラに到達する想定
+    // (NODE_ENV未設定時のfinalhandlerスタックトレース漏洩の回帰テスト)。
+    const res = await request(app).post("/interaction/nonexistent-uid/confirm").send({});
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.text).not.toMatch(/at \S+ \(.*:\d+:\d+\)/); // Node.jsスタックトレース行の典型パターン
+    expect(res.text).not.toContain(".ts:");
+    expect(res.text).not.toContain(".js:");
+  });
+});
+
+describe("Phase 1a PR1: 同意画面の保存型XSS対策", () => {
+  let app: Express;
+
+  beforeAll(async () => {
+    ({ app } = await createApp(ISSUER_URL, BIND_PORT));
+  });
+
+  beforeEach(() => {
+    mockVerifyIdToken.mockReset();
+  });
+
+  it("DCRで登録した client_name に含まれるHTMLタグがエスケープされて同意画面に表示される", async () => {
+    const redirectUri = "http://localhost:1234/callback";
+    const maliciousClientName = '<script>alert(1)</script>';
+    const reg = await request(app)
+      .post("/reg")
+      .set("Content-Type", "application/json")
+      .send({
+        redirect_uris: [redirectUri],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code"],
+        response_types: ["code"],
+        client_name: maliciousClientName,
+      });
+    expect(reg.status).toBe(201);
+    const clientId = reg.body.client_id as string;
+
+    const { codeChallenge } = generatePkcePair();
+    const query = {
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: "code",
+      resource: `${ISSUER_URL}/mcp`,
+      scope: "openid",
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+    };
+    const authRes = await request(app).get("/auth").query(query);
+    let jar = mergeCookies(new Map(), authRes.headers["set-cookie"] as unknown as string[]);
+    const loginUrl = new URL(authRes.headers.location as string, ISSUER_URL);
+    const loginUid = loginUrl.pathname.slice("/interaction/".length).split("/")[0];
+
+    mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken());
+    const callbackRes = await request(app)
+      .post(`/interaction/${loginUid}/firebase-callback`)
+      .set("Cookie", cookieHeader(jar))
+      .send({ idToken: "fake-id-token" });
+    jar = mergeCookies(jar, callbackRes.headers["set-cookie"] as unknown as string[]);
+
+    const resumePath = new URL(callbackRes.body.redirectTo as string, ISSUER_URL);
+    const resumeRes = await request(app)
+      .get(resumePath.pathname + resumePath.search)
+      .set("Cookie", cookieHeader(jar));
+    jar = mergeCookies(jar, resumeRes.headers["set-cookie"] as unknown as string[]);
+    const consentUrl = new URL(resumeRes.headers.location as string, ISSUER_URL);
+    const consentUid = consentUrl.pathname.slice("/interaction/".length).split("/")[0];
+
+    const consentPage = await request(app)
+      .get(consentUrl.pathname + consentUrl.search)
+      .set("Cookie", cookieHeader(jar));
+    expect(consentPage.status).toBe(200);
+    expect(consentPage.text).not.toContain("<script>alert(1)</script>");
+    expect(consentPage.text).toContain("&lt;script&gt;");
+    expect(consentUid).toBeTruthy();
+  });
+
+  it("DCRで登録した redirect_uri に含まれるHTMLタグがエスケープされて同意画面に表示される", async () => {
+    // client_name同様、views.ts冒頭コメントが脅威モデルとして明記するredirect_uriも
+    // ルーター経由の実プラムビングでエスケープされることを確認する(unit testの
+    // views.test.tsだけではrouter.tsでの取り回しミスを検知できない)。
+    const maliciousRedirectUri = 'http://localhost:1234/callback?x="><img src=x onerror=alert(2)>';
+    const reg = await request(app)
+      .post("/reg")
+      .set("Content-Type", "application/json")
+      .send({
+        redirect_uris: [maliciousRedirectUri],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code"],
+        response_types: ["code"],
+      });
+    expect(reg.status).toBe(201);
+    const clientId = reg.body.client_id as string;
+    const registeredRedirectUri = (reg.body.redirect_uris as string[])[0];
+
+    const { codeChallenge } = generatePkcePair();
+    const query = {
+      client_id: clientId,
+      redirect_uri: registeredRedirectUri,
+      response_type: "code",
+      resource: `${ISSUER_URL}/mcp`,
+      scope: "openid",
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+    };
+    const authRes = await request(app).get("/auth").query(query);
+    expect([302, 303]).toContain(authRes.status);
+    let jar = mergeCookies(new Map(), authRes.headers["set-cookie"] as unknown as string[]);
+    const loginUrl = new URL(authRes.headers.location as string, ISSUER_URL);
+    const loginUid = loginUrl.pathname.slice("/interaction/".length).split("/")[0];
+
+    mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken());
+    const callbackRes = await request(app)
+      .post(`/interaction/${loginUid}/firebase-callback`)
+      .set("Cookie", cookieHeader(jar))
+      .send({ idToken: "fake-id-token" });
+    jar = mergeCookies(jar, callbackRes.headers["set-cookie"] as unknown as string[]);
+
+    const resumePath = new URL(callbackRes.body.redirectTo as string, ISSUER_URL);
+    const resumeRes = await request(app)
+      .get(resumePath.pathname + resumePath.search)
+      .set("Cookie", cookieHeader(jar));
+    jar = mergeCookies(jar, resumeRes.headers["set-cookie"] as unknown as string[]);
+    const consentUrl = new URL(resumeRes.headers.location as string, ISSUER_URL);
+
+    const consentPage = await request(app)
+      .get(consentUrl.pathname + consentUrl.search)
+      .set("Cookie", cookieHeader(jar));
+    expect(consentPage.status).toBe(200);
+    expect(consentPage.text).not.toContain('"><img src=x onerror=alert(2)>');
+    expect(consentPage.text).toContain("&lt;img src=x onerror=alert(2)&gt;");
+  });
 });
 
 describe("Phase 0: Cloud Run 想定の回帰テスト（issuerUrlのホストとbindPortが異なる場合）", () => {
@@ -301,5 +703,1262 @@ describe("Phase 0: Cloud Run 想定の回帰テスト（issuerUrlのホストと
     expect(res.body.issuer).toBe(fakePublicIssuer);
     expect(res.body.authorization_endpoint).toBe(`${fakePublicIssuer}/auth`);
     expect(res.body.token_endpoint).toBe(`${fakePublicIssuer}/token`);
+  });
+});
+
+describe("Phase 1a PR2: クロスインスタンス永続化（Firestore adapter を共有した2つの独立したcreateAppインスタンス）", () => {
+  it("インスタンスAでDCR登録・認可コード取得したものを、インスタンスBでtoken交換〜ping呼び出しできる", async () => {
+    // Cloud Run のリビジョン切替で別インスタンスに着地しても認可フローが継続できることの実証
+    // (この PR の存在意義そのもの。計画 noble-purring-rabbit.md 検証項目#3)。
+    const sharedDb = createFakeFirestore();
+    const storageOptions = { adapter: createFirestoreAdapterFactory(sharedDb) };
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+
+    const { app: appA } = await createApp(ISSUER_URL, 8094, firebaseConfig, storageOptions);
+    const { app: appB } = await createApp(ISSUER_URL, 8095, firebaseConfig, storageOptions);
+
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeVerifier, codeChallenge } = generatePkcePair();
+
+    mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken());
+    const { clientId, code } = await obtainAuthorizationCode(appA, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+    // token交換は別インスタンス(appB)で行う = DCR登録・認可コード発行がappAのプロセスローカル
+    // メモリではなく共有Firestoreに永続化されていることの証明。
+    const tokenRes = await request(appB).post("/token").type("form").send({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+      client_id: clientId,
+      code_verifier: codeVerifier,
+    });
+    expect(tokenRes.status).toBe(200);
+    const accessToken = tokenRes.body.access_token as string;
+    expect(accessToken).toBeTruthy();
+
+    // 発行されたトークンでappA(=appBとは別インスタンス)の/mcpも呼べる
+    const mcpRes = await request(appA)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "ping", arguments: {} },
+      });
+    expect(mcpRes.status).toBe(200);
+  });
+});
+
+describe("Phase 1b-1: Firebaseリフレッシュトークンの暗号化永続化", () => {
+  function makeKeyring() {
+    const key = crypto.randomBytes(32);
+    return { keys: [{ version: 1, key }], activeVersion: 1 };
+  }
+
+  it("refreshTokenを送ると、暗号化されて mcp_user_credentials に保存される", async () => {
+    const store = createCredentialStore(createFakeFirestore());
+    const keyring = makeKeyring();
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+
+    const { app } = await createApp(ISSUER_URL, 8096, firebaseConfig, {}, { store, keyring });
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+
+    const stored = await store.find("test-firebase-uid");
+    expect(stored).toBeDefined();
+    expect(decryptWithKeyring(stored!.encryptedRefreshToken, keyring.keys)).toBe("my-refresh-token");
+  });
+
+  it("refreshTokenが未送信でもサインインは200で成功する（credential-storeは呼ばれない）", async () => {
+    const store = createCredentialStore(createFakeFirestore());
+    const keyring = makeKeyring();
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(ISSUER_URL, 8097, firebaseConfig, {}, { store, keyring });
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const { code } = await obtainAuthorizationCode(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+
+    expect(code).toBeTruthy();
+    const stored = await store.find("test-firebase-uid");
+    expect(stored).toBeUndefined();
+  });
+
+  it("store.saveが失敗してもサインインは200で成功する（保存失敗はサインインを阻害しない。pr-review-toolkitセカンドオピニオン指摘: 実際にstore.saveがthrowする経路の検証）", async () => {
+    const keyring = makeKeyring();
+    const failingStore = {
+      save: async () => {
+        throw new Error("firestore down");
+      },
+      find: async () => undefined,
+      delete: async () => {},
+    };
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(ISSUER_URL, 8099, firebaseConfig, {}, { store: failingStore, keyring });
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const { code } = await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+
+    expect(code).toBeTruthy();
+  });
+
+  it("サインイン時に暗号化保存されたrefreshTokenを、credential-service.tsが復号・交換して実際にidTokenを取得できる（write経路とread経路のE2E結合。pr-test-analyzerセカンドオピニオン指摘: 両者が別々の低レベルプリミティブに対してしかテストされておらず結合されていなかった）", async () => {
+    const store = createCredentialStore(createFakeFirestore());
+    const keyring = makeKeyring();
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+
+    const { app } = await createApp(ISSUER_URL, 8100, firebaseConfig, {}, { store, keyring });
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+
+    const exchangeMock = vi
+      .fn()
+      .mockResolvedValue({ idToken: "fresh-id-token", refreshToken: "rotated-refresh-token", expiresIn: 3600 });
+    const credentialService = createCredentialService({
+      store,
+      keyring,
+      firebaseWebApiKey: "api-key",
+      exchange: exchangeMock,
+    });
+
+    const idToken = await credentialService.getFirebaseIdTokenForAccount("test-firebase-uid");
+
+    expect(idToken).toBe("fresh-id-token");
+    // router.ts が保存した暗号文を credential-service.ts が正しく復号できたことの証明
+    // （decryptWithKeyringへ渡された平文が、サインイン時に送った値と一致）
+    expect(exchangeMock).toHaveBeenCalledWith("my-refresh-token", "api-key");
+  });
+
+  it("credentialOptions未指定（従来どおり）でもサインインは影響を受けない", async () => {
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(ISSUER_URL, 8098, firebaseConfig, {});
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const { code } = await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+
+    expect(code).toBeTruthy();
+  });
+
+  it("store.saveが応答しない（ハング）場合でも、persistTimeoutMsで打ち切りサインインをブロックしない（codex review指摘: Firestore劣化時に無期限に待たされない）", async () => {
+    const keyring = makeKeyring();
+    const hangingStore = {
+      save: () => new Promise<void>(() => {}), // 永久に解決しない
+      find: async () => undefined,
+      delete: async () => {},
+    };
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(
+      ISSUER_URL,
+      8101,
+      firebaseConfig,
+      {},
+      { store: hangingStore, keyring, persistTimeoutMs: 50 }
+    );
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const startedAt = Date.now();
+    const { code } = await obtainAuthorizationCode(
+      app,
+      redirectUri,
+      codeChallenge,
+      `${ISSUER_URL}/mcp`,
+      "openid",
+      ["authorization_code"],
+      "my-refresh-token"
+    );
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(code).toBeTruthy();
+    // persistTimeoutMs(50ms)で打ち切られるはず。DCR登録・複数HTTPラウンドトリップの
+    // オーバーヘッドを見込んでも、store.saveのハングに引きずられた場合の
+    // 「無期限」とは明確に区別できる余裕を持った閾値にする。
+    expect(elapsedMs).toBeLessThan(2000);
+  });
+
+  it("store.saveがpersistTimeoutMs内に成功した場合、タイムアウト後に偽の失敗ログを出さない（codex review再指摘: setTimeoutのクリア漏れでタイムアウト成功時にも誤ってタイムアウトログが出ていた）", async () => {
+    const keyring = makeKeyring();
+    const store = createCredentialStore(createFakeFirestore());
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(
+      ISSUER_URL,
+      8102,
+      firebaseConfig,
+      {},
+      { store, keyring, persistTimeoutMs: 30 }
+    );
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { code } = await obtainAuthorizationCode(
+        app,
+        redirectUri,
+        codeChallenge,
+        `${ISSUER_URL}/mcp`,
+        "openid",
+        ["authorization_code"],
+        "my-refresh-token"
+      );
+      expect(code).toBeTruthy();
+
+      // persistTimeoutMs(30ms)を確実に超えるまで待ち、それでも「timeout exceeded」
+      // ログが遅延発火しないことを確認する（setTimeoutが正しくclearされていれば発火しない）
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      const timeoutLogCalls = consoleErrorSpy.mock.calls.filter((call) =>
+        String(call[0]).includes("exceeded timeout")
+      );
+      expect(timeoutLogCalls).toHaveLength(0);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+});
+
+describe("Phase 2a: 読み取り専用quizツール（list_courses/list_lessons/get_quiz）", () => {
+  const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+
+  it("list_coursesはlmsApiClient.listCoursesを呼び、courses配列を返す", async () => {
+    const deps = makeMcpServerDeps({
+      lmsApiClient: {
+        listCourses: vi.fn().mockResolvedValue([{ id: "c1", name: "Course 1" }]),
+        listLessons: vi.fn(),
+        getQuiz: vi.fn(),
+      },
+    });
+    const { app } = await createApp(ISSUER_URL, 8103, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    expect(mcpRes.status).toBe(200);
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0]!.text)).toEqual({ courses: [{ id: "c1", name: "Course 1" }] });
+    expect(deps.lmsApiClient.listCourses).toHaveBeenCalledWith("tenant-a", "fresh-id-token");
+    expect(deps.credentialService.getFirebaseIdTokenForAccount).toHaveBeenCalledWith("test-firebase-uid", undefined);
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "success" })
+    );
+  });
+
+  it("list_lessonsはlmsApiClient.listLessonsを呼び、lessons配列を返す", async () => {
+    const deps = makeMcpServerDeps({
+      lmsApiClient: {
+        listCourses: vi.fn(),
+        listLessons: vi.fn().mockResolvedValue([{ id: "l1", hasQuiz: true }]),
+        getQuiz: vi.fn(),
+      },
+    });
+    const { app } = await createApp(ISSUER_URL, 8104, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "list_lessons", arguments: { tenant: "tenant-a", courseId: "course-1" } },
+      });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0]!.text)).toEqual({ lessons: [{ id: "l1", hasQuiz: true }] });
+    expect(deps.lmsApiClient.listLessons).toHaveBeenCalledWith("tenant-a", "course-1", "fresh-id-token");
+  });
+
+  it("get_quizはlmsApiClient.getQuizを呼び、正解・解説を含むquizを返す", async () => {
+    const quiz = { id: "q1", questions: [{ id: "qq1", options: [{ id: "o1", isCorrect: true }], explanation: "because" }] };
+    const deps = makeMcpServerDeps({
+      lmsApiClient: {
+        listCourses: vi.fn(),
+        listLessons: vi.fn(),
+        getQuiz: vi.fn().mockResolvedValue(quiz),
+      },
+    });
+    const { app } = await createApp(ISSUER_URL, 8105, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "get_quiz", arguments: { tenant: "tenant-a", lessonId: "lesson-1" } },
+      });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0]!.text)).toEqual({ quiz });
+    expect(deps.lmsApiClient.getQuiz).toHaveBeenCalledWith("tenant-a", "lesson-1", "fresh-id-token");
+  });
+
+  it("LMS APIが403(非admin)を返した場合、tool呼び出しはisError:trueになる", async () => {
+    const deps = makeMcpServerDeps({
+      lmsApiClient: {
+        listCourses: vi.fn().mockRejectedValue(new LmsApiError("forbidden", "forbidden", 403, false)),
+        listLessons: vi.fn(),
+        getQuiz: vi.fn(),
+      },
+    });
+    const { app } = await createApp(ISSUER_URL, 8106, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("forbidden");
+    expect(deps.auditLog.record).toHaveBeenCalledWith(expect.objectContaining({ result: "error" }));
+  });
+
+  it("存在しないlessonId（404）を渡した場合、get_quizはisError:trueになる", async () => {
+    const deps = makeMcpServerDeps({
+      lmsApiClient: {
+        listCourses: vi.fn(),
+        listLessons: vi.fn(),
+        getQuiz: vi.fn().mockRejectedValue(new LmsApiError("Quiz not found for this lesson", "not_found", 404, false)),
+      },
+    });
+    const { app } = await createApp(ISSUER_URL, 8107, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "get_quiz", arguments: { tenant: "tenant-a", lessonId: "missing" } },
+      });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("Quiz not found for this lesson");
+  });
+
+  it("資格情報未保存（CredentialNotFoundError）の場合、再認証を促すisError:trueメッセージを返し、監査ログにもエラーとして記録する（codex review P2指摘: 初回のtoken取得失敗が監査ログに残っていなかった）", async () => {
+    const deps = makeMcpServerDeps({
+      credentialService: {
+        getFirebaseIdTokenForAccount: vi.fn().mockRejectedValue(new CredentialNotFoundError("test-firebase-uid")),
+      },
+    });
+    const { app } = await createApp(ISSUER_URL, 8108, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("再認証");
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
+  });
+
+  it("401リトライ時のforceRefresh自体が失敗した場合も監査ログにエラーとして記録する（codex review P2指摘: リトライ経路のtoken取得失敗も監査ログに残っていなかった）", async () => {
+    const getFirebaseIdTokenForAccount = vi
+      .fn()
+      .mockResolvedValueOnce("stale-id-token")
+      .mockRejectedValueOnce(new CredentialNotFoundError("test-firebase-uid"));
+    const listCourses = vi.fn().mockRejectedValueOnce(new LmsApiError("unauthorized", "unauthorized", 401, false));
+    const deps = makeMcpServerDeps({
+      credentialService: { getFirebaseIdTokenForAccount },
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8112, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
+  });
+
+  it("LMS APIが401を返した場合、forceRefreshで新しいIDトークンを取得し1回だけ自動リトライする", async () => {
+    const getFirebaseIdTokenForAccount = vi
+      .fn()
+      .mockResolvedValueOnce("stale-id-token")
+      .mockResolvedValueOnce("fresh-retried-id-token");
+    const listCourses = vi
+      .fn()
+      .mockRejectedValueOnce(new LmsApiError("unauthorized", "unauthorized", 401, false))
+      .mockResolvedValueOnce([{ id: "c1", name: "Course 1" }]);
+    const deps = makeMcpServerDeps({
+      credentialService: { getFirebaseIdTokenForAccount },
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8109, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0]!.text)).toEqual({ courses: [{ id: "c1", name: "Course 1" }] });
+    expect(listCourses).toHaveBeenCalledTimes(2);
+    expect(listCourses).toHaveBeenNthCalledWith(1, "tenant-a", "stale-id-token");
+    expect(listCourses).toHaveBeenNthCalledWith(2, "tenant-a", "fresh-retried-id-token");
+    expect(getFirebaseIdTokenForAccount).toHaveBeenNthCalledWith(2, "test-firebase-uid", { forceRefresh: true });
+    // リトライが成功しても、初回401失敗そのものが監査ログから消えないことを確認する
+    // （直近のレビュー指摘: 成功ログ1件のみだと初回の認可エラーが読み取れなかった）
+    expect(deps.auditLog.record).toHaveBeenCalledTimes(2);
+    expect(deps.auditLog.record).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
+    expect(deps.auditLog.record).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "success" })
+    );
+  });
+
+  it("401リトライ後の再試行自体も401で失敗した場合、そこで打ち切りisError:trueを返す（無限リトライしない。pr-test-analyzerセカンドオピニオン指摘: リトライ枯渇パスが未テストだった）", async () => {
+    const getFirebaseIdTokenForAccount = vi
+      .fn()
+      .mockResolvedValueOnce("stale-id-token")
+      .mockResolvedValueOnce("still-invalid-id-token");
+    const listCourses = vi
+      .fn()
+      .mockRejectedValueOnce(new LmsApiError("unauthorized", "unauthorized", 401, false))
+      .mockRejectedValueOnce(new LmsApiError("unauthorized", "unauthorized", 401, false));
+    const deps = makeMcpServerDeps({
+      credentialService: { getFirebaseIdTokenForAccount },
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8113, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    // ちょうど2回（初回+1回だけのリトライ）で打ち切られ、3回目は呼ばれない
+    expect(listCourses).toHaveBeenCalledTimes(2);
+    expect(getFirebaseIdTokenForAccount).toHaveBeenCalledTimes(2);
+    // 初回401失敗とリトライ失敗の両方が監査ログに残ること（1件だけだと
+    // どちらの失敗が記録されたのか区別できない）
+    expect(deps.auditLog.record).toHaveBeenCalledTimes(2);
+    expect(deps.auditLog.record).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
+    expect(deps.auditLog.record).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
+  });
+
+  it("401以外（500等のtransientエラー）ではforceRefreshリトライを行わない（codex review pr-test-analyzer指摘: 401判定条件が意図せず広がっていないことを確認する回帰テスト）", async () => {
+    const getFirebaseIdTokenForAccount = vi.fn().mockResolvedValue("id-token-1");
+    const listCourses = vi.fn().mockRejectedValueOnce(new LmsApiError("server error", undefined, 500, true));
+    const deps = makeMcpServerDeps({
+      credentialService: { getFirebaseIdTokenForAccount },
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8114, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    // transientな内部詳細は返さず汎用メッセージのみ返す（silent-failure-hunterセカンドオピニオン指摘）
+    expect(result.content[0]!.text).not.toContain("server error");
+    expect(result.content[0]!.text).toContain("一時的");
+    expect(listCourses).toHaveBeenCalledTimes(1);
+    expect(getFirebaseIdTokenForAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("mcpServerDeps未指定（従来どおり）の場合、quizツールは登録されずpingのみ呼べる", async () => {
+    const { app } = await createApp(ISSUER_URL, 8110, firebaseConfig, {});
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    // 未登録ツール呼び出しはSDKレベルのJSON-RPCエラーになる(isErrorではない)
+    const dataLine = mcpRes.text.split("\n").find((line) => line.startsWith("data: "));
+    const parsed = JSON.parse(dataLine!.slice("data: ".length)) as { error?: { message?: string } };
+    expect(parsed.error).toBeDefined();
+  });
+});
+
+describe("Phase 2b PR C1: テナント自己一致ガード", () => {
+  const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+
+  it("dry-runモード: 非メンバーテナントでもlmsApiClientが呼ばれ成功し、監査ログにwould_denyが記録される", async () => {
+    const checkMembership = vi.fn().mockResolvedValue("denied");
+    const listCourses = vi.fn().mockResolvedValue([{ id: "c1", name: "Course 1" }]);
+    const deps = makeMcpServerDeps({
+      tenantMembership: { checkMembership },
+      tenantGuardMode: "dry-run",
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8150, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBeUndefined();
+    expect(listCourses).toHaveBeenCalledWith("tenant-a", "fresh-id-token");
+    expect(checkMembership).toHaveBeenCalledWith("tenant-a", "quiz-editor@example.com");
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "would_deny" })
+    );
+  });
+
+  it("enforceモード: 非メンバーテナントではlmsApiClientが呼ばれず、監査ログにdeniedが記録され、isError:trueになる", async () => {
+    const checkMembership = vi.fn().mockResolvedValue("denied");
+    const listCourses = vi.fn();
+    const deps = makeMcpServerDeps({
+      tenantMembership: { checkMembership },
+      tenantGuardMode: "enforce",
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8151, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("割り当てられていません");
+    expect(listCourses).not.toHaveBeenCalled();
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "denied" })
+    );
+  });
+
+  it("enforceモードでもメンバーであるテナントでは従来通り成功する（Phase 2a既存挙動の回帰なし）", async () => {
+    const deps = makeMcpServerDeps({
+      lmsApiClient: {
+        listCourses: vi.fn().mockResolvedValue([{ id: "c1", name: "Course 1" }]),
+        listLessons: vi.fn(),
+        getQuiz: vi.fn(),
+      },
+    });
+    const { app } = await createApp(ISSUER_URL, 8152, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBeUndefined();
+    expect(deps.tenantMembership.checkMembership).toHaveBeenCalledWith("tenant-a", "quiz-editor@example.com");
+  });
+
+  it("401リトライ経路でもforceRefresh後のidTokenで再度テナント一致を検証する（1回目の検証だけだとリトライがガード外になる問題の回帰テスト）", async () => {
+    const getFirebaseIdTokenForAccount = vi
+      .fn()
+      .mockResolvedValueOnce("stale-id-token")
+      .mockResolvedValueOnce("fresh-retried-id-token");
+    const listCourses = vi
+      .fn()
+      .mockRejectedValueOnce(new LmsApiError("unauthorized", "unauthorized", 401, false))
+      .mockResolvedValueOnce([{ id: "c1", name: "Course 1" }]);
+    const checkMembership = vi.fn().mockResolvedValue("member");
+    const deps = makeMcpServerDeps({
+      credentialService: { getFirebaseIdTokenForAccount },
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+      tenantMembership: { checkMembership },
+    });
+    const { app } = await createApp(ISSUER_URL, 8153, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBeUndefined();
+    expect(checkMembership).toHaveBeenCalledTimes(2);
+  });
+
+  it("dry-runモード: verifyGoogleIdToken自体が失敗した場合（判定不能）、ブロックせずfnを実行し監査ログにerrorとして記録する（dry-runの「絶対にブロックしない」契約を守る）", async () => {
+    const checkMembership = vi.fn();
+    const listCourses = vi.fn().mockResolvedValue([{ id: "c1", name: "Course 1" }]);
+    const deps = makeMcpServerDeps({
+      tenantMembership: { checkMembership },
+      tenantGuardMode: "dry-run",
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8154, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    mockVerifyIdToken.mockRejectedValueOnce(new Error("token verification transiently failed"));
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBeUndefined();
+    expect(listCourses).toHaveBeenCalledWith("tenant-a", "fresh-id-token");
+    expect(checkMembership).not.toHaveBeenCalled();
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
+  });
+
+  it("enforceモード: verifyGoogleIdToken自体が失敗した場合（判定不能）、fail-closedでブロックし監査ログにerrorとして記録する（pr-review-toolkit:code-reviewerセカンドオピニオン指摘: 「無効なidTokenなら401で弾かれる」という当初の安全性根拠は誤りで、fail-openにするとまさにガードが機能してほしい瞬間に無効化されるため）", async () => {
+    const checkMembership = vi.fn();
+    const listCourses = vi.fn();
+    const deps = makeMcpServerDeps({
+      tenantMembership: { checkMembership },
+      tenantGuardMode: "enforce",
+      lmsApiClient: { listCourses, listLessons: vi.fn(), getQuiz: vi.fn() },
+    });
+    const { app } = await createApp(ISSUER_URL, 8155, firebaseConfig, {}, undefined, deps);
+    const accessToken = await obtainAccessToken(app);
+
+    mockVerifyIdToken.mockRejectedValueOnce(new Error("token verification transiently failed"));
+    const mcpRes = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_courses", arguments: { tenant: "tenant-a" } } });
+
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("本人確認に失敗しました");
+    expect(listCourses).not.toHaveBeenCalled();
+    expect(checkMembership).not.toHaveBeenCalled();
+    expect(deps.auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: "test-firebase-uid", tenant: "tenant-a", tool: "list_courses", result: "error" })
+    );
+  });
+});
+
+describe("Phase 2b PR C2: 書き込み系quizツール（create_quiz/update_quiz/delete_quiz）", () => {
+  const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+
+  const validQuestion = {
+    id: "q1",
+    text: "1+1は？",
+    type: "single" as const,
+    options: [
+      { id: "o1", text: "2", isCorrect: true },
+      { id: "o2", text: "3", isCorrect: false },
+    ],
+    points: 10,
+    explanation: "",
+  };
+
+  async function callTool(app: Express, accessToken: string, name: string, args: Record<string, unknown>) {
+    return request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .set("Content-Type", "application/json")
+      .set("Accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
+  }
+
+  // SDKのinputSchemaバリデーションはハンドラ到達前に失敗し、isError:trueのツール結果として返る
+  // （JSON-RPCレベルのerrorオブジェクトにはならない。「未登録ツール呼び出し」の場合とは異なる形状）
+  function expectInputValidationError(mcpRes: request.Response) {
+    const result = parseMcpToolResult(mcpRes);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("Input validation error");
+  }
+
+  describe("create_quiz", () => {
+    it("正常系: lmsApiClient.createQuizを呼び、作成されたquizを返し、監査ログにsuccessを記録する", async () => {
+      const createQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "新テスト" });
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8160, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [validQuestion],
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ quiz: { id: "q1", title: "新テスト" } });
+      expect(createQuiz).toHaveBeenCalledWith(
+        "tenant-a",
+        "lesson-1",
+        expect.objectContaining({ title: "新テスト", questions: [validQuestion] }),
+        "fresh-id-token"
+      );
+      expect(deps.auditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant: "tenant-a", tool: "create_quiz", targetId: "lesson-1", result: "success" })
+      );
+    });
+
+    it("409(quiz_already_exists)はisError:trueになる", async () => {
+      const createQuiz = vi
+        .fn()
+        .mockRejectedValue(new LmsApiError("A quiz already exists for this lesson", "quiz_already_exists", 409, false));
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8161, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [validQuestion],
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain("A quiz already exists");
+    });
+
+    it("transientエラー(5xx等)の場合、単純な「再試行してください」ではなく状態不明を明示するメッセージになる（silent-failure-hunterセカンドオピニオン指摘・CRITICAL: create_quizはquiz本体作成+lesson.hasQuiz更新の非トランザクション2段書き込みのため、後段だけ失敗してもこの分岐に落ち、実際には既にquizが作成済みの可能性がある）", async () => {
+      const createQuiz = vi
+        .fn()
+        .mockRejectedValue(new LmsApiError("LMS APIがエラーを返しました (status=500)", undefined, 500, true));
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8178, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [validQuestion],
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).not.toContain("しばらくしてから再度お試しください");
+      expect(result.content[0]!.text).toContain("get_quiz");
+    });
+
+    it("51問を渡すとzodバリデーションで即座に拒否されlmsApiClientが呼ばれない（API側50問上限のMCP側事前チェック）", async () => {
+      const createQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8162, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const questions = Array.from({ length: 51 }, (_, i) => ({ ...validQuestion, id: `q${i}` }));
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions,
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(createQuiz).not.toHaveBeenCalled();
+    });
+
+    it("single型で正解(isCorrect)が2つある場合、zodバリデーションで即座に拒否されlmsApiClientが呼ばれない", async () => {
+      const createQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8163, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const badQuestion = {
+        ...validQuestion,
+        options: [
+          { id: "o1", text: "2", isCorrect: true },
+          { id: "o2", text: "3", isCorrect: true },
+        ],
+      };
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [badQuestion],
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(createQuiz).not.toHaveBeenCalled();
+    });
+
+    it("passThresholdに範囲外の値(負値)を渡すとzodバリデーションで即座に拒否される（Codexセカンドオピニオン2巡目指摘: API側は数値バリデーションをしないため、MCP側が最後の防波堤）", async () => {
+      const createQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8164, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [validQuestion],
+        passThreshold: -1,
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(createQuiz).not.toHaveBeenCalled();
+    });
+
+    it("questionsが0問（空配列）の場合、zodバリデーションで即座に拒否されlmsApiClientが呼ばれない", async () => {
+      const createQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8173, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [],
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(createQuiz).not.toHaveBeenCalled();
+    });
+
+    it("questionsがちょうど50問の場合はzodバリデーションを通過しlmsApiClientが呼ばれる（API側validateQuestionsの上限50問との境界一致確認）", async () => {
+      const createQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "新テスト" });
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8174, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const questions = Array.from({ length: 50 }, (_, i) => ({ ...validQuestion, id: `q${i}` }));
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions,
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBeUndefined();
+      expect(createQuiz).toHaveBeenCalledTimes(1);
+    });
+
+    it("maxAttemptsに負値を渡すとzodバリデーションで即座に拒否される", async () => {
+      const createQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8175, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [validQuestion],
+        maxAttempts: -1,
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(createQuiz).not.toHaveBeenCalled();
+    });
+
+    it("timeLimitSecに0を渡すとzodバリデーションで即座に拒否される（positive制約、0は無制限扱いと誤読されうるため許容しない）", async () => {
+      const createQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { createQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8176, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "create_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        title: "新テスト",
+        questions: [validQuestion],
+        timeLimitSec: 0,
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(createQuiz).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("update_quiz", () => {
+    it("正常系: 実行直前GETしupdatedAtが一致すればupdateQuizを呼び、監査ログにsuccessを記録する", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "旧タイトル", updatedAt: "2026-01-01T00:00:00.000Z" });
+      const updateQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "新タイトル" });
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, updateQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8165, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "update_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        title: "新タイトル",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ quiz: { id: "q1", title: "新タイトル" } });
+      expect(getQuiz).toHaveBeenCalledWith("tenant-a", "lesson-1", "fresh-id-token");
+      expect(updateQuiz).toHaveBeenCalledWith(
+        "tenant-a",
+        "lesson-1",
+        expect.objectContaining({ title: "新タイトル" }),
+        "fresh-id-token"
+      );
+      expect(deps.auditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant: "tenant-a", tool: "update_quiz", targetId: "lesson-1", result: "success" })
+      );
+    });
+
+    it("updateQuizが401を返した場合、GET+PATCHのペア全体（assertQuizMatchesExpected含む）がforceRefreshした新しいidTokenで再実行される（pr-test-analyzerセカンドオピニオン指摘: 401リトライ経路が未テストだった。callToolWithAuthはfn全体を再実行する設計のため、getQuizも2回呼ばれる）", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "旧タイトル", updatedAt: "2026-01-01T00:00:00.000Z" });
+      const updateQuiz = vi
+        .fn()
+        .mockRejectedValueOnce(new LmsApiError("unauthorized", "unauthorized", 401, false))
+        .mockResolvedValueOnce({ id: "q1", title: "新タイトル" });
+      const getFirebaseIdTokenForAccount = vi
+        .fn()
+        .mockResolvedValueOnce("stale-id-token")
+        .mockResolvedValueOnce("fresh-retried-id-token");
+      const deps = makeMcpServerDeps({
+        lmsApiClient: { getQuiz, updateQuiz },
+        credentialService: { getFirebaseIdTokenForAccount },
+      });
+      const { app } = await createApp(ISSUER_URL, 8177, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "update_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        title: "新タイトル",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ quiz: { id: "q1", title: "新タイトル" } });
+      expect(getQuiz).toHaveBeenCalledTimes(2);
+      expect(getQuiz).toHaveBeenNthCalledWith(1, "tenant-a", "lesson-1", "stale-id-token");
+      expect(getQuiz).toHaveBeenNthCalledWith(2, "tenant-a", "lesson-1", "fresh-retried-id-token");
+      expect(updateQuiz).toHaveBeenCalledTimes(2);
+      expect(updateQuiz).toHaveBeenNthCalledWith(1, "tenant-a", "lesson-1", expect.objectContaining({ title: "新タイトル" }), "stale-id-token");
+      expect(updateQuiz).toHaveBeenNthCalledWith(2, "tenant-a", "lesson-1", expect.objectContaining({ title: "新タイトル" }), "fresh-retried-id-token");
+    });
+
+    it("expectedUpdatedAtが実際のupdatedAtと不一致なら中止し、updateQuizが呼ばれず監査ログにerrorを記録する", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "旧タイトル", updatedAt: "2026-02-01T00:00:00.000Z" });
+      const updateQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, updateQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8166, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "update_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        title: "新タイトル",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain("変更されています");
+      expect(updateQuiz).not.toHaveBeenCalled();
+      expect(deps.auditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant: "tenant-a", tool: "update_quiz", targetId: "lesson-1", result: "error" })
+      );
+    });
+
+    it("expectedUpdatedAtのみ（実更新フィールドなし）はzodバリデーションで即座に拒否され、getQuizすら呼ばれない（applyUpdateが空更新でもupdatedAtを無条件更新するため他クライアントのexpectedUpdatedAtを失効させてしまう対策）", async () => {
+      const getQuiz = vi.fn();
+      const updateQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, updateQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8167, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "update_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      expectInputValidationError(mcpRes);
+      expect(getQuiz).not.toHaveBeenCalled();
+      expect(updateQuiz).not.toHaveBeenCalled();
+    });
+
+    it("PATCH応答がquiz:nullの場合（レース条件）、isError:trueになる（lms-api-clientのnullチェックが機能していることのE2E確認）", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "旧タイトル", updatedAt: "2026-01-01T00:00:00.000Z" });
+      const updateQuiz = vi
+        .fn()
+        .mockRejectedValue(new LmsApiError("LMS APIの応答にquizが含まれていません（updateQuiz）", undefined, undefined, false));
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, updateQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8168, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "update_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        title: "新タイトル",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+    });
+  });
+
+  describe("delete_quiz", () => {
+    it("正常系: updatedAt一致・confirmTitle一致でdeleteQuizを呼び、監査ログにsuccessを記録する", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "削除対象", updatedAt: "2026-01-01T00:00:00.000Z" });
+      const deleteQuiz = vi.fn().mockResolvedValue(undefined);
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, deleteQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8169, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "delete_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        confirmTitle: "削除対象",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ deleted: true });
+      expect(deleteQuiz).toHaveBeenCalledWith("tenant-a", "lesson-1", "fresh-id-token");
+      expect(deps.auditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant: "tenant-a", tool: "delete_quiz", targetId: "lesson-1", result: "success" })
+      );
+    });
+
+    it("confirmTitleが実際のタイトルと一致しない場合、中止しdeleteQuizが呼ばれない", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "本当のタイトル", updatedAt: "2026-01-01T00:00:00.000Z" });
+      const deleteQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, deleteQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8170, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "delete_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        confirmTitle: "違うタイトル",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain("confirmTitle");
+      expect(deleteQuiz).not.toHaveBeenCalled();
+      expect(deps.auditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant: "tenant-a", tool: "delete_quiz", targetId: "lesson-1", result: "error" })
+      );
+    });
+
+    it("expectedUpdatedAtが不一致の場合、confirmTitleの一致有無に関わらず中止しdeleteQuizが呼ばれない", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "削除対象", updatedAt: "2026-02-01T00:00:00.000Z" });
+      const deleteQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, deleteQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8171, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "delete_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        confirmTitle: "削除対象",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain("変更されています");
+      expect(deleteQuiz).not.toHaveBeenCalled();
+    });
+
+    it("404(quiz未設定)はisError:trueになる", async () => {
+      const getQuiz = vi.fn().mockRejectedValue(new LmsApiError("Quiz not found for this lesson", "not_found", 404, false));
+      const deleteQuiz = vi.fn();
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, deleteQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8172, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "delete_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        confirmTitle: "何か",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain("Quiz not found for this lesson");
+      expect(deleteQuiz).not.toHaveBeenCalled();
+    });
+
+    it("transientエラー(5xx等)の場合、単純な「再試行してください」ではなく状態不明を明示するメッセージになる（silent-failure-hunterセカンドオピニオン指摘・CRITICAL: delete_quizは物理削除+lesson.hasQuiz更新の非トランザクション2段書き込みのため、後段だけ失敗してもこの分岐に落ち、実際には既にquizが削除済みの可能性がある）", async () => {
+      const getQuiz = vi.fn().mockResolvedValue({ id: "q1", title: "削除対象", updatedAt: "2026-01-01T00:00:00.000Z" });
+      const deleteQuiz = vi
+        .fn()
+        .mockRejectedValue(new LmsApiError("LMS APIがエラーを返しました (status=500)", undefined, 500, true));
+      const deps = makeMcpServerDeps({ lmsApiClient: { getQuiz, deleteQuiz } });
+      const { app } = await createApp(ISSUER_URL, 8179, firebaseConfig, {}, undefined, deps);
+      const accessToken = await obtainAccessToken(app);
+
+      const mcpRes = await callTool(app, accessToken, "delete_quiz", {
+        tenant: "tenant-a",
+        lessonId: "lesson-1",
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        confirmTitle: "削除対象",
+      });
+
+      const result = parseMcpToolResult(mcpRes);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).not.toContain("しばらくしてから再度お試しください");
+      expect(result.content[0]!.text).toContain("get_quiz");
+    });
+  });
+});
+
+describe("Phase 2a: Session/Grant/RefreshTokenのTTL短縮（codex review P1指摘: 資格情報喪失時に既定14日のセッション有効期限のせいで自己回復できない問題の緩和策）", () => {
+  it("ログイン時に発行される_sessionクッキーのexpiresが約24時間後になる（既定14日ではない）", async () => {
+    const firebaseConfig = { apiKey: "", authDomain: "", projectId: "" };
+    const { app } = await createApp(ISSUER_URL, 8111, firebaseConfig, {});
+    const redirectUri = "http://localhost:1234/callback";
+    const { codeChallenge } = generatePkcePair();
+
+    const beforeLogin = Date.now();
+    const { jar: startJar, uid } = await startAuthorization(app, redirectUri, codeChallenge, `${ISSUER_URL}/mcp`, "openid");
+    let jar = startJar;
+
+    mockVerifyIdToken.mockResolvedValueOnce(makeDecodedToken());
+    const callbackRes = await request(app)
+      .post(`/interaction/${uid}/firebase-callback`)
+      .set("Cookie", cookieHeader(jar))
+      .send({ idToken: "fake-id-token" });
+    expect(callbackRes.status).toBe(200);
+    jar = mergeCookies(jar, callbackRes.headers["set-cookie"] as unknown as string[]);
+
+    // ログイン結果を resolve すると oidc-provider が Session を作成し、直後の resume
+    // リダイレクト応答で `_session` クッキー(expires属性つき)を発行する
+    // （実際のSet-Cookieヘッダを確認して判明。firebase-callback応答自体には含まれない）。
+    const resumeUrl = new URL(callbackRes.body.redirectTo as string, ISSUER_URL);
+    const resumeRes = await request(app)
+      .get(resumeUrl.pathname + resumeUrl.search)
+      .set("Cookie", cookieHeader(jar));
+    expect([302, 303]).toContain(resumeRes.status);
+
+    const setCookieHeader = (resumeRes.headers["set-cookie"] as unknown as string[]) ?? [];
+    const sessionCookie = setCookieHeader.find((c) => c.startsWith("_session="));
+    expect(sessionCookie).toBeDefined();
+    const expiresMatch = sessionCookie!.match(/expires=([^;]+)/i);
+    expect(expiresMatch).toBeTruthy();
+    const expiresAt = new Date(expiresMatch![1]!).getTime();
+
+    const ttlSeconds = (expiresAt - beforeLogin) / 1000;
+    // 24時間(86400秒)を中心に、テスト実行のオーバーヘッドを見込んだ許容幅(±5分)で確認する。
+    // 既定値の14日(1209600秒)とは明確に区別できる。
+    expect(ttlSeconds).toBeGreaterThan(24 * 60 * 60 - 300);
+    expect(ttlSeconds).toBeLessThan(24 * 60 * 60 + 300);
   });
 });
