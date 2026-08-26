@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-26 (Phase 2b完了に続き、チーム展開の実務着手。ノンエンジニア向け周知文書を作成・送信済み、Owner候補`y.tsukuda@279279.net`のLMS側アクセス権限を全4テナントに付与済み。残るは組織カスタムコネクタのOwner登録完了確認のみ)
+updated: 2026-08-26 (Phase 2b完了・チーム展開の実務着手に続き、監視中だったPR #667由来MEDIUM〔401初回失敗の監査ログ欠落〕をPR #671で解消。残るは組織カスタムコネクタのOwner登録完了確認のみ)
 ---
 
 ## 現在のミッション
@@ -87,7 +87,7 @@ plan mode で計画策定 → Codexセカンドオピニオン(MCP版、effort=h
   - `delete_quiz`→`create_quiz`で作り直すと、過去合格者の`user_progress.quizPassed`（レッスン単位で管理）が残り続け新quizを受験できなくなる
   - `create_quiz`/`delete_quiz`はquiz本体書き込み+`lesson.hasQuiz`更新が非トランザクションの2段書き込みで、後段のみ失敗すると状態不整合が生じうる（silent-failure-hunter指摘を受け、transientエラー時のメッセージでget_quizによる状態確認を促す対策済み、根治ではない）
   - `create_quiz`の同時並行呼び出しはAPI側の既存チェック→作成がTOCTOUのため、同一レッスンに複数テストが作成されうる（ツール説明文に明記済み、根治ではない）
-- **PR #667 pr-review-toolkit:silent-failure-hunter指摘のMEDIUM（本PR差分外、フォローアップ）**: `callToolWithAuth`の401リトライ機構で、初回失敗が監査ログに記録されない（Phase 2a由来の既存コード、書き込み系ツール追加によりこの監査ログの空白が副作用を伴う操作にも波及するようになった）。次にこの経路を触る機会に合わせて監査ログ記録の追加を検討
+- ~~**PR #667 pr-review-toolkit:silent-failure-hunter指摘のMEDIUM（本PR差分外、フォローアップ）**: `callToolWithAuth`の401リトライ機構で、初回失敗が監査ログに記録されない~~ → **解消済み（2026-08-26、PR #671）**: リトライ突入前に初回401失敗を`result:"error"`として記録するよう修正。テスト2件に記録回数・順序のアサーションを追加、193件PASS。同一パターン（分岐ごとの手動audit-log呼び出し）による記録漏れがPhase 2a〜2bのレビューで計5箇所検出されてきた構造的傾向を認識（`getIdTokenAudited`/`verifyTenantMembershipAudited`/`extractUid`失敗時/本件、いずれも個別レビュー指摘で都度修正）。恒久対策（`callToolWithAuth`全体を一元的なtry/finally相当のラッパーに再設計する等）は未着手・decision-maker判断待ち — 新規ブランチ追加時に同様の記録漏れが再発するリスクが構造的に残る
 - **ローカル環境で観測した`services/api`の既存テストflaky（本PRと無関係、2026-08-24）**: `services/api/src/routes/__tests__/super-admin-tenants-gcip.test.ts`の「gcipTenantIdに空文字を指定すると400」テストが、ローカル実行で5000msタイムアウトにより断続的に失敗（`git diff main...HEAD`でservices/api配下の変更0件を確認済みで無関係、直近のmain CIはPASS済みのためローカル環境固有の可能性が高い）。CI破壊が確認されればIssue化を検討、現時点はtriage基準未達のため見送り
 - PR #620（`QUIZ_REQUIRE_ACTIVE_SESSION=true`本番切替のロールバック弁、2026-08-20作成）は観察期間を置いて維持する方針（2026-08-21、決裁者確認）。`/quizzes/:quizId/attempts`の409(`session_required`/`session_time_exceeded`)発生率異常、または正当な受講者からの問い合わせが確認されない限りmergeしない。観察期間終了の目安なし
 - **Phase 1a PR1マージ後、Cloud Run自動デプロイが進行中**（`Deploy to Cloud Run`ワークフロー、本セッション内で完了確認予定）。devInteractionsは本番で無効化されるが、**Firebase Console → Authentication → Authorized domainsに`mcp-3zcica5euq-an.a.run.app`を追加するまでは実Googleサインインが`auth/unauthorized-domain`で失敗する**（コード外の手動作業、次セッションの即着手候補）
