@@ -1,89 +1,77 @@
-# Session Handoff — 2026-08-26 (Session 96)
+# Session Handoff — 2026-08-28 (Session 97)
 
 ## TL;DR
 
-**前セッション(95)の`/handoff`直後からの継続（auto-compact 1回跨ぎ）:
-Phase 2b PR C1（テナント自己一致ガード、全6ツール対象）をplan mode計画通りdry-run先行で実装 →
-codex review(P1×1) + pr-review-toolkit:silent-failure-hunter(CRITICAL×1) + code-reviewer(Important×1)の3系統で計3件反映 →
-PR #665マージ・デプロイ →
-開発者から「31日までに全て本番で使える状況が必要」の納期指示を受け観察期間を省略 →
-ブロッカーだった`atali82i`のallowed_emails未登録をPlaywrightで解消 →
-PR #666（enforce切替）マージ・デプロイ・実機確認 →
-Phase 2b PR C2（書き込み系quizツール3種）を実装 →
-codex review(P2×1) + pr-review-toolkit4エージェント並列（code-reviewer/pr-test-analyzer/silent-failure-hunter/type-design-analyzer）でCRITICAL×1件含む計6件反映 →
-PR #667マージ・デプロイ・実機E2E検証（TESTテナントで作成→更新→stale拒否確認→削除→復元の一巡） →
-独立evaluatorエージェントでGOAL.mdの完了主張を客観的に反証検証（食い違いなし、PR #667のTest planチェックボックス未更新のみ是正） →
-GOAL.md反映PR #668マージ →
-開発者よりチーム展開を進める決定を受け、ノンエンジニア向け説明文書をhtml-briefスキルで作成（図解3点、6セクション）、Playwright実機確認後に送信 →
-Owner候補`y.tsukuda@279279.net`のLMS側allowed_emails登録状況を確認したところ「ドメイン全体で許可されている」という開発者の推測が誤りと判明（実コードで検証）、4テナント全てで未登録と発覚 →
-開発者指示により4テナント全てへ`allowed_emails`登録+ユーザーレコード`role:管理者`で新規作成、実機確認 →
-GOAL.md反映PR #669マージ →
+**開発者から「完了通知・進捗レポート配信設定は問題なく使えるか」という質問（当初「運用状態」と誤解し訂正を受けた後、実装・コード自体の健全性確認と理解し直した）から開始 →
+続けて「ヘルプページにスクショ付き説明があるか」の確認依頼を受け調査 →
+未整備と判明したため「管理者アカウントユーザーが操作に困らないように」の指示でPR #674（完了通知・進捗レポート配信設定のヘルプにスクショ6枚追加）を実装・codex review・マージ →
+エージェントチーム監視・完了メンバークローズの指示に対応 →
+開発者から「テストの任意切り替え機能など、マニュアルに未反映の機能はないか」の質問を受け、2本のExploreエージェントで全体調査 →
+「計画的にベストプラクティスで進めましょう」の指示でplan mode突入、`/plan-crossreview`（grip自白可視化 + codex 2パス独立診断）で計画をクロスレビューし、当初計画の重大な欠陥（Firestoreのquiz_policy未設定状態は復元不可能、実際に保存すると操作者メールが`updatedBy`として静的ヘルプ画像に残る）を実装着手前に発見・是正 →
+撮影方式を「実際に保存ボタンを押す」から「Playwright `page.route()`によるAPIレスポンススタブ化」へ全面変更した改訂プランで承認を得てPR #675（テスト任意化・資料PDF・進捗PDF出力の未反映機能をスーパー管理者向けヘルプに追加、Phase1テキスト修正+Phase2新規スクショ）を実装・codex review・セカンドオピニオン・マージ →
+「エージェントチーム監視。終了時閉じて。」への対応 →
+続けて「Phase 3に進む」の指示で受講者側（テストスキップボタン・資料PDF DL 3状態）のヘルプ拡充を実施、e2e-testテナント(InMemoryDataSource)+`page.route()`スタブ化で本番Firestore/GCSに一切書き込まずに状態を再現 →
+PR #676作成、codex review（P2×2）+ セカンドオピニオン（Important×2）の計4件指摘（サムネイル16:9クロップ、受講期間ゲート記述漏れ、撮影セレクタ不備による説明文欠落、「ボタン非表示=テナント非許可」というconverseの誤り）に対応、`sips --padToHeightWidth`によるレターボックスパディングでクロップ問題を解決してマージ →
 `/handoff`実行。詳細は下表参照。**
 
 | 主要成果 | 結果 |
 |---|---|
-| Phase 2b PR C1（テナント自己一致ガード） | ✅ `tenant-membership.ts`新設、`tenants/{tenant}/allowed_emails`未登録テナントはMCP経由アクセス不可（全6ツール対象）。`MCP_TENANT_GUARD_MODE`（dry-run/enforce）で段階導入。codex review(P1×1: deploy.ymlの`--set-env-vars`全置換仕様によるenforce手動切替の巻き戻りリスク) + silent-failure-hunter(CRITICAL×1: `verifyGoogleIdToken`失敗時の監査ログ漏れ・dry-run無害性違反) + code-reviewer(Important×1: 上記CRITICAL修正がfail-open化していた問題の是正)。テスト162件PASS/5skip、PR #665マージ・デプロイ成功（dry-run開始） |
-| PR C1 enforce切替 | ✅ 開発者の納期指示（8/31までに本番稼働）を受け観察期間省略。`atali82i`のallowed_emails未登録ブロッカーをPlaywright実機操作で解消（`system@279279.net`追加）。PR #666（deploy.yml 1行）マージ・デプロイ・実機確認（`qos4c4ka`/`atali82i`成功、存在しないテナントは拒否+監査ログ`result:"denied"`記録） |
-| Phase 2b PR C2（書き込み系quizツール3種） | ✅ create_quiz/update_quiz/delete_quiz、`expectedUpdatedAt`差分検知・`confirmTitle`削除確認・zod数値範囲バリデーション実装。codex review(P2×1: create_quiz同時実行TOCTOUで複数テスト作成されうる問題→ツール説明文に明記) + pr-review-toolkit4エージェント並列: code-reviewer(findings0件)/pr-test-analyzer(Critical Gap1件: 401リトライ時のGET+書き込みペア再実行が未テスト、Important4件)/silent-failure-hunter(**CRITICAL×1**: create_quiz/delete_quizのtransientエラー時「しばらくして再試行」という文言が、実は既に完了している破壊的操作を安全な再試行対象と誤読させる→get_quiz確認を促すメッセージへ修正)/type-design-analyzer(型で表現されない不変条件をJSDoc明記)。テスト193件PASS/5skip、PR #667マージ・デプロイ成功 |
-| PR C2実機E2E検証 | ✅ TESTテナント`qos4c4ka`のレッスンで一巡フロー実施: 既存quiz内容退避→delete_quiz→404確認→create_quiz(2問)→get_quiz一致確認→update_quiz(タイトル変更)→**古いexpectedUpdatedAtでの再update_quizが期待通り拒否**→delete_quiz→404確認→退避内容を`create_quiz`で完全復元・一致確認。全ステップ期待通り |
-| 独立evaluator検証 | ✅ 事前知識なしのevaluatorエージェントにGOAL.mdの完了主張を反証優先で検証させた（services/api非改変・テスト件数再現・6ツール実装・安全機構実在・PR履歴整合・残存リスク実在の6項目）。**総合判定「ゴール達成」**、食い違いは軽微1件（PR #667本文のTest planチェックボックス未更新）のみ→`gh pr edit`で是正 |
-| チーム展開の周知文書作成・送信 | ✅ 開発者よりチーム展開（Team plan組織カスタムコネクタ登録）を進める決定。html-briefスキルでノンエンジニアのLMS運営スタッフ向け説明文書を作成（Before/After比較・使い方フロー・注意点フローの図解3点、6セクション: 概要/管理者向け組織登録手順/接続方法〔claude.ai・Desktop用Connect + Claude Code用`claude mcp add`コマンド〕/使い方/注意点/問い合わせ先）。Playwright実機確認（コピー機能・レイアウト・非エンジニア可読性、複数回の修正サイクル）を経て送信済み |
-| y.tsukuda@279279.net権限登録 | ✅ 開発者の「ドメイン全体で許可されているのでは」という推測を実コード（`isEmailAllowed`/`tenant-membership.ts`/`SUPER_ADMIN_EMAILS`パース処理）で検証し誤りと確認。さらに「allowed_emailsは受講生用では」という指摘を受け`tenantAwareAuthMiddleware`/`requireAdmin`を調査し、allowed_emails=ロール非依存ログインゲート、実際の管理者機能可否は別途ユーザーレコードの`role`フィールドという二段構造であることを実データ（atali82iの受講者管理画面で12件中11件が受講者ロールと判明）で確認。gcloud認証権限不足のためFirestore直接クエリは断念、既存の認証済みブラウザセッション経由でWeb管理画面を確認したところ`y.tsukuda@279279.net`は4テナント全てで未登録と判明。開発者指示（全4テナント）を受け、AskUserQuestionで登録範囲を確認したうえで4テナント全てに`allowed_emails`登録+ユーザーレコード`role:管理者`で新規作成、各テナントのユーザー管理画面で反映を実機確認 |
+| PR #674（完了通知・進捗レポート配信設定のヘルプ拡充） | ✅ `super-dispatch-settings`セクションの`screenshots: []`を6枚（有効化トグル/スケジュール/メッセージ/CC/進捗レポート/プレビュー）に置換。in-memoryモード切替（`DISPATCH_USE_IN_MEMORY=true`）で本番Firestore非接続のまま撮影。codex review対応後マージ済み |
+| PR #675（スーパー管理者向け: テスト任意化・資料PDF・進捗PDF出力） | ✅ Phase1: `super-sync-resources`の資料DL条件記述をADR-040の3状態（合格 OR (スキップ AND テナント許可)）に更新、`student-quiz`の矛盾解消。Phase2: `super-enrollments`にテスト任意化設定手順、`super-master`に資料PDFアップロード手順、`super-progress`に進捗PDF出力・Gmail下書き作成手順を追加、各セクションにスクショ計4枚。plan-crossreview（grip+codex）で計画段階の重大欠陥（Firestore復元不可能・管理者メール露出）を実装前に是正、撮影方式を`page.route()`スタブ化へ全面変更。追加で`super-master-pdf-uploader.png`のアスペクト比問題（10.6:1→2.06:1）とPDF生成の「最低1項目必要」記述誤り（実際はGmail下書き作成側の制約）をcodex review+セカンドオピニオン指摘で修正。マージ済み |
+| PR #676（受講者向け: テストスキップ・資料PDF DL 3状態） | ✅ `student-quiz`セクションにテストスキップボタンの操作手順・確認ダイアログ、資料PDF DL 3状態（`needs_quiz_pass`/`blocked_by_skip`/`allowed`）の説明とスクショ計5枚を追加。`e2e-test`テナント（`AUTH_MODE=dev`+`E2E_TEST_ENABLED=true`で書き込み可能なInMemoryDataSource、demo講座自動シード済み）+ `page.route()`による`GET /lessons/:id`・`GET /quizzes/by-lesson/:id`レスポンスのスタブ化で、本番Firestore/GCSに一切書き込まず3状態を再現。codex review（P2×2: サムネイル16:9クロップ、受講期間`videoAccessUntil`ゲート記述漏れ）+ セカンドオピニオン（Important×2: 撮影セレクタ不備によるPDF状態別説明文の欠落、「スキップボタン非表示=テナント非許可」のconverseの誤り）の計4件を反映。`sips -p <h> <w> --padColor f5f6f7`でページ背景色に合わせたレターボックスパディングを行い、全画像を668×376または414×233（いずれも16:9）へ整形。マージ済み |
+| エージェントチーム監視×2回 | ✅ PR #675・#676それぞれのレビュー完了後、`codereview-pr675`/`codereview-pr676`をidle確認のうえ`TaskStop`でクローズ |
 
-- **Issue Net (本セッション)**: Close 0 + 起票 0 = **Net 0**（本ミッションはGOAL.md追跡のためIssue経由の進捗ではない）
-- **本セッションmerged PR**: 5件（#665「PR C1」、#666「enforce切替」、#667「PR C2」、#668「GOAL.md反映」、#669「チーム展開進捗反映」）
-- **本セッション本番操作**: mainへのpush 5回（各PR番号単位の明示認可取得済み）によるCloud Run自動デプロイ、`MCP_TENANT_GUARD_MODE`のdry-run→enforce切替（本番アクセス制御の実効化）、本番Firestoreデータへの直接操作多数（TESTテナントでのquiz作成/更新/削除の実機検証一式は実施後に元データへ完全復元、`atali82i`/4テナント全てへの`allowed_emails`追加とユーザーレコード新規作成は開発者の明示指示・範囲確認〔AskUserQuestion〕を得たうえで実施）
-- **意思決定確認事項**: PR #665/#666/#667/#668/#669マージ可否（個別確認）、31日納期を受けた観察期間省略の判断、チーム展開を進める決定、y.tsukuda登録範囲（全4テナント、AskUserQuestionで確認）— いずれもAskUserQuestion/対話で個別確認取得
+- **Issue Net (本セッション)**: Close 0 + 起票 0 = **Net 0**（Issue経由の作業ではなく開発者からの口頭依頼ベース）
+- **本セッションmerged PR**: 3件（#674「配信設定ヘルプ」、#675「スーパー管理者側テスト任意化等ヘルプ」、#676「受講者側テストスキップ・PDF DLヘルプ」）
+- **本セッション本番操作**: なし。撮影は全てin-memoryモード（`DISPATCH_USE_IN_MEMORY=true`、`e2e-test`テナントのInMemoryDataSource）または`page.route()`によるAPIレスポンススタブ化で完結し、本番Firestore/GCSへの書き込みは一切発生していない
+- **意思決定確認事項**: PR #674/#675/#676マージ可否（個別確認）、Phase1+2先行実施の範囲確認、撮影方式（`page.route()`スタブ化への変更）の選択、Phase 3着手の確認 — いずれもAskUserQuestion/対話で個別確認取得
 
 ## 既知事象・教訓（次セッション向け参考情報）
-- **AI運用ミス1件（本セッション、2026-08-25）**: GOAL.md更新をmainブランチへ直接コミットしてしまった（push前に気づき是正）。`git branch <new>`→`git reset --hard origin/main`→新ブランチへcheckoutで退避し、正規のfeatureブランチ+PR経由（#668/#669）へ修正。以降のGOAL.md更新は毎回`git checkout -b`から開始するよう徹底
-- **gcloud認証の権限不足**: `system@279279.net`のgcloud認証トークンでFirestore REST APIの`runQuery`を実行したところ`403 PERMISSION_DENIED`（サニティチェックとして既知登録済みメールで再試行しても同様に失敗、クエリ自体の不備ではなく権限不足と判明）。`gcloud auth application-default print-access-token`も同様に失敗（reauthentication required、非対話実行不可）。代替として、既に認証済みのPlaywright browserセッション（Web管理画面）経由での確認に切り替えて解決。次セッションでFirestore直接確認が必要な場合はこの制約を踏まえること
-- **allowed_emailsの二段構造**: `tenants/{tenant}/allowed_emails`はロール非依存のテナントログイン可否ゲート（`tenantAwareAuthMiddleware`が全ルートに適用）。実際の管理者機能可否（`requireAdmin`、MCPが呼ぶ`/admin/*`エンドポイント含む）は別途ユーザーレコードの`role`フィールドで判定される。allowed_emails登録者の大半が「受講者」ロールというケースが実データで確認された（`atali82i`: 12件中11件受講者）。今後「allowed_emailsに載っている=管理者/MCP利用可」と誤認しないこと
+
+- **ScreenshotViewerの16:9 object-coverによるサムネイルクロップ問題（PR #675, #676で連続発生）**: `web/app/help/_components/ScreenshotViewer.tsx`はサムネイルを`aspect-video`(16:9)ボックスに`object-cover`で配置するため、横長のUIコンポーネント（ボタン行・情報カード）を単体撮影するとタイトルやボタンの大半がクロップされる。PR #675では複数UIブロックの結合で比率改善（2.06:1程度）を試みたが、PR #676のcodex reviewで「2.6:1でもまだクロップで見切れる」と再指摘された。最終的に`sips -p <height> <width> --padColor <hex>`（ページ実背景色`rgb(245,246,247)`=`f5f6f7`）でレターボックスパディングし、画像自体を正確に16:9（or それに近い比率）へ整形する方式で解決。**今後同様の横長UI撮影では、複結合による比率改善を試みるより先に、最初からsipsパディングで正確に16:9化することを検討する方が確実**
+- **Playwrightの`page.route()`スタブ化撮影で、boundingBox計算用のgetByTextセレクタが対象要素の一部にしかマッチしないと、状態別の説明文が撮影範囲から漏れる**: PR #676で、PDF DLボタンの状態別説明文（「テスト合格後にダウンロードできます。」等）を含めずにboundingBoxを計算してしまい、撮影した画像にその説明文が写っていない不備が発生（セカンドオピニオンのImportant指摘で発覚）。テキストベースのセレクタは、対象要素が持つ全テキスト内容（末尾の条件付き説明文含む）を含めて指定すること
+- **`services/api/src/routes/super/tenant-quiz-policy.ts`はproduction wiring固定（Firestore直結）で、`E2E_TEST_ENABLED=true`でもin-memoryへルーティングされない**（`tenantExists`がFirestoreの`tenants`コレクションを直接参照するため）。このルート経由でe2e-testテナントの状態を作ろうとすると`GOOGLE_APPLICATION_CREDENTIALS`のファイル欠如で500エラーになる。同様のsuper admin系Firestore直結ルートで撮影用の状態を作る場合は、最初から`page.route()`スタブ化を選択する方が確実（実際にAPIを叩く方式を試して詰まった後に方針転換した）
+- **撮影用の一時環境変更（`.env`系ファイル、`web/lib/auth-context.tsx`）は毎回作業終了時に確実にrevertし、`git status --short`で「①ヘルプデータ・PNG以外の差分がないこと」「②auth-context.tsx等に差分がないこと」を個別に確認する運用を継続**。本セッションでも全撮影サイクルでこの手順を徹底し、最終的に環境revert漏れなし
 
 ## 同根再発スキャン（§4.6）/ 対症療法判定（§4.7）
-本セッションのmerged PR（#665〜#669）は全て`feat:`/`chore:`/`docs:`プレフィックスで、`fix:`/`hotfix:`プレフィックスや障害復旧目的のPRはゼロ（PR内のiterative commitに`fix:`表現を含む場合があるが、いずれも同一レビューサイクル内での指摘対応でありsquash後は各PRの主目的〔feat/chore/docs〕に統合される）。§4.6/§4.7の発動条件（修正PR1件以上）に該当せず、スキャン対象外。
+本セッションのmerged PR（#674〜#676）は全て`docs:`/`fix:`プレフィックス（`fix:`はいずれもcodex review/セカンドオピニオン指摘へのヘルプドキュメント修正であり、コード障害の修正ではない）。実コードの障害復旧目的のPRはゼロ。§4.6/§4.7は「修正PR」を障害復旧目的のPRと解釈すると対象外だが、念のため`fix:`コミット3件（アスペクト比修正2件、記述誤り修正2件）の同根性を確認: いずれも「ヘルプドキュメントのスクショ・記述をcodex/セカンドオピニオンの指摘に基づき修正」という共通パターンだが、これは通常のレビューサイクルであり、障害の再発ではない。同根再発スキャン対象外と判定。
 
 ## 次のアクション（3分割構造）
 
 #### 即着手タスクなし
-本セッションでexecutor領分の技術作業は完了。残るチーム展開の完了確認は開発者側のアクション（claude.ai組織コネクタ登録）待ちで、AI起点では着手できない。
+開発者依頼の「テスト任意化等の未反映機能をヘルプに反映」は完遂。executor領分の作業は完了。
 
 #### 条件待ち（明示trigger付き）
-| # | 項目 | trigger（充足条件） | 充足時のタスク | 充足確認方法 |
-|---|------|------------------|--------------|------------|
-| 1 | チーム展開ミッションの完了確認 | 開発者（Owner: `y.tsukuda@279279.net`）がclaude.aiの`Organization settings > Connectors`で組織カスタムコネクタ登録を完了 | GOAL.mdのミッション達成を記録、全チェックリスト`[x]`化を確認のうえ次ゴールへの更新 or ファイル削除を提案 | 開発者への確認（AIからはclaude.ai管理画面を観測できない） |
-| 2 | Cloud Run CPUスロットリング対応（`--no-cpu-throttling`等） | decision-makerからのインフラコスト増認可 | Cloud Run設定変更（`.github/workflows/deploy.yml`のdeploy-mcp job） | GOAL.md監視項目節を確認 |
-| 3 | PR #667 pr-review-toolkit:silent-failure-hunter指摘のMEDIUM（401リトライ初回失敗の監査ログ欠落、Phase 2a由来の既存コード） | 次にこの経路（`callToolWithAuth`）を触る機会 | 監査ログ記録の追加を検討 | GOAL.md監視中節を確認 |
+なし。本セッションで新規に発生したtrigger待ちタスクはない。
 
-#### 却下候補（記録のみ）
+#### 却下候補（記録のみ、Session 96から継続する既存backlog — 本セッションでは触れていない）
 | # | 項目 | 検討経緯 | 着手しない理由 | 参照条件 |
 |---|------|---------|--------------|---------|
 | 1 | super admin横断操作の本格対策（`tenant-membership.ts`はPhase 2bで実装済みだが、super admin自体の横断権限の設計変更） | 複数セッションから継続する既知の残存リスク | decision-maker確認済みでv1未対応の合意事項 | decision-makerからの明示指示時のみ |
 | 2 | DCR濫用対策の本実装（Client登録数上限・監視） | Phase 1a PR2段階から継続する既知の残存リスク | 同上 | 同上 |
-| 3 | `.claude/scheduled_tasks.lock`の未コミット削除 | 複数セッション継続で観測 | 原因不明のまま操作すべきでない、実害なし | decision-makerからの明示指示時のみ |
+| 3 | `.claude/scheduled_tasks.lock`の未コミット削除 | 複数セッション継続で観測（本セッションでも`git status`に検出） | 原因不明のまま操作すべきでない、実害なし。セッションランタイムが自動更新する内部ファイルと判明 | decision-makerからの明示指示時のみ |
 | 4 | PR #620（ロールバック用、待機状態）のmerge/close判断 | 複数セッションから継続、無関係の既存backlog | 待機状態が意図的な設計、decision-maker判断待ち | decision-makerからの明示指示時のみ |
-| 5 | GitHub Dependabot PR 9件（#642-651） + 24件の脆弱性 | 複数セッションから継続観測、内容未調査 | 本セッションのスコープ外、triage未実施 | decision-makerからの明示指示時のみ |
-| 6 | `Cleanup Orphan Auth Users`ワークフローの週次CI失敗（本セッション時点で5週連続） | 本セッションでCI確認時に検出 | 意図的な設計（孤児Auth検出時にdry-runがwarning目的でexit 1する仕様、コード確認済み）であり、本セッションの変更とは無関係。実害ではなく仕様通りの動作 | 継続的に孤児が検出され続ける場合はexecute=true実行の要否をdecision-maker判断 |
+| 5 | GitHub Dependabot 脆弱性（本セッション中も「1 moderate」の通知がpush時に継続表示） | 複数セッションから継続観測、内容未調査 | 本セッションのスコープ外、triage未実施 | decision-makerからの明示指示時のみ |
 
 > ⚠️ 「優先順にすすめて」等の包括指示で次セッションが動けるのは即着手タスクのみ（本セッションは0件）。条件待ち・却下候補は包括指示の対象外。
 
 ## Issue Net 変化
 - Close 数: 0 件
 - 起票数: 0 件
-- Net: 0 件
+- Net: 0 件（active Issue 5件、いずれも既存postponedのbacklogで本セッション無関係、Session 96から変化なし）
 
 ## 再開可能性判定
-✅ **再開可能** - `docs/handoff/GOAL.md`の🔄中断点節（Owner組織コネクタ登録の完了確認待ち）から再開できます
+✅ **再開可能** — 中断点なし。GOAL.md（別ミッション・完了済み）に`## 🔄 中断点`見出しを追加し「なし」を明記（見出し契約driftの是正）。
 
 ---
 
 ## 最終結論
 
-⚠️ **セッション終了前に要対応なし、ただしミッション未完結** — 即着手タスク0件・条件待ち1件（チーム展開の最終確認、AI起点では着手不可）のため実質的にセッション終了可
-- OPEN PR: 0件（本セッションのPR #665-669は全てマージ済み）
+✅ **セッション終了可**
+- OPEN PR: 0件（本セッションのPR #674-676は全てマージ済み）
 - active Issue: 5件（#521/#405/#276/#275/#274、いずれも本セッション無関係の既存backlog、全てpostponed、Net変化0）
-- Git: クリーン、mainはupstreamと同期済み
-- 即着手タスク: 0件 / 条件待ち: 3件（チーム展開完了確認・CPUスロットリング対応・監査ログ欠落フォローアップ、いずれもdecision-maker判断または外部トリガー待ちで本セッションでは対応不能）
-- 残留プロセス: 1件検出（`http.server` port 41823、別プロジェクト`sanwa-houkai-app`のセッションが起動、cwdから確認済み。本プロジェクトとは無関係、稼働中の可能性があり停止提案はしない）
-- 既知のblocker: Owner（`y.tsukuda@279279.net`）による組織カスタムコネクタ登録の完了確認（AIからは観測不可）
-- §4.6同根再発スキャン: 対象外（修正PR0件） / §4.7対症療法判定: 対象外（同上）
+- Git: クリーン（唯一の差分`.claude/scheduled_tasks.lock`はセッションランタイムの内部ファイルで無害）
+- 即着手タスク: 0件 / 条件待ち: 0件
+- 残留プロセス: 1件検出（`node .../sanwa-houkai-app/web/node_modules/.bin/next dev --port 3003`、別プロジェクト`sanwa-houkai-app`のセッションが起動したものと判明、本プロジェクトとは無関係、稼働中の可能性があり停止提案はしない）
+- 既知のblocker: なし
+- §4.6同根再発スキャン: 対象外（障害復旧目的の修正PRなし、レビューサイクル内の記述修正のみ） / §4.7対症療法判定: 対象外（同上）
