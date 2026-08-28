@@ -21,9 +21,9 @@ export const superSections: HelpSection[] = [
     screenshots: [
       {
         src: "/help/screenshots/super-master-pdf-uploader.png",
-        alt: "レッスン編集画面の講座資料(PDF)アップロード枠。PDFファイルを選択ボタンとPDF形式・最大300MBの説明が表示されている",
+        alt: "レッスンの「動画 / テスト / 資料 を編集」展開エリア。上部に動画設定・テスト設定、下部に講座資料(PDF)アップロード枠(PDFファイルを選択ボタン、PDF形式・最大300MBの説明)が表示されている",
         caption:
-          "レッスンの「動画 / テスト / 資料 を編集」を開くと表示される講座資料アップロード枠。PDF形式のみ、最大300MBまで",
+          "レッスンの「動画 / テスト / 資料 を編集」を開いた展開エリア。下部の講座資料アップロード枠はPDF形式のみ、最大300MBまで",
       },
     ],
     steps: [
