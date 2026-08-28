@@ -490,7 +490,7 @@ export const superSections: HelpSection[] = [
         src: "/help/screenshots/super-dispatch-settings-enable.png",
         alt: "配信の有効化セクション。トグルスイッチが OFF になっており、送信元アドレスが表示されている",
         caption:
-          "画面上部の「配信の有効化」スイッチ。この最終スイッチを ON にするまでは何も配信されません",
+          "画面上部の「配信を有効化」スイッチ。この最終スイッチを ON にするまでは何も配信されません",
       },
       {
         src: "/help/screenshots/super-dispatch-settings-schedule.png",
