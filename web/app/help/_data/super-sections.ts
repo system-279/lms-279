@@ -485,7 +485,44 @@ export const superSections: HelpSection[] = [
     ],
     description:
       "受講者へのメール自動配信機能（完了通知レーン・進捗レポートレーン）と、配信前に内容を確認できる「配信プレビュー」機能の設定方法と運用について説明します。",
-    screenshots: [],
+    screenshots: [
+      {
+        src: "/help/screenshots/super-dispatch-settings-enable.png",
+        alt: "配信の有効化セクション。トグルスイッチが OFF になっており、送信元アドレスが表示されている",
+        caption:
+          "画面上部の「配信を有効化」スイッチ。この最終スイッチを ON にするまでは何も配信されません",
+      },
+      {
+        src: "/help/screenshots/super-dispatch-settings-schedule.png",
+        alt: "配信スケジュールセクション。曜日チェックボックスで月曜が選択され、配信時刻が09:00に設定されている",
+        caption:
+          "配信スケジュールの設定例（月曜・09:00 を選択した状態）。曜日は複数選択できます",
+      },
+      {
+        src: "/help/screenshots/super-dispatch-settings-message.png",
+        alt: "メール署名・本文セクション。左に署名と本文の入力欄、右にメールプレビューが表示されている",
+        caption:
+          "メール本文・署名の編集画面。右側のプレビューで実際の見え方をその場で確認できます",
+      },
+      {
+        src: "/help/screenshots/super-dispatch-settings-cc.png",
+        alt: "テナントごとのCC追加設定セクション。対象テナントを選択するプルダウンが表示されている",
+        caption:
+          "テナントごとの CC 追加設定。「対象テナント」を選ぶと、そのテナント用の CC 入力欄が表示されます",
+      },
+      {
+        src: "/help/screenshots/super-dispatch-settings-progress-report.png",
+        alt: "進捗レポート定期配信セクション。配信OFFのトグル、配信曜日、配信時刻の設定項目が表示されている",
+        caption:
+          "進捗レポートレーンの設定項目。完了通知とは別の曜日・時刻・マスタートグルで独立して動作します",
+      },
+      {
+        src: "/help/screenshots/super-dispatch-settings-preview.png",
+        alt: "完了通知配信プレビューセクション。プレビューを取得ボタンを押した後の結果（対象テナント数、送信予定数、本文文字数）が表示されている",
+        caption:
+          "「プレビューを取得」を押すと、実際に送信する前に対象件数やメール内容を確認できます（送信は行われません）",
+      },
+    ],
     steps: [
       {
         title: "配信スケジュールを設定する（両レーン共通）",
