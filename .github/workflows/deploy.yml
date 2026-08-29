@@ -137,12 +137,10 @@ jobs:
           # (web-3zcica5euq-an.a.run.app) と新形式 (web-1034821634012.asia-northeast1.run.app)
           # の 2 種類の URL を並列提供している。どちらの origin からアクセスされても
           # CORS preflight が通るよう両方を許可する (2026-05-23 Phase 8 cutover で発覚)。
-          # QUIZ_REQUIRE_ACTIVE_SESSION=true: テスト任意化 Stage 5(ケースD厳格化) の
-          # 2段階ロールアウト完了。先行デプロイ(=false、挙動不変)を経て本切替。
-          # コード側デフォルトも true (有効セッション必須) のため、本フラグ自体は
-          # 冗長化のための明示指定として残す。ロールバックする場合は false に戻す
-          # (単独リビジョンでの切替のため、切り戻しも新規デプロイのみで完結する)。
-          ENV_VARS="^|^NODE_ENV=production|DEMO_ENABLED=true|AUTH_MODE=firebase|CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,https://web-1034821634012.asia-northeast1.run.app|GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net|SESSION_DURATION_MS=10800000|GCS_RESOURCE_BUCKET=lms-279-resources|DXCOLLEGE_DISPATCH_SUBJECT=system@279279.net|DXCOLLEGE_SENDER_EMAIL=dxcollege@279279.net|QUIZ_REQUIRE_ACTIVE_SESSION=true"
+          # QUIZ_REQUIRE_ACTIVE_SESSION=false: PR #619(2026-08-20)によるtrue切替のロールバック。
+          # ケースD厳格化を無効化し、有効セッションなしでのテスト受験を再度許容する旧挙動に戻す。
+          # コード側デフォルトはtrueのため、このPRをmergeしない限り効果はない(切替待ちの安全弁)。
+          ENV_VARS="^|^NODE_ENV=production|DEMO_ENABLED=true|AUTH_MODE=firebase|CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,https://web-1034821634012.asia-northeast1.run.app|GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net|SESSION_DURATION_MS=10800000|GCS_RESOURCE_BUCKET=lms-279-resources|DXCOLLEGE_DISPATCH_SUBJECT=system@279279.net|DXCOLLEGE_SENDER_EMAIL=dxcollege@279279.net|QUIZ_REQUIRE_ACTIVE_SESSION=false"
           if [ -n "${{ secrets.SUPER_ADMIN_EMAILS }}" ]; then
             ENV_VARS="${ENV_VARS}|SUPER_ADMIN_EMAILS=${{ secrets.SUPER_ADMIN_EMAILS }}"
           fi
