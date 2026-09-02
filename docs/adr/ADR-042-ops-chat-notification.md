@@ -69,3 +69,12 @@ codex review 3巡に加え、Claude 系の `code-reviewer` / `silent-failure-hun
 - rollback のウィンドウ境界復元は「rollback対象がそのウィンドウを開始した本人だった」ケースに対応しているが、複数のrollbackが同一fingerprintに対してほぼ同時に発生する多重障害シナリオまでは検証していない。
 - **health-report の claim 解除は ownership-safe ではない**（codex review 4巡目指摘、P2）: 最初の呼び出しが `STALE_CLAIM_MS`（10分）を超えて実行中に別の Scheduler リトライが stale 判定で claim を奪い、その後に元の呼び出しが transient 失敗して無条件 delete を実行すると、新しいリトライの claim を誤って消しうる。対処は `claimedAt`（またはリーストークン）が自分の claim と一致する場合のみ削除するトランザクション化が必要だが、発生確率が低い（同一日次ジョブの実行が10分を超えて重複する必要がある）ため今回は見送った。
 - **flush-job は同時配信で重複投稿しうる**（codex review 4巡目指摘、P2）: Cloud Scheduler の at-least-once 配信で flush ジョブの複数実行が重なった場合、両方が同じ pending item を読んで投稿してしまう可能性がある（`markFlushed` の条件付き削除は「新しいウィンドウとの競合」は防ぐが「同一ウィンドウの同時 flush」は防がない）。対処は投稿前にトランザクションでリース/ステータスを取得する必要があるが、flush ジョブは10分毎の低頻度実行かつ実行時間も短いため同時実行の実発生確率は低く、今回は見送った。両者とも「まれに二重通知（無害）または稀な取りこぼし」に留まり、既存の「本番相当の高並行負荷は未検証」という限界の一部として扱う。
+
+## 2026-09-02 追記: provisioning 実施・実機検証で判明した事項
+
+`docs/runbook/monitoring-setup.md` §6.2/§6.3 の GCP リソース provisioning を全項目実施し、実機検証（合成エラーログの publish、日次ヘルスチェックの手動実行、Uptime Check の疑似障害化）を行った。以下が判明・対応済み:
+
+- **DLQ 転送用 IAM binding が runbook 未記載だった**: `gcloud pubsub subscriptions create --dead-letter-topic=...` は非対話実行時、Pub/Sub サービスエージェントへの DLQ topic `pubsub.publisher` / 元 subscription `pubsub.subscriber` 権限を自動付与しない。付与しないと恒久失敗イベントが DLQ へ転送されず静かに失われる。runbook に追記済み。
+- **経路1（可用性監視）の当初設計は実質機能しなかった**: 5xx エラー率条件のみのアラートポリシーに Uptime Check 失敗条件を追加したが、初回実装（`ALIGN_FRACTION_TRUE`、20分ウィンドウ、拠点ごと独立評価）を実際に Uptime Check の path を疑似的に無効化して検証したところ、約47分待っても発火・Chat投稿を確認できなかった。`ALIGN_NEXT_OLDER`（直近1サンプル、BOOL型のまま） + `REDUCE_COUNT_FALSE`（6拠点横断で失敗拠点数を合算） + 過半数拠点閾値（`COMPARISON_GT`, `thresholdValue: 3`）+ ウィンドウ5分へ再設計した。理論的検証（`crossSeriesReducer` の型制約再確認）は済んでいるが、**再設計後の実際の発火は未再検証**（初回検証で本番監視を長時間止めたため、同日中の再検証は見送った）。次回の検証機会で再確認すること。
+- **ヘルスチェック投稿の非エンジニア可読性**: 実機投稿（`firestore: ok`, `heapUsed: 115MB`）を Chat スペースの非エンジニアメンバーも見ることが判明し、平常時は専門用語・生メトリクスを含まない一文（「LMS は正常に稼働しています」）のみに変更、異常時のみ平易な言い換え + 技術的補足を併記する設計に修正した（`chat-payload-allowlist.ts` `buildHealthReportText`）。
+- **合成エラーログ publish は本番 Cloud Logging を経由しない**: エラー通知経路の実機検証は、Sink 経由ではなく `ops-error-alerts` topic への直接 publish で行った（本番 api に故意のエラーを起こさないため）。Sink フィルタ自体（`jsonPayload."@type"` の一致）はソースコード直接確認（`error-handler.ts`）で代替検証し、実ログでの一致確認はできていない（本番でエラーが実際に発生していなかったため）。
