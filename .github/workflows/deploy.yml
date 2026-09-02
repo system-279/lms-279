@@ -319,6 +319,12 @@ jobs:
 
       - name: Deploy Notification to Cloud Run
         run: |
+          # ADR-042 運用通知自動化。
+          # --service-account / OPS_* env-vars の結線は、notification-runtime SA・
+          # Secret Manager IAM binding・ops-chat-webhook-url secret の bootstrap
+          # (docs/runbook/monitoring-setup.md §6.1) 完了後、別PRで有効化する
+          # (codex review 3巡目指摘: この状態のまま main にマージすると、
+          # 未作成の SA を参照して本 job がデプロイ失敗する)。
           gcloud run deploy notification \
             --image=${{ env.ARTIFACT_REGISTRY }}/notification:${{ github.sha }} \
             --region=${{ env.GCP_REGION }} \

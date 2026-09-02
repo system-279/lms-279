@@ -37,8 +37,10 @@
 | GCS | `lms-279-uploads` | 一時アップロード（24h TTL） |
 | Artifact Registry | `lms-279` | Dockerイメージ |
 | Cloud Scheduler | `notification-trigger` | 通知トリガー |
+| Cloud Scheduler | `ops-daily-health-check` / `ops-notification-flush` | 運用通知自動化（平日毎日のヘルスチェック投稿 + 集約flush、ADR-042） |
+| Pub/Sub | `ops-error-alerts` / `ops-availability-alerts` | Cloud Logging Sink / Cloud Monitoring 通知チャネルから `notification` への配信（ADR-042） |
 | Firebase Auth | - | ユーザー認証 |
-| Secret Manager | super-admin-emails等 | 機密情報 |
+| Secret Manager | super-admin-emails等、`ops-chat-webhook-url` | 機密情報 |
 
 ### 認証フロー
 

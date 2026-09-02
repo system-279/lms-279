@@ -2,7 +2,7 @@
 
 ## Firestore構造
 
-全データは `tenants/{tenantId}/` 配下に格納。
+全データは `tenants/{tenantId}/` 配下に格納。**例外**: 運用通知自動化（ADR-042）の `ops_notification_dedup` / `ops_health_report_sent` はテナント横断の運用データのため、ルート直下のコレクションとして配置する（末尾「テナント横断コレクション」参照）。
 
 ### 継承コレクション（参考プロジェクトから）
 
@@ -189,3 +189,27 @@ questions配列の各要素:
 | pdfDownloadAllowedForSkipped | boolean | スキップ済み受講者への資料PDFダウンロード許可。マスターOFF時も値を保持し、実効判定は `quizSkipEnabled && pdfDownloadAllowedForSkipped` のAND |
 | updatedBy | string | 設定したスーパー管理者のメールアドレス |
 | updatedAt | string | 更新日時 |
+
+## テナント横断コレクション（`tenants/{tenantId}/` 配下ではない）
+
+運用通知自動化（ADR-042）で `services/notification` が使用する、ルート直下のコレクション。
+
+#### ops_notification_dedup/{fingerprint}
+同一エラーの連続発生を集約（dedup）するための状態。`fingerprint` はエラー名+正規化スタック先頭フレーム+正規化メッセージのsha256。TTL: `ttlExpireAt` 24時間。
+
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| suppressedCount | number | 現在のウィンドウで抑制された件数 |
+| windowEndsAt | string (ISO8601) | 集約ウィンドウの終了時刻（既定10分） |
+| seenInsertIds | string[] | Pub/Subの at-least-once 再配信を検知するための既知insertId（直近20件） |
+| needsFlush | boolean | flushジョブ（10分毎）の回収対象かどうか |
+| ttlExpireAt | Timestamp | Firestore TTL |
+
+#### ops_health_report_sent/{jstDate}
+平日毎日のヘルスチェック投稿の冪等性キー。`jstDate` は `YYYY-MM-DD`（JST）。TTL: `ttlExpireAt` 7日。
+
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| claimedAt | string (ISO8601) | 予約確保時刻 |
+| postedAt | string (ISO8601)? | Chat投稿成功時刻。null のまま `STALE_CLAIM_MS`（10分）を超えると再クレーム可能（プロセスクラッシュからの復旧） |
+| ttlExpireAt | Timestamp | Firestore TTL |
