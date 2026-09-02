@@ -110,6 +110,7 @@ npm run test
 - **テスト任意化**: テナント単位でテスト受験を任意化（`quizSkipEnabled`）、スキップ時も動画視聴は必須。ケースD（セッションなし受験）は`QUIZ_REQUIRE_ACTIVE_SESSION`で厳格化、合格後再受験は常時遮断（ADR-040, ADR-019/027/036/020改訂）
 - **出席レコード異常検出**: 重複（`overlap_previous`）/負滞在（`negative_duration`）/放置active（`stale_active`）の3種をオンザフライ計算で検知、出席レポートにバッジ表示（DBスキーマ変更なし。ADR-027改訂）
 - **レッスン入室最小間隔**: 異なるレッスンへの入室を同一コース内の直前退室から`LESSON_ENTRY_GAP_MS`（デフォルト1分）ブロック、同一レッスン再入室は免除。トランザクションでgap判定+session作成を原子化、FEは事前ゲート（再生ボタン無効化）で防止（ADR-027ケースG改訂）
+- **運用通知自動化**: `services/notification`が平日毎日のヘルスチェック結果とAPIエラー発生時の詳細をGoogle Chatへ自動投稿。PIIはallowlist方式で転送フィールドを明示列挙、同一エラーは10分ウィンドウで集約、Cloud Scheduler/Pub-Sub push呼び出しはOIDC audience+caller emailのallowlistで認証（ADR-042）
 
 全ADRは`docs/adr/`を参照。
 
