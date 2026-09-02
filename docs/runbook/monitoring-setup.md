@@ -36,7 +36,7 @@ gcloud monitoring uptime create \
 
 - **Condition 1**: Cloud Run > Request count, filter by response_code_class="5xx"
 - **Threshold**: 5件/5分
-- **Condition 2/3**: Uptime Check（`LMS API Health` / `LMS API Readiness`）の `check_passed` がしきい値未満（可用性監視、経路1。5xx条件だけでは「リクエストすら来ない＝ログも出ない」障害を検知できないため、2026-09-02 追記で `combiner: OR` の別条件として追加。ADR-042 経路1の設計意図を満たすための拡張）
+- **Condition 2/3**: Uptime Check（`LMS API Health` / `LMS API Readiness`）で、直近5分の最新サンプルにおいて6拠点中4拠点以上（過半数）が失敗（可用性監視、経路1。5xx条件だけでは「リクエストすら来ない＝ログも出ない」障害を検知できないため、2026-09-02 追記で `combiner: OR` の別条件として追加。ADR-042 経路1の設計意図を満たすための拡張。**2026-09-02 実機検証で判明した再設計**: 当初は `ALIGN_FRACTION_TRUE`（20分ウィンドウ、拠点ごと独立評価）だったが、実際にUptime Checkを疑似障害化して検証したところ約47分待っても発火せず、検知が遅すぎることが判明。`ALIGN_NEXT_OLDER`（直近1サンプル） + `REDUCE_COUNT_FALSE`（拠点横断で失敗数を合算）+ 過半数拠点閾値へ変更し、ウィンドウを5分に短縮。単一拠点の一時的ネットワーク不調による誤検知にも強くなる副次効果あり）
 - **Notification**: メール、および Pub/Sub 通知チャネル経由で Google Chat（§6 参照、ADR-042）
 
 ### 手動設定（gcloud）
@@ -63,28 +63,32 @@ cat > /tmp/alert-policy.json << 'POLICY'
       }
     },
     {
-      "displayName": "Uptime check failing: LMS API Health",
+      "displayName": "Uptime check failing: LMS API Health (majority of locations)",
       "conditionThreshold": {
         "filter": "resource.type=\"uptime_url\" AND metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" AND metric.labels.check_id=\"<uptime-check-id-health>\"",
-        "comparison": "COMPARISON_LT",
-        "thresholdValue": 1,
-        "duration": "60s",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 3,
+        "duration": "0s",
         "aggregations": [{
-          "alignmentPeriod": "1200s",
-          "perSeriesAligner": "ALIGN_FRACTION_TRUE"
+          "alignmentPeriod": "300s",
+          "perSeriesAligner": "ALIGN_NEXT_OLDER",
+          "crossSeriesReducer": "REDUCE_COUNT_FALSE",
+          "groupByFields": ["resource.label.host", "resource.label.project_id"]
         }]
       }
     },
     {
-      "displayName": "Uptime check failing: LMS API Readiness",
+      "displayName": "Uptime check failing: LMS API Readiness (majority of locations)",
       "conditionThreshold": {
         "filter": "resource.type=\"uptime_url\" AND metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" AND metric.labels.check_id=\"<uptime-check-id-readiness>\"",
-        "comparison": "COMPARISON_LT",
-        "thresholdValue": 1,
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 3,
         "duration": "0s",
         "aggregations": [{
-          "alignmentPeriod": "1200s",
-          "perSeriesAligner": "ALIGN_FRACTION_TRUE"
+          "alignmentPeriod": "300s",
+          "perSeriesAligner": "ALIGN_NEXT_OLDER",
+          "crossSeriesReducer": "REDUCE_COUNT_FALSE",
+          "groupByFields": ["resource.label.host", "resource.label.project_id"]
         }]
       }
     }
@@ -99,8 +103,16 @@ gcloud alpha monitoring policies create \
   --project=lms-279
 ```
 
-> **`crossSeriesReducer` を付けない**: `check_passed` は DOUBLE 型のため `REDUCE_COUNT_FALSE`（BOOL専用）を指定すると
-> `INVALID_ARGUMENT` になる（filter が単一 `check_id` に絞り込まれておりそもそも複数時系列に跨る集約が不要）。
+> **`ALIGN_NEXT_OLDER` + `REDUCE_COUNT_FALSE` を使う（`ALIGN_FRACTION_TRUE` は使わない）**: `ALIGN_FRACTION_TRUE`
+> は BOOL の `check_passed` を DOUBLE（0.0〜1.0の割合）へ変換するため、その後に `REDUCE_COUNT_FALSE`（BOOL専用）を
+> 組み合わせると `INVALID_ARGUMENT` になる。`ALIGN_NEXT_OLDER` は BOOL 型のまま「直近1サンプルの値」を採るため、
+> 後段で `REDUCE_COUNT_FALSE`（6拠点中いくつが `false` か）を組み合わせられる。標準的なUptime Check多拠点集約の
+> 定石パターン（デフォルトのDouble変換系aligner + crossSeriesReducerの組み合わせは型不一致で軒並み使えない）。
+>
+> **thresholdValue は「拠点数」の絶対値**（割合ではない）。デフォルトの世界6拠点構成
+> （usa-virginia/usa-oregon/usa-iowa/eur-belgium/apac-singapore/sa-brazil-sao_paulo）を前提に、
+> 過半数（4拠点以上）が同時に失敗した場合のみ発火するよう `COMPARISON_GT` + `thresholdValue: 3` とした。
+> 拠点数が変わった場合は再計算すること。
 
 ## 3. Cloud Error Reporting
 
