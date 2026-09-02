@@ -184,16 +184,29 @@ describe("buildErrorAlertText", () => {
 });
 
 describe("buildHealthReportText", () => {
-  it("okステータスは✅アイコン", () => {
+  it("okステータスは非エンジニア向けの平易な一文のみ（専門用語・生メトリクスを含まない）", () => {
     const text = buildHealthReportText({
       date: "2026-09-02",
       status: "ok",
       firestoreStatus: "ok",
       heapUsedMB: 42,
     });
-    expect(text).toContain("✅");
-    expect(text).toContain("firestore: ok");
-    expect(text).toContain("heapUsed: 42MB");
+    expect(text).toBe("✅ LMS は正常に稼働しています（2026-09-02）");
+    expect(text).not.toContain("firestore");
+    expect(text).not.toContain("heapUsed");
+  });
+
+  it("degradedステータスは⚠️アイコン + 平易な言い換え + 技術的補足を併記する", () => {
+    const text = buildHealthReportText({
+      date: "2026-09-02",
+      status: "degraded",
+      firestoreStatus: "error",
+      heapUsedMB: 42,
+    });
+    expect(text).toContain("⚠️");
+    expect(text).toContain("データベース接続: 異常の可能性あり");
+    expect(text).toContain("firestore: error");
+    expect(text).toContain("メモリ使用量（参考値）: 42MB");
   });
 
   it("errorステータスは🔴アイコン", () => {
@@ -204,6 +217,8 @@ describe("buildHealthReportText", () => {
       detail: "connect ECONNREFUSED",
     });
     expect(text).toContain("🔴");
+    expect(text).toContain("データベース接続: 異常の可能性あり");
+    expect(text).toContain("connect ECONNREFUSED");
   });
 });
 

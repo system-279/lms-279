@@ -158,11 +158,24 @@ export interface HealthReportInput {
   detail?: string;
 }
 
+/**
+ * 非エンジニアメンバーも見るスペースへの投稿のため、平常時は専門用語を出さない。
+ * 異常時のみ「データベース接続」等の平易な言い換え + 技術的な補足情報（firestore
+ * の生ステータス・heapUsedMB）を併記し、対応するエンジニアが原因を追える形にする。
+ */
 export function buildHealthReportText(input: HealthReportInput): string {
-  const icon = input.status === "ok" ? "✅" : input.status === "degraded" ? "⚠️" : "🔴";
-  const lines = [`${icon} LMS 稼働確認 (${input.date})`, `firestore: ${input.firestoreStatus}`];
+  if (input.status === "ok") {
+    return `✅ LMS は正常に稼働しています（${input.date}）`;
+  }
+
+  const icon = input.status === "degraded" ? "⚠️" : "🔴";
+  const dbStatusLabel = input.firestoreStatus === "ok" ? "正常" : "異常の可能性あり";
+  const lines = [
+    `${icon} LMS で問題が発生している可能性があります（${input.date}）`,
+    `データベース接続: ${dbStatusLabel}（firestore: ${input.firestoreStatus}）`,
+  ];
   if (typeof input.heapUsedMB === "number") {
-    lines.push(`heapUsed: ${input.heapUsedMB}MB`);
+    lines.push(`メモリ使用量（参考値）: ${input.heapUsedMB}MB`);
   }
   if (input.detail) {
     lines.push(maskPii(input.detail));
