@@ -145,9 +145,45 @@ gcloud projects add-iam-policy-binding lms-279 \
 # Secret 作成（Webhook URL の投入は開発者自身が実施。会話・ログ・コミットに値を残さない）
 gcloud secrets create ops-chat-webhook-url --replication-policy=automatic --project=lms-279
 # gcloud secrets versions add ops-chat-webhook-url --data-file=- --project=lms-279  ← 開発者が対話的に実行
+
+# Pub/Sub push 用の呼び出し元 SA（6.2 で push subscription の認証に使う。
+# notification-runtime とは別。呼び出し元の身元と実行時の身元を分離するため）
+gcloud iam service-accounts create ops-pubsub-caller \
+  --display-name="Pub/Sub push caller for ops notification" --project=lms-279
+
+# 両呼び出し元（Cloud Scheduler の既存 SA と ops-pubsub-caller）に、
+# notification は --no-allow-unauthenticated のため Cloud Run Invoker が必須
+# （IAM レベルの認可はミドルウェアの OIDC 検証より手前で効く。codex review 指摘）。
+# <notification-cloud-run-url> が確定するのは初回デプロイ後のため、この2行は
+# 6.2 の一番最初（初回デプロイ後・他リソース作成前）に実行する。
+# gcloud run services add-iam-policy-binding notification \
+#   --region=asia-northeast1 --project=lms-279 \
+#   --member="serviceAccount:dxcollege-scheduler@lms-279.iam.gserviceaccount.com" \
+#   --role="roles/run.invoker"
+# gcloud run services add-iam-policy-binding notification \
+#   --region=asia-northeast1 --project=lms-279 \
+#   --member="serviceAccount:ops-pubsub-caller@lms-279.iam.gserviceaccount.com" \
+#   --role="roles/run.invoker"
 ```
 
 ### 6.2 マージ後（開発者の認可を得てから）
+
+`NOTIFICATION_BASE_URL` は `notification` の Cloud Run サービス URL（`gcloud run services describe notification --region=asia-northeast1 --project=lms-279 --format='value(status.url)'` で取得）。
+**OIDC audience は常にこの base URL を使う**（パス毎に分けない。Cloud Scheduler / Pub/Sub push が発行する ID Token の `aud` は `--oidc-token-audience` / `--push-auth-token-audience` で指定した値そのものになり、`OPS_SCHEDULER_AUDIENCE` / `OPS_PUBSUB_AUDIENCE`（`deploy.yml`、base URL のみを設定）と一致しないと 401 になる。既存の `DISPATCH_OIDC_AUDIENCE` と同じ慣例、codex review 指摘）:
+```bash
+NOTIFICATION_BASE_URL=$(gcloud run services describe notification \
+  --region=asia-northeast1 --project=lms-279 --format='value(status.url)')
+
+# Cloud Run Invoker（6.1 末尾を参照、初回デプロイ後にここで実行）
+gcloud run services add-iam-policy-binding notification \
+  --region=asia-northeast1 --project=lms-279 \
+  --member="serviceAccount:dxcollege-scheduler@lms-279.iam.gserviceaccount.com" \
+  --role="roles/run.invoker"
+gcloud run services add-iam-policy-binding notification \
+  --region=asia-northeast1 --project=lms-279 \
+  --member="serviceAccount:ops-pubsub-caller@lms-279.iam.gserviceaccount.com" \
+  --role="roles/run.invoker"
+```
 
 既存監視インフラの棚卸し（重複作成防止）:
 ```bash
@@ -170,9 +206,9 @@ gcloud pubsub topics create ops-error-alerts --project=lms-279
 gcloud pubsub topics create ops-error-alerts-dlq --project=lms-279
 gcloud pubsub subscriptions create ops-error-alerts-sub \
   --topic=ops-error-alerts \
-  --push-endpoint="https://<notification-cloud-run-url>/internal/error-alert" \
+  --push-endpoint="${NOTIFICATION_BASE_URL}/internal/error-alert" \
   --push-auth-service-account="ops-pubsub-caller@lms-279.iam.gserviceaccount.com" \
-  --push-auth-token-audience="https://<notification-cloud-run-url>/internal/error-alert" \
+  --push-auth-token-audience="${NOTIFICATION_BASE_URL}" \
   --dead-letter-topic=ops-error-alerts-dlq --max-delivery-attempts=5 \
   --project=lms-279
 
@@ -193,16 +229,16 @@ Cloud Scheduler（日次ヘルスチェック + 10分毎 flush、SA は ADR-039 
 ```bash
 gcloud scheduler jobs create http ops-daily-health-check \
   --schedule="0 9 * * 1-5" --time-zone="Asia/Tokyo" \
-  --uri="https://<notification-cloud-run-url>/internal/health-report" --http-method=POST \
+  --uri="${NOTIFICATION_BASE_URL}/internal/health-report" --http-method=POST \
   --oidc-service-account-email="dxcollege-scheduler@lms-279.iam.gserviceaccount.com" \
-  --oidc-token-audience="https://<notification-cloud-run-url>/internal/health-report" \
+  --oidc-token-audience="${NOTIFICATION_BASE_URL}" \
   --location=asia-northeast1 --project=lms-279
 
 gcloud scheduler jobs create http ops-notification-flush \
   --schedule="*/10 * * * *" --time-zone="Asia/Tokyo" \
-  --uri="https://<notification-cloud-run-url>/internal/flush" --http-method=POST \
+  --uri="${NOTIFICATION_BASE_URL}/internal/flush" --http-method=POST \
   --oidc-service-account-email="dxcollege-scheduler@lms-279.iam.gserviceaccount.com" \
-  --oidc-token-audience="https://<notification-cloud-run-url>/internal/flush" \
+  --oidc-token-audience="${NOTIFICATION_BASE_URL}" \
   --location=asia-northeast1 --project=lms-279
 ```
 
@@ -212,9 +248,9 @@ Cloud Monitoring Uptime Check + Alerting Policy（可用性監視、§1/§2 の�
 gcloud pubsub topics create ops-availability-alerts --project=lms-279
 gcloud pubsub subscriptions create ops-availability-alerts-sub \
   --topic=ops-availability-alerts \
-  --push-endpoint="https://<notification-cloud-run-url>/internal/availability-alert" \
+  --push-endpoint="${NOTIFICATION_BASE_URL}/internal/availability-alert" \
   --push-auth-service-account="ops-pubsub-caller@lms-279.iam.gserviceaccount.com" \
-  --push-auth-token-audience="https://<notification-cloud-run-url>/internal/availability-alert" \
+  --push-auth-token-audience="${NOTIFICATION_BASE_URL}" \
   --project=lms-279
 gcloud beta monitoring channels create --project=lms-279 \
   --display-name="ops-chat-availability" --type=pubsub \

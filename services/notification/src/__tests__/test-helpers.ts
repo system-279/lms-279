@@ -22,19 +22,32 @@ export class InMemoryDedupStore implements DedupStore {
     return decision;
   }
 
+  async rollback(fingerprint: string, insertId: string): Promise<void> {
+    const doc = this.docs.get(fingerprint);
+    if (!doc) return;
+    const isUntouchedSinceThisDecide =
+      doc.suppressedCount === 0 && doc.seenInsertIds.length === 1 && doc.seenInsertIds[0] === insertId;
+    if (isUntouchedSinceThisDecide) {
+      this.docs.delete(fingerprint);
+    }
+  }
+
   async listPendingFlush(nowIso: string): Promise<PendingFlush[]> {
     const now = new Date(nowIso).getTime();
     const result: PendingFlush[] = [];
     for (const [fingerprint, doc] of this.docs.entries()) {
       if (doc.needsFlush && new Date(doc.windowEndsAt).getTime() < now) {
-        result.push({ fingerprint, suppressedCount: doc.suppressedCount });
+        result.push({ fingerprint, suppressedCount: doc.suppressedCount, windowEndsAt: doc.windowEndsAt });
       }
     }
     return result;
   }
 
-  async markFlushed(fingerprint: string): Promise<void> {
-    this.docs.delete(fingerprint);
+  async markFlushed(fingerprint: string, windowEndsAt: string): Promise<void> {
+    const doc = this.docs.get(fingerprint);
+    if (doc && doc.windowEndsAt === windowEndsAt) {
+      this.docs.delete(fingerprint);
+    }
   }
 
   /** テストの中身確認用 */

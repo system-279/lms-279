@@ -251,6 +251,14 @@
         { "fieldPath": "model", "order": "ASCENDING" },
         { "fieldPath": "userCode", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "ops_notification_dedup",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "needsFlush", "order": "ASCENDING" },
+        { "fieldPath": "windowEndsAt", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

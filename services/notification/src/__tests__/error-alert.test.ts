@@ -129,6 +129,26 @@ describe("error-alert handler", () => {
     expect(res.body.ack).toBe(false);
   });
 
+  it("Chat投稿がtransient失敗した場合、dedup状態がロールバックされ再配信時に再度投稿される", async () => {
+    const { app, dedupStore } = makeApp();
+    postToChatMock.mockResolvedValueOnce({ ok: false, status: 503 });
+
+    const first = await request(app)
+      .post("/internal/error-alert")
+      .send(makePubSubBody(makeReportedErrorLogEntry(), "m1"));
+    expect(first.status).toBe(503);
+    expect(dedupStore.size()).toBe(0); // rollbackにより状態が残らない
+
+    postToChatMock.mockResolvedValueOnce({ ok: true, status: 200 });
+    const retry = await request(app)
+      .post("/internal/error-alert")
+      .send(makePubSubBody(makeReportedErrorLogEntry(), "m1")); // Pub/Subの再配信(同一insertId)
+
+    expect(retry.status).toBe(200);
+    expect(retry.body).toEqual({ ack: true, posted: true });
+    expect(postToChatMock).toHaveBeenCalledTimes(2);
+  });
+
   it("Chat投稿がネットワーク例外(status不明)の場合もtransientとして503を返す", async () => {
     postToChatMock.mockResolvedValue({ ok: false });
     const { app } = makeApp();

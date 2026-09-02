@@ -92,12 +92,22 @@ export function decideDedup(
 export interface PendingFlush {
   fingerprint: string;
   suppressedCount: number;
+  /** markFlushed に渡し、読み取り後に新しいウィンドウが始まっていないかの条件付き削除に使う */
+  windowEndsAt: string;
 }
 
 export interface DedupStore {
   decide(fingerprint: string, insertId: string, nowIso: string): Promise<DedupDecision>;
+  /**
+   * decide() が shouldPost:true を返した直後に Chat 投稿が transient 失敗した場合に呼ぶ。
+   * decide() が書き込んだ状態を打ち消し、Pub/Sub の再配信時に同じイベントとして再判定
+   * できるようにする（呼ばないと insertId が seenInsertIds に残り続け、再配信が
+   * shouldPost:false になって通知が永久に失われる）。
+   */
+  rollback(fingerprint: string, insertId: string): Promise<void>;
   listPendingFlush(nowIso: string): Promise<PendingFlush[]>;
-  markFlushed(fingerprint: string): Promise<void>;
+  /** listPendingFlush 時点の windowEndsAt と一致する場合のみ削除する（新規ウィンドウとの競合防止） */
+  markFlushed(fingerprint: string, windowEndsAt: string): Promise<void>;
 }
 
 interface StoredDoc extends DedupDocState {
@@ -146,6 +156,37 @@ export class FirestoreDedupStore implements DedupStore {
     return { shouldPost: true, suppressedSincePrevious: 0 };
   }
 
+  /**
+   * decide() が shouldPost:true を書き込んだ直後に限り、その書き込みを打ち消す。
+   * shouldPost:true の nextState は「新規 doc」「ウィンドウロールオーバー」いずれも
+   * 構造的に { suppressedCount: 0, seenInsertIds: [insertId] } の1件のみになるため
+   * （decideDedup 参照）、その形と一致する場合にのみ安全に削除できる。
+   * 既に他のイベントで状態が進んでいた場合は何もしない（次回の集約判定に委ねる）。
+   */
+  async rollback(fingerprint: string, insertId: string): Promise<void> {
+    const docRef = this.db.collection(COLLECTION).doc(fingerprint);
+    try {
+      await this.db.runTransaction(async (tx) => {
+        const snap = await tx.get(docRef);
+        if (!snap.exists) return;
+        const data = snap.data() as StoredDoc;
+        const isUntouchedSinceThisDecide =
+          data.suppressedCount === 0 &&
+          data.seenInsertIds.length === 1 &&
+          data.seenInsertIds[0] === insertId;
+        if (isUntouchedSinceThisDecide) {
+          tx.delete(docRef);
+        }
+      });
+    } catch (err) {
+      logger.error("dedup rollback failed", {
+        fingerprint,
+        insertId,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
+    }
+  }
+
   async listPendingFlush(nowIso: string): Promise<PendingFlush[]> {
     const snap = await this.db
       .collection(COLLECTION)
@@ -154,11 +195,22 @@ export class FirestoreDedupStore implements DedupStore {
       .get();
     return snap.docs.map((d) => {
       const data = d.data() as StoredDoc;
-      return { fingerprint: d.id, suppressedCount: data.suppressedCount };
+      return { fingerprint: d.id, suppressedCount: data.suppressedCount, windowEndsAt: data.windowEndsAt };
     });
   }
 
-  async markFlushed(fingerprint: string): Promise<void> {
-    await this.db.collection(COLLECTION).doc(fingerprint).delete();
+  /** listPendingFlush 時点から windowEndsAt が変わっていない場合のみ削除する */
+  async markFlushed(fingerprint: string, windowEndsAt: string): Promise<void> {
+    const docRef = this.db.collection(COLLECTION).doc(fingerprint);
+    await this.db.runTransaction(async (tx) => {
+      const snap = await tx.get(docRef);
+      if (!snap.exists) return;
+      const data = snap.data() as StoredDoc;
+      if (data.windowEndsAt === windowEndsAt) {
+        tx.delete(docRef);
+      }
+      // windowEndsAt が変わっている = flush対象読み取り後に新しいイベントが到着し
+      // 新ウィンドウが始まっている。その新しい状態を誤って消さないよう何もしない。
+    });
   }
 }

@@ -138,6 +138,10 @@ export function createErrorAlertHandler(deps: ErrorAlertDeps) {
     if (!result.ok) {
       const transient = result.status === undefined || result.status >= 500;
       if (transient) {
+        // decide() が既に書き込んだ状態を打ち消す。呼ばないと、Pub/Sub の再配信時に
+        // 同じ insertId が seenInsertIds に残っているため shouldPost:false と判定され、
+        // このアラートが永久に失われる（codex review 指摘）。
+        await deps.dedupStore.rollback(fingerprint, insertId);
         // Pub/Sub に nack させ再配信させる
         res.status(503).json({ ack: false, reason: "chat_post_failed_transient" });
         return;

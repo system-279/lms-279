@@ -28,7 +28,7 @@ export function createFlushJobHandler(deps: FlushJobDeps) {
       const text = buildFlushSummaryText(`fingerprint: ${item.fingerprint.slice(0, 12)}…`, item.suppressedCount);
       const result = await postToChat(text, deps.webhookSecretName);
       if (result.ok) {
-        await deps.dedupStore.markFlushed(item.fingerprint);
+        await deps.dedupStore.markFlushed(item.fingerprint, item.windowEndsAt);
         flushed += 1;
       } else {
         logger.error("flush-job: Chat 投稿に失敗したため今回は flush をスキップします", {
