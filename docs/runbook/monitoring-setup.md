@@ -134,6 +134,12 @@ spec:
 gcloud iam service-accounts create notification-runtime \
   --display-name="notification service runtime SA" --project=lms-279
 
+# Secret 作成（IAM binding より先に作成する必要がある。順序を誤ると
+# add-iam-policy-binding が NOT_FOUND で失敗する。codex review 指摘）。
+# Webhook URL の投入は開発者自身が実施。会話・ログ・コミットに値を残さない。
+gcloud secrets create ops-chat-webhook-url --replication-policy=automatic --project=lms-279
+# gcloud secrets versions add ops-chat-webhook-url --data-file=- --project=lms-279  ← 開発者が対話的に実行
+
 # IAM（最小権限）
 gcloud secrets add-iam-policy-binding ops-chat-webhook-url \
   --member="serviceAccount:notification-runtime@lms-279.iam.gserviceaccount.com" \
@@ -141,10 +147,6 @@ gcloud secrets add-iam-policy-binding ops-chat-webhook-url \
 gcloud projects add-iam-policy-binding lms-279 \
   --member="serviceAccount:notification-runtime@lms-279.iam.gserviceaccount.com" \
   --role="roles/datastore.user"
-
-# Secret 作成（Webhook URL の投入は開発者自身が実施。会話・ログ・コミットに値を残さない）
-gcloud secrets create ops-chat-webhook-url --replication-policy=automatic --project=lms-279
-# gcloud secrets versions add ops-chat-webhook-url --data-file=- --project=lms-279  ← 開発者が対話的に実行
 
 # Pub/Sub push 用の呼び出し元 SA（6.2 で push subscription の認証に使う。
 # notification-runtime とは別。呼び出し元の身元と実行時の身元を分離するため）
@@ -246,11 +248,13 @@ Cloud Monitoring Uptime Check + Alerting Policy（可用性監視、§1/§2 の�
 ```bash
 # §1 のコマンドで uptime check 作成後、Pub/Sub 通知チャネルを作成
 gcloud pubsub topics create ops-availability-alerts --project=lms-279
+gcloud pubsub topics create ops-availability-alerts-dlq --project=lms-279
 gcloud pubsub subscriptions create ops-availability-alerts-sub \
   --topic=ops-availability-alerts \
   --push-endpoint="${NOTIFICATION_BASE_URL}/internal/availability-alert" \
   --push-auth-service-account="ops-pubsub-caller@lms-279.iam.gserviceaccount.com" \
   --push-auth-token-audience="${NOTIFICATION_BASE_URL}" \
+  --dead-letter-topic=ops-availability-alerts-dlq --max-delivery-attempts=5 \
   --project=lms-279
 gcloud beta monitoring channels create --project=lms-279 \
   --display-name="ops-chat-availability" --type=pubsub \

@@ -99,7 +99,7 @@ describe("health-report handler", () => {
     expect(postToChatMock).toHaveBeenCalledWith(expect.stringContaining("🔴"), "secret");
   });
 
-  it("Chat投稿が失敗した場合は503を返し、送信済みマークを残さない（リトライさせる）", async () => {
+  it("Chat投稿がtransient失敗(5xx)した場合は503を返し、予約を解除する（リトライさせる）", async () => {
     const db = new FakeFirestore();
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ status: "ok", checks: { firestore: "ok" } }), { status: 200 })
@@ -119,5 +119,51 @@ describe("health-report handler", () => {
     expect(res.status).toBe(503);
     const doc = await db.collection("ops_health_report_sent").doc("2026-09-02").get();
     expect(doc.exists).toBe(false);
+  });
+
+  it("予約解除後の再試行では改めてクレームでき、成功すれば投稿される", async () => {
+    const db = new FakeFirestore();
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "ok", checks: { firestore: "ok" } }), { status: 200 })
+    );
+    const app = makeApp({
+      db: db.asFirestore(),
+      webhookSecretName: "secret",
+      apiHealthReadyUrl: "https://api.example.com/health/ready",
+      fetchImpl,
+      now: () => new Date("2026-09-02T00:00:00.000Z"),
+    });
+
+    postToChatMock.mockResolvedValueOnce({ ok: false, status: 503 });
+    const first = await request(app).post("/internal/health-report");
+    expect(first.status).toBe(503);
+
+    postToChatMock.mockResolvedValueOnce({ ok: true, status: 200 });
+    const retry = await request(app).post("/internal/health-report");
+    expect(retry.status).toBe(200);
+    expect(retry.body.posted).toBe(true);
+  });
+
+  it("Chat投稿が恒久失敗(4xx)した場合は200を返しSchedulerを無限リトライさせない。予約は残す", async () => {
+    const db = new FakeFirestore();
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "ok", checks: { firestore: "ok" } }), { status: 200 })
+    );
+    postToChatMock.mockResolvedValue({ ok: false, status: 404 });
+
+    const app = makeApp({
+      db: db.asFirestore(),
+      webhookSecretName: "secret",
+      apiHealthReadyUrl: "https://api.example.com/health/ready",
+      fetchImpl,
+      now: () => new Date("2026-09-02T00:00:00.000Z"),
+    });
+
+    const res = await request(app).post("/internal/health-report");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ posted: false, reason: "chat_post_failed_permanent" });
+    const doc = await db.collection("ops_health_report_sent").doc("2026-09-02").get();
+    expect(doc.exists).toBe(true); // 予約は残り、その日はもう再送しない
   });
 });

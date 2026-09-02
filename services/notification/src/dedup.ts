@@ -157,11 +157,14 @@ export class FirestoreDedupStore implements DedupStore {
   }
 
   /**
-   * decide() が shouldPost:true を書き込んだ直後に限り、その書き込みを打ち消す。
-   * shouldPost:true の nextState は「新規 doc」「ウィンドウロールオーバー」いずれも
-   * 構造的に { suppressedCount: 0, seenInsertIds: [insertId] } の1件のみになるため
-   * （decideDedup 参照）、その形と一致する場合にのみ安全に削除できる。
-   * 既に他のイベントで状態が進んでいた場合は何もしない（次回の集約判定に委ねる）。
+   * decide() が shouldPost:true を書き込んだ直後、その insertId を seenInsertIds から
+   * 取り除く。全消し（旧実装）だと、rollback対象のイベント処理中に同一fingerprintの
+   * 別イベントが到着してウィンドウ内に取り込まれていた場合、そのイベントの分まで
+   * 巻き添えで消してしまい、二重の意味で通知を失う（codex review 指摘）。
+   * insertId だけを除去すれば、その insertId の再配信は「新規イベント」として
+   * 再判定される（この時点で window が既に他のイベントで開始済みなら、個別詳細の
+   * 再送ではなくウィンドウ内の抑制カウントとして扱われる — 詳細を伴わないが、
+   * 通知の存在自体が消えることはない）。
    */
   async rollback(fingerprint: string, insertId: string): Promise<void> {
     const docRef = this.db.collection(COLLECTION).doc(fingerprint);
@@ -170,13 +173,13 @@ export class FirestoreDedupStore implements DedupStore {
         const snap = await tx.get(docRef);
         if (!snap.exists) return;
         const data = snap.data() as StoredDoc;
-        const isUntouchedSinceThisDecide =
-          data.suppressedCount === 0 &&
-          data.seenInsertIds.length === 1 &&
-          data.seenInsertIds[0] === insertId;
-        if (isUntouchedSinceThisDecide) {
+        if (!data.seenInsertIds.includes(insertId)) return;
+        const remainingIds = data.seenInsertIds.filter((id) => id !== insertId);
+        if (remainingIds.length === 0 && data.suppressedCount === 0) {
           tx.delete(docRef);
+          return;
         }
+        tx.update(docRef, { seenInsertIds: remainingIds });
       });
     } catch (err) {
       logger.error("dedup rollback failed", {
