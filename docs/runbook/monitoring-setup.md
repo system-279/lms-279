@@ -31,32 +31,64 @@ gcloud monitoring uptime create \
 
 ## 2. アラートポリシー
 
-### 5xx エラー率アラート（Cloud Run）
+### 5xx エラー率アラート（Cloud Run）+ Uptime Check 失敗アラート
 コンソール: Monitoring > Alerting > Create Policy
 
-- **Condition**: Cloud Run > Request count, filter by response_code_class="5xx"
+- **Condition 1**: Cloud Run > Request count, filter by response_code_class="5xx"
 - **Threshold**: 5件/5分
-- **Notification**: メール、または Pub/Sub 通知チャネル経由で Google Chat（§6 参照、ADR-042）
+- **Condition 2/3**: Uptime Check（`LMS API Health` / `LMS API Readiness`）の `check_passed` がしきい値未満（可用性監視、経路1。5xx条件だけでは「リクエストすら来ない＝ログも出ない」障害を検知できないため、2026-09-02 追記で `combiner: OR` の別条件として追加。ADR-042 経路1の設計意図を満たすための拡張）
+- **Notification**: メール、および Pub/Sub 通知チャネル経由で Google Chat（§6 参照、ADR-042）
 
 ### 手動設定（gcloud）
+
+`<uptime-check-id>` は `gcloud monitoring uptime list-configs --project=lms-279` で確認する（§1 のコマンドで作成した2件の `name` 末尾）。
+
 ```bash
 # アラートポリシー作成（JSON定義）
 cat > /tmp/alert-policy.json << 'POLICY'
 {
   "displayName": "LMS API 5xx Error Rate",
-  "conditions": [{
-    "displayName": "5xx errors > 5 in 5min",
-    "conditionThreshold": {
-      "filter": "resource.type=\"cloud_run_revision\" AND metric.type=\"run.googleapis.com/request_count\" AND metric.labels.response_code_class=\"5xx\"",
-      "comparison": "COMPARISON_GT",
-      "thresholdValue": 5,
-      "duration": "300s",
-      "aggregations": [{
-        "alignmentPeriod": "300s",
-        "perSeriesAligner": "ALIGN_SUM"
-      }]
+  "conditions": [
+    {
+      "displayName": "5xx errors > 5 in 5min",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_revision\" AND metric.type=\"run.googleapis.com/request_count\" AND metric.labels.response_code_class=\"5xx\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 5,
+        "duration": "300s",
+        "aggregations": [{
+          "alignmentPeriod": "300s",
+          "perSeriesAligner": "ALIGN_SUM"
+        }]
+      }
+    },
+    {
+      "displayName": "Uptime check failing: LMS API Health",
+      "conditionThreshold": {
+        "filter": "resource.type=\"uptime_url\" AND metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" AND metric.labels.check_id=\"<uptime-check-id-health>\"",
+        "comparison": "COMPARISON_LT",
+        "thresholdValue": 1,
+        "duration": "60s",
+        "aggregations": [{
+          "alignmentPeriod": "1200s",
+          "perSeriesAligner": "ALIGN_FRACTION_TRUE"
+        }]
+      }
+    },
+    {
+      "displayName": "Uptime check failing: LMS API Readiness",
+      "conditionThreshold": {
+        "filter": "resource.type=\"uptime_url\" AND metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" AND metric.labels.check_id=\"<uptime-check-id-readiness>\"",
+        "comparison": "COMPARISON_LT",
+        "thresholdValue": 1,
+        "duration": "0s",
+        "aggregations": [{
+          "alignmentPeriod": "1200s",
+          "perSeriesAligner": "ALIGN_FRACTION_TRUE"
+        }]
+      }
     }
-  }],
+  ],
   "combiner": "OR",
   "notificationChannels": []
 }
@@ -66,6 +98,9 @@ gcloud alpha monitoring policies create \
   --policy-from-file=/tmp/alert-policy.json \
   --project=lms-279
 ```
+
+> **`crossSeriesReducer` を付けない**: `check_passed` は DOUBLE 型のため `REDUCE_COUNT_FALSE`（BOOL専用）を指定すると
+> `INVALID_ARGUMENT` になる（filter が単一 `check_id` に絞り込まれておりそもそも複数時系列に跨る集約が不要）。
 
 ## 3. Cloud Error Reporting
 
@@ -172,6 +207,12 @@ gcloud iam service-accounts create ops-pubsub-caller \
 
 ### 6.2 マージ後（開発者の認可を得てから）
 
+> **2026-09-02 実施済み**: 本節（6.2）・6.3 は Claude Code + `gcloud` で全項目実施・実機確認済み
+> （PR #686 マージ後の初回デプロイ成功を確認してから着手）。実行時に判明した runbook 未記載の
+> 差分（DLQ 転送用 IAM binding が `--dead-letter-topic` 指定だけでは自動付与されない、経路1の
+> アラートポリシーが 5xx 条件のみで Uptime Check 失敗自体には未接続だった設計ギャップ）は
+> 本節のコマンド例・§2 に反映済み。
+
 `NOTIFICATION_BASE_URL` は `notification` の Cloud Run サービス URL（`gcloud run services describe notification --region=asia-northeast1 --project=lms-279 --format='value(status.url)'` で取得）。
 **OIDC audience は常にこの base URL を使う**（パス毎に分けない。Cloud Scheduler / Pub/Sub push が発行する ID Token の `aud` は `--oidc-token-audience` / `--push-auth-token-audience` で指定した値そのものになり、`OPS_SCHEDULER_AUDIENCE` / `OPS_PUBSUB_AUDIENCE`（`deploy.yml`、base URL のみを設定）と一致しないと 401 になる。既存の `DISPATCH_OIDC_AUDIENCE` と同じ慣例、codex review 指摘）:
 ```bash
@@ -227,6 +268,16 @@ gcloud pubsub topics add-iam-policy-binding ops-error-alerts \
 gcloud iam service-accounts add-iam-policy-binding ops-pubsub-caller@lms-279.iam.gserviceaccount.com \
   --member="serviceAccount:service-<PROJECT_NUMBER>@gcp-sa-pubsub.iam.gserviceaccount.com" \
   --role="roles/iam.serviceAccountTokenCreator" --project=lms-279
+
+# DLQ 転送権限（2026-09-02 実施時に判明した必須ステップ。--dead-letter-topic 付き
+# subscription 作成コマンド自体は非対話実行時にこの権限を自動付与しないため、
+# 明示的に付与しないと恒久失敗イベントが DLQ へ転送されず静かに失われる）:
+gcloud pubsub topics add-iam-policy-binding ops-error-alerts-dlq \
+  --member="serviceAccount:service-<PROJECT_NUMBER>@gcp-sa-pubsub.iam.gserviceaccount.com" \
+  --role="roles/pubsub.publisher" --project=lms-279
+gcloud pubsub subscriptions add-iam-policy-binding ops-error-alerts-sub \
+  --member="serviceAccount:service-<PROJECT_NUMBER>@gcp-sa-pubsub.iam.gserviceaccount.com" \
+  --role="roles/pubsub.subscriber" --project=lms-279
 ```
 
 Cloud Scheduler（日次ヘルスチェック + 10分毎 flush、SA は ADR-039 と共用可）:
@@ -258,10 +309,22 @@ gcloud pubsub subscriptions create ops-availability-alerts-sub \
   --push-auth-token-audience="${NOTIFICATION_BASE_URL}" \
   --dead-letter-topic=ops-availability-alerts-dlq --max-delivery-attempts=5 \
   --project=lms-279
+
+# DLQ 転送権限（ops-error-alerts と同様、必須）
+gcloud pubsub topics add-iam-policy-binding ops-availability-alerts-dlq \
+  --member="serviceAccount:service-<PROJECT_NUMBER>@gcp-sa-pubsub.iam.gserviceaccount.com" \
+  --role="roles/pubsub.publisher" --project=lms-279
+gcloud pubsub subscriptions add-iam-policy-binding ops-availability-alerts-sub \
+  --member="serviceAccount:service-<PROJECT_NUMBER>@gcp-sa-pubsub.iam.gserviceaccount.com" \
+  --role="roles/pubsub.subscriber" --project=lms-279
+
 gcloud beta monitoring channels create --project=lms-279 \
   --display-name="ops-chat-availability" --type=pubsub \
   --channel-labels=topic=projects/lms-279/topics/ops-availability-alerts
-# §2 の alert-policy.json の notificationChannels に上記チャネルIDを設定して再作成
+# §2 のポリシーへ、既存チャネルを維持したまま追加する（再作成ではなく追加。
+# 既存の 5xx 条件・メールチャネルを消さないため --add-notification-channels を使う）:
+gcloud alpha monitoring policies update <alert-policy-name> \
+  --add-notification-channels=<pubsub channel name> --project=lms-279
 ```
 
 Firestore TTL 有効化（集約用ドキュメント。既存の `ttlExpireAt` 規約に合わせる）:
