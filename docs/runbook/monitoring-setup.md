@@ -333,11 +333,29 @@ gcloud pubsub subscriptions add-iam-policy-binding ops-availability-alerts-sub \
 gcloud beta monitoring channels create --project=lms-279 \
   --display-name="ops-chat-availability" --type=pubsub \
   --channel-labels=topic=projects/lms-279/topics/ops-availability-alerts
+
+# **MUST（2026-09-02 実機検証で判明。省略すると通知が「静かに」届かない）**:
+# Cloud Monitoring 通知サービス自身のサービスエージェントに、この topic への
+# publish 権限を付与する。`gcloud beta monitoring channels create` はこの権限を
+# 自動付与しない。付与しないと、アラートの評価・インシデント発火自体は正常に行われ
+# （メール等の他チャネルには届く）、Pub/Sub 経由の Chat 通知だけが原因不明のまま
+# 静かに失敗する（エラーログも一切残らないため発見が極めて困難）。
+gcloud projects describe lms-279 --format='value(projectNumber)'
+# 上記で得た番号を <PROJECT_NUMBER> に代入:
+gcloud pubsub topics add-iam-policy-binding ops-availability-alerts \
+  --member="serviceAccount:service-<PROJECT_NUMBER>@gcp-sa-monitoring-notification.iam.gserviceaccount.com" \
+  --role="roles/pubsub.publisher" --project=lms-279
+
 # §2 のポリシーへ、既存チャネルを維持したまま追加する（再作成ではなく追加。
 # 既存の 5xx 条件・メールチャネルを消さないため --add-notification-channels を使う）:
 gcloud alpha monitoring policies update <alert-policy-name> \
   --add-notification-channels=<pubsub channel name> --project=lms-279
 ```
+
+> **切り分けのコツ**: Pub/Sub 通知チャネルだけ届かない・メールは届く、という状況になったら、
+> まず `gcloud pubsub topics get-iam-policy <topic>` で binding が空でないか確認する
+> （空なら上記の権限付与漏れがほぼ確実な原因）。Snooze（`curl .../v3/projects/<id>/snoozes`）や
+> 集約ロジック（aligner/reducer の型不一致等）を疑う前に、まずここを確認すること。
 
 Firestore TTL 有効化（集約用ドキュメント。既存の `ttlExpireAt` 規約に合わせる）:
 ```bash
