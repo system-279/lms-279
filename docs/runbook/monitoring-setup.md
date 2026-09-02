@@ -123,7 +123,9 @@ spec:
 
 ## 6. 運用通知の自動化（Google Chat 連携、ADR-042）
 
-`services/notification` が Google Chat の受信 Webhook（Secret Manager 管理）へ、平日毎日のヘルスチェック結果とエラー発生時の詳細を投稿する。実装は PR でマージ済みだが、以下の GCP リソース provisioning は**開発者の gcloud 認証回復後、コード外で個別に実施**する（コミット時点では未実施）。すべて冪等なコマンドとして記載し、実行後は `describe` で実在確認すること。
+`services/notification` が Google Chat の受信 Webhook（Secret Manager 管理）へ、平日毎日のヘルスチェック結果とエラー発生時の詳細を投稿する。以下の GCP リソース provisioning は**開発者の gcloud 認証回復後、コード外で個別に実施**する（コミット時点では未実施）。すべて冪等なコマンドとして記載し、実行後は `describe` で実在確認すること。
+
+**実装コードと `deploy.yml` の結線は別PRに分離している**（codex review 3巡目指摘: `notification-runtime` SA が存在しない状態で `deploy.yml` に `--service-account` 参照を含めて main へマージすると、次の push で `deploy-notification` job が失敗する）。進め方: ①本PR（実装コード + テスト。`deploy.yml` は現状の `--no-allow-unauthenticated` のみで変更なし）をマージ → ②6.1 の bootstrap を実施 → ③ `deploy.yml` に `--service-account` / `OPS_*` env-vars を追加する follow-up PR を作成・マージ → ④6.2 以降を実施。
 
 **実施順序が重要**（先に SA を作らずに `deploy.yml` の `--service-account` を有効化すると Cloud Run デプロイが失敗する）:
 

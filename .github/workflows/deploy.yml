@@ -320,18 +320,13 @@ jobs:
       - name: Deploy Notification to Cloud Run
         run: |
           # ADR-042 運用通知自動化。
-          # --service-account: 専用ランタイムSA(notification-runtime)。Secret Manager
-          #   accessor + Firestore user のみの最小権限(docs/runbook/monitoring-setup.md §6.1)。
-          #   このSAが存在しない状態でデプロイすると失敗するため、bootstrap(SA/IAM/Secret作成)を
-          #   必ず本PRのマージ前に完了させること(クロスレビューHigh #9)。
-          # OPS_SCHEDULER_AUDIENCE / OPS_PUBSUB_AUDIENCE: 他サービス(DISPATCH_OIDC_AUDIENCE等)と
-          #   同じ慣例でCloud Runのbase URLをaudienceとする(パス毎に分けない)。
-          # OPS_*_CALLER_EMAILS: OIDC audience検証に加え、呼び出し元SAをallowlist検証する
-          #   (クロスレビューHigh #6)。Schedulerは既存のADR-039 SAを共用、Pub/Subは専用SA。
+          # --service-account / OPS_* env-vars の結線は、notification-runtime SA・
+          # Secret Manager IAM binding・ops-chat-webhook-url secret の bootstrap
+          # (docs/runbook/monitoring-setup.md §6.1) 完了後、別PRで有効化する
+          # (codex review 3巡目指摘: この状態のまま main にマージすると、
+          # 未作成の SA を参照して本 job がデプロイ失敗する)。
           gcloud run deploy notification \
             --image=${{ env.ARTIFACT_REGISTRY }}/notification:${{ github.sha }} \
             --region=${{ env.GCP_REGION }} \
             --platform=managed \
-            --no-allow-unauthenticated \
-            --service-account=notification-runtime@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
-            --set-env-vars="^|^NODE_ENV=production|OPS_CHAT_WEBHOOK_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/ops-chat-webhook-url/versions/latest|OPS_API_HEALTH_READY_URL=https://api-3zcica5euq-an.a.run.app/health/ready|OPS_SCHEDULER_AUDIENCE=https://notification-3zcica5euq-an.a.run.app|OPS_SCHEDULER_CALLER_EMAILS=dxcollege-scheduler@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com|OPS_PUBSUB_AUDIENCE=https://notification-3zcica5euq-an.a.run.app|OPS_PUBSUB_CALLER_EMAILS=ops-pubsub-caller@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com"
+            --no-allow-unauthenticated
