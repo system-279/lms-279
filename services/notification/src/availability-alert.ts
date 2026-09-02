@@ -7,7 +7,7 @@
 
 import type { Request, Response } from "express";
 import { buildAvailabilityAlertText } from "./chat-payload-allowlist.js";
-import { postToChat } from "./chat-client.js";
+import { isTransientChatFailure, postToChat } from "./chat-client.js";
 import { logger } from "./logger.js";
 
 interface PubSubPushBody {
@@ -60,7 +60,7 @@ export function createAvailabilityAlertHandler(deps: AvailabilityAlertDeps) {
 
     const result = await postToChat(text, deps.webhookSecretName);
     if (!result.ok) {
-      const transient = result.status === undefined || result.status >= 500;
+      const transient = isTransientChatFailure(result.status);
       res.status(transient ? 503 : 200).json({ ack: !transient });
       return;
     }

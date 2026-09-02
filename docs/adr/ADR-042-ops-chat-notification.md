@@ -49,7 +49,21 @@ Chat のみに運用アラートを依存させると、Webhook 失効等で `no
 - **401/403/429 急増の個別 Chat 通知**: 価値はあるが Chat 通知というより Cloud Monitoring 全体設計の話であり、今回のスコープでは見送った。将来 Cloud Monitoring の閾値アラート対象として検討する。
 - **Terraform 等の完全 IaC 化**: 既存インフラが gcloud ワンショットコマンドの手順書ベース運用のため、今回だけ IaC 化すると一貫性が崩れる。代わりに冪等な gcloud スクリプト化 + `describe` による実在確認で代替する。
 
+## 追加レビュー（PR #685、pr-review-toolkit 3系統並列）
+
+codex review 3巡に加え、Claude 系の `code-reviewer` / `silent-failure-hunter` / `pr-test-analyzer` を並列起動し、以下を修正した:
+
+- **PII**: `path` フィールドが無マスクで転送されていた（`/api/v2/super/admins/:email` 等）。既知の静的ルート名以外を `<id>` に畳む allowlist 方式（`sanitizePathForDisplay`）に変更
+- **fingerprint**: `topStackFrames` の先頭行（実際は "TypeError: xxx" というヘッダ行）を fingerprint に使っており、`normalizeMessage` の効果を打ち消していた。実フレーム（"at ..." 形式）の先頭行を使うよう修正
+- **Chat webhook の 429（レート制限）**: 恒久失敗として誤って ack していた。5xx・ネットワーク例外と同様 transient として nack するよう修正（`isTransientChatFailure`）
+- **rollback**: ウィンドウ境界をまたいだ直後（decideDedup のロールオーバー分岐）の rollback で、直前ウィンドウの抑制件数が完全に消失するバグを修正（`restoreSuppressedCount` を渡し、ウィンドウ期限切れ状態として復元）
+- **可観測性**: OIDC 検証失敗が一切ログされていなかった（認証層全断が不可視だった）ため `logger.warn`/`error` を追加。`app.ts` にグローバルエラーハンドラ（ADR-010 相当のフラット形式）を追加し、未捕捉例外が HTML 500 や無構造ログに落ちないようにした。`ops-chat-post-failures` メトリクスは特定文言限定だったため `severity=ERROR` 全体を拾うよう `docs/runbook/monitoring-setup.md` を修正
+- **health-report の冪等性**: 予約確保後・Chat 投稿前にプロセスが死ぬとその日の報告が永久欠落する穴があったため、`STALE_CLAIM_MS`（10分）を超えて `postedAt` が無い予約は再クレーム可能にした
+- **テスト**: `FirestoreDedupStore`（本番実装）が `InMemoryDedupStore`（テスト専用の別実装）の陰でカバレッジ0%だった（2つの独立レビューが収束して指摘）ため、`FakeFirestore` に `.where()` と真の部分マージ `update()` を実装し、`FirestoreDedupStore` を直接検証するテストを追加
+
 ## 既知の限界
 
 - Firestore を使った集約(dedup)の実際の並行動作は、pure 関数のユニットテストと Firestore トランザクションの atomicity という信頼できるプリミティブへの委譲で担保しており、本番相当の高並行負荷での実機検証はしていない。
 - `docs/runbook/monitoring-setup.md` の既存記述に `service_name=lms-api` という古い Cloud Run サービス名の参照があったため、本 ADR の実装に合わせて `service_name=api` へ修正した（別件の doc drift）。
+- `GoogleOidcTokenVerifier`（google-auth-library を直接使う本番実装クラス）は単体テストでは常にモック verifier に差し替えられており、実クラス自体は未検証（`services/api/src/services/dispatch/oidc-verify.ts` の既存実装も同様の慣行のため、本PR固有の後退ではない）。
+- rollback のウィンドウ境界復元は「rollback対象がそのウィンドウを開始した本人だった」ケースに対応しているが、複数のrollbackが同一fingerprintに対してほぼ同時に発生する多重障害シナリオまでは検証していない。

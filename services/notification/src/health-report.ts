@@ -12,11 +12,16 @@
 import type { Request, Response } from "express";
 import { Firestore, Timestamp } from "@google-cloud/firestore";
 import { buildHealthReportText } from "./chat-payload-allowlist.js";
-import { postToChat } from "./chat-client.js";
+import { isTransientChatFailure, postToChat } from "./chat-client.js";
 import { logger } from "./logger.js";
 
 const IDEMPOTENCY_COLLECTION = "ops_health_report_sent";
 const IDEMPOTENCY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// 予約確保後・Chat投稿前にインスタンスが死ぬ（デプロイ差し替え・OOM・scale-in等）と、
+// postedAtの無い予約だけが残り、以降のScheduler再試行が全てskipされてその日の
+// 報告が永久欠落しうる。この閾値を超えてpostedAtが無いままの予約は stale とみなし
+// 再クレームを許可する（pr-review-toolkit code-reviewer 指摘、Important）。
+const STALE_CLAIM_MS = 10 * 60 * 1000;
 
 export function getJstDateString(now: Date): string {
   const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -53,7 +58,13 @@ export function createHealthReportHandler(deps: HealthReportDeps) {
 
     const claimed = await deps.db.runTransaction(async (tx) => {
       const snap = await tx.get(idempotencyRef);
-      if (snap.exists) return false;
+      if (snap.exists) {
+        const data = snap.data() as { postedAt?: string | null; claimedAt?: string } | undefined;
+        const claimedAtMs = data?.claimedAt ? new Date(data.claimedAt).getTime() : 0;
+        const isStale = !data?.postedAt && now.getTime() - claimedAtMs > STALE_CLAIM_MS;
+        if (!isStale) return false;
+        // stale な予約（投稿完了前にプロセスが落ちた等）は再クレームを許可する
+      }
       tx.set(idempotencyRef, { claimedAt: now.toISOString(), postedAt: null, ttlExpireAt });
       return true;
     });
@@ -96,7 +107,7 @@ export function createHealthReportHandler(deps: HealthReportDeps) {
     const result = await postToChat(text, deps.webhookSecretName);
 
     if (!result.ok) {
-      const transient = result.status === undefined || result.status >= 500;
+      const transient = isTransientChatFailure(result.status);
       if (transient) {
         // 予約を解除し、Scheduler のリトライで再度予約できるようにする
         await idempotencyRef.delete();

@@ -4,9 +4,10 @@ import request from "supertest";
 import { createErrorAlertHandler } from "../error-alert.js";
 import { InMemoryDedupStore } from "./test-helpers.js";
 
-vi.mock("../chat-client.js", () => ({
-  postToChat: vi.fn(),
-}));
+vi.mock("../chat-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../chat-client.js")>();
+  return { ...actual, postToChat: vi.fn() };
+});
 import { postToChat } from "../chat-client.js";
 
 const postToChatMock = vi.mocked(postToChat);
@@ -72,10 +73,120 @@ describe("error-alert handler", () => {
     const text = postToChatMock.mock.calls[0][0];
     expect(text).toContain("TypeError");
     expect(text).toContain("tenant: tenant-a");
-    expect(text).toContain("POST /api/v2/tenant-a/quizzes");
+    // tenant-a は既知の静的セグメントではないため <id> に畳まれる（PII対策）
+    expect(text).toContain("POST /api/v2/<id>/quizzes");
     // クエリ文字列 + メールアドレスが本文に残らないこと
     expect(text).not.toContain("email=user@example.com");
+    expect(text).not.toContain("tenant-a/quizzes");
     expect(text).toContain("u***@example.com");
+  });
+
+  it("insertIdもmessageIdも取得できない場合は200 ackでスキップする", async () => {
+    const { app, dedupStore } = makeApp();
+    const decideSpy = vi.spyOn(dedupStore, "decide");
+
+    const res = await request(app)
+      .post("/internal/error-alert")
+      .send(makePubSubBody(makeReportedErrorLogEntry({ insertId: undefined }), ""));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ack: true, skipped: "no_insert_id" });
+    expect(decideSpy).not.toHaveBeenCalled();
+  });
+
+  it("Error以外のthrow(rawError)でもmessageが本文に含まれる", async () => {
+    postToChatMock.mockResolvedValue({ ok: true, status: 200 });
+    const { app } = makeApp();
+
+    const res = await request(app).post("/internal/error-alert").send(
+      makePubSubBody({
+        insertId: "insert-raw",
+        timestamp: "2026-09-02T00:00:00.000Z",
+        jsonPayload: {
+          "@type": REPORTED_ERROR_EVENT_TYPE,
+          message: "Unknown error",
+          rawError: "TenantNotAllowedError: tenant xyz is disabled",
+          method: "GET",
+          url: "/api/v2/tenant-a/courses",
+        },
+      })
+    );
+
+    expect(res.status).toBe(200);
+    const text = postToChatMock.mock.calls[0][0];
+    expect(text).toContain("TenantNotAllowedError: tenant xyz is disabled");
+  });
+
+  it("dedupStore.decide自体が例外を投げても個別投稿にフォールバックする", async () => {
+    postToChatMock.mockResolvedValue({ ok: true, status: 200 });
+    const dedupStore = new InMemoryDedupStore();
+    vi.spyOn(dedupStore, "decide").mockRejectedValue(new Error("firestore unavailable"));
+    const { app } = makeApp(dedupStore);
+
+    const res = await request(app)
+      .post("/internal/error-alert")
+      .send(makePubSubBody(makeReportedErrorLogEntry()));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ack: true, posted: true });
+    expect(postToChatMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("Chat投稿が429(レート制限)の場合もtransientとして503を返しnackさせる", async () => {
+    postToChatMock.mockResolvedValue({ ok: false, status: 429 });
+    const { app } = makeApp();
+
+    const res = await request(app)
+      .post("/internal/error-alert")
+      .send(makePubSubBody(makeReportedErrorLogEntry()));
+
+    expect(res.status).toBe(503);
+    expect(res.body.ack).toBe(false);
+  });
+
+  it("メッセージ中の数値・IDだけが異なる類似エラーは同一fingerprintとして集約される", async () => {
+    postToChatMock.mockResolvedValue({ ok: true, status: 200 });
+    const { app } = makeApp();
+
+    await request(app)
+      .post("/internal/error-alert")
+      .send(
+        makePubSubBody(
+          makeReportedErrorLogEntry({
+            insertId: "insert-1",
+            jsonPayload: {
+              "@type": REPORTED_ERROR_EVENT_TYPE,
+              error: {
+                name: "NotFoundError",
+                message: "user 123 not found",
+                stack: "NotFoundError: user 123 not found\n  at findUser (users.ts:10:1)",
+              },
+            },
+          }),
+          "m1"
+        )
+      );
+    await request(app)
+      .post("/internal/error-alert")
+      .send(
+        makePubSubBody(
+          makeReportedErrorLogEntry({
+            insertId: "insert-2",
+            jsonPayload: {
+              "@type": REPORTED_ERROR_EVENT_TYPE,
+              error: {
+                name: "NotFoundError",
+                message: "user 456 not found",
+                stack: "NotFoundError: user 456 not found\n  at findUser (users.ts:10:1)",
+              },
+            },
+          }),
+          "m2"
+        )
+      );
+
+    // IDだけが違う同種のエラーは同一fingerprintに丸められ、1件のみ投稿される
+    expect(postToChatMock).toHaveBeenCalledTimes(1);
   });
 
   it("@typeがReportedErrorEvent以外 → 200 ack、Chat投稿もdedupも呼ばれない", async () => {

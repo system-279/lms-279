@@ -3,9 +3,10 @@ import express from "express";
 import request from "supertest";
 import { createAvailabilityAlertHandler } from "../availability-alert.js";
 
-vi.mock("../chat-client.js", () => ({
-  postToChat: vi.fn(),
-}));
+vi.mock("../chat-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../chat-client.js")>();
+  return { ...actual, postToChat: vi.fn() };
+});
 import { postToChat } from "../chat-client.js";
 
 const postToChatMock = vi.mocked(postToChat);
@@ -67,7 +68,7 @@ describe("availability-alert handler", () => {
     expect(postToChatMock).not.toHaveBeenCalled();
   });
 
-  it("Chat投稿がtransient失敗の場合は503", async () => {
+  it("Chat投稿がtransient失敗(5xx)の場合は503", async () => {
     postToChatMock.mockResolvedValue({ ok: false, status: 500 });
     const app = makeApp();
 
@@ -76,5 +77,29 @@ describe("availability-alert handler", () => {
       .send(makePubSubBody({ state: "open", policy_name: "x", summary: "y" }));
 
     expect(res.status).toBe(503);
+    expect(res.body.ack).toBe(false);
+  });
+
+  it("Chat投稿が429(レート制限)の場合もtransientとして503", async () => {
+    postToChatMock.mockResolvedValue({ ok: false, status: 429 });
+    const app = makeApp();
+
+    const res = await request(app)
+      .post("/internal/availability-alert")
+      .send(makePubSubBody({ state: "open", policy_name: "x", summary: "y" }));
+
+    expect(res.status).toBe(503);
+  });
+
+  it("Chat投稿が恒久失敗(4xx)の場合は200 ackを返しループさせない", async () => {
+    postToChatMock.mockResolvedValue({ ok: false, status: 404 });
+    const app = makeApp();
+
+    const res = await request(app)
+      .post("/internal/availability-alert")
+      .send(makePubSubBody({ state: "open", policy_name: "x", summary: "y" }));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ack: true });
   });
 });

@@ -21,3 +21,16 @@ export function normalizeMessage(message: string): string {
     .replace(/\d+/g, "<n>")
     .trim();
 }
+
+/**
+ * topStackFrames() の結果から、fingerprint 計算に使う「実際の呼び出しフレーム」の
+ * 先頭行を取り出す。Node のスタックトレースは1行目が "TypeError: xxx" 等のヘッダ行
+ * （エラーメッセージそのもの）で、2行目以降が "at ..." 形式の実フレームになる。
+ * ヘッダ行は正規化前の生メッセージと同一のため、fingerprint にヘッダ行を使うと
+ * normalizeMessage の効果が打ち消されてしまう（ID/件数が違うだけの同一エラーが
+ * 毎回別 fingerprint になり、集約が効かなくなる）。
+ */
+export function firstStackFrameLine(stackFrames: string[]): string {
+  const frame = stackFrames.find((line) => line.startsWith("at "));
+  return frame ?? stackFrames[0] ?? "";
+}

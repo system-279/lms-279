@@ -82,6 +82,10 @@ npm run test
 | `PAUSE_TIMEOUT_MS` | 連続一時停止の上限（ミリ秒、正の整数、default: 900000 = 15分） |
 | `QUIZ_REQUIRE_ACTIVE_SESSION` | テスト受験に有効なレッスンセッションを必須化するか（`true`/`false`、default: true。false で ADR-027 ケースD後方互換経路が有効化） |
 | `LESSON_ENTRY_GAP_MS` | 異なるレッスンへの入室を、同一コース内の直前退室からブロックする最小間隔（ミリ秒、0以上の整数、default: 60000 = 1分。`0` で無効化、ADR-027 ケースG） |
+| `OPS_CHAT_WEBHOOK_SECRET_NAME`（notification） | Google Chat Webhook URLのSecret Managerリソース名（ADR-042） |
+| `OPS_API_HEALTH_READY_URL`（notification） | 日次ヘルスチェックで叩く`api`の`/health/ready`フルURL（ADR-042） |
+| `OPS_SCHEDULER_AUDIENCE` / `OPS_PUBSUB_AUDIENCE`（notification） | Cloud Scheduler/Pub-Sub pushが発行するOIDC ID Tokenの期待audience（`notification`のbase URL、パス毎に分けない、ADR-042） |
+| `OPS_SCHEDULER_CALLER_EMAILS` / `OPS_PUBSUB_CALLER_EMAILS`（notification） | OIDC caller emailのallowlist（カンマ区切り。空だと全拒否、ADR-042） |
 
 ## 重要な設計判断
 

@@ -17,6 +17,7 @@
 
 import type { Request, Response, NextFunction } from "express";
 import { OAuth2Client } from "google-auth-library";
+import { logger } from "./logger.js";
 
 /** OIDC 検証結果。caller の subject (Service Account email) を含む */
 export interface VerifiedOidcCaller {
@@ -159,13 +160,27 @@ export function requireValidOidcToken(opts: {
         req.oidcCaller = caller;
         next();
       } catch (err) {
+        // この経路のログが無いと、audience/allowlist の設定ミスや認証基盤側の
+        // 障害で通知パイプライン全体が入口で止まっていても誰も気づけない
+        // （notification 自身は Sink 対象から除外されているため、この失敗は
+        // ここで記録しない限りどこにも残らない。pr-review-toolkit
+        // silent-failure-hunter 指摘、HIGH）。
         if (err instanceof OidcVerifyFailure) {
+          logger.warn("OIDC verification failed", {
+            code: err.code,
+            path: req.path,
+            message: err.message,
+          });
           res.status(401).json({
             error: err.code,
             message: err.message,
           });
           return;
         }
+        logger.error("OIDC verification failed with an unexpected error", {
+          path: req.path,
+          error: err instanceof Error ? err : new Error(String(err)),
+        });
         res.status(401).json({
           error: "invalid_token",
           message: "OIDC token verification failed",

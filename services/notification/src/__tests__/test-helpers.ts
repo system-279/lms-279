@@ -22,15 +22,31 @@ export class InMemoryDedupStore implements DedupStore {
     return decision;
   }
 
-  async rollback(fingerprint: string, insertId: string): Promise<void> {
+  async rollback(fingerprint: string, insertId: string, restoreSuppressedCount: number): Promise<void> {
     const doc = this.docs.get(fingerprint);
     if (!doc || !doc.seenInsertIds.includes(insertId)) return;
     const seenInsertIds = doc.seenInsertIds.filter((id) => id !== insertId);
-    if (seenInsertIds.length === 0 && doc.suppressedCount === 0) {
+
+    if (seenInsertIds.length > 0) {
+      this.docs.set(fingerprint, {
+        ...doc,
+        seenInsertIds,
+        suppressedCount: doc.suppressedCount + restoreSuppressedCount,
+      });
+      return;
+    }
+
+    if (restoreSuppressedCount === 0) {
       this.docs.delete(fingerprint);
       return;
     }
-    this.docs.set(fingerprint, { ...doc, seenInsertIds });
+
+    this.docs.set(fingerprint, {
+      suppressedCount: restoreSuppressedCount,
+      windowEndsAt: new Date(0).toISOString(),
+      seenInsertIds: [],
+      needsFlush: true,
+    });
   }
 
   async listPendingFlush(nowIso: string): Promise<PendingFlush[]> {

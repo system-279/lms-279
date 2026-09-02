@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import request from "supertest";
+import type { Firestore } from "@google-cloud/firestore";
 import { createApp } from "../app.js";
 import { InMemoryDedupStore, makeFakeOidcVerifier } from "./test-helpers.js";
 import { FakeFirestore } from "./fake-firestore.js";
@@ -59,5 +60,48 @@ describe("createApp", () => {
     // verifierはemailを検証するがallowlistに含まれないためcaller_not_allowedになる
     expect(res.status).toBe(401);
     expect(res.body.error).toBe("caller_not_allowed");
+  });
+
+  it("未定義のルートは404をADR-010互換のフラット形式で返す", async () => {
+    const app = createApp({
+      db: new FakeFirestore().asFirestore(),
+      dedupStore: new InMemoryDedupStore(),
+    });
+
+    const res = await request(app).get("/no-such-route");
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({
+      error: "not_found",
+      message: "Route GET /no-such-route not found",
+    });
+  });
+
+  it("ハンドラ内の未捕捉例外はグローバルエラーハンドラで500・フラット形式にする（Express5の自動catchを利用）", async () => {
+    const verifier = makeFakeOidcVerifier({
+      email: "scheduler@lms-279.iam.gserviceaccount.com",
+      subject: "1",
+      audience: "https://x",
+    });
+    const brokenDb = {
+      collection: () => ({ doc: () => ({}) }),
+      runTransaction: async () => {
+        throw new Error("firestore FAILED_PRECONDITION: index not ready");
+      },
+    };
+    const app = createApp({
+      db: brokenDb as unknown as Firestore,
+      dedupStore: new InMemoryDedupStore(),
+      oidcVerifier: verifier,
+      schedulerAudience: "https://notification",
+      schedulerCallerEmails: ["scheduler@lms-279.iam.gserviceaccount.com"],
+    });
+
+    const res = await request(app)
+      .post("/internal/health-report")
+      .set("Authorization", "Bearer token")
+      .send({});
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "internal_error", message: "Internal server error" });
   });
 });

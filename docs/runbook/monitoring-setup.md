@@ -274,11 +274,15 @@ gcloud firestore fields ttls update ttlExpireAt \
 
 ### 6.3 notification 自身の障害検知（Chat単一障害点対策）
 
-`notification` は Sink 対象から除外しているため、Chat 投稿失敗はログベースメトリクスで拾う:
+`notification` は Sink 対象から除外しているため、`notification` 自身の障害はログベースメトリクスで拾う。
+**フィルタは `jsonPayload.message=~"Chat webhook"` のような特定文言限定にせず、severity=ERROR
+全体を対象にする**（pr-review-toolkit silent-failure-hunter 指摘: dedup transaction のリトライ枯渇・
+rollback失敗・Pub/Subデコード失敗・OIDC検証失敗等、Chat投稿以外の失敗ログも拾わないと、
+通知パイプラインの入口（認証層）や集約ロジックが壊れていても誰も気づけない）:
 ```bash
-gcloud logging metrics create ops-chat-post-failures \
-  --description="notification service failed to post to Chat webhook" \
-  --log-filter='resource.type="cloud_run_revision" AND resource.labels.service_name="notification" AND severity="ERROR" AND jsonPayload.message=~"Chat webhook"' \
+gcloud logging metrics create ops-notification-errors \
+  --description="notification service internal errors (Chat post failures, dedup/rollback failures, decode failures, OIDC verification failures, etc.)" \
+  --log-filter='resource.type="cloud_run_revision" AND resource.labels.service_name="notification" AND severity="ERROR"' \
   --project=lms-279
 # このメトリクスに対してメール通知チャネルのアラートポリシーを作成する（§2 手動設定と同様の手順）
 ```

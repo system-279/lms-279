@@ -34,14 +34,20 @@ describe("extractBearerToken", () => {
   });
 
   it("undefined header → missing_authorization", () => {
+    // try/catch without expect.assertions は catch に入らない回帰があっても
+    // 緑のままPASSしてしまうため、toThrow で確実に例外送出を検証する
+    // （pr-review-toolkit pr-test-analyzer 指摘）。
+    expect(() => extractBearerToken(undefined)).toThrow(OidcVerifyFailure);
     try {
       extractBearerToken(undefined);
+      expect.unreachable("例外が投げられるはず");
     } catch (err) {
       expect((err as OidcVerifyFailure).code).toBe("missing_authorization");
     }
   });
 
   it("Bearer prefix 不在 → invalid_authorization_format", () => {
+    expect(() => extractBearerToken("Basic abc.def")).toThrow(OidcVerifyFailure);
     try {
       extractBearerToken("Basic abc.def");
     } catch (err) {

@@ -103,8 +103,14 @@ export interface DedupStore {
    * decide() が書き込んだ状態を打ち消し、Pub/Sub の再配信時に同じイベントとして再判定
    * できるようにする（呼ばないと insertId が seenInsertIds に残り続け、再配信が
    * shouldPost:false になって通知が永久に失われる）。
+   *
+   * @param restoreSuppressedCount decide() が返した decision.suppressedSincePrevious。
+   *   ウィンドウ境界をまたいだ直後の shouldPost:true（decideDedup の rollover 分岐）を
+   *   rollback すると、その書き込みは常に suppressedCount:0 にリセットされているため、
+   *   これを渡さないと直前ウィンドウの抑制件数が跡形もなく失われる
+   *   （pr-review-toolkit silent-failure-hunter 指摘、CRITICAL）。
    */
-  rollback(fingerprint: string, insertId: string): Promise<void>;
+  rollback(fingerprint: string, insertId: string, restoreSuppressedCount: number): Promise<void>;
   listPendingFlush(nowIso: string): Promise<PendingFlush[]>;
   /** listPendingFlush 時点の windowEndsAt と一致する場合のみ削除する（新規ウィンドウとの競合防止） */
   markFlushed(fingerprint: string, windowEndsAt: string): Promise<void>;
@@ -161,12 +167,15 @@ export class FirestoreDedupStore implements DedupStore {
    * 取り除く。全消し（旧実装）だと、rollback対象のイベント処理中に同一fingerprintの
    * 別イベントが到着してウィンドウ内に取り込まれていた場合、そのイベントの分まで
    * 巻き添えで消してしまい、二重の意味で通知を失う（codex review 指摘）。
-   * insertId だけを除去すれば、その insertId の再配信は「新規イベント」として
-   * 再判定される（この時点で window が既に他のイベントで開始済みなら、個別詳細の
-   * 再送ではなくウィンドウ内の抑制カウントとして扱われる — 詳細を伴わないが、
-   * 通知の存在自体が消えることはない）。
+   *
+   * さらに、rollback対象がウィンドウロールオーバーの書き込み（decideDedup が
+   * suppressedCount:0 にリセットした直後）だった場合、restoreSuppressedCount を
+   * 使って直前ウィンドウの抑制件数を復元する。復元先は windowEndsAt を過去日時に
+   * 設定した「即座に期限切れ」のドキュメントにし、次のイベントで正しく
+   * ウィンドウロールオーバーとして再報告されるようにする（flush ジョブからも
+   * 即座に回収可能）（pr-review-toolkit silent-failure-hunter 指摘、CRITICAL）。
    */
-  async rollback(fingerprint: string, insertId: string): Promise<void> {
+  async rollback(fingerprint: string, insertId: string, restoreSuppressedCount: number): Promise<void> {
     const docRef = this.db.collection(COLLECTION).doc(fingerprint);
     try {
       await this.db.runTransaction(async (tx) => {
@@ -175,11 +184,33 @@ export class FirestoreDedupStore implements DedupStore {
         const data = snap.data() as StoredDoc;
         if (!data.seenInsertIds.includes(insertId)) return;
         const remainingIds = data.seenInsertIds.filter((id) => id !== insertId);
-        if (remainingIds.length === 0 && data.suppressedCount === 0) {
+
+        if (remainingIds.length > 0) {
+          // 他のイベントがこのウィンドウに乗っている。それらの状態は保ちつつ、
+          // 復元すべき抑制件数があれば合算する（このinsertIdがrolloverの
+          // 起点だった場合、直前ウィンドウの分を失わないため）。
+          tx.update(docRef, {
+            seenInsertIds: remainingIds,
+            suppressedCount: data.suppressedCount + restoreSuppressedCount,
+          });
+          return;
+        }
+
+        if (restoreSuppressedCount === 0) {
+          // 新規fingerprintとしての投稿がrollback対象だった。他に何も残って
+          // いないのでdocごと削除し、まっさらな新規fingerprintの状態に戻す。
           tx.delete(docRef);
           return;
         }
-        tx.update(docRef, { seenInsertIds: remainingIds });
+
+        const epoch = new Date(0).toISOString();
+        tx.set(docRef, {
+          suppressedCount: restoreSuppressedCount,
+          windowEndsAt: epoch,
+          seenInsertIds: [],
+          needsFlush: true,
+          ttlExpireAt: data.ttlExpireAt,
+        });
       });
     } catch (err) {
       logger.error("dedup rollback failed", {

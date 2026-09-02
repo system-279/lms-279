@@ -26,6 +26,16 @@ export interface ChatPostResult {
   status?: number;
 }
 
+/**
+ * Chat webhook 呼び出しの失敗が transient（再試行の価値がある）かどうかを判定する。
+ * 429（レート制限）は、インシデント発生中にアラートが集中して最も起きやすい失敗
+ * モードであり、恒久失敗として ack すると詳細アラートを取り逃す。5xx・ネットワーク
+ * 例外と同様に transient として扱う（pr-review-toolkit silent-failure-hunter 指摘）。
+ */
+export function isTransientChatFailure(status: number | undefined): boolean {
+  return status === undefined || status === 429 || status >= 500;
+}
+
 export interface ChatClientDeps {
   fetchImpl?: typeof fetch;
   getSecret?: (secretName: string) => Promise<string>;

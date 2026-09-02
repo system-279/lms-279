@@ -10,7 +10,9 @@
  */
 
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-const LONG_DIGIT_RE = /\d{9,}/g;
+// ハイフン/スペース区切りの電話番号（例: 090-1234-5678）も拾えるよう、
+// 数字9桁相当を区切り文字混じりでも検出する（純粋な8桁以下の件数等は誤検知しない）。
+const LONG_DIGIT_RE = /\d[\d\-\s]{7,}\d/g;
 const BEARER_RE = /Bearer\s+[A-Za-z0-9._-]+/gi;
 
 function maskEmail(email: string): string {
@@ -36,6 +38,58 @@ export function stripQuery(url: string | undefined): string | undefined {
   if (!url) return url;
   const qIndex = url.indexOf("?");
   return qIndex >= 0 ? url.slice(0, qIndex) : url;
+}
+
+/**
+ * path セグメントのうち既知の静的ルート名以外（メールアドレス・受講者ID・
+ * tenant ID等の可変値）を `<id>` に畳んで表示用に整形する。
+ *
+ * maskPii の正規表現だけでは、URLエンコードされたメールアドレスや、正規表現に
+ * 一致しない形式の受講者ID等の opaque な識別子を検知できない
+ * （例: `/api/v2/super/admins/foo@example.com` や
+ * `/api/v2/super/tenants/x/student-progress/y/userId123`）。
+ * allowlist方式の趣旨（転送してよい情報を明示的に決める）に合わせ、
+ * 既知の静的セグメントのみを許可するホワイトリスト方式で畳む
+ * （pr-review-toolkit code-reviewer 指摘、CRITICAL）。
+ */
+const KNOWN_STATIC_PATH_SEGMENTS = new Set([
+  "api",
+  "v2",
+  "super",
+  "public",
+  "demo",
+  "tenants",
+  "courses",
+  "lessons",
+  "videos",
+  "quizzes",
+  "users",
+  "admins",
+  "enrollments",
+  "progress",
+  "student-progress",
+  "attempts",
+  "sessions",
+  "resources",
+  "pdf-download",
+  "pdf-upload-url",
+  "health",
+  "healthz",
+  "internal",
+]);
+
+export function sanitizePathForDisplay(path: string | undefined): string | undefined {
+  if (!path) return path;
+  let decoded = path;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    // 不正なURLエンコードはデコードせずそのまま扱う
+  }
+  return decoded
+    .split("/")
+    .map((segment) => (segment === "" || KNOWN_STATIC_PATH_SEGMENTS.has(segment) ? segment : "<id>"))
+    .join("/");
 }
 
 /** `/api/v2/:tenant/...` 形式の path から tenant ID を抽出する（無ければ undefined） */
@@ -75,7 +129,7 @@ export interface ErrorAlertInput {
 export function buildErrorAlertText(input: ErrorAlertInput): string {
   const lines: string[] = [`🔴 [api] ${input.errorName}`, `時刻: ${input.timestamp}`];
   if (input.method && input.path) {
-    lines.push(`${input.method} ${input.path}`);
+    lines.push(`${input.method} ${maskPii(sanitizePathForDisplay(input.path))}`);
   }
   if (input.tenantId) {
     lines.push(`tenant: ${input.tenantId}`);

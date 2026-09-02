@@ -15,6 +15,7 @@ import { createErrorAlertHandler } from "./error-alert.js";
 import { createAvailabilityAlertHandler } from "./availability-alert.js";
 import { createFlushJobHandler } from "./flush-job.js";
 import { FirestoreDedupStore, type DedupStore } from "./dedup.js";
+import { errorHandler, notFoundHandler } from "./error-handler.js";
 
 const DEFAULT_DEDUP_WINDOW_MS = 10 * 60 * 1000;
 
@@ -93,6 +94,9 @@ export function createApp(opts: CreateAppOptions = {}): Express {
     pubsubAuth,
     createAvailabilityAlertHandler({ webhookSecretName })
   );
+
+  app.use(notFoundHandler);
+  app.use(errorHandler);
 
   return app;
 }

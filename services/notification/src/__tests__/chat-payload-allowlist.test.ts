@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   maskPii,
   stripQuery,
+  sanitizePathForDisplay,
   extractTenantId,
   topStackFrames,
   buildErrorAlertText,
@@ -37,6 +38,14 @@ describe("maskPii", () => {
     expect(maskPii("count: 12345678")).toBe("count: 12345678");
   });
 
+  it("ハイフン区切りの電話番号もマスクする", () => {
+    expect(maskPii("tel: 090-1234-5678")).toBe("tel: 09***78");
+  });
+
+  it("短い数値の範囲表記(誤検知しやすい形)はマスクしない", () => {
+    expect(maskPii("range: 100-200")).toBe("range: 100-200");
+  });
+
   it("PIIを含まない文字列はそのまま返す", () => {
     expect(maskPii("TypeError: Cannot read property")).toBe(
       "TypeError: Cannot read property"
@@ -62,6 +71,34 @@ describe("stripQuery", () => {
 
   it("undefinedはundefinedを返す", () => {
     expect(stripQuery(undefined)).toBeUndefined();
+  });
+});
+
+describe("sanitizePathForDisplay", () => {
+  it("既知の静的セグメントは残し、可変セグメントは<id>に畳む", () => {
+    expect(sanitizePathForDisplay("/api/v2/tenant-a/courses")).toBe("/api/v2/<id>/courses");
+  });
+
+  it("メールアドレスセグメントも<id>に畳む", () => {
+    expect(sanitizePathForDisplay("/api/v2/super/admins/foo@example.com")).toBe(
+      "/api/v2/super/admins/<id>"
+    );
+  });
+
+  it("URLエンコードされたセグメントもデコードしてから判定する", () => {
+    expect(sanitizePathForDisplay("/api/v2/super/admins/foo%40example.com")).toBe(
+      "/api/v2/super/admins/<id>"
+    );
+  });
+
+  it("複数の可変セグメントを含むパスも全て畳む", () => {
+    expect(
+      sanitizePathForDisplay("/api/v2/super/tenants/tenant-a/student-progress/lesson1/user1")
+    ).toBe("/api/v2/super/tenants/<id>/student-progress/<id>/<id>");
+  });
+
+  it("undefinedはundefinedを返す", () => {
+    expect(sanitizePathForDisplay(undefined)).toBeUndefined();
   });
 });
 
@@ -111,12 +148,28 @@ describe("buildErrorAlertText", () => {
       suppressedSincePrevious: 3,
     });
     expect(text).toContain("TypeError");
-    expect(text).toContain("POST /api/v2/tenant-a/quizzes");
+    // tenant-a は既知の静的セグメントではないため <id> に畳まれる（PII対策）
+    expect(text).toContain("POST /api/v2/<id>/quizzes");
+    expect(text).not.toContain("tenant-a/quizzes");
     expect(text).toContain("tenant: tenant-a");
     expect(text).toContain("u***@example.com");
     expect(text).not.toContain("user@example.com");
     expect(text).toContain("（前ウィンドウで3件抑制）");
     expect(text).toContain("https://console.cloud.google.com/logs/x");
+  });
+
+  it("pathにメールアドレスや受講者IDが含まれていても<id>に畳まれ本文に残らない", () => {
+    const text = buildErrorAlertText({
+      timestamp: "2026-09-02T00:00:00.000Z",
+      errorName: "NotFoundError",
+      message: "admin not found",
+      method: "GET",
+      path: "/api/v2/super/admins/foo@example.com",
+      stackFrames: [],
+    });
+    expect(text).toContain("GET /api/v2/super/admins/<id>");
+    expect(text).not.toContain("foo@example.com");
+    expect(text).not.toContain("foo***@example.com"); // マスク後の形跡すら残らない(セグメント自体を畳むため)
   });
 
   it("suppressedSincePreviousが0の場合は抑制行を含まない", () => {
