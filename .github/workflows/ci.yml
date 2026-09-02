@@ -69,7 +69,7 @@ jobs:
         run: npm run build -w @lms-279/shared-types
 
       - name: Run tests
-        run: npm run test -w @lms-279/api -w @lms-279/mcp
+        run: npm run test -w @lms-279/api -w @lms-279/mcp -w @lms-279/notification
 
       - name: Run script smoke tests
         run: npm run test:scripts
