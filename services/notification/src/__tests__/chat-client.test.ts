@@ -63,4 +63,23 @@ describe("postToChat", () => {
     expect(result).toEqual({ ok: false });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it("fetchにタイムアウト用のAbortSignalを渡す（Chat側が無応答でハングし続けるのを防ぐ）", async () => {
+    const getSecret = vi.fn().mockResolvedValue(WEBHOOK_URL);
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+
+    await postToChat("hello", SECRET_NAME, { fetchImpl, getSecret });
+
+    const options = fetchImpl.mock.calls[0][1] as RequestInit;
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("fetchがタイムアウト(AbortError)した場合もok:falseを返す（transientとして扱われる）", async () => {
+    const getSecret = vi.fn().mockResolvedValue(WEBHOOK_URL);
+    const fetchImpl = vi.fn().mockRejectedValue(new DOMException("signal timed out", "TimeoutError"));
+
+    const result = await postToChat("hello", SECRET_NAME, { fetchImpl, getSecret });
+
+    expect(result).toEqual({ ok: false });
+  });
 });

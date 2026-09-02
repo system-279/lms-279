@@ -21,6 +21,14 @@ import { logger } from "./logger.js";
 // Google Chat の実務上の安全マージン（仕様上限は 4096 文字）
 const CHAT_MESSAGE_MAX_LENGTH = 4000;
 
+// fetch がタイムアウト設定無しだと、Chat 側が接続を受け付けたまま無応答の場合に
+// 無期限にハングしうる。その間 dedup レコードは既に書き込まれているため、
+// Cloud Run/Scheduler のタイムアウトでプロセスが強制終了されると rollback が
+// 実行されないまま、Pub/Sub 再配信は「抑制済み」として扱われアラートが失われる。
+// Cloud Run の一般的なリクエストタイムアウトより十分短く設定し、transient 失敗
+// として早期に呼び出し元へ返す（codex review 4巡目指摘、P1）。
+const CHAT_FETCH_TIMEOUT_MS = 10_000;
+
 export interface ChatPostResult {
   ok: boolean;
   status?: number;
@@ -71,6 +79,7 @@ export async function postToChat(
       method: "POST",
       headers: { "Content-Type": "application/json; charset=UTF-8" },
       body: JSON.stringify({ text: truncated }),
+      signal: AbortSignal.timeout(CHAT_FETCH_TIMEOUT_MS),
     });
     if (!res.ok) {
       logger.error("Chat webhook post failed", { status: res.status });
