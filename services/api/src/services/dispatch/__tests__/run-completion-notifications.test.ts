@@ -521,3 +521,131 @@ describe("RunAbortError class", () => {
     expect(err.cause).toBe(inner);
   });
 });
+
+describe("PR3: Google Chat 通知 (notifier wiring)", () => {
+  beforeEach(() => {
+    storage.__setSettingsForTest(makeSettings());
+  });
+
+  it("送信 0 件の成功 run → notifier は呼ばれない (0件スキップ)", async () => {
+    // tenant を有効にするが完了者0人 (fixture のデフォルト courseProgress は未完了扱いになる設定)
+    loader.setTenant(
+      "tenantA",
+      makeFixture({
+        courseProgresses: new Map([
+          ["user-1", [{ courseId: "c1", isCompleted: false, totalLessons: 3, completedLessons: 1 }]],
+        ]),
+      }),
+    );
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    const result = await runCompletionNotifications({
+      runId: "run-1", now: NOW, storage, loader, env: ENV,
+      sendMail: vi.fn(),
+      notifier,
+    });
+    expect(result.sent).toBe(0);
+    expect(notifier).not.toHaveBeenCalled();
+  });
+
+  it("送信成功 (sent>0) → notifier が outcome='completed' + テナント別内訳付きで呼ばれる", async () => {
+    loader.setTenant("tenantA", makeFixture({ name: "テナントA" }));
+    const sendMail = vi
+      .fn()
+      .mockResolvedValue({ messageId: "msg-001", attempts: 1 } satisfies SendCompletionMailResult);
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    await runCompletionNotifications({
+      runId: "run-1", now: NOW, storage, loader, env: ENV, sendMail, notifier,
+    });
+    expect(notifier).toHaveBeenCalledTimes(1);
+    const call = notifier.mock.calls[0][0];
+    expect(call.outcome).toBe("completed");
+    expect(call.lane).toBe("completion");
+    expect(call.runId).toBe("run-1");
+    expect(call.totalSent).toBe(1);
+    expect(call.perTenant).toEqual([
+      { tenantId: "tenantA", tenantName: "テナントA", sent: 1, failed: 0, manualReviewRequired: 0 },
+    ]);
+  });
+
+  it("abort (scope_revoked) → sent=0 でも notifier が outcome='aborted' で呼ばれる (0件スキップ対象外)", async () => {
+    loader.setTenant(
+      "tenantA",
+      makeFixture({
+        users: [{ id: "user-1", email: "u1@example.com", name: "U1" }],
+        courseProgresses: new Map([
+          ["user-1", [{ courseId: "c1", isCompleted: true, totalLessons: 3, completedLessons: 3 }]],
+        ]),
+      }),
+    );
+    const sendMail = vi.fn().mockRejectedValue({
+      response: {
+        status: 403,
+        data: { error: { errors: [{ reason: "insufficientPermissions" }] } },
+      },
+    });
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    await runCompletionNotifications({
+      runId: "run-1", now: NOW, storage, loader, env: ENV, sendMail, notifier,
+      userConcurrency: 1,
+    });
+    expect(notifier).toHaveBeenCalledTimes(1);
+    const call = notifier.mock.calls[0][0];
+    expect(call.outcome).toBe("aborted");
+    expect(call.totalSent).toBe(0);
+    expect(typeof call.abortedReason).toBe("string");
+  });
+
+  it("想定外エラー → notifier が outcome='unexpected_error' で呼ばれたうえで run は throw する", async () => {
+    loader.setTenant("tenantA", makeFixture());
+    // Gmail エラー分類の対象外 (storage/loader 障害相当) を再現するため、
+    // tenant ループ内から直接 throw する箇所 (getTenantCcConfig) をモックする
+    vi.spyOn(loader, "getTenantCcConfig").mockRejectedValue(
+      new Error("boom, totally unexpected"),
+    );
+    const sendMail = vi.fn();
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    await expect(
+      runCompletionNotifications({
+        runId: "run-1", now: NOW, storage, loader, env: ENV, sendMail, notifier,
+      }),
+    ).rejects.toThrow("boom, totally unexpected");
+    expect(notifier).toHaveBeenCalledTimes(1);
+    expect(notifier.mock.calls[0][0].outcome).toBe("unexpected_error");
+  });
+
+  it("notifier が reject しても run は正常終了する (防御的 try-catch)", async () => {
+    loader.setTenant("tenantA", makeFixture());
+    const sendMail = vi
+      .fn()
+      .mockResolvedValue({ messageId: "msg-001", attempts: 1 } satisfies SendCompletionMailResult);
+    const notifier = vi.fn().mockRejectedValue(new Error("chat webhook down"));
+    const result = await runCompletionNotifications({
+      runId: "run-1", now: NOW, storage, loader, env: ENV, sendMail, notifier,
+    });
+    expect(result.sent).toBe(1);
+    expect(notifier).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifier が {ok:false} を返しても run は正常終了する", async () => {
+    loader.setTenant("tenantA", makeFixture());
+    const sendMail = vi
+      .fn()
+      .mockResolvedValue({ messageId: "msg-001", attempts: 1 } satisfies SendCompletionMailResult);
+    const notifier = vi.fn().mockResolvedValue({ ok: false });
+    const result = await runCompletionNotifications({
+      runId: "run-1", now: NOW, storage, loader, env: ENV, sendMail, notifier,
+    });
+    expect(result.sent).toBe(1);
+  });
+
+  it("notifier 未注入 (undefined) → 後方互換で run は正常終了する", async () => {
+    loader.setTenant("tenantA", makeFixture());
+    const sendMail = vi
+      .fn()
+      .mockResolvedValue({ messageId: "msg-001", attempts: 1 } satisfies SendCompletionMailResult);
+    const result = await runCompletionNotifications({
+      runId: "run-1", now: NOW, storage, loader, env: ENV, sendMail,
+    });
+    expect(result.sent).toBe(1);
+  });
+});

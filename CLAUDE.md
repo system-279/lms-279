@@ -86,6 +86,8 @@ npm run test
 | `OPS_API_HEALTH_READY_URL`（notification） | 日次ヘルスチェックで叩く`api`の`/health/ready`フルURL（ADR-042） |
 | `OPS_SCHEDULER_AUDIENCE` / `OPS_PUBSUB_AUDIENCE`（notification） | Cloud Scheduler/Pub-Sub pushが発行するOIDC ID Tokenの期待audience（`notification`のbase URL、パス毎に分けない、ADR-042） |
 | `OPS_SCHEDULER_CALLER_EMAILS` / `OPS_PUBSUB_CALLER_EMAILS`（notification） | OIDC caller emailのallowlist（カンマ区切り。空だと全拒否、ADR-042） |
+| `DISPATCH_COMPLETION_NOTIFICATION_CHAT_WEBHOOK_SECRET_NAME` | 完了通知レーンの配信結果Google Chat通知先webhook URLのSecret Managerリソース名（未設定/Secret未作成時は投稿スキップのみでrun自体は継続、ADR-042 2026-09-18追記） |
+| `DISPATCH_PROGRESS_REPORT_CHAT_WEBHOOK_SECRET_NAME` | 進捗レポートレーンの配信結果Google Chat通知先webhook URLのSecret Managerリソース名（同上） |
 
 ## 重要な設計判断
 
@@ -115,6 +117,7 @@ npm run test
 - **出席レコード異常検出**: 重複（`overlap_previous`）/負滞在（`negative_duration`）/放置active（`stale_active`）の3種をオンザフライ計算で検知、出席レポートにバッジ表示（DBスキーマ変更なし。ADR-027改訂）
 - **レッスン入室最小間隔**: 異なるレッスンへの入室を同一コース内の直前退室から`LESSON_ENTRY_GAP_MS`（デフォルト1分）ブロック、同一レッスン再入室は免除。トランザクションでgap判定+session作成を原子化、FEは事前ゲート（再生ボタン無効化）で防止（ADR-027ケースG改訂）
 - **運用通知自動化**: `services/notification`が平日毎日のヘルスチェック結果とAPIエラー発生時の詳細をGoogle Chatへ自動投稿。PIIはallowlist方式で転送フィールドを明示列挙、同一エラーは10分ウィンドウで集約、Cloud Scheduler/Pub-Sub push呼び出しはOIDC audience+caller emailのallowlistで認証（ADR-042）
+- **配信結果の可視化**: `/super/dispatch-history`で送信実績一覧（テナント名・受講者名・処理日時・ステータス）、進捗レポートdry-runでテナント代表1名分の文面プレビューを表示（管理画面はスーパー管理者限定のため個人名表示可）。配信完了/中断/想定外エラーの結果はテナント名+件数のみ（氏名・メールアドレス含まず）をGoogle Chatへ通知、0件成功時は投稿スキップ（at-least-once retryの重複防止を暗黙に兼ねる）だがabort/例外時は0件でも通知（ADR-042 2026-09-18追記、ADR-039追記）
 
 全ADRは`docs/adr/`を参照。
 

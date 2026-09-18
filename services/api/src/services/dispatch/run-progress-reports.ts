@@ -63,6 +63,8 @@ import { buildProgressReportMime } from "./progress-mime-builder.js";
 import { recordAuditLog } from "./dispatch-audit.js";
 import { sanitizeErrorForAudit } from "./dispatch-error-sanitizer.js";
 import { RunAbortError, type DispatchEnv } from "./run-completion-notifications.js";
+import type { DispatchNotifier, TenantMetricsEntry } from "./chat-notify.js";
+import { logger } from "../../utils/logger.js";
 
 import type { DispatchStorage } from "./dispatch-storage.js";
 import type {
@@ -126,6 +128,11 @@ export interface RunProgressReportsInput {
   userConcurrency?: number;
   /** raw MIME 送信注入点 (テスト時 mock) */
   sendRaw?: (input: SendRawMessageInput) => Promise<SendCompletionMailResult>;
+  /**
+   * PR3: 配信結果の Google Chat 通知。省略時は通知しない (既存呼び出し元との後方互換)。
+   * production wiring は `routes/internal/progress-reports.ts` が `createChatNotifier` で行う。
+   */
+  notifier?: DispatchNotifier;
 }
 
 /**
@@ -210,7 +217,7 @@ function responseFromMetrics(
 export async function runProgressReports(
   input: RunProgressReportsInput,
 ): Promise<RunProgressReportsResponse> {
-  const { runId, occurrenceId, now, storage, loader, env, pdfBuilder } = input;
+  const { runId, occurrenceId, now, storage, loader, env, pdfBuilder, notifier } = input;
   const sendRaw = input.sendRaw ?? defaultSendRawMessage;
   const userConcurrency = input.userConcurrency ?? DEFAULT_USER_CONCURRENCY;
 
@@ -261,6 +268,7 @@ export async function runProgressReports(
     failed: 0,
     pendingPromotedToManualReview: 0,
   };
+  const perTenantMetrics: TenantMetricsEntry[] = [];
 
   try {
     const tenantIds = await loader.listAllTenantIds();
@@ -285,6 +293,15 @@ export async function runProgressReports(
         dataView.listProgressReportTargetUsers(now),
       ]);
 
+      // PR3: テナントごとに独立した集計オブジェクトへ記録し、後で全体 metrics に合算する
+      const tenantMetrics: ProgressMetrics = {
+        processedTenants: 0,
+        sent: 0,
+        skipped: 0,
+        failed: 0,
+        pendingPromotedToManualReview: 0,
+      };
+
       // ⑦ user 並列度 8 (FR-3)
       await runWithConcurrency(users, userConcurrency, async (user) => {
         await processProgressUser({
@@ -302,8 +319,20 @@ export async function runProgressReports(
           env,
           pdfBuilder,
           sendRaw,
-          metrics,
+          metrics: tenantMetrics,
         });
+      });
+
+      metrics.sent += tenantMetrics.sent;
+      metrics.skipped += tenantMetrics.skipped;
+      metrics.failed += tenantMetrics.failed;
+      metrics.pendingPromotedToManualReview += tenantMetrics.pendingPromotedToManualReview;
+      perTenantMetrics.push({
+        tenantId,
+        tenantName: tenantInfo.name,
+        sent: tenantMetrics.sent,
+        failed: tenantMetrics.failed,
+        manualReviewRequired: tenantMetrics.pendingPromotedToManualReview,
       });
     }
 
@@ -318,6 +347,7 @@ export async function runProgressReports(
       durationMs: runDurationMs,
       now,
     });
+    await notifyProgressDispatchResult(notifier, "completed", runId, occurrenceId, metrics, perTenantMetrics);
     return responseFromMetrics(runId, occurrenceId, metrics);
   } catch (err) {
     // abort 経路でも duration を記録 (evaluator AC-PR-21 反映、完了通知レーンと整合)
@@ -336,22 +366,81 @@ export async function runProgressReports(
         durationMs: abortDurationMs,
         now,
       });
+      await notifyProgressDispatchResult(
+        notifier,
+        "aborted",
+        runId,
+        occurrenceId,
+        metrics,
+        perTenantMetrics,
+        sanitizedCauseMessage,
+      );
       return responseFromMetrics(runId, occurrenceId, metrics);
     }
     // 想定外エラーの abort 経路: lock 解放 + audit 記録 (code-review #8 反映、
     // 完了通知レーンとの対称性確保。errorMessage は evaluator LOW 反映で明示 sanitize、
     // run-completion-notifications.ts L274 の pattern と統一)
     await abortLaneLock(storage, "progress", runId, "unexpected_error");
+    const sanitizedErrorMessage = sanitizeErrorForAudit(err);
     await recordAuditLog(storage, {
       runId,
       runStartedAt,
       eventType: "progress_report_run_aborted",
       errorCode: "unexpected_error",
-      errorMessage: sanitizeErrorForAudit(err),
+      errorMessage: sanitizedErrorMessage,
       durationMs: abortDurationMs,
       now,
     });
+    await notifyProgressDispatchResult(
+      notifier,
+      "unexpected_error",
+      runId,
+      occurrenceId,
+      metrics,
+      perTenantMetrics,
+      sanitizedErrorMessage,
+    );
     throw err;
+  }
+}
+
+/**
+ * PR3: 進捗レポートレーンの配信結果を Chat 通知する (成功/中断/想定外エラーの3経路すべてから呼ぶ)。
+ * 0件スキップ (未送信スキップ) は成功パスのみに適用し、abort/例外時は部分送信が0件でも通知する
+ * (中断そのものが異常事態のため。完了通知レーンの notifyDispatchResult と同じ設計、
+ * run-completion-notifications.ts 参照)。
+ */
+async function notifyProgressDispatchResult(
+  notifier: DispatchNotifier | undefined,
+  outcome: "completed" | "aborted" | "unexpected_error",
+  runId: string,
+  occurrenceId: string,
+  metrics: ProgressMetrics,
+  perTenantMetrics: TenantMetricsEntry[],
+  abortedReason?: string,
+): Promise<void> {
+  if (!notifier) return;
+  if (outcome === "completed" && metrics.sent === 0 && metrics.failed === 0 && metrics.pendingPromotedToManualReview === 0) {
+    return;
+  }
+  try {
+    await notifier({
+      outcome,
+      lane: "progress",
+      runId,
+      occurrenceId,
+      totalSent: metrics.sent,
+      totalFailed: metrics.failed,
+      totalManualReviewRequired: metrics.pendingPromotedToManualReview,
+      perTenant: perTenantMetrics.filter(
+        (t) => t.sent > 0 || t.failed > 0 || t.manualReviewRequired > 0,
+      ),
+      abortedReason,
+    });
+  } catch (err) {
+    logger.error("dispatch chat notify failed", {
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
   }
 }
 

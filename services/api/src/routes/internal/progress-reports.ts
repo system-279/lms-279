@@ -48,6 +48,7 @@ import type {
   SendCompletionMailResult,
   SendRawMessageInput,
 } from "../../services/dispatch/gmail-dwd-send.js";
+import type { DispatchNotifier } from "../../services/dispatch/chat-notify.js";
 
 const CLOUD_SCHEDULER_SCHEDULE_TIME_HEADER = "x-cloudscheduler-scheduletime";
 
@@ -67,6 +68,8 @@ export interface InternalProgressReportsRouteConfig {
   runIdGenerator?: () => string;
   /** Date 注入 (test で固定可能) */
   nowProvider?: () => Date;
+  /** PR3: 配信結果の Google Chat 通知。省略時は通知しない (test は未注入で無通知のまま検証) */
+  notifier?: DispatchNotifier;
 }
 
 /**
@@ -125,6 +128,7 @@ export function createInternalProgressReportsRouter(
             env: config.env,
             pdfBuilder: config.pdfBuilder,
             ...(config.sendRaw !== undefined && { sendRaw: config.sendRaw }),
+            notifier: config.notifier,
           });
           res.status(200).json(result);
         } catch (err) {

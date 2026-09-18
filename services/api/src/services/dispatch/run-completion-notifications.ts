@@ -61,6 +61,8 @@ import {
 } from "./run-lock.js";
 import { recordAuditLog } from "./dispatch-audit.js";
 import { sanitizeErrorForAudit } from "./dispatch-error-sanitizer.js";
+import type { DispatchNotifier, TenantMetricsEntry } from "./chat-notify.js";
+import { logger } from "../../utils/logger.js";
 
 import type { DispatchStorage } from "./dispatch-storage.js";
 import type {
@@ -93,6 +95,11 @@ export interface RunCompletionNotificationsInput {
   sendMail?: (
     input: SendCompletionMailInput,
   ) => Promise<SendCompletionMailResult>;
+  /**
+   * PR3: 配信結果の Google Chat 通知。省略時は通知しない (既存呼び出し元との後方互換)。
+   * production wiring は `routes/internal/dispatch.ts` が `createChatNotifier` で行う。
+   */
+  notifier?: DispatchNotifier;
 }
 
 /**
@@ -149,6 +156,49 @@ interface RunMetrics {
 }
 
 /**
+ * PR3: 配信結果を Chat notifier へ通知する (成功/abort/例外の 3 経路すべてから呼ぶ)。
+ *
+ * Fable レビューで判明した設計ミス (成功パスにのみフックを置くと「5件送った直後に
+ * scope_revoked で中断」のようなケースが完全に無通知になる) への対応。
+ *
+ * - 成功時 (outcome="completed") のみ 0 件スキップを適用する。中断・例外時は
+ *   部分送信が 0 件でも通知する (中断そのものが異常事態のため)。
+ * - notifier が reject しても run を落とさない (呼び出し元は必ず try-catch で包むこと、
+ *   本関数自身もここで catch する防御的二重化)。
+ */
+async function notifyDispatchResult(
+  notifier: DispatchNotifier | undefined,
+  outcome: "completed" | "aborted" | "unexpected_error",
+  runId: string,
+  metrics: RunMetrics,
+  perTenantMetrics: TenantMetricsEntry[],
+  abortedReason?: string,
+): Promise<void> {
+  if (!notifier) return;
+  if (outcome === "completed" && metrics.sent === 0 && metrics.failed === 0 && metrics.manualReviewRequired === 0) {
+    return;
+  }
+  try {
+    await notifier({
+      outcome,
+      lane: "completion",
+      runId,
+      totalSent: metrics.sent,
+      totalFailed: metrics.failed,
+      totalManualReviewRequired: metrics.manualReviewRequired,
+      perTenant: perTenantMetrics.filter(
+        (t) => t.sent > 0 || t.failed > 0 || t.manualReviewRequired > 0,
+      ),
+      abortedReason,
+    });
+  } catch (err) {
+    logger.error("dispatch chat notify failed", {
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+  }
+}
+
+/**
  * Phase 4 メインロジック。
  *
  * 戻り値: `RunCompletionNotificationsResponse` (Cloud Scheduler への HTTP response)。
@@ -161,9 +211,11 @@ interface RunMetrics {
 export async function runCompletionNotifications(
   input: RunCompletionNotificationsInput,
 ): Promise<RunCompletionNotificationsResponse> {
-  const { runId, now, storage, loader, env } = input;
+  const { runId, now, storage, loader, env, notifier } = input;
   const userConcurrency = input.userConcurrency ?? DEFAULT_USER_CONCURRENCY;
   const sendMail = input.sendMail ?? defaultSendCompletionMail;
+  // PR3: テナント別集計 (Chat 通知用、件数のみで PII を含まない)
+  const perTenantMetrics: TenantMetricsEntry[] = [];
 
   // ③ settings 読み取り
   const settings = await storage.getDispatchSettings();
@@ -217,6 +269,16 @@ export async function runCompletionNotifications(
       }
       const users = await dataView.listNotificationTargetUsers();
 
+      // PR3: テナントごとに独立した集計オブジェクトへ記録し、後で全体 metrics に合算する
+      // (processUser 自体は変更しない、既存の metrics += パターンをそのまま再利用)
+      const tenantMetrics: RunMetrics = {
+        processedTenants: 0,
+        sent: 0,
+        skipped: 0,
+        failed: 0,
+        manualReviewRequired: 0,
+      };
+
       await runWithConcurrency(users, userConcurrency, async (user) => {
         await processUser({
           tenantId,
@@ -231,8 +293,20 @@ export async function runCompletionNotifications(
           storage,
           env,
           sendMail,
-          metrics,
+          metrics: tenantMetrics,
         });
+      });
+
+      metrics.sent += tenantMetrics.sent;
+      metrics.skipped += tenantMetrics.skipped;
+      metrics.failed += tenantMetrics.failed;
+      metrics.manualReviewRequired += tenantMetrics.manualReviewRequired;
+      perTenantMetrics.push({
+        tenantId,
+        tenantName: ccConfig.name,
+        sent: tenantMetrics.sent,
+        failed: tenantMetrics.failed,
+        manualReviewRequired: tenantMetrics.manualReviewRequired,
       });
     }
 
@@ -250,6 +324,7 @@ export async function runCompletionNotifications(
       eventType: "run_completed",
       now,
     });
+    await notifyDispatchResult(notifier, "completed", runId, metrics, perTenantMetrics);
     return {
       runId,
       processedTenants: metrics.processedTenants,
@@ -280,6 +355,14 @@ export async function runCompletionNotifications(
         errorMessage: sanitizedCauseMessage,
         now,
       });
+      await notifyDispatchResult(
+        notifier,
+        "aborted",
+        runId,
+        metrics,
+        perTenantMetrics,
+        sanitizedCauseMessage,
+      );
       return {
         runId,
         processedTenants: metrics.processedTenants,
@@ -297,6 +380,14 @@ export async function runCompletionNotifications(
       failed: metrics.failed,
       manualReviewRequired: metrics.manualReviewRequired,
     });
+    await notifyDispatchResult(
+      notifier,
+      "unexpected_error",
+      runId,
+      metrics,
+      perTenantMetrics,
+      sanitizeErrorForAudit(err instanceof Error ? err.message : String(err)),
+    );
     throw err;
   }
 }

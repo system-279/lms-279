@@ -80,3 +80,31 @@ codex review 3巡に加え、Claude 系の `code-reviewer` / `silent-failure-hun
 - **dedup集約とflushの実機確認、完全成功**: 同一fingerprintの合成`ReportedErrorEvent`を3件連投したところ Chat 投稿は1件のみに正しく抑制され、Firestore の集約ドキュメント（`suppressedCount: 2`）も期待通りだった。10分毎の Cloud Scheduler flush ジョブ（`ops-notification-flush`）は手動トリガー不要で自動実行され、ウィンドウ終了後に抑制件数サマリー（「🔁 集約サマリー」「直近ウィンドウで2件抑制されました」）を正しく Chat へ投稿した。
 - **ヘルスチェック投稿の非エンジニア可読性**: 実機投稿（`firestore: ok`, `heapUsed: 115MB`）を Chat スペースの非エンジニアメンバーも見ることが判明し、平常時は専門用語・生メトリクスを含まない一文（「LMS は正常に稼働しています」）のみに変更、異常時のみ平易な言い換え + 技術的補足を併記する設計に修正した（`chat-payload-allowlist.ts` `buildHealthReportText`）。
 - **合成エラーログ publish は本番 Cloud Logging を経由しない**: エラー通知経路の実機検証は、Sink 経由ではなく `ops-error-alerts` topic への直接 publish で行った（本番 api に故意のエラーを起こさないため）。Sink フィルタ自体（`jsonPayload."@type"` の一致）はソースコード直接確認（`error-handler.ts`）で代替検証し、実ログでの一致確認はできていない（本番でエラーが実際に発生していなかったため、既知の限界として残る）。
+
+## 2026-09-18 追記（PR3、配信可視化）: 配置決定の適用範囲の明確化
+
+自動配信（完了通知レーン／進捗レポートレーン）の送信結果を「いつ・どのテナントに・何件送ったか」というレポートとして Google Chat へ投稿する機能を `services/api` 側に追加した（`services/api/src/services/dispatch/chat-notify.ts`）。本 ADR の「配置先」決定（新規コードは `services/notification` に置く）と表面上矛盾するため、適用範囲を以下のとおり明確化する。
+
+### 配置決定の適用範囲
+
+「配置先」決定の理由は「ヘルスチェック通知は "API が落ちたことを報告する" 役目であり、API と同じ障害ドメインに同居させると、API が本当に落ちたときに報告できなくなる」という**可用性障害ドメインの分離**である。この理由は、**"API が正常に稼働し送信処理を完了した" ことを前提とする成果報告**には当てはまらない。配信結果レポートは API が生きていることが送信できたことの証明そのものであり、`services/notification` に分離しても可用性上のメリットがない。よって本ADRの配置決定は配信結果レポート機能の対象外とし、`services/api` 側への実装を許容する。
+
+### `postToChat` の複製（共有パッケージ化を見送った理由）
+
+`services/notification/src/chat-client.ts` の `postToChat`（Secret Manager 経由の webhook 投稿、throw しない契約、10秒 timeout、4000字 truncate）と同等の実装を `services/api/src/services/dispatch/chat-notify.ts` に複製した。このリポジトリには「小さい自己完結ファイルは共有パッケージ化せず複製する」という既存の明文方針があり（`services/notification/src/logger.ts` / `secret-manager.ts` 冒頭コメント参照）、`postToChat` も外部依存が `logger` と Secret Manager のみの自己完結関数のため、この方針を踏襲した。`packages/` への切り出しは、`packages/shared-types` が型のみでランタイムコードを含まない現状の構成を崩すため見送った。
+
+### 検討したが見送った代替: 既存3経路（Sink 経由）の再利用
+
+「エラー発生時のリアルタイム通知」経路（`api` の構造化ログ → Cloud Logging Sink → Pub/Sub → `notification` → Chat）を再利用し、`api` からは `DispatchReportEvent` 相当のログを1行出すだけで完結させる案も検討した。ADR-042 の配置方針を完全に守れる一方、(1) 現行の Sink フィルタが `ReportedErrorEvent` 型ログ限定でフィルタ変更が要る、(2) `notification` 側に新規ペイロードビルダー・新規 `/internal/*` エンドポイントの追加が要る、(3) Sink 伝播遅延（通常は秒〜数十秒）が乗る、という理由で見送った。低頻度（最大でも2レーン×毎時）の成果報告に対し、2サービスをまたぐパイプライン新設は過剰と判断した。
+
+### PII 境界
+
+Chat スペースの閲覧範囲は管理外のため、投稿内容は**件数とテナント名のみ**とし、受講者の氏名・メールアドレスは一切含めない（型 `DispatchNotifyInput` で転送フィールドを allowlist 方式に固定、ADR-042 本文の PII 対策と同じ設計）。テナント名は Firestore の自由記述文字列のため、`maskPii`（`chat-payload-allowlist.ts` 相当、メールアドレス・Bearer トークン・長い数字列を検出）を必ず通す。一方、管理画面（`/super/dispatch-history`、スーパー管理者限定・認証必須）では受講者氏名の表示を許容する非対称設計とした（配信可視化計画のプライバシー境界原則）。
+
+### 0件スキップと at-least-once retry の重複防止の暗黙の依存
+
+送信成功件数が0件の run は Chat へ投稿しない（`sent === 0 && failed === 0 && manualReviewRequired === 0` のとき送信をスキップ）。この規則は「意味のない投稿でスペースを埋めない」という表向きの目的に加え、**Cloud Scheduler の at-least-once retry 下での暗黙の重複投稿防止も兼ねている**（retry 時は lane lock / 予約済みステータスにより通常 `sent=0` になるため、0件スキップが実質的な dedup として働く）。ただし **abort（`RunAbortError`）/想定外エラーによる中断は、部分送信が0件でも必ず投稿する**（中断そのものが運用者が最も知りたい異常であり、0件スキップの対象外とした。メッセージ先頭に `【中断】`/`【異常終了】` を付けて成功時と区別する）。将来「0件でも稼働確認のため常に投稿する」設計に変更する場合は、この暗黙の重複防止依存が失われる点を踏まえ、`runId`/`occurrenceId` ベースの明示的 dedup を別途検討すること。
+
+### GCP リソース provisioning
+
+Secret 作成・webhook URL 投入・IAM 権限付与の手順は `docs/runbook/dispatch-chat-notification-setup.md` を参照。`services/notification`（専用ランタイム SA `notification-runtime`）と異なり、`api` は default compute SA で稼働するため新規 SA 作成は不要。

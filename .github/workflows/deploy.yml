@@ -142,7 +142,13 @@ jobs:
           # コード側デフォルトも true (有効セッション必須) のため、本フラグ自体は
           # 冗長化のための明示指定として残す。ロールバックする場合は false に戻す
           # (単独リビジョンでの切替のため、切り戻しも新規デプロイのみで完結する)。
-          ENV_VARS="^|^NODE_ENV=production|DEMO_ENABLED=true|AUTH_MODE=firebase|CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,https://web-1034821634012.asia-northeast1.run.app|GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net|SESSION_DURATION_MS=10800000|GCS_RESOURCE_BUCKET=lms-279-resources|DXCOLLEGE_DISPATCH_SUBJECT=system@279279.net|DXCOLLEGE_SENDER_EMAIL=dxcollege@279279.net|QUIZ_REQUIRE_ACTIVE_SESSION=true"
+          # DISPATCH_*_CHAT_WEBHOOK_SECRET_NAME (PR3、配信可視化): 配信結果の Google Chat
+          # 通知先 webhook URL を格納した Secret Manager リソース名。OPS_CHAT_WEBHOOK_SECRET_NAME
+          # (notification service, L336 付近) と同じ命名規約。Secret 自体・バージョン投入・
+          # api 実行 SA への accessor 権限付与は開発者が事前に実施する運用手順
+          # (docs/runbook/dispatch-chat-notification-setup.md 参照)。Secret 未作成でも
+          # api の起動自体は失敗しない (chat-notify.ts の postToChat が {ok:false} を返すのみ、silent degrade)。
+          ENV_VARS="^|^NODE_ENV=production|DEMO_ENABLED=true|AUTH_MODE=firebase|CORS_ORIGIN=https://web-3zcica5euq-an.a.run.app,https://web-1034821634012.asia-northeast1.run.app|GOOGLE_WORKSPACE_ADMIN_EMAIL=system@279279.net|SESSION_DURATION_MS=10800000|GCS_RESOURCE_BUCKET=lms-279-resources|DXCOLLEGE_DISPATCH_SUBJECT=system@279279.net|DXCOLLEGE_SENDER_EMAIL=dxcollege@279279.net|QUIZ_REQUIRE_ACTIVE_SESSION=true|DISPATCH_COMPLETION_NOTIFICATION_CHAT_WEBHOOK_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/dispatch-completion-notification-chat-webhook-url/versions/latest|DISPATCH_PROGRESS_REPORT_CHAT_WEBHOOK_SECRET_NAME=projects/${{ env.GCP_PROJECT_ID }}/secrets/dispatch-progress-report-chat-webhook-url/versions/latest"
           if [ -n "${{ secrets.SUPER_ADMIN_EMAILS }}" ]; then
             ENV_VARS="${ENV_VARS}|SUPER_ADMIN_EMAILS=${{ secrets.SUPER_ADMIN_EMAILS }}"
           fi

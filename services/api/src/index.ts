@@ -19,6 +19,7 @@ import { helpRoleRouter } from "./routes/help-role.js";
 import { publicRouter } from "./routes/public.js";
 import { createInternalDispatchRouter } from "./routes/internal/dispatch.js";
 import { createInternalProgressReportsRouter } from "./routes/internal/progress-reports.js";
+import { createChatNotifier } from "./services/dispatch/chat-notify.js";
 import { createDispatchSuperRouter } from "./routes/super/dispatch-super-router.js";
 import {
   InMemoryTenantCcConfigStore,
@@ -169,6 +170,18 @@ let dispatchFactory: ReturnType<typeof buildDispatchFactory> | null = null;
 
 try {
   dispatchFactory = buildDispatchFactory();
+
+  // PR3 (配信可視化): 配信結果の Google Chat 通知。secret 名は env var で注入し、
+  // 未設定時は空文字列を渡す (services/notification/src/app.ts の OPS_CHAT_WEBHOOK_SECRET_NAME
+  // と同じ既存規約)。空文字列だと Secret Manager 取得が失敗し notifier は {ok:false} を返すのみで
+  // run 自体は継続する (chat-notify.ts の postToChat 契約、silent degrade)。
+  const completionChatNotifier = createChatNotifier(
+    process.env.DISPATCH_COMPLETION_NOTIFICATION_CHAT_WEBHOOK_SECRET_NAME ?? "",
+  );
+  const progressChatNotifier = createChatNotifier(
+    process.env.DISPATCH_PROGRESS_REPORT_CHAT_WEBHOOK_SECRET_NAME ?? "",
+  );
+
   app.use(
     "/api/v2/internal",
     createInternalDispatchRouter({
@@ -177,6 +190,7 @@ try {
       storage: dispatchFactory.storage,
       loader: dispatchFactory.loader,
       env: dispatchFactory.env,
+      notifier: completionChatNotifier,
     }),
   );
   // Phase 3 PR 3c: 進捗レポート定期自動配信 endpoint mount (Codex セカンドオピニオン HIGH #1 反映)。
@@ -190,6 +204,7 @@ try {
       loader: dispatchFactory.loader,
       env: dispatchFactory.env,
       pdfBuilder: dispatchFactory.progressPdfBuilder,
+      notifier: progressChatNotifier,
     }),
   );
   logger.info("Internal dispatch routers mounted (completion + progress)", {
