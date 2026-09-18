@@ -202,4 +202,122 @@ describe("GET /api/v2/super/dispatch/send-history", () => {
     expect(allUserIds).toEqual(["user-1", "user-2", "user-3"]);
     expect(new Set(allUserIds).size).toBe(3);
   });
+
+  it("複数テナント (複数シャード) を跨ぐ cursor ページングでも重複・欠落なく全件走査でき、ページ間の降順も保たれる (fable-review M4 反映)", async () => {
+    const storage = new InMemoryDispatchStorage();
+    const loader = new InMemoryTenantDataLoader();
+    // tenant-a/tenant-b それぞれ2件ずつ (=2シャード×2件)、時刻を交互に配置して
+    // 単純な「シャードごと順番に消費」では正しくソートできないことを検証する
+    for (const t of ["tenant-a", "tenant-b"]) {
+      loader.setTenant(t, {
+        publishedCourses: [],
+        users: [
+          { id: `${t}-user-1`, email: `${t}1@example.com`, name: `${t}-1` },
+          { id: `${t}-user-2`, email: `${t}2@example.com`, name: `${t}-2` },
+        ],
+        courseProgresses: new Map(),
+        ccConfig: null,
+        name: t,
+      });
+    }
+    // 時刻降順で並べると: b-user-2(04) > a-user-2(03) > b-user-1(02) > a-user-1(01)
+    await storage.tryReserveCompletionNotification({
+      tenantId: "tenant-a", userId: "tenant-a-user-1", runId: "run-1",
+      now: "2026-06-03T01:00:00.000Z", leaseExpiresAt: "2026-06-03T01:10:00.000Z",
+    });
+    await storage.tryReserveCompletionNotification({
+      tenantId: "tenant-b", userId: "tenant-b-user-1", runId: "run-1",
+      now: "2026-06-03T02:00:00.000Z", leaseExpiresAt: "2026-06-03T02:10:00.000Z",
+    });
+    await storage.tryReserveCompletionNotification({
+      tenantId: "tenant-a", userId: "tenant-a-user-2", runId: "run-1",
+      now: "2026-06-03T03:00:00.000Z", leaseExpiresAt: "2026-06-03T03:10:00.000Z",
+    });
+    await storage.tryReserveCompletionNotification({
+      tenantId: "tenant-b", userId: "tenant-b-user-2", runId: "run-1",
+      now: "2026-06-03T04:00:00.000Z", leaseExpiresAt: "2026-06-03T04:10:00.000Z",
+    });
+    const app = makeApp(storage, loader);
+
+    // limit=1 で1件ずつページングし、シャード境界を跨いだカーソル継続を強制する
+    const expectedOrder = [
+      "tenant-b-user-2",
+      "tenant-a-user-2",
+      "tenant-b-user-1",
+      "tenant-a-user-1",
+    ];
+    const collected: string[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < expectedOrder.length; i += 1) {
+      const qs = new URLSearchParams({ lane: "completion", limit: "1" });
+      if (cursor) qs.set("cursor", cursor);
+      const res = await request(app).get(`/api/v2/super/dispatch/send-history?${qs.toString()}`);
+      const body = res.body as GetSendHistoryResponse;
+      expect(body.items).toHaveLength(1);
+      collected.push(body.items[0].userId);
+      cursor = body.nextCursor;
+    }
+    expect(collected).toEqual(expectedOrder);
+    // 全件消費後は空ページで終端
+    const finalQs = new URLSearchParams({ lane: "completion", limit: "1" });
+    if (cursor) finalQs.set("cursor", cursor);
+    const finalRes = await request(app).get(`/api/v2/super/dispatch/send-history?${finalQs.toString()}`);
+    expect((finalRes.body as GetSendHistoryResponse).items).toEqual([]);
+  });
+
+  it("同一 processedAt がテナント (シャード) を跨いでも欠落しない (tiebreaker)", async () => {
+    const storage = new InMemoryDispatchStorage();
+    const loader = new InMemoryTenantDataLoader();
+    const SAME_TIME = "2026-06-03T01:00:00.000Z";
+    for (const t of ["tenant-a", "tenant-b"]) {
+      loader.setTenant(t, {
+        publishedCourses: [],
+        users: [{ id: `${t}-user-1`, email: `${t}@example.com`, name: t }],
+        courseProgresses: new Map(),
+        ccConfig: null,
+        name: t,
+      });
+      await storage.tryReserveCompletionNotification({
+        tenantId: t, userId: `${t}-user-1`, runId: "run-1",
+        now: SAME_TIME, leaseExpiresAt: "2026-06-03T01:10:00.000Z",
+      });
+    }
+    const app = makeApp(storage, loader);
+
+    const res = await request(app).get(
+      "/api/v2/super/dispatch/send-history?lane=completion",
+    );
+    const body = res.body as GetSendHistoryResponse;
+    expect(body.items.map((i) => i.userId).sort()).toEqual([
+      "tenant-a-user-1",
+      "tenant-b-user-1",
+    ]);
+  });
+
+  it("lane 未指定 → completion/progress 両レーンが混在してマージされる (lane=all 相当)", async () => {
+    const storage = new InMemoryDispatchStorage();
+    const loader = new InMemoryTenantDataLoader();
+    loader.setTenant("tenant-a", {
+      publishedCourses: [],
+      users: [{ id: "user-1", email: "u1@example.com", name: "U1" }],
+      courseProgresses: new Map(),
+      ccConfig: null,
+      name: "テナントA",
+    });
+    await storage.tryReserveCompletionNotification({
+      tenantId: "tenant-a", userId: "user-1", runId: "run-1",
+      now: "2026-06-03T01:00:00.000Z", leaseExpiresAt: "2026-06-03T01:10:00.000Z",
+    });
+    await storage.tryClaimProgressRecipient({
+      tenantId: "tenant-a", userId: "user-1", occurrenceId: "occ-1", runId: "run-1",
+      now: "2026-06-03T02:00:00.000Z",
+      leaseExpiresAt: "2026-06-03T02:10:00.000Z",
+      ttlExpireAt: "2026-09-03T02:00:00.000Z",
+    });
+    const app = makeApp(storage, loader);
+
+    const res = await request(app).get("/api/v2/super/dispatch/send-history");
+    const body = res.body as GetSendHistoryResponse;
+    expect(body.items.map((i) => i.lane).sort()).toEqual(["completion", "progress"]);
+  });
 });

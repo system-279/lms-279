@@ -176,16 +176,21 @@ describe("postToChat", () => {
 });
 
 describe("createChatNotifier", () => {
-  it("postToChat の結果を {ok} に写す (Secret Manager 未接続でも throw しない、silent degrade)", async () => {
-    // SecretManagerServiceClient のコンストラクタが同期的に throw するよう差し替え、
-    // 実 GCP への疎通なしで「Secret 取得失敗時に throw しない」契約のみを検証する。
-    const { SecretManagerServiceClient } = await import("@google-cloud/secret-manager");
-    vi.spyOn(SecretManagerServiceClient.prototype, "accessSecretVersion").mockRejectedValue(
-      new Error("no ADC credentials in test environment"),
-    );
-    const notifier = createChatNotifier("dummy-secret-name");
+  it("postToChat の結果を {ok} に写す (deps 注入で実 GCP/fetch への疎通なしに検証)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const getSecret = vi.fn().mockResolvedValue("https://chat.googleapis.com/webhook-url");
+    const notifier = createChatNotifier("dummy-secret-name", { fetchImpl, getSecret });
+    const result = await notifier(makeInput());
+    expect(result).toEqual({ ok: true });
+    expect(getSecret).toHaveBeenCalledWith("dummy-secret-name");
+  });
+
+  it("Secret 取得失敗でも throw せず {ok:false} を返す", async () => {
+    const fetchImpl = vi.fn();
+    const getSecret = vi.fn().mockRejectedValue(new Error("secret not found"));
+    const notifier = createChatNotifier("dummy-secret-name", { fetchImpl, getSecret });
     const result = await notifier(makeInput());
     expect(result).toEqual({ ok: false });
-    vi.restoreAllMocks();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

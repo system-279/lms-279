@@ -365,7 +365,10 @@ export async function runProgressReportDryRun(
           mimePreview: {
             from: `${settings?.signatureName ?? ""} <${senderEmail ?? ""}>`,
             to: sampleUser.email,
-            cc: ccConfig?.ownerEmail ? [ccConfig.ownerEmail] : [],
+            // 実送信の Cc ヘッダ (run-progress-reports.ts の ccResult.validCcEmails) と
+            // 一致させる。ownerEmail 単独だと notificationCcEmails の追加分が
+            // プレビューに反映されず、送信前確認の目的を果たせない (fable-review M1 反映)。
+            cc: ccDedup.validCcEmails,
             subject: built.subject,
             body: built.body,
           },

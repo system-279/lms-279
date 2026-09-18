@@ -703,7 +703,7 @@ export interface DispatchStorage {
    * 単一テナント×単一レーンの送信実績を処理日時降順で最大 limit 件取得する。
    *
    * route 層はテナント横断のマージソート (keyset merge) を行うため、本メソッドは
-   * 1 シャード分の取得のみを担う (`docs/../wobbly-exploring-sundae.md` PR2a 参照)。
+   * 1 シャード分の取得のみを担う (`routes/super/dispatch-send-history.ts` PR2a 参照)。
    *
    * 実装契約:
    *   - `processedAt desc, docId desc` で安定ソートして返す

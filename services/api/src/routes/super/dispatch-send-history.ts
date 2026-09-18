@@ -7,7 +7,7 @@
  *
  * 認可は親 (index.ts) で superAdminAuthMiddleware 適用済み (AC-31 と同型)。
  *
- * ## 設計 (計画: docs/../wobbly-exploring-sundae.md PR2a、Fable レビュー反映済み)
+ * ## 設計 (PR2a、Fable レビュー反映済み)
  *
  * `completion_notifications` / `progress_report_sends` は `tenants/{tenantId}/...`
  * のテナント別サブコレクションであり、テナント横断の一覧取得には collectionGroup クエリの

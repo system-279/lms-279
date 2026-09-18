@@ -171,16 +171,27 @@ let dispatchFactory: ReturnType<typeof buildDispatchFactory> | null = null;
 try {
   dispatchFactory = buildDispatchFactory();
 
-  // PR3 (配信可視化): 配信結果の Google Chat 通知。secret 名は env var で注入し、
-  // 未設定時は空文字列を渡す (services/notification/src/app.ts の OPS_CHAT_WEBHOOK_SECRET_NAME
-  // と同じ既存規約)。空文字列だと Secret Manager 取得が失敗し notifier は {ok:false} を返すのみで
-  // run 自体は継続する (chat-notify.ts の postToChat 契約、silent degrade)。
-  const completionChatNotifier = createChatNotifier(
-    process.env.DISPATCH_COMPLETION_NOTIFICATION_CHAT_WEBHOOK_SECRET_NAME ?? "",
-  );
-  const progressChatNotifier = createChatNotifier(
-    process.env.DISPATCH_PROGRESS_REPORT_CHAT_WEBHOOK_SECRET_NAME ?? "",
-  );
+  // PR3 (配信可視化): 配信結果の Google Chat 通知。secret 名 env var が未設定の間
+  // (docs/runbook/dispatch-chat-notification-setup.md §1/§2 の provisioning 未実施)
+  // は notifier 自体を注入しない (「省略時は通知しない」設計と一致させる)。
+  // 空文字列を渡す実装だと Secret Manager 取得が run のたびに失敗し ERROR ログが
+  // 定常発生してしまう (fable-review M3 反映、常時ノイズと実障害の区別が難しくなるため回避)。
+  const completionWebhookSecretName =
+    process.env.DISPATCH_COMPLETION_NOTIFICATION_CHAT_WEBHOOK_SECRET_NAME?.trim();
+  const progressWebhookSecretName =
+    process.env.DISPATCH_PROGRESS_REPORT_CHAT_WEBHOOK_SECRET_NAME?.trim();
+  const completionChatNotifier = completionWebhookSecretName
+    ? createChatNotifier(completionWebhookSecretName)
+    : undefined;
+  const progressChatNotifier = progressWebhookSecretName
+    ? createChatNotifier(progressWebhookSecretName)
+    : undefined;
+  if (!completionChatNotifier || !progressChatNotifier) {
+    logger.warn(
+      "Dispatch chat notification secret name(s) not configured — Chat 通知は無効 (docs/runbook/dispatch-chat-notification-setup.md 参照)",
+      { completionConfigured: Boolean(completionChatNotifier), progressConfigured: Boolean(progressChatNotifier) },
+    );
+  }
 
   app.use(
     "/api/v2/internal",

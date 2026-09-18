@@ -208,11 +208,18 @@ export function buildDeliveryReportText(input: DispatchNotifyInput): string {
 /**
  * production notifier: 指定された Secret Manager リソース名の webhook へ配信結果を投稿する。
  * `postToChat` と同じ契約で throw しない。
+ *
+ * `deps` は `postToChat` への透過的な注入口 (test で `fetchImpl`/`getSecret` を差し替え、
+ * 実 Secret Manager / 実 fetch への疎通なしに notifier の動作を検証できるようにする。
+ * fable-review L5 反映)。
  */
-export function createChatNotifier(webhookSecretName: string): DispatchNotifier {
+export function createChatNotifier(
+  webhookSecretName: string,
+  deps: ChatClientDeps = {},
+): DispatchNotifier {
   return async (input) => {
     const text = buildDeliveryReportText(input);
-    const result = await postToChat(text, webhookSecretName);
+    const result = await postToChat(text, webhookSecretName, deps);
     return { ok: result.ok };
   };
 }
