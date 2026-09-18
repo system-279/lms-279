@@ -24,6 +24,7 @@
  */
 
 import {
+  FieldPath,
   Timestamp,
   type Firestore,
   type DocumentReference,
@@ -59,12 +60,14 @@ import type {
   CompleteLaneLockInput,
   DispatchStorage,
   GetProgressRecipientInput,
+  ListSendHistoryShardInput,
   MarkFailedPermanentInput,
   MarkProgressRecipientFailedInput,
   MarkProgressRecipientSentInput,
   MarkSentInput,
   PromotePendingToManualReviewInput,
   ReserveCompletionNotificationInput,
+  SendHistoryShardItem,
   UpdateDispatchSettingsInput,
   UpdateDispatchSettingsOutcome,
   UpdateRunStatusInput,
@@ -1073,6 +1076,53 @@ export class FirestoreDispatchStorage implements DispatchStorage {
     ).get()) as DocumentSnapshot;
     if (!snap.exists) return null;
     return toProgressReportRecipient(snap.data() ?? {});
+  }
+
+  // =====================================================================
+  // Send history (PR2a、送信実績一覧)
+  // =====================================================================
+
+  /**
+   * `orderBy(processedAtField desc).orderBy(FieldPath.documentId(), desc)` は
+   * Firestore が単一フィールド + doc id の組み合わせを自動サポートするため、
+   * 追加の複合インデックス定義は不要 (公式のカーソルページング推奨パターン)。
+   */
+  async listSendHistoryShard(
+    input: ListSendHistoryShardInput,
+  ): Promise<SendHistoryShardItem[]> {
+    const collectionPath =
+      input.lane === "completion"
+        ? completionNotificationsCollection(input.tenantId)
+        : progressReportSendsCollection(input.tenantId);
+    const processedAtField = input.lane === "completion" ? "reservedAt" : "claimedAt";
+    const sentAtField = input.lane === "completion" ? "notifiedAt" : "sentAt";
+
+    let query = this.db
+      .collection(collectionPath)
+      .orderBy(processedAtField, "desc")
+      .orderBy(FieldPath.documentId(), "desc")
+      .limit(input.limit);
+
+    if (input.after) {
+      query = query.startAfter(
+        isoToTimestamp(input.after.processedAt),
+        input.after.docId,
+      );
+    }
+
+    const snap = (await query.get()) as { docs: DocumentSnapshot[] };
+    return snap.docs.map((doc) => {
+      const data = doc.data() ?? {};
+      return {
+        tenantId: input.tenantId,
+        lane: input.lane,
+        userId: (data.userId as string) ?? doc.id,
+        status: data.status as SendHistoryShardItem["status"],
+        processedAt: requireIso(data[processedAtField], processedAtField),
+        sentAt: timestampToIso(data[sentAtField]),
+        docId: doc.id,
+      };
+    });
   }
 }
 

@@ -686,3 +686,40 @@ export const DISPATCH_CONSTRAINTS = {
   /** 受講中フィルタの最低進捗率 (%、ADR-039 D-5) */
   PROGRESS_REPORT_MIN_PROGRESS_PERCENT: 1,
 } as const;
+
+// ============================================================
+// 送信実績一覧 (PR2a、super-admin向け可視化機能)
+// ============================================================
+
+/**
+ * 送信実績一覧の1行分。`completion_notifications`/`progress_report_sends` の
+ * 両コレクションを統合した表示用 DTO。
+ *
+ * 注意: `processedAt` は claim/予約時刻 (claimedAt/reservedAt) であり、実際の
+ * 送信完了時刻ではない (`sentAt` が null の場合、未送信または失敗を意味する)。
+ * この区別は Fable レビューで判明した「ソートキーが目的とずれている」問題への
+ * 対応 (列名「処理日時」で区別する)。
+ */
+export interface SendHistoryEntry {
+  lane: DispatchLane;
+  tenantId: string;
+  tenantName: string;
+  userId: string;
+  /** join 時点の受講者氏名。退会等で取得できない場合は null */
+  userName: string | null;
+  /** join 時点の受講者メールアドレス。退会等で取得できない場合は null */
+  userEmail: string | null;
+  status: ProgressReportRecipientStatus | CompletionNotificationStatus;
+  /** 処理日時 (claimedAt/reservedAt、ISO 8601)。ソートキー */
+  processedAt: string;
+  /** 送信完了時刻 (sentAt/notifiedAt、ISO 8601)。未送信/失敗時は null */
+  sentAt: string | null;
+  /** keyset カーソルの tiebreaker (Firestore doc id) */
+  docId: string;
+}
+
+export interface GetSendHistoryResponse {
+  items: SendHistoryEntry[];
+  /** 次ページのカーソル (opaque string)。null なら最終ページ */
+  nextCursor: string | null;
+}

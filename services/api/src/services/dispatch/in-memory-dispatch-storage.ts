@@ -39,12 +39,14 @@ import type {
   CompleteLaneLockInput,
   DispatchStorage,
   GetProgressRecipientInput,
+  ListSendHistoryShardInput,
   MarkFailedPermanentInput,
   MarkProgressRecipientFailedInput,
   MarkProgressRecipientSentInput,
   MarkSentInput,
   PromotePendingToManualReviewInput,
   ReserveCompletionNotificationInput,
+  SendHistoryShardItem,
   UpdateDispatchSettingsInput,
   UpdateDispatchSettingsOutcome,
   UpdateRunStatusInput,
@@ -666,6 +668,69 @@ export class InMemoryDispatchStorage implements DispatchStorage {
   ): Promise<ProgressReportRecipient | null> {
     const key = pkey(input.tenantId, input.occurrenceId, input.userId);
     return this.progressRecipients.get(key) ?? null;
+  }
+
+  // =====================================================================
+  // Send history (PR2a、送信実績一覧)
+  // =====================================================================
+
+  async listSendHistoryShard(
+    input: ListSendHistoryShardInput,
+  ): Promise<SendHistoryShardItem[]> {
+    const prefix = `${input.tenantId}${KEY_SEPARATOR}`;
+    let items: SendHistoryShardItem[];
+
+    if (input.lane === "completion") {
+      items = [];
+      for (const [key, record] of this.notifications) {
+        if (!key.startsWith(prefix)) continue;
+        items.push({
+          tenantId: input.tenantId,
+          lane: "completion",
+          userId: record.userId,
+          status: record.status,
+          processedAt: record.reservedAt,
+          sentAt: record.notifiedAt,
+          // Firestore doc id 規約 (completion_notifications/{userId}) と一致させる
+          docId: record.userId,
+        });
+      }
+    } else {
+      items = [];
+      for (const [key, record] of this.progressRecipients) {
+        if (!key.startsWith(prefix)) continue;
+        items.push({
+          tenantId: input.tenantId,
+          lane: "progress",
+          userId: record.userId,
+          status: record.status,
+          processedAt: record.claimedAt,
+          sentAt: record.sentAt,
+          // Firestore doc id 規約 (progress_report_sends/{occurrenceId}__{userId}) と一致
+          docId: `${record.occurrenceId}__${record.userId}`,
+        });
+      }
+    }
+
+    // processedAt desc, docId desc (Firestore 実装の orderBy と同じ安定ソート)
+    items.sort((a, b) => {
+      if (a.processedAt !== b.processedAt) {
+        return a.processedAt < b.processedAt ? 1 : -1;
+      }
+      return a.docId < b.docId ? 1 : a.docId > b.docId ? -1 : 0;
+    });
+
+    const after = input.after;
+    const filtered = after
+      ? items.filter((item) => {
+          if (item.processedAt !== after.processedAt) {
+            return item.processedAt < after.processedAt;
+          }
+          return item.docId < after.docId;
+        })
+      : items;
+
+    return filtered.slice(0, input.limit);
   }
 }
 

@@ -198,6 +198,7 @@ describe("recordAuditLog - best-effort (§6.1)", () => {
       markProgressRecipientFailed: vi.fn(),
       promotePendingToManualReview: vi.fn(),
       getProgressRecipient: vi.fn(),
+      listSendHistoryShard: vi.fn(),
     };
   }
 
@@ -267,6 +268,7 @@ describe("recordAuditLog - best-effort (§6.1)", () => {
       markProgressRecipientFailed: vi.fn(),
       promotePendingToManualReview: vi.fn(),
       getProgressRecipient: vi.fn(),
+      listSendHistoryShard: vi.fn(),
     };
     const warn = vi.fn();
     await recordAuditLog(

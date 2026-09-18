@@ -179,6 +179,26 @@ export class FirestoreTenantDataLoader implements TenantDataLoader {
           };
         });
       },
+
+      async getUsersByIds(
+        userIds: string[],
+      ): Promise<Pick<User, "id" | "email" | "name">[]> {
+        if (userIds.length === 0) return [];
+        // バッチ取得 (N+1 回避、tenants.ts:408 と同パターン)
+        const refs = userIds.map((id) => usersCol.doc(id));
+        const docs = await db.getAll(...refs);
+        const result: Pick<User, "id" | "email" | "name">[] = [];
+        for (const doc of docs) {
+          if (!doc.exists) continue;
+          const data = doc.data() ?? {};
+          result.push({
+            id: doc.id,
+            email: (data.email as string) ?? "",
+            name: (data.name as string | null) ?? null,
+          });
+        }
+        return result;
+      },
     };
   }
 

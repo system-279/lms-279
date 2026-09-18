@@ -41,6 +41,7 @@ import {
 import { createDispatchAuditLogsRouter } from "./dispatch-audit-logs.js";
 import { createDispatchRunsRouter } from "./dispatch-runs.js";
 import { createDispatchDryRunRouter } from "./dispatch-dry-run.js";
+import { createDispatchSendHistoryRouter } from "./dispatch-send-history.js";
 
 export interface DispatchSuperRouterDeps {
   storage: DispatchStorage;
@@ -69,6 +70,12 @@ export function createDispatchSuperRouter(
   );
   router.use(createDispatchAuditLogsRouter({ storage: deps.storage }));
   router.use(createDispatchRunsRouter({ storage: deps.storage }));
+  router.use(
+    createDispatchSendHistoryRouter({
+      storage: deps.storage,
+      loader: deps.loader,
+    }),
+  );
   router.use(
     createDispatchDryRunRouter({
       storage: deps.storage,

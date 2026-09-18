@@ -100,6 +100,17 @@ export interface DispatchTenantDataView {
       "courseId" | "isCompleted" | "totalLessons" | "completedLessons"
     >[]
   >;
+  /**
+   * PR2a (送信実績一覧): userId 配列からユーザー情報をバッチ取得する。
+   * 退会等で存在しない userId は結果配列に含めない (呼び出し側で userId → 情報の
+   * map 化を想定、不在は「表示できない」扱いにする)。
+   *
+   * 実装契約: 逐次 N+1 読み取りを避け、Firestore 実装は `db.getAll()` 等の
+   * バッチ取得を使うこと (`tenants.ts:408` 参照)。
+   */
+  getUsersByIds(
+    userIds: string[],
+  ): Promise<Pick<User, "id" | "email" | "name">[]>;
 }
 
 /**
@@ -222,6 +233,10 @@ export class InMemoryTenantDataLoader implements TenantDataLoader {
       },
       async listCourseProgressForUser(userId) {
         return fixture.courseProgresses.get(userId) ?? [];
+      },
+      async getUsersByIds(userIds) {
+        const idSet = new Set(userIds);
+        return fixture.users.filter((u) => idSet.has(u.id));
       },
     };
   }

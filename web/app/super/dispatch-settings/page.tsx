@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import type {
   GetDispatchSettingsResponse,
   ProgressReportSettings,
@@ -409,6 +410,19 @@ export default function DispatchSettingsPage() {
       >
         <RunHistoryTable />
       </Section>
+
+      <div className="rounded-md border p-4">
+        <p className="text-sm">
+          「いつ・どのテナントの・誰に送ったか」を受講者単位で確認したい場合は
+          {" "}
+          <Link
+            href="/super/dispatch-history"
+            className="font-medium text-primary underline underline-offset-2"
+          >
+            送信実績を見る →
+          </Link>
+        </p>
+      </div>
     </div>
   );
 }
