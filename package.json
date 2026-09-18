@@ -16,6 +16,9 @@
     },
     "eslint": {
       "js-yaml": "^4.3.2"
+    },
+    "@modelcontextprotocol/node": {
+      "hono": "^4.13.8"
     }
   },
   "scripts": {
