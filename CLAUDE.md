@@ -58,7 +58,7 @@ npm run test
 
 - Node.js v24.12.0 (LTS)
 - TypeScript 5.9.3, ES Modules (`type: "module"`)
-- Next.js 16.2.6, React 19.2.8
+- Next.js 16.3.3, React 19.2.8
 - Express 5.2.1
 - Firestore 8.6.0, GCS 7.16.0
 - Firebase Admin SDK 13.10.0

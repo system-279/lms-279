@@ -12,7 +12,7 @@
 
 | 技術 | バージョン | 用途 |
 |------|----------|------|
-| Next.js | 16.2.6 | App Router, SSR/RSC |
+| Next.js | 16.3.3 | App Router, SSR/RSC |
 | React | 19.2.8 | UIフレームワーク |
 | Tailwind CSS | 4.1.18 | スタイリング |
 | Radix UI | 各種 | アクセシブルUIコンポーネント |
