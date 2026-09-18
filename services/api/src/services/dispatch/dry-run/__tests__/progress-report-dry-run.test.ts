@@ -21,9 +21,11 @@ import {
   type TenantDataLoader,
   type DispatchTenantDataView,
 } from "../../tenant-data-loader.js";
+import type { ProgressPdfData } from "@lms-279/shared-types";
 import {
   runProgressReportDryRun,
   type ProgressDryRunLogger,
+  type ProgressDryRunSampleBuilder,
   AVG_PER_USER_MS,
   USER_CONCURRENCY,
   SCALE_TRIGGER_THRESHOLD,
@@ -174,6 +176,7 @@ describe("runProgressReportDryRun", () => {
       const warnSpy = vi.fn();
       const logger: ProgressDryRunLogger = {
         warnTenantDocNotFound: warnSpy,
+        warnSampleBuildFailed: vi.fn(),
       };
       // 専用 mock: listAllTenantIds で出るが getTenantInfo は null
       const ghostLoader: TenantDataLoader = {
@@ -538,6 +541,150 @@ describe("runProgressReportDryRun", () => {
 
       expect(consoleSpy).not.toHaveBeenCalled();
       consoleSpy.mockRestore();
+    });
+  });
+
+  describe("PR2b: wouldSendSample (テナント代表サンプル文面プレビュー)", () => {
+    function stubSampleBuilder(): ProgressDryRunSampleBuilder {
+      return {
+        async buildPdfData({ tenantId, tenantName, userId }): Promise<ProgressPdfData> {
+          return {
+            generatedAt: NOW.toISOString(),
+            user: { id: userId, name: `name-${userId}`, email: `${userId}@example.com` },
+            tenant: { id: tenantId, name: tenantName, ownerEmail: null },
+            deadline: {
+              enrolledAt: null,
+              deadlineBaseDate: null,
+              videoAccessUntil: null,
+              quizAccessUntil: null,
+              daysRemainingVideo: null,
+              daysRemainingQuiz: null,
+            },
+            courses: [],
+            pace: {
+              status: "ongoing",
+              remainingLessons: 1,
+              remainingDays: null,
+              lessonsPerWeek: null,
+              minutesPerDay: null,
+            },
+            videoSummary: { totalWatchedSec: 0, totalDurationSec: 0 },
+          };
+        },
+      };
+    }
+
+    it("sampleBuilder 未注入なら wouldSendSample=[] (後方互換)", async () => {
+      const storage = new InMemoryDispatchStorage();
+      const loader = new InMemoryTenantDataLoader();
+      const courseProgresses = new Map<string, ReturnType<typeof partialProgress>>();
+      courseProgresses.set("u1", partialProgress());
+      loader.setTenant(
+        "t1",
+        makeFixture({
+          users: [{ id: "u1", email: "u1@example.com", name: "U1" }],
+          courseProgresses,
+        }),
+      );
+
+      const result = await runProgressReportDryRun({ storage, loader, now: NOW });
+      expect(result.wouldSendSample).toEqual([]);
+    });
+
+    it("sampleBuilder 注入時、wouldSendCount>0 のテナントに実文面サンプルを1件含める", async () => {
+      const storage = new InMemoryDispatchStorage();
+      const loader = new InMemoryTenantDataLoader();
+      const courseProgresses = new Map<string, ReturnType<typeof partialProgress>>();
+      courseProgresses.set("u1", partialProgress());
+      loader.setTenant(
+        "t1",
+        makeFixture({
+          users: [{ id: "u1", email: "u1@example.com", name: "U1" }],
+          courseProgresses,
+          name: "テナント1",
+        }),
+      );
+
+      const result = await runProgressReportDryRun({
+        storage,
+        loader,
+        now: NOW,
+        sampleBuilder: stubSampleBuilder(),
+        senderEmail: "sender@example.com",
+      });
+
+      expect(result.wouldSendSample).toHaveLength(1);
+      expect(result.wouldSendSample[0]).toMatchObject({
+        tenantId: "t1",
+        userId: "u1",
+        userEmail: "u1@example.com",
+      });
+      expect(result.wouldSendSample[0].mimePreview.subject).toContain("テナント1");
+      expect(result.wouldSendSample[0].mimePreview.to).toBe("u1@example.com");
+    });
+
+    it("複数候補がいる場合 userId 昇順の先頭 1 名を決定的に選ぶ", async () => {
+      const storage = new InMemoryDispatchStorage();
+      const loader = new InMemoryTenantDataLoader();
+      const courseProgresses = new Map<string, ReturnType<typeof partialProgress>>();
+      courseProgresses.set("u-b", partialProgress());
+      courseProgresses.set("u-a", partialProgress());
+      courseProgresses.set("u-c", partialProgress());
+      loader.setTenant(
+        "t1",
+        makeFixture({
+          users: [
+            { id: "u-b", email: "b@example.com", name: "B" },
+            { id: "u-a", email: "a@example.com", name: "A" },
+            { id: "u-c", email: "c@example.com", name: "C" },
+          ],
+          courseProgresses,
+        }),
+      );
+
+      const result = await runProgressReportDryRun({
+        storage,
+        loader,
+        now: NOW,
+        sampleBuilder: stubSampleBuilder(),
+      });
+
+      expect(result.wouldSendSample).toHaveLength(1);
+      expect(result.wouldSendSample[0].userId).toBe("u-a");
+    });
+
+    it("sampleBuilder が throw しても dry-run 全体は継続し、logger に警告する", async () => {
+      const storage = new InMemoryDispatchStorage();
+      const loader = new InMemoryTenantDataLoader();
+      const courseProgresses = new Map<string, ReturnType<typeof partialProgress>>();
+      courseProgresses.set("u1", partialProgress());
+      loader.setTenant(
+        "t1",
+        makeFixture({
+          users: [{ id: "u1", email: "u1@example.com", name: "U1" }],
+          courseProgresses,
+        }),
+      );
+
+      const warnSpy = vi.fn();
+      const failingBuilder: ProgressDryRunSampleBuilder = {
+        buildPdfData: () => Promise.reject(new Error("boom")),
+      };
+
+      const result = await runProgressReportDryRun({
+        storage,
+        loader,
+        now: NOW,
+        sampleBuilder: failingBuilder,
+        logger: {
+          warnTenantDocNotFound: () => {},
+          warnSampleBuildFailed: warnSpy,
+        },
+      });
+
+      expect(result.wouldSendSample).toEqual([]);
+      expect(result.tenantsSummary[0].wouldSendCount).toBe(1); // 集計自体は影響を受けない
+      expect(warnSpy).toHaveBeenCalledWith("t1", "u1", expect.any(Error));
     });
   });
 });

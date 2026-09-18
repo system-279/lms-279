@@ -60,6 +60,7 @@ function progressResult(
     estimatedDurationMs: 0,
     estimatedPdfSizeKbRange: { min: 150, typical: 350, max: 1200 },
     scaleTriggerExceeded: false,
+    wouldSendSample: [],
     ...overrides,
   };
 }

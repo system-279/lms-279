@@ -81,6 +81,7 @@ function makeProgressResult(
     estimatedDurationMs: 2000,
     estimatedPdfSizeKbRange: { min: 150, typical: 350, max: 1200 },
     scaleTriggerExceeded: false,
+    wouldSendSample: [],
     ...partial,
   };
 }
@@ -169,6 +170,59 @@ describe("DryRunPreview (progress)", () => {
     expect(screen.getAllByText("14").length).toBeGreaterThanOrEqual(1);
     // PDF サイズ範囲は固有テキスト
     expect(screen.getByText("150–1200 KB")).toBeInTheDocument();
+  });
+
+  it("wouldSendSample が空なら「サンプル文面プレビューの対象者はいません」を表示する (PR2b)", () => {
+    render(
+      <DryRunPreview
+        lane="progress"
+        result={makeProgressResult()}
+        isLoading={false}
+        error={null}
+        lastFetchedAt={NOW}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText("サンプル文面プレビューの対象者はいません。"),
+    ).toBeInTheDocument();
+  });
+
+  it("wouldSendSample があれば実文面 (件名・本文) を表示する (PR2b)", () => {
+    render(
+      <DryRunPreview
+        lane="progress"
+        result={makeProgressResult({
+          wouldSendSample: [
+            {
+              tenantId: "tenant-a",
+              userId: "user-1",
+              userEmail: "user1@example.com",
+              userName: "受講者一郎",
+              mimePreview: {
+                from: "DXcollege運営スタッフ <sender@example.com>",
+                to: "user1@example.com",
+                cc: [],
+                subject: "【テナントA】受講者一郎 さんの受講進捗レポート (2026-06-04)",
+                body: "受講者一郎 様\n\nお世話になっております。",
+              },
+            },
+          ],
+        })}
+        isLoading={false}
+        error={null}
+        lastFetchedAt={NOW}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/サンプル文面プレビュー/)).toBeInTheDocument();
+    expect(screen.getByText("受講者一郎")).toBeInTheDocument();
+    // details 内は既定で開かれていないため getByText で subject/body を直接検証する前に開く
+    fireEvent.click(screen.getByText(/サンプル文面プレビュー/));
+    fireEvent.click(screen.getByText("MIME プレビュー"));
+    expect(
+      screen.getByText("【テナントA】受講者一郎 さんの受講進捗レポート (2026-06-04)"),
+    ).toBeInTheDocument();
   });
 
   it("テナント別内訳テーブルにテナント名と tenantId を併記する (PR1)", () => {

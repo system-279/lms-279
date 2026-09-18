@@ -547,6 +547,22 @@ export interface ProgressDryRunTenantSummary {
 }
 
 /** 進捗レポート dry-run の戻り値。`lane: "progress"` で discriminated union のタグ化。 */
+/**
+ * 進捗レポート dry-run のテナント代表サンプル文面プレビュー (PR2b)。
+ *
+ * 完了通知の `CompletionDryRunTarget` と異なり、進捗レポートは受講者ごとに本文が
+ * 異なり生成コストが高いため、**テナントごと `userId` 昇順の先頭 1 名のみ**を対象にする
+ * (決定的選定規則。リロードのたびに対象が変わらないようにするため)。
+ * `wouldSendCount === 0` のテナントにはサンプルが存在しない。
+ */
+export interface ProgressDryRunSample {
+  tenantId: string;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  mimePreview: DryRunMimePreview;
+}
+
 export interface ProgressDryRunResult {
   lane: "progress";
   evaluatedAt: string;
@@ -569,6 +585,11 @@ export interface ProgressDryRunResult {
   estimatedPdfSizeKbRange: { min: number; typical: number; max: number };
   /** scale trigger: 全テナント合計 300 名超で Cloud Tasks 移行検討 */
   scaleTriggerExceeded: boolean;
+  /**
+   * テナントごとの代表サンプル文面プレビュー (PR2b)。サンプル生成器が未注入の場合は
+   * 空配列 (既存の呼び出し元との後方互換)。PDF 実体は生成しない。
+   */
+  wouldSendSample: ProgressDryRunSample[];
 }
 
 /**
