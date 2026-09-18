@@ -518,6 +518,11 @@ export type ProgressDryRunSkipReason =
 
 export interface ProgressDryRunTenantSummary {
   tenantId: string;
+  /**
+   * テナント表示名。`tenants/{tid}` doc 不在 (`skipReason === "tenant_doc_not_found"`)
+   * の場合のみ tenantId をフォールバックとして使う。
+   */
+  tenantName: string;
   skipped: boolean;
   /** `skipped === true` のときのみ設定される */
   skipReason?: ProgressDryRunSkipReason;
@@ -596,6 +601,11 @@ export interface CompletionDryRunTarget {
 
 export interface CompletionDryRunTenantSummary {
   tenantId: string;
+  /**
+   * テナント表示名。`tenants/{tid}` doc 不在等で取得できない場合のみ tenantId を
+   * フォールバックとして使う（`ProgressDryRunTenantSummary.tenantName` と同一規約）。
+   */
+  tenantName: string;
   skipped: boolean;
   /** `skipped === true` のときのみ設定される */
   skipReason?: CompletionDryRunSkipReason;

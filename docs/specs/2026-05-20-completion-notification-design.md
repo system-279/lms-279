@@ -139,7 +139,7 @@ Cloud Scheduler は固定で JST 毎時 00 分起動 (`time-zone: Asia/Tokyo`)�
 
 | 階層 | 並列度 | 根拠 |
 |---|---|---|
-| テナント間 | 直列 | 現状 2 テナント、ログ可読性優先 |
+| テナント間 | 直列 | 設計当時 (2026-05-20) は 2 テナント、ログ可読性優先。**2026-09-18 実機確認時点で対象テナント数は 4 に増加** (OQ-4 参照)、直列前提の再評価が必要 |
 | テナント内 user | 8 | 既存 `progress-pdf.ts` `LESSON_FETCH_CONCURRENCY` と同値、Firestore quota 配慮 |
 | user 内 (PDF 生成 + Gmail send) | 順次 | 依存関係あり |
 
@@ -764,7 +764,7 @@ SendAs 設定は即時反映。設計仕様書 §8.1 の **「SendAs 実機 send
 | **OQ-1** | Gmail API が `lms-279` プロジェクトで有効化済みか | `gcloud services list --enabled --project=lms-279 \| grep gmail` |
 | **OQ-2** | ~~`dxcollege@279279.net` が Google Group の場合、DWD subject として `gmail.users.messages.send` が成功するか~~ | ✅ **RESOLVED (2026-05-21)**: smoke check 3 回 (run #26166362814 / #26186034548 / #26186218233) で Group エイリアスへの DWD impersonation 不可と確定。**ADR-037 案 X (SendAs) を採用**。新たに「SendAs 実機 send smoke」を OQ-X として後続 |
 | **OQ-3** | DWD scope 追加 (gmail.send) の Workspace 管理コンソール作業は本田様が実施可能な権限を持つか | ✅ **RESOLVED (2026-05-20)**: 本田様が Workspace 管理コンソールで `gmail.send` scope を追加完了、smoke 3 回目で動作確認済 |
-| **OQ-4** | Cloud Run 実行制限 300 秒で全テナント全 user の走査が完了するか | 現状 2 テナント × user 数で実測 |
+| **OQ-4** | Cloud Run 実行制限 300 秒で全テナント全 user の走査が完了するか | ⚠️ **未解決、前提が陳腐化 (2026-09-18 確認)**: 本表作成時は「現状 2 テナント」を前提としていたが、実機確認 (`/super/dispatch-settings` プレビュー) で対象テナント数は既に **4** に増加している。実測による解決は未実施のまま。テナント数増加傾向を踏まえ、実測または lease+checkpoint 設計 (§3.3 記載の将来課題) の前倒し着手を検討すること |
 | **OQ-5** | 既存 `tenants/{tenantId}` ドキュメントへのフィールド追加は backfill 不要か | Firestore は欠損フィールドを `undefined` 扱い、`sanitizeForUpdate` で対応 |
 | **OQ-6** | Cloud Scheduler の OIDC token audience は Cloud Run service URL でよいか | `services/api` の URL を使用 |
 | **OQ-7 (新規)** | **既存 super-admin auth middleware の認証方式は Firebase Bearer Token か (cookie 不使用か)** (Codex Important-9) | 実装着手前に既存コード確認、Bearer なら CSRF 対策不要を AC-31 で明示済 |

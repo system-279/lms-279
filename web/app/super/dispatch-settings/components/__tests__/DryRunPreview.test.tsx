@@ -65,6 +65,7 @@ function makeProgressResult(
     tenantsSummary: [
       {
         tenantId: "tenant-a",
+        tenantName: "テナントA",
         skipped: false,
         usersScanned: 10,
         candidateCount: 10,
@@ -102,6 +103,7 @@ function makeCompletionResult(
     tenantsSummary: [
       {
         tenantId: "tenant-a",
+        tenantName: "テナントA",
         skipped: false,
         usersScanned: 10,
         eligibleCount: 1,
@@ -169,6 +171,36 @@ describe("DryRunPreview (progress)", () => {
     expect(screen.getByText("150–1200 KB")).toBeInTheDocument();
   });
 
+  it("テナント別内訳テーブルにテナント名と tenantId を併記する (PR1)", () => {
+    render(
+      <DryRunPreview
+        lane="progress"
+        result={makeProgressResult()}
+        isLoading={false}
+        error={null}
+        lastFetchedAt={NOW}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("テナントA")).toBeInTheDocument();
+    expect(screen.getByText("(tenant-a)")).toBeInTheDocument();
+  });
+
+  it("completion レーンのテナント別内訳テーブルにもテナント名を表示する (PR1)", () => {
+    render(
+      <DryRunPreview
+        lane="completion"
+        result={makeCompletionResult()}
+        isLoading={false}
+        error={null}
+        lastFetchedAt={NOW}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("テナントA")).toBeInTheDocument();
+    expect(screen.getByText("(tenant-a)")).toBeInTheDocument();
+  });
+
   it("scaleTriggerExceeded=true で 300 名超 warning が出る (ADR-039)", () => {
     render(
       <DryRunPreview
@@ -209,6 +241,7 @@ describe("DryRunPreview (progress)", () => {
           tenantsSummary: [
             {
               tenantId: "tenant-b",
+              tenantName: "テナントB",
               skipped: true,
               skipReason: "progress_report_disabled",
               usersScanned: 0,
@@ -334,6 +367,7 @@ describe("DryRunPreview (AC-α7-04 全 skipReason 網羅)", () => {
             tenantsSummary: [
               {
                 tenantId: `tenant-${reason}`,
+                tenantName: `テナント-${reason}`,
                 skipped: true,
                 skipReason: reason,
                 usersScanned: 0,
@@ -370,6 +404,7 @@ describe("DryRunPreview (AC-α7-04 全 skipReason 網羅)", () => {
             tenantsSummary: [
               {
                 tenantId: `tenant-${reason}`,
+                tenantName: `テナント-${reason}`,
                 skipped: true,
                 skipReason: reason,
                 usersScanned: 0,

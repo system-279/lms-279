@@ -192,6 +192,8 @@ export class FirestoreTenantDataLoader implements TenantDataLoader {
       // §4.1.2: completionNotificationEnabled は default true (既存テナントの後方互換)
       completionNotificationEnabled:
         (data.completionNotificationEnabled as boolean | undefined) ?? true,
+      // dispatch 可視化機能用。フォールバック規約は factory.ts buildProductionPdf と同一
+      name: typeof data.name === "string" ? data.name : tenantId,
     };
   }
 
@@ -207,6 +209,8 @@ export class FirestoreTenantDataLoader implements TenantDataLoader {
       // progressReportEnabled は default false (opt-in、ADR-039 D-6)
       progressReportEnabled:
         (data.progressReportEnabled as boolean | undefined) ?? false,
+      // dispatch 可視化機能用。フォールバック規約は factory.ts buildProductionPdf と同一
+      name: typeof data.name === "string" ? data.name : tenantId,
     };
   }
 }

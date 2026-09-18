@@ -149,6 +149,7 @@ export async function runProgressReportDryRun(
       logger.warnTenantDocNotFound(tenantId);
       tenantsSummary.push({
         tenantId,
+        tenantName: tenantId,
         skipped: true,
         skipReason: "tenant_doc_not_found",
         usersScanned: 0,
@@ -164,6 +165,7 @@ export async function runProgressReportDryRun(
     if (!tenantInfo.active) {
       tenantsSummary.push({
         tenantId,
+        tenantName: tenantInfo.name,
         skipped: true,
         skipReason: "tenant_not_active",
         usersScanned: 0,
@@ -179,6 +181,7 @@ export async function runProgressReportDryRun(
     if (!tenantInfo.progressReportEnabled) {
       tenantsSummary.push({
         tenantId,
+        tenantName: tenantInfo.name,
         skipped: true,
         skipReason: "progress_report_disabled",
         usersScanned: 0,
@@ -206,6 +209,7 @@ export async function runProgressReportDryRun(
     if (publishedCourses.length === 0) {
       tenantsSummary.push({
         tenantId,
+        tenantName: tenantInfo.name,
         skipped: true,
         skipReason: "no_published_courses",
         usersScanned: 0,
@@ -262,6 +266,7 @@ export async function runProgressReportDryRun(
 
     tenantsSummary.push({
       tenantId,
+      tenantName: tenantInfo.name,
       skipped: false,
       usersScanned: users.length,
       candidateCount,

@@ -396,7 +396,12 @@ function SummaryRow({
     : null;
   return (
     <tr className="border-b last:border-b-0">
-      <td className="py-1 pr-2 font-mono text-[11px]">{summary.tenantId}</td>
+      <td className="py-1 pr-2">
+        <span>{summary.tenantName}</span>
+        <span className="ml-1 font-mono text-[10px] text-muted-foreground">
+          ({summary.tenantId})
+        </span>
+      </td>
       <td className="py-1 pr-2">
         {summary.skipped ? (
           <Badge variant="secondary">{skipLabel ?? "skip"}</Badge>

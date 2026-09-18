@@ -177,6 +177,7 @@ describe("FirestoreTenantDataLoader.getTenantCcConfig", () => {
   it("tenant doc のフィールドから CcConfig を組み立てる", async () => {
     const m = buildMockDb();
     m.seedTenant("tenant-a", {
+      name: "テナントA",
       ownerEmail: "owner@a.example.com",
       notificationCcEmails: ["cc1@a.example.com", "cc2@a.example.com"],
       completionNotificationEnabled: true,
@@ -187,6 +188,7 @@ describe("FirestoreTenantDataLoader.getTenantCcConfig", () => {
       ownerEmail: "owner@a.example.com",
       notificationCcEmails: ["cc1@a.example.com", "cc2@a.example.com"],
       completionNotificationEnabled: true,
+      name: "テナントA",
     });
   });
 
@@ -209,7 +211,19 @@ describe("FirestoreTenantDataLoader.getTenantCcConfig", () => {
       ownerEmail: null,
       notificationCcEmails: [],
       completionNotificationEnabled: false,
+      // name 未設定 → tenantId をフォールバック (PR1)
+      name: "tenant-b",
     });
+  });
+
+  it("name 未定義 → tenantId をフォールバック (PR1)", async () => {
+    const m = buildMockDb();
+    m.seedTenant("tenant-c", {
+      completionNotificationEnabled: true,
+    });
+    const loader = new FirestoreTenantDataLoader(m.db);
+    const config = await loader.getTenantCcConfig("tenant-c");
+    expect(config?.name).toBe("tenant-c");
   });
 
   it("completionNotificationEnabled 未定義 → default true (既存テナントの後方互換)", async () => {
