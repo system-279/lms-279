@@ -63,6 +63,8 @@ import { buildProgressReportMime } from "./progress-mime-builder.js";
 import { recordAuditLog } from "./dispatch-audit.js";
 import { sanitizeErrorForAudit } from "./dispatch-error-sanitizer.js";
 import { RunAbortError, type DispatchEnv } from "./run-completion-notifications.js";
+import { notifyDispatchResult } from "./chat-notify.js";
+import type { DispatchNotifier, TenantMetricsEntry } from "./chat-notify.js";
 
 import type { DispatchStorage } from "./dispatch-storage.js";
 import type {
@@ -126,6 +128,11 @@ export interface RunProgressReportsInput {
   userConcurrency?: number;
   /** raw MIME 送信注入点 (テスト時 mock) */
   sendRaw?: (input: SendRawMessageInput) => Promise<SendCompletionMailResult>;
+  /**
+   * PR3: 配信結果の Google Chat 通知。省略時は通知しない (既存呼び出し元との後方互換)。
+   * production wiring は `routes/internal/progress-reports.ts` が `createChatNotifier` で行う。
+   */
+  notifier?: DispatchNotifier;
 }
 
 /**
@@ -210,7 +217,7 @@ function responseFromMetrics(
 export async function runProgressReports(
   input: RunProgressReportsInput,
 ): Promise<RunProgressReportsResponse> {
-  const { runId, occurrenceId, now, storage, loader, env, pdfBuilder } = input;
+  const { runId, occurrenceId, now, storage, loader, env, pdfBuilder, notifier } = input;
   const sendRaw = input.sendRaw ?? defaultSendRawMessage;
   const userConcurrency = input.userConcurrency ?? DEFAULT_USER_CONCURRENCY;
 
@@ -261,6 +268,7 @@ export async function runProgressReports(
     failed: 0,
     pendingPromotedToManualReview: 0,
   };
+  const perTenantMetrics: TenantMetricsEntry[] = [];
 
   try {
     const tenantIds = await loader.listAllTenantIds();
@@ -285,26 +293,54 @@ export async function runProgressReports(
         dataView.listProgressReportTargetUsers(now),
       ]);
 
-      // ⑦ user 並列度 8 (FR-3)
-      await runWithConcurrency(users, userConcurrency, async (user) => {
-        await processProgressUser({
-          tenantId,
-          user,
-          publishedCourses,
-          ccConfig,
-          dataView,
-          settings,
-          runId,
-          runStartedAt,
-          occurrenceId,
-          now,
-          storage,
-          env,
-          pdfBuilder,
-          sendRaw,
-          metrics,
+      // PR3: テナントごとに独立した集計オブジェクトへ記録し、後で全体 metrics に合算する
+      const tenantMetrics: ProgressMetrics = {
+        processedTenants: 0,
+        sent: 0,
+        skipped: 0,
+        failed: 0,
+        pendingPromotedToManualReview: 0,
+      };
+
+      // try/finally で必ず merge する (pr-review-toolkit silent-failure-hunter HIGH 反映):
+      // runWithConcurrency が RunAbortError 等で reject した場合、abort 発生時点で
+      // 既に処理済みだったユーザー分の件数が finally 無しだと merge されずに失われ、
+      // 外側の metrics (audit log / abortLaneLock / Chat 通知の totalSent いずれにも使われる)
+      // が実際より過小に報告されてしまう (PR3 で tenantMetrics バッファを導入した際の regression)。
+      try {
+        // ⑦ user 並列度 8 (FR-3)
+        await runWithConcurrency(users, userConcurrency, async (user) => {
+          await processProgressUser({
+            tenantId,
+            user,
+            publishedCourses,
+            ccConfig,
+            dataView,
+            settings,
+            runId,
+            runStartedAt,
+            occurrenceId,
+            now,
+            storage,
+            env,
+            pdfBuilder,
+            sendRaw,
+            metrics: tenantMetrics,
+          });
         });
-      });
+      } finally {
+        metrics.sent += tenantMetrics.sent;
+        metrics.skipped += tenantMetrics.skipped;
+        metrics.failed += tenantMetrics.failed;
+        metrics.pendingPromotedToManualReview += tenantMetrics.pendingPromotedToManualReview;
+        perTenantMetrics.push({
+          tenantId,
+          tenantName: tenantInfo.name,
+          sent: tenantMetrics.sent,
+          failed: tenantMetrics.failed,
+          manualReviewRequired: tenantMetrics.pendingPromotedToManualReview,
+        });
+      }
     }
 
     // ⑭ run 完了 — durationMs を audit log に記録 (evaluator AC-PR-21 反映)。
@@ -317,6 +353,17 @@ export async function runProgressReports(
       eventType: "progress_report_run_completed",
       durationMs: runDurationMs,
       now,
+    });
+    await notifyDispatchResult({
+      notifier,
+      outcome: "completed",
+      lane: "progress",
+      runId,
+      occurrenceId,
+      totalSent: metrics.sent,
+      totalFailed: metrics.failed,
+      totalManualReviewRequired: metrics.pendingPromotedToManualReview,
+      perTenant: perTenantMetrics,
     });
     return responseFromMetrics(runId, occurrenceId, metrics);
   } catch (err) {
@@ -336,20 +383,45 @@ export async function runProgressReports(
         durationMs: abortDurationMs,
         now,
       });
+      await notifyDispatchResult({
+        notifier,
+        outcome: "aborted",
+        lane: "progress",
+        runId,
+        occurrenceId,
+        totalSent: metrics.sent,
+        totalFailed: metrics.failed,
+        totalManualReviewRequired: metrics.pendingPromotedToManualReview,
+        perTenant: perTenantMetrics,
+        abortedReason: sanitizedCauseMessage,
+      });
       return responseFromMetrics(runId, occurrenceId, metrics);
     }
     // 想定外エラーの abort 経路: lock 解放 + audit 記録 (code-review #8 反映、
     // 完了通知レーンとの対称性確保。errorMessage は evaluator LOW 反映で明示 sanitize、
     // run-completion-notifications.ts L274 の pattern と統一)
     await abortLaneLock(storage, "progress", runId, "unexpected_error");
+    const sanitizedErrorMessage = sanitizeErrorForAudit(err);
     await recordAuditLog(storage, {
       runId,
       runStartedAt,
       eventType: "progress_report_run_aborted",
       errorCode: "unexpected_error",
-      errorMessage: sanitizeErrorForAudit(err),
+      errorMessage: sanitizedErrorMessage,
       durationMs: abortDurationMs,
       now,
+    });
+    await notifyDispatchResult({
+      notifier,
+      outcome: "unexpected_error",
+      lane: "progress",
+      runId,
+      occurrenceId,
+      totalSent: metrics.sent,
+      totalFailed: metrics.failed,
+      totalManualReviewRequired: metrics.pendingPromotedToManualReview,
+      perTenant: perTenantMetrics,
+      abortedReason: sanitizedErrorMessage,
     });
     throw err;
   }

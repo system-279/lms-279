@@ -38,6 +38,8 @@ function buildMockDb() {
     collection: string;
     where: [string, string, unknown][];
     limit?: number;
+    orderBy: [string, string][];
+    startAfter?: unknown[];
   }[] = [];
   const docState = new Map<string, MockDoc>();
   let nextQueryResult: { docs: MockDoc[]; empty: boolean } = { docs: [], empty: true };
@@ -67,14 +69,24 @@ function buildMockDb() {
 
   function buildQuery(collectionPath: string) {
     const wheres: [string, string, unknown][] = [];
+    const orderBys: [string, string][] = [];
     let limitVal: number | undefined;
+    let startAfterVal: unknown[] | undefined;
     const query: Record<string, unknown> = {
       where(field: string, op: string, value: unknown) {
         wheres.push([field, op, value]);
         return query;
       },
+      orderBy(field: string | { toString(): string }, direction: string) {
+        orderBys.push([typeof field === "string" ? field : field.toString(), direction]);
+        return query;
+      },
       limit(n: number) {
         limitVal = n;
+        return query;
+      },
+      startAfter(...values: unknown[]) {
+        startAfterVal = values;
         return query;
       },
       async get() {
@@ -82,6 +94,8 @@ function buildMockDb() {
           collection: collectionPath,
           where: [...wheres],
           limit: limitVal,
+          orderBy: [...orderBys],
+          startAfter: startAfterVal,
         });
         return nextQueryResult;
       },
@@ -103,9 +117,21 @@ function buildMockDb() {
           value,
         );
       },
+      orderBy(field: string | { toString(): string }, direction: string) {
+        const q = buildQuery(collectionPath);
+        return (
+          q.orderBy as (f: string | { toString(): string }, d: string) => unknown
+        )(field, direction);
+      },
       // collection.get() は filter なしの全件取得 (query なしクエリ) を表す
       async get() {
-        queryCalls.push({ collection: collectionPath, where: [], limit: undefined });
+        queryCalls.push({
+          collection: collectionPath,
+          where: [],
+          limit: undefined,
+          orderBy: [],
+          startAfter: undefined,
+        });
         return nextQueryResult;
       },
     };
@@ -834,5 +860,103 @@ describe("FirestoreDispatchStorage.listAuditLogs", () => {
         ["eventType", "==", "user_notified"],
       ]),
     );
+  });
+});
+
+// ============================================================
+// listSendHistoryShard (PR2a、送信実績一覧)
+// ============================================================
+
+describe("FirestoreDispatchStorage.listSendHistoryShard", () => {
+  it("completion レーン: 正しい collection path・orderBy・limit を発行し、reservedAt/notifiedAt を変換する", async () => {
+    const m = buildMockDb();
+    m.setNextQueryResult([
+      {
+        exists: true,
+        id: "user-1",
+        data: () => ({
+          userId: "user-1",
+          status: "sent",
+          reservedAt: Timestamp.fromDate(NOW_DATE),
+          notifiedAt: Timestamp.fromDate(NOW_DATE),
+        }),
+      },
+    ]);
+    const storage = new FirestoreDispatchStorage(m.db);
+    const items = await storage.listSendHistoryShard({
+      tenantId: "tenant-a",
+      lane: "completion",
+      limit: 50,
+    });
+
+    expect(m.collectionCalls).toContain("tenants/tenant-a/completion_notifications");
+    expect(m.queryCalls).toHaveLength(1);
+    expect(m.queryCalls[0].orderBy[0]).toEqual(["reservedAt", "desc"]);
+    // tiebreaker: 同一 processedAt の並列 claim/reservation を安定ソートするための
+    // 2番目の orderBy (FieldPath.documentId() desc)。方向の取り違えや削除は
+    // ページング正確性の要のため明示的に assert する (test-analyzer 指摘反映)。
+    expect(m.queryCalls[0].orderBy[1]).toEqual(["__name__", "desc"]);
+    expect(m.queryCalls[0].limit).toBe(50);
+    expect(m.queryCalls[0].startAfter).toBeUndefined();
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      tenantId: "tenant-a",
+      lane: "completion",
+      userId: "user-1",
+      status: "sent",
+      processedAt: NOW_ISO,
+      sentAt: NOW_ISO,
+      docId: "user-1",
+    });
+  });
+
+  it("progress レーン: claimedAt/sentAt フィールド名を使う", async () => {
+    const m = buildMockDb();
+    m.setNextQueryResult([
+      {
+        exists: true,
+        id: "occ-1__user-1",
+        data: () => ({
+          userId: "user-1",
+          status: "pending",
+          claimedAt: Timestamp.fromDate(NOW_DATE),
+          sentAt: null,
+        }),
+      },
+    ]);
+    const storage = new FirestoreDispatchStorage(m.db);
+    const items = await storage.listSendHistoryShard({
+      tenantId: "tenant-a",
+      lane: "progress",
+      limit: 50,
+    });
+
+    expect(m.collectionCalls).toContain("tenants/tenant-a/progress_report_sends");
+    expect(m.queryCalls[0].orderBy[0]).toEqual(["claimedAt", "desc"]);
+    expect(m.queryCalls[0].orderBy[1]).toEqual(["__name__", "desc"]);
+    expect(items[0]).toMatchObject({
+      status: "pending",
+      processedAt: NOW_ISO,
+      sentAt: null,
+      docId: "occ-1__user-1",
+    });
+  });
+
+  it("after カーソル指定時に startAfter(processedAt, docId) を渡す", async () => {
+    const m = buildMockDb();
+    m.setNextQueryResult([]);
+    const storage = new FirestoreDispatchStorage(m.db);
+    await storage.listSendHistoryShard({
+      tenantId: "tenant-a",
+      lane: "completion",
+      limit: 10,
+      after: { processedAt: NOW_ISO, docId: "user-5" },
+    });
+
+    expect(m.queryCalls[0].startAfter).toEqual([
+      Timestamp.fromDate(NOW_DATE),
+      "user-5",
+    ]);
   });
 });

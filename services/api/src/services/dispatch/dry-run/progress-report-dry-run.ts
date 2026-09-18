@@ -20,7 +20,9 @@
 import type {
   DispatchSettings,
   ProgressDryRunResult,
+  ProgressDryRunSample,
   ProgressDryRunTenantSummary,
+  ProgressPdfData,
 } from "@lms-279/shared-types";
 
 import {
@@ -30,6 +32,8 @@ import {
 import { evaluateCompletionEligibility } from "../completion-eligibility.js";
 import type { DispatchStorage } from "../dispatch-storage.js";
 import type { TenantDataLoader } from "../tenant-data-loader.js";
+import type { User } from "../../../types/entities.js";
+import { buildMailTemplate } from "../../progress-pdf-mail-template.js";
 
 // 型定義は `@lms-279/shared-types` に集約 (B タスクで移管完了)。
 // ProgressDryRunResult / ProgressDryRunTenantSummary / ProgressDryRunSkipReason は
@@ -62,10 +66,15 @@ export const PDF_SIZE_KB_RANGE = { min: 150, typical: 350, max: 1200 };
  */
 export interface ProgressDryRunLogger {
   warnTenantDocNotFound(tenantId: string): void;
+  /**
+   * PR2b: サンプル文面プレビューの生成に失敗した (best-effort、dry-run 全体は継続)。
+   */
+  warnSampleBuildFailed(tenantId: string, userId: string, error: unknown): void;
 }
 
 const NOOP_LOGGER: ProgressDryRunLogger = {
   warnTenantDocNotFound: () => {},
+  warnSampleBuildFailed: () => {},
 };
 
 /**
@@ -76,6 +85,12 @@ export const CONSOLE_PROGRESS_DRY_RUN_LOGGER: ProgressDryRunLogger = {
   warnTenantDocNotFound: (tenantId) => {
     console.error(
       `[WARN] tenant_doc_not_found: tenants/${tenantId} doc が存在しません。subcollection 孤児の可能性があるため運用者の確認推奨。`,
+    );
+  },
+  warnSampleBuildFailed: (tenantId, userId, error) => {
+    console.error(
+      `[WARN] sample_build_failed: tenant=${tenantId} user=${userId} のサンプル文面プレビュー生成に失敗しました (dry-run は継続)。`,
+      error,
     );
   },
 };
@@ -94,6 +109,17 @@ export function createStructuredProgressDryRunLogger(structured: {
         { tenantId, lane: "progress" },
       );
     },
+    warnSampleBuildFailed: (tenantId, userId, error) => {
+      structured.warn(
+        "dispatch.dry_run.sample_build_failed: サンプル文面プレビュー生成に失敗 (dry-run は継続)",
+        {
+          tenantId,
+          userId,
+          lane: "progress",
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
+    },
   };
 }
 
@@ -110,6 +136,27 @@ export interface RunProgressReportDryRunInput {
   now?: Date;
   /** test / endpoint では noop or 構造化、CLI では `CONSOLE_PROGRESS_DRY_RUN_LOGGER` */
   logger?: ProgressDryRunLogger;
+  /**
+   * PR2b: テナント代表サンプルの文面プレビュー生成器。省略時はサンプル生成を
+   * スキップし `wouldSendSample: []` を返す (既存呼び出し元との後方互換)。
+   * 実装は route 層 (`dispatch-dry-run.ts`) で `getDataSource` + `buildProgressPdfData`
+   * を wiring する。本 service module 自体は Firestore/DataSource に直接依存しない
+   * (DI によるテスト容易性維持、AC-α7-06 read-only 保証とは独立した設計判断)。
+   */
+  sampleBuilder?: ProgressDryRunSampleBuilder;
+  /** サンプル MIME From ヘッダに使う送信元アドレス (env DXCOLLEGE_SENDER_EMAIL 由来) */
+  senderEmail?: string;
+}
+
+/** PR2b: テナント代表サンプル 1 名分の `ProgressPdfData` を構築する注入インターフェース */
+export interface ProgressDryRunSampleBuilder {
+  buildPdfData(input: {
+    tenantId: string;
+    tenantName: string;
+    ownerEmail: string | null;
+    userId: string;
+    now: Date;
+  }): Promise<ProgressPdfData>;
 }
 
 // ============================================================
@@ -125,7 +172,15 @@ export interface RunProgressReportDryRunInput {
 export async function runProgressReportDryRun(
   input: RunProgressReportDryRunInput,
 ): Promise<ProgressDryRunResult> {
-  const { storage, loader, now = new Date(), logger = NOOP_LOGGER } = input;
+  const {
+    storage,
+    loader,
+    now = new Date(),
+    logger = NOOP_LOGGER,
+    sampleBuilder,
+    senderEmail,
+  } = input;
+  const wouldSendSample: ProgressDryRunSample[] = [];
 
   // ① settings 読み取り
   // doc missing 許容: 初期化前 cutover リハーサル想定で「対象規模見積もり」だけは返す。
@@ -149,6 +204,7 @@ export async function runProgressReportDryRun(
       logger.warnTenantDocNotFound(tenantId);
       tenantsSummary.push({
         tenantId,
+        tenantName: tenantId,
         skipped: true,
         skipReason: "tenant_doc_not_found",
         usersScanned: 0,
@@ -164,6 +220,7 @@ export async function runProgressReportDryRun(
     if (!tenantInfo.active) {
       tenantsSummary.push({
         tenantId,
+        tenantName: tenantInfo.name,
         skipped: true,
         skipReason: "tenant_not_active",
         usersScanned: 0,
@@ -179,6 +236,7 @@ export async function runProgressReportDryRun(
     if (!tenantInfo.progressReportEnabled) {
       tenantsSummary.push({
         tenantId,
+        tenantName: tenantInfo.name,
         skipped: true,
         skipReason: "progress_report_disabled",
         usersScanned: 0,
@@ -206,6 +264,7 @@ export async function runProgressReportDryRun(
     if (publishedCourses.length === 0) {
       tenantsSummary.push({
         tenantId,
+        tenantName: tenantInfo.name,
         skipped: true,
         skipReason: "no_published_courses",
         usersScanned: 0,
@@ -228,6 +287,8 @@ export async function runProgressReportDryRun(
     let completedCount = 0;
     let ineligibleCount = 0;
     let wouldSendCount = 0;
+    // PR2b: サンプル選定用に「送信対象になる user」を集める (userId 昇順で先頭 1 名を採用)
+    const wouldSendUsers: Pick<User, "id" | "email" | "name">[] = [];
 
     for (const user of users) {
       // email validation (進捗レーンも完了通知レーンと同様、無効 email は送信不能)
@@ -258,10 +319,12 @@ export async function runProgressReportDryRun(
       }
 
       wouldSendCount += 1;
+      wouldSendUsers.push(user);
     }
 
     tenantsSummary.push({
       tenantId,
+      tenantName: tenantInfo.name,
       skipped: false,
       usersScanned: users.length,
       candidateCount,
@@ -274,6 +337,47 @@ export async function runProgressReportDryRun(
 
     totalWouldSendCount += wouldSendCount;
     totalCcCount += wouldSendCount * ccCount;
+
+    // PR2b: sampleBuilder 注入時のみ、テナントごと代表サンプル 1 名分の実文面を生成する
+    // (userId 昇順の先頭、決定的選定規則。PDF 実体は生成しない)。
+    if (sampleBuilder && wouldSendUsers.length > 0) {
+      const sampleUser = [...wouldSendUsers].sort((a, b) =>
+        a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+      )[0];
+      try {
+        const pdfData = await sampleBuilder.buildPdfData({
+          tenantId,
+          tenantName: tenantInfo.name,
+          ownerEmail: ccConfig?.ownerEmail ?? null,
+          userId: sampleUser.id,
+          now,
+        });
+        const built = buildMailTemplate({
+          data: pdfData,
+          senderName: settings?.signatureName ?? "",
+          ccEmail: ccConfig?.ownerEmail ?? undefined,
+        });
+        wouldSendSample.push({
+          tenantId,
+          userId: sampleUser.id,
+          userEmail: sampleUser.email,
+          userName: sampleUser.name ?? "",
+          mimePreview: {
+            from: `${settings?.signatureName ?? ""} <${senderEmail ?? ""}>`,
+            to: sampleUser.email,
+            // 実送信の Cc ヘッダ (run-progress-reports.ts の ccResult.validCcEmails) と
+            // 一致させる。ownerEmail 単独だと notificationCcEmails の追加分が
+            // プレビューに反映されず、送信前確認の目的を果たせない (fable-review M1 反映)。
+            cc: ccDedup.validCcEmails,
+            subject: built.subject,
+            body: built.body,
+          },
+        });
+      } catch (err) {
+        // サンプル生成失敗は dry-run 全体を落とさない (プレビュー専用の best-effort)
+        logger.warnSampleBuildFailed(tenantId, sampleUser.id, err);
+      }
+    }
   }
 
   // ⑥ 推定処理時間 = (totalWouldSendCount / userConcurrency) * AVG_PER_USER_MS
@@ -300,5 +404,6 @@ export async function runProgressReportDryRun(
     estimatedDurationMs,
     estimatedPdfSizeKbRange: PDF_SIZE_KB_RANGE,
     scaleTriggerExceeded: totalWouldSendCount > SCALE_TRIGGER_THRESHOLD,
+    wouldSendSample,
   };
 }

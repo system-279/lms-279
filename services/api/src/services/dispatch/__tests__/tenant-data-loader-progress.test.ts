@@ -149,7 +149,21 @@ describe("InMemoryTenantDataLoader.getTenantInfo", () => {
       tenantId: TENANT,
       active: true,
       progressReportEnabled: false,
+      // name 未指定 fixture → tenantId をフォールバック (PR1)
+      name: TENANT,
     });
+  });
+
+  it("name を指定すれば反映される (PR1)", async () => {
+    loader.setTenant(TENANT, {
+      publishedCourses: [],
+      users: [],
+      courseProgresses: new Map(),
+      ccConfig: null,
+      name: "テナントX",
+    });
+    const info = await loader.getTenantInfo(TENANT);
+    expect(info?.name).toBe("テナントX");
   });
 
   it("info で progressReportEnabled=true 指定すれば反映 (opt-in 後)", async () => {

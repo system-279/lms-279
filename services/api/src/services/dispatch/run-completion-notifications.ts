@@ -61,6 +61,8 @@ import {
 } from "./run-lock.js";
 import { recordAuditLog } from "./dispatch-audit.js";
 import { sanitizeErrorForAudit } from "./dispatch-error-sanitizer.js";
+import { notifyDispatchResult } from "./chat-notify.js";
+import type { DispatchNotifier, TenantMetricsEntry } from "./chat-notify.js";
 
 import type { DispatchStorage } from "./dispatch-storage.js";
 import type {
@@ -93,6 +95,11 @@ export interface RunCompletionNotificationsInput {
   sendMail?: (
     input: SendCompletionMailInput,
   ) => Promise<SendCompletionMailResult>;
+  /**
+   * PR3: 配信結果の Google Chat 通知。省略時は通知しない (既存呼び出し元との後方互換)。
+   * production wiring は `routes/internal/dispatch.ts` が `createChatNotifier` で行う。
+   */
+  notifier?: DispatchNotifier;
 }
 
 /**
@@ -161,9 +168,11 @@ interface RunMetrics {
 export async function runCompletionNotifications(
   input: RunCompletionNotificationsInput,
 ): Promise<RunCompletionNotificationsResponse> {
-  const { runId, now, storage, loader, env } = input;
+  const { runId, now, storage, loader, env, notifier } = input;
   const userConcurrency = input.userConcurrency ?? DEFAULT_USER_CONCURRENCY;
   const sendMail = input.sendMail ?? defaultSendCompletionMail;
+  // PR3: テナント別集計 (Chat 通知用、件数のみで PII を含まない)
+  const perTenantMetrics: TenantMetricsEntry[] = [];
 
   // ③ settings 読み取り
   const settings = await storage.getDispatchSettings();
@@ -217,23 +226,52 @@ export async function runCompletionNotifications(
       }
       const users = await dataView.listNotificationTargetUsers();
 
-      await runWithConcurrency(users, userConcurrency, async (user) => {
-        await processUser({
-          tenantId,
-          user,
-          publishedCourses,
-          ccConfig,
-          dataView,
-          settings,
-          runId,
-          runStartedAt,
-          now,
-          storage,
-          env,
-          sendMail,
-          metrics,
+      // PR3: テナントごとに独立した集計オブジェクトへ記録し、後で全体 metrics に合算する
+      // (processUser 自体は変更しない、既存の metrics += パターンをそのまま再利用)
+      const tenantMetrics: RunMetrics = {
+        processedTenants: 0,
+        sent: 0,
+        skipped: 0,
+        failed: 0,
+        manualReviewRequired: 0,
+      };
+
+      // try/finally で必ず merge する (pr-review-toolkit silent-failure-hunter HIGH 反映):
+      // runWithConcurrency が RunAbortError 等で reject した場合、abort 発生時点で
+      // 既に処理済みだったユーザー分の件数が finally 無しだと merge されずに失われ、
+      // 外側の metrics (audit log / abortRun / Chat 通知の totalSent いずれにも使われる)
+      // が実際より過小に報告されてしまう (PR3 で tenantMetrics バッファを導入した際の regression)。
+      try {
+        await runWithConcurrency(users, userConcurrency, async (user) => {
+          await processUser({
+            tenantId,
+            user,
+            publishedCourses,
+            ccConfig,
+            dataView,
+            settings,
+            runId,
+            runStartedAt,
+            now,
+            storage,
+            env,
+            sendMail,
+            metrics: tenantMetrics,
+          });
         });
-      });
+      } finally {
+        metrics.sent += tenantMetrics.sent;
+        metrics.skipped += tenantMetrics.skipped;
+        metrics.failed += tenantMetrics.failed;
+        metrics.manualReviewRequired += tenantMetrics.manualReviewRequired;
+        perTenantMetrics.push({
+          tenantId,
+          tenantName: ccConfig.name,
+          sent: tenantMetrics.sent,
+          failed: tenantMetrics.failed,
+          manualReviewRequired: tenantMetrics.manualReviewRequired,
+        });
+      }
     }
 
     // ⑫ run 完了
@@ -249,6 +287,16 @@ export async function runCompletionNotifications(
       runStartedAt,
       eventType: "run_completed",
       now,
+    });
+    await notifyDispatchResult({
+      notifier,
+      outcome: "completed",
+      lane: "completion",
+      runId,
+      totalSent: metrics.sent,
+      totalFailed: metrics.failed,
+      totalManualReviewRequired: metrics.manualReviewRequired,
+      perTenant: perTenantMetrics,
     });
     return {
       runId,
@@ -280,6 +328,17 @@ export async function runCompletionNotifications(
         errorMessage: sanitizedCauseMessage,
         now,
       });
+      await notifyDispatchResult({
+        notifier,
+        outcome: "aborted",
+        lane: "completion",
+        runId,
+        totalSent: metrics.sent,
+        totalFailed: metrics.failed,
+        totalManualReviewRequired: metrics.manualReviewRequired,
+        perTenant: perTenantMetrics,
+        abortedReason: sanitizedCauseMessage,
+      });
       return {
         runId,
         processedTenants: metrics.processedTenants,
@@ -296,6 +355,17 @@ export async function runCompletionNotifications(
       skipped: metrics.skipped,
       failed: metrics.failed,
       manualReviewRequired: metrics.manualReviewRequired,
+    });
+    await notifyDispatchResult({
+      notifier,
+      outcome: "unexpected_error",
+      lane: "completion",
+      runId,
+      totalSent: metrics.sent,
+      totalFailed: metrics.failed,
+      totalManualReviewRequired: metrics.manualReviewRequired,
+      perTenant: perTenantMetrics,
+      abortedReason: sanitizeErrorForAudit(err instanceof Error ? err.message : String(err)),
     });
     throw err;
   }

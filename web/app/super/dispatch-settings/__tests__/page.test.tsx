@@ -263,6 +263,7 @@ describe("DispatchSettingsPage", () => {
       estimatedDurationMs: 0,
       estimatedPdfSizeKbRange: { min: 0, typical: 0, max: 0 },
       scaleTriggerExceeded: false,
+      wouldSendSample: [],
     });
 
     await act(async () => {

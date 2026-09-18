@@ -179,6 +179,26 @@ export class FirestoreTenantDataLoader implements TenantDataLoader {
           };
         });
       },
+
+      async getUsersByIds(
+        userIds: string[],
+      ): Promise<Pick<User, "id" | "email" | "name">[]> {
+        if (userIds.length === 0) return [];
+        // バッチ取得 (N+1 回避、tenants.ts:408 と同パターン)
+        const refs = userIds.map((id) => usersCol.doc(id));
+        const docs = await db.getAll(...refs);
+        const result: Pick<User, "id" | "email" | "name">[] = [];
+        for (const doc of docs) {
+          if (!doc.exists) continue;
+          const data = doc.data() ?? {};
+          result.push({
+            id: doc.id,
+            email: (data.email as string) ?? "",
+            name: (data.name as string | null) ?? null,
+          });
+        }
+        return result;
+      },
     };
   }
 
@@ -192,6 +212,8 @@ export class FirestoreTenantDataLoader implements TenantDataLoader {
       // §4.1.2: completionNotificationEnabled は default true (既存テナントの後方互換)
       completionNotificationEnabled:
         (data.completionNotificationEnabled as boolean | undefined) ?? true,
+      // dispatch 可視化機能用。フォールバック規約は factory.ts buildProductionPdf と同一
+      name: typeof data.name === "string" ? data.name : tenantId,
     };
   }
 
@@ -207,6 +229,8 @@ export class FirestoreTenantDataLoader implements TenantDataLoader {
       // progressReportEnabled は default false (opt-in、ADR-039 D-6)
       progressReportEnabled:
         (data.progressReportEnabled as boolean | undefined) ?? false,
+      // dispatch 可視化機能用。フォールバック規約は factory.ts buildProductionPdf と同一
+      name: typeof data.name === "string" ? data.name : tenantId,
     };
   }
 }

@@ -65,6 +65,7 @@ function makeProgressResult(
     tenantsSummary: [
       {
         tenantId: "tenant-a",
+        tenantName: "テナントA",
         skipped: false,
         usersScanned: 10,
         candidateCount: 10,
@@ -80,6 +81,7 @@ function makeProgressResult(
     estimatedDurationMs: 2000,
     estimatedPdfSizeKbRange: { min: 150, typical: 350, max: 1200 },
     scaleTriggerExceeded: false,
+    wouldSendSample: [],
     ...partial,
   };
 }
@@ -102,6 +104,7 @@ function makeCompletionResult(
     tenantsSummary: [
       {
         tenantId: "tenant-a",
+        tenantName: "テナントA",
         skipped: false,
         usersScanned: 10,
         eligibleCount: 1,
@@ -169,6 +172,89 @@ describe("DryRunPreview (progress)", () => {
     expect(screen.getByText("150–1200 KB")).toBeInTheDocument();
   });
 
+  it("wouldSendSample が空なら「サンプル文面プレビューの対象者はいません」を表示する (PR2b)", () => {
+    render(
+      <DryRunPreview
+        lane="progress"
+        result={makeProgressResult()}
+        isLoading={false}
+        error={null}
+        lastFetchedAt={NOW}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText("サンプル文面プレビューの対象者はいません。"),
+    ).toBeInTheDocument();
+  });
+
+  it("wouldSendSample があれば実文面 (件名・本文) を表示する (PR2b)", () => {
+    render(
+      <DryRunPreview
+        lane="progress"
+        result={makeProgressResult({
+          wouldSendSample: [
+            {
+              tenantId: "tenant-a",
+              userId: "user-1",
+              userEmail: "user1@example.com",
+              userName: "受講者一郎",
+              mimePreview: {
+                from: "DXcollege運営スタッフ <sender@example.com>",
+                to: "user1@example.com",
+                cc: [],
+                subject: "【テナントA】受講者一郎 さんの受講進捗レポート (2026-06-04)",
+                body: "受講者一郎 様\n\nお世話になっております。",
+              },
+            },
+          ],
+        })}
+        isLoading={false}
+        error={null}
+        lastFetchedAt={NOW}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/サンプル文面プレビュー/)).toBeInTheDocument();
+    expect(screen.getByText("受講者一郎")).toBeInTheDocument();
+    // details 内は既定で開かれていないため getByText で subject/body を直接検証する前に開く
+    fireEvent.click(screen.getByText(/サンプル文面プレビュー/));
+    fireEvent.click(screen.getByText("MIME プレビュー"));
+    expect(
+      screen.getByText("【テナントA】受講者一郎 さんの受講進捗レポート (2026-06-04)"),
+    ).toBeInTheDocument();
+  });
+
+  it("テナント別内訳テーブルにテナント名と tenantId を併記する (PR1)", () => {
+    render(
+      <DryRunPreview
+        lane="progress"
+        result={makeProgressResult()}
+        isLoading={false}
+        error={null}
+        lastFetchedAt={NOW}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("テナントA")).toBeInTheDocument();
+    expect(screen.getByText("(tenant-a)")).toBeInTheDocument();
+  });
+
+  it("completion レーンのテナント別内訳テーブルにもテナント名を表示する (PR1)", () => {
+    render(
+      <DryRunPreview
+        lane="completion"
+        result={makeCompletionResult()}
+        isLoading={false}
+        error={null}
+        lastFetchedAt={NOW}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("テナントA")).toBeInTheDocument();
+    expect(screen.getByText("(tenant-a)")).toBeInTheDocument();
+  });
+
   it("scaleTriggerExceeded=true で 300 名超 warning が出る (ADR-039)", () => {
     render(
       <DryRunPreview
@@ -209,6 +295,7 @@ describe("DryRunPreview (progress)", () => {
           tenantsSummary: [
             {
               tenantId: "tenant-b",
+              tenantName: "テナントB",
               skipped: true,
               skipReason: "progress_report_disabled",
               usersScanned: 0,
@@ -334,6 +421,7 @@ describe("DryRunPreview (AC-α7-04 全 skipReason 網羅)", () => {
             tenantsSummary: [
               {
                 tenantId: `tenant-${reason}`,
+                tenantName: `テナント-${reason}`,
                 skipped: true,
                 skipReason: reason,
                 usersScanned: 0,
@@ -370,6 +458,7 @@ describe("DryRunPreview (AC-α7-04 全 skipReason 網羅)", () => {
             tenantsSummary: [
               {
                 tenantId: `tenant-${reason}`,
+                tenantName: `テナント-${reason}`,
                 skipped: true,
                 skipReason: reason,
                 usersScanned: 0,

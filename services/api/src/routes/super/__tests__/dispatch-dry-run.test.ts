@@ -21,6 +21,7 @@ import type {
   ProgressDryRunResult,
 } from "@lms-279/shared-types";
 
+import type { ProgressPdfData } from "@lms-279/shared-types";
 import { InMemoryDispatchStorage } from "../../../services/dispatch/in-memory-dispatch-storage.js";
 import {
   InMemoryTenantDataLoader,
@@ -28,7 +29,10 @@ import {
   type DispatchTenantDataView,
 } from "../../../services/dispatch/tenant-data-loader.js";
 import { createDispatchDryRunSingleFlightForTest } from "../../../services/dispatch/dry-run/single-flight.js";
-import type { ProgressDryRunLogger } from "../../../services/dispatch/dry-run/progress-report-dry-run.js";
+import type {
+  ProgressDryRunLogger,
+  ProgressDryRunSampleBuilder,
+} from "../../../services/dispatch/dry-run/progress-report-dry-run.js";
 import { createDispatchDryRunRouter } from "../dispatch-dry-run.js";
 import {
   FIXTURE_SENDER_EMAIL as SENDER,
@@ -40,6 +44,39 @@ import {
 
 const ADMIN_EMAIL = "admin@example.com";
 
+/**
+ * test 用 sampleBuilder: Firestore/DataSource に一切アクセスせず固定の
+ * ProgressPdfData を返す (PR2b)。`createDispatchDryRunRouter` は
+ * `progressSampleBuilder` を必須にしているため、default をこのスタブにすることで
+ * fixture が偶然 `wouldSendCount > 0` を作っても実 Firestore アクセスに事故らない。
+ */
+const STUB_SAMPLE_BUILDER: ProgressDryRunSampleBuilder = {
+  async buildPdfData({ tenantId, tenantName, userId }): Promise<ProgressPdfData> {
+    return {
+      generatedAt: "2026-05-14T03:00:00.000Z",
+      user: { id: userId, name: `user-${userId}`, email: `${userId}@example.com` },
+      tenant: { id: tenantId, name: tenantName, ownerEmail: null },
+      deadline: {
+        enrolledAt: null,
+        deadlineBaseDate: null,
+        videoAccessUntil: null,
+        quizAccessUntil: null,
+        daysRemainingVideo: null,
+        daysRemainingQuiz: null,
+      },
+      courses: [],
+      pace: {
+        status: "ongoing",
+        remainingLessons: 1,
+        remainingDays: null,
+        lessonsPerWeek: null,
+        minutesPerDay: null,
+      },
+      videoSummary: { totalWatchedSec: 0, totalDurationSec: 0 },
+    };
+  },
+};
+
 function makeApp(
   storage: InMemoryDispatchStorage,
   loader: InMemoryTenantDataLoader | TenantDataLoader,
@@ -48,6 +85,7 @@ function makeApp(
     limiterLimit?: number;
     singleFlight?: ReturnType<typeof createDispatchDryRunSingleFlightForTest>;
     progressDryRunLogger?: ProgressDryRunLogger;
+    progressSampleBuilder?: ProgressDryRunSampleBuilder;
   } = {},
 ): express.Express {
   const app = express();
@@ -84,7 +122,7 @@ function makeApp(
 
   // Default test logger は noop で標準出力汚染を避ける。F4 regression test では
   // 明示的に spy logger を渡して呼び出しを assert する。
-  const noopLogger: ProgressDryRunLogger = { warnTenantDocNotFound: () => {} };
+  const noopLogger: ProgressDryRunLogger = { warnTenantDocNotFound: () => {}, warnSampleBuildFailed: () => {} };
 
   app.use(
     "/api/v2/super",
@@ -96,6 +134,7 @@ function makeApp(
       singleFlight:
         opts.singleFlight ?? createDispatchDryRunSingleFlightForTest(),
       progressDryRunLogger: opts.progressDryRunLogger ?? noopLogger,
+      progressSampleBuilder: opts.progressSampleBuilder ?? STUB_SAMPLE_BUILDER,
     }),
   );
   return app;
@@ -306,7 +345,7 @@ describe("progressDryRunLogger integration (F4)", () => {
     };
     const warnSpy = vi.fn();
     const app = makeApp(storage, ghostLoader, {
-      progressDryRunLogger: { warnTenantDocNotFound: warnSpy },
+      progressDryRunLogger: { warnTenantDocNotFound: warnSpy, warnSampleBuildFailed: () => {} },
     });
 
     const res = await request(app).get(
@@ -397,7 +436,8 @@ describe("AC-α7-05 super-admin auth rejection", () => {
         loader,
         senderEmail: SENDER,
         singleFlight: createDispatchDryRunSingleFlightForTest(),
-        progressDryRunLogger: { warnTenantDocNotFound: () => {} },
+        progressDryRunLogger: { warnTenantDocNotFound: () => {}, warnSampleBuildFailed: () => {} },
+        progressSampleBuilder: STUB_SAMPLE_BUILDER,
       }),
     );
 

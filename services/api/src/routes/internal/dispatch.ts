@@ -36,6 +36,7 @@ import {
 import type { DispatchStorage } from "../../services/dispatch/dispatch-storage.js";
 import type { TenantDataLoader } from "../../services/dispatch/tenant-data-loader.js";
 import type { SendCompletionMailInput, SendCompletionMailResult } from "../../services/dispatch/gmail-dwd-send.js";
+import type { DispatchNotifier } from "../../services/dispatch/chat-notify.js";
 
 export interface InternalDispatchRouteConfig {
   /** OIDC audience (Cloud Scheduler 設定の audience と一致させる) */
@@ -51,6 +52,8 @@ export interface InternalDispatchRouteConfig {
   runIdGenerator?: () => string;
   /** Date 注入 (test で固定可能) */
   nowProvider?: () => Date;
+  /** PR3: 配信結果の Google Chat 通知。省略時は通知しない (test は未注入で無通知のまま検証) */
+  notifier?: DispatchNotifier;
 }
 
 export function createInternalDispatchRouter(
@@ -77,6 +80,7 @@ export function createInternalDispatchRouter(
               loader: config.loader,
               env: config.env,
               sendMail: config.sendMail,
+              notifier: config.notifier,
             });
           res.status(200).json(result);
         } catch (err) {

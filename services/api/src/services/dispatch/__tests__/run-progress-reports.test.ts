@@ -1220,3 +1220,156 @@ describe("code-review fixes — markSent race + unexpected error (Scenario 28-29
     expect(second.acquired).toBe(true);
   });
 });
+
+describe("PR3: Google Chat 通知 (notifier wiring)", () => {
+  it("送信 0 件の成功 run → notifier は呼ばれない (0件スキップ)", async () => {
+    storage.__setSettingsForTest(makeSettings());
+    loader.setTenant(
+      "t1",
+      makeFixture({
+        courseProgresses: new Map([
+          ["u1", [{ courseId: "c1", isCompleted: true, totalLessons: 10, completedLessons: 10 }]],
+        ]),
+      }),
+    );
+    const sendRaw = vi.fn();
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    const result = await runProgressReports({
+      runId: RUN_1, occurrenceId: OCC_1, now: NOW, storage, loader, env: ENV,
+      pdfBuilder: makePdfBuilder(), sendRaw, notifier,
+    });
+    expect(result.sent).toBe(0);
+    expect(notifier).not.toHaveBeenCalled();
+  });
+
+  it("送信成功 (sent>0) → notifier が outcome='completed' + occurrenceId + テナント別内訳付きで呼ばれる", async () => {
+    storage.__setSettingsForTest(makeSettings());
+    loader.setTenant("t1", makeFixture({ name: "テナント1" }));
+    const sendRaw = vi.fn().mockResolvedValue({ messageId: "msg-001", attempts: 1 });
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    await runProgressReports({
+      runId: RUN_1, occurrenceId: OCC_1, now: NOW, storage, loader, env: ENV,
+      pdfBuilder: makePdfBuilder(), sendRaw, notifier,
+    });
+    expect(notifier).toHaveBeenCalledTimes(1);
+    const call = notifier.mock.calls[0][0];
+    expect(call.outcome).toBe("completed");
+    expect(call.lane).toBe("progress");
+    expect(call.runId).toBe(RUN_1);
+    expect(call.occurrenceId).toBe(OCC_1);
+    expect(call.totalSent).toBe(1);
+    expect(call.perTenant).toEqual([
+      { tenantId: "t1", tenantName: "テナント1", sent: 1, failed: 0, manualReviewRequired: 0 },
+    ]);
+  });
+
+  it("abort (scope_revoked) → sent=0 でも notifier が outcome='aborted' で呼ばれる (0件スキップ対象外)", async () => {
+    storage.__setSettingsForTest(makeSettings());
+    loader.setTenant("t1", makeFixture());
+    const errorScopeRevoked = {
+      response: {
+        status: 403,
+        data: {
+          error: { errors: [{ reason: "insufficientPermissions" }], status: "PERMISSION_DENIED" },
+        },
+      },
+    };
+    const sendRaw = vi.fn().mockRejectedValue(errorScopeRevoked);
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    await runProgressReports({
+      runId: RUN_1, occurrenceId: OCC_1, now: NOW, storage, loader, env: ENV,
+      pdfBuilder: makePdfBuilder(), sendRaw, notifier,
+    });
+    expect(notifier).toHaveBeenCalledTimes(1);
+    const call = notifier.mock.calls[0][0];
+    expect(call.outcome).toBe("aborted");
+    expect(call.totalSent).toBe(0);
+    expect(typeof call.abortedReason).toBe("string");
+  });
+
+  it("abort (scope_revoked、1人目送信成功後に2人目で中断) → 1人目のsent件数がrun/notifierに反映される (pr-review-toolkit silent-failure-hunter HIGH 反映の regression test)", async () => {
+    storage.__setSettingsForTest(makeSettings());
+    loader.setTenant(
+      "t1",
+      makeFixture({
+        users: [
+          { id: "u1", email: "yamada@example.com", name: "山田 太郎" },
+          { id: "u2", email: "sato@example.com", name: "佐藤 花子" },
+        ],
+        courseProgresses: new Map([
+          ["u1", [{ courseId: "c1", isCompleted: false, totalLessons: 10, completedLessons: 2 }]],
+          ["u2", [{ courseId: "c1", isCompleted: false, totalLessons: 10, completedLessons: 2 }]],
+        ]),
+      }),
+    );
+    const errorScopeRevoked = {
+      response: {
+        status: 403,
+        data: {
+          error: { errors: [{ reason: "insufficientPermissions" }], status: "PERMISSION_DENIED" },
+        },
+      },
+    };
+    const sendRaw = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "msg-001", attempts: 1 })
+      .mockRejectedValueOnce(errorScopeRevoked);
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    const result = await runProgressReports({
+      runId: RUN_1, occurrenceId: OCC_1, now: NOW, storage, loader, env: ENV,
+      pdfBuilder: makePdfBuilder(), sendRaw, notifier,
+      userConcurrency: 1, // 直列化してu1完了→u2で中断、の順序を確定させる
+    });
+    // 修正前 (finally 無し) は tenantMetrics が merge されず 0 になっていた
+    expect(result.sent).toBe(1);
+    expect(notifier).toHaveBeenCalledTimes(1);
+    const call = notifier.mock.calls[0][0];
+    expect(call.outcome).toBe("aborted");
+    expect(call.totalSent).toBe(1);
+    expect(call.perTenant).toEqual([
+      { tenantId: "t1", tenantName: "t1", sent: 1, failed: 0, manualReviewRequired: 0 },
+    ]);
+  });
+
+  it("想定外エラー → notifier が outcome='unexpected_error' で呼ばれたうえで run は throw する", async () => {
+    storage.__setSettingsForTest(makeSettings());
+    loader.setTenant("t1", makeFixture());
+    vi.spyOn(loader, "getTenantInfo").mockRejectedValueOnce(
+      new Error("Firestore transient down"),
+    );
+    const sendRaw = vi.fn();
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    await expect(
+      runProgressReports({
+        runId: RUN_1, occurrenceId: OCC_1, now: NOW, storage, loader, env: ENV,
+        pdfBuilder: makePdfBuilder(), sendRaw, notifier,
+      }),
+    ).rejects.toThrow(/Firestore transient down/);
+    expect(notifier).toHaveBeenCalledTimes(1);
+    expect(notifier.mock.calls[0][0].outcome).toBe("unexpected_error");
+  });
+
+  it("notifier が reject しても run は正常終了する (防御的 try-catch)", async () => {
+    storage.__setSettingsForTest(makeSettings());
+    loader.setTenant("t1", makeFixture());
+    const sendRaw = vi.fn().mockResolvedValue({ messageId: "msg-001", attempts: 1 });
+    const notifier = vi.fn().mockRejectedValue(new Error("chat webhook down"));
+    const result = await runProgressReports({
+      runId: RUN_1, occurrenceId: OCC_1, now: NOW, storage, loader, env: ENV,
+      pdfBuilder: makePdfBuilder(), sendRaw, notifier,
+    });
+    expect(result.sent).toBe(1);
+    expect(notifier).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifier 未注入 (undefined) → 後方互換で run は正常終了する", async () => {
+    storage.__setSettingsForTest(makeSettings());
+    loader.setTenant("t1", makeFixture());
+    const sendRaw = vi.fn().mockResolvedValue({ messageId: "msg-001", attempts: 1 });
+    const result = await runProgressReports({
+      runId: RUN_1, occurrenceId: OCC_1, now: NOW, storage, loader, env: ENV,
+      pdfBuilder: makePdfBuilder(), sendRaw,
+    });
+    expect(result.sent).toBe(1);
+  });
+});

@@ -19,6 +19,7 @@ import { helpRoleRouter } from "./routes/help-role.js";
 import { publicRouter } from "./routes/public.js";
 import { createInternalDispatchRouter } from "./routes/internal/dispatch.js";
 import { createInternalProgressReportsRouter } from "./routes/internal/progress-reports.js";
+import { createChatNotifier } from "./services/dispatch/chat-notify.js";
 import { createDispatchSuperRouter } from "./routes/super/dispatch-super-router.js";
 import {
   InMemoryTenantCcConfigStore,
@@ -169,6 +170,29 @@ let dispatchFactory: ReturnType<typeof buildDispatchFactory> | null = null;
 
 try {
   dispatchFactory = buildDispatchFactory();
+
+  // PR3 (配信可視化): 配信結果の Google Chat 通知。secret 名 env var が未設定の間
+  // (docs/runbook/dispatch-chat-notification-setup.md §1/§2 の provisioning 未実施)
+  // は notifier 自体を注入しない (「省略時は通知しない」設計と一致させる)。
+  // 空文字列を渡す実装だと Secret Manager 取得が run のたびに失敗し ERROR ログが
+  // 定常発生してしまう (fable-review M3 反映、常時ノイズと実障害の区別が難しくなるため回避)。
+  const completionWebhookSecretName =
+    process.env.DISPATCH_COMPLETION_NOTIFICATION_CHAT_WEBHOOK_SECRET_NAME?.trim();
+  const progressWebhookSecretName =
+    process.env.DISPATCH_PROGRESS_REPORT_CHAT_WEBHOOK_SECRET_NAME?.trim();
+  const completionChatNotifier = completionWebhookSecretName
+    ? createChatNotifier(completionWebhookSecretName)
+    : undefined;
+  const progressChatNotifier = progressWebhookSecretName
+    ? createChatNotifier(progressWebhookSecretName)
+    : undefined;
+  if (!completionChatNotifier || !progressChatNotifier) {
+    logger.warn(
+      "Dispatch chat notification secret name(s) not configured — Chat 通知は無効 (docs/runbook/dispatch-chat-notification-setup.md 参照)",
+      { completionConfigured: Boolean(completionChatNotifier), progressConfigured: Boolean(progressChatNotifier) },
+    );
+  }
+
   app.use(
     "/api/v2/internal",
     createInternalDispatchRouter({
@@ -177,6 +201,7 @@ try {
       storage: dispatchFactory.storage,
       loader: dispatchFactory.loader,
       env: dispatchFactory.env,
+      notifier: completionChatNotifier,
     }),
   );
   // Phase 3 PR 3c: 進捗レポート定期自動配信 endpoint mount (Codex セカンドオピニオン HIGH #1 反映)。
@@ -190,6 +215,7 @@ try {
       loader: dispatchFactory.loader,
       env: dispatchFactory.env,
       pdfBuilder: dispatchFactory.progressPdfBuilder,
+      notifier: progressChatNotifier,
     }),
   );
   logger.info("Internal dispatch routers mounted (completion + progress)", {

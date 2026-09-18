@@ -518,6 +518,11 @@ export type ProgressDryRunSkipReason =
 
 export interface ProgressDryRunTenantSummary {
   tenantId: string;
+  /**
+   * テナント表示名。`tenants/{tid}` doc 不在 (`skipReason === "tenant_doc_not_found"`)
+   * の場合のみ tenantId をフォールバックとして使う。
+   */
+  tenantName: string;
   skipped: boolean;
   /** `skipped === true` のときのみ設定される */
   skipReason?: ProgressDryRunSkipReason;
@@ -542,6 +547,22 @@ export interface ProgressDryRunTenantSummary {
 }
 
 /** 進捗レポート dry-run の戻り値。`lane: "progress"` で discriminated union のタグ化。 */
+/**
+ * 進捗レポート dry-run のテナント代表サンプル文面プレビュー (PR2b)。
+ *
+ * 完了通知の `CompletionDryRunTarget` と異なり、進捗レポートは受講者ごとに本文が
+ * 異なり生成コストが高いため、**テナントごと `userId` 昇順の先頭 1 名のみ**を対象にする
+ * (決定的選定規則。リロードのたびに対象が変わらないようにするため)。
+ * `wouldSendCount === 0` のテナントにはサンプルが存在しない。
+ */
+export interface ProgressDryRunSample {
+  tenantId: string;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  mimePreview: DryRunMimePreview;
+}
+
 export interface ProgressDryRunResult {
   lane: "progress";
   evaluatedAt: string;
@@ -564,6 +585,11 @@ export interface ProgressDryRunResult {
   estimatedPdfSizeKbRange: { min: number; typical: number; max: number };
   /** scale trigger: 全テナント合計 300 名超で Cloud Tasks 移行検討 */
   scaleTriggerExceeded: boolean;
+  /**
+   * テナントごとの代表サンプル文面プレビュー (PR2b)。サンプル生成器が未注入の場合は
+   * 空配列 (既存の呼び出し元との後方互換)。PDF 実体は生成しない。
+   */
+  wouldSendSample: ProgressDryRunSample[];
 }
 
 /**
@@ -596,6 +622,11 @@ export interface CompletionDryRunTarget {
 
 export interface CompletionDryRunTenantSummary {
   tenantId: string;
+  /**
+   * テナント表示名。`tenants/{tid}` doc 不在等で取得できない場合のみ tenantId を
+   * フォールバックとして使う（`ProgressDryRunTenantSummary.tenantName` と同一規約）。
+   */
+  tenantName: string;
   skipped: boolean;
   /** `skipped === true` のときのみ設定される */
   skipReason?: CompletionDryRunSkipReason;
@@ -676,3 +707,40 @@ export const DISPATCH_CONSTRAINTS = {
   /** 受講中フィルタの最低進捗率 (%、ADR-039 D-5) */
   PROGRESS_REPORT_MIN_PROGRESS_PERCENT: 1,
 } as const;
+
+// ============================================================
+// 送信実績一覧 (PR2a、super-admin向け可視化機能)
+// ============================================================
+
+/**
+ * 送信実績一覧の1行分。`completion_notifications`/`progress_report_sends` の
+ * 両コレクションを統合した表示用 DTO。
+ *
+ * 注意: `processedAt` は claim/予約時刻 (claimedAt/reservedAt) であり、実際の
+ * 送信完了時刻ではない (`sentAt` が null の場合、未送信または失敗を意味する)。
+ * この区別は Fable レビューで判明した「ソートキーが目的とずれている」問題への
+ * 対応 (列名「処理日時」で区別する)。
+ */
+export interface SendHistoryEntry {
+  lane: DispatchLane;
+  tenantId: string;
+  tenantName: string;
+  userId: string;
+  /** join 時点の受講者氏名。退会等で取得できない場合は null */
+  userName: string | null;
+  /** join 時点の受講者メールアドレス。退会等で取得できない場合は null */
+  userEmail: string | null;
+  status: ProgressReportRecipientStatus | CompletionNotificationStatus;
+  /** 処理日時 (claimedAt/reservedAt、ISO 8601)。ソートキー */
+  processedAt: string;
+  /** 送信完了時刻 (sentAt/notifiedAt、ISO 8601)。未送信/失敗時は null */
+  sentAt: string | null;
+  /** keyset カーソルの tiebreaker (Firestore doc id) */
+  docId: string;
+}
+
+export interface GetSendHistoryResponse {
+  items: SendHistoryEntry[];
+  /** 次ページのカーソル (opaque string)。null なら最終ページ */
+  nextCursor: string | null;
+}

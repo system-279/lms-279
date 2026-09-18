@@ -26,10 +26,13 @@ import { Router, type Request, type RequestHandler, type Response } from "expres
 import type { DispatchDryRunResult } from "@lms-279/shared-types";
 
 import { dispatchDryRunLimiter } from "../../middleware/dispatch-dry-run-limiter.js";
+import { getDataSource } from "../../datasource/factory.js";
+import { buildProgressPdfData } from "../../services/progress-pdf.js";
 import {
   runProgressReportDryRun,
   createStructuredProgressDryRunLogger,
   type ProgressDryRunLogger,
+  type ProgressDryRunSampleBuilder,
 } from "../../services/dispatch/dry-run/progress-report-dry-run.js";
 import { runCompletionNotificationDryRun } from "../../services/dispatch/dry-run/completion-notification-dry-run.js";
 import {
@@ -87,7 +90,31 @@ export interface DispatchDryRunRouteDeps {
    * test では noop 注入で標準出力汚染を避ける。
    */
   progressDryRunLogger?: ProgressDryRunLogger;
+  /**
+   * PR2b: 進捗レポート dry-run のテナント代表サンプル文面プレビュー生成器。
+   *
+   * **意図的に必須 (optional にしない)**: 省略時に「production では実 Firestore を叩く
+   * 実装、test では未注入」という暗黙 default を許すと、test fixture がたまたま
+   * `wouldSendCount > 0` を作った瞬間に test が無自覚に実 Firestore/DataSource へ
+   * アクセスしてしまう事故リスクがある (`senderEmail` が必須なのと同じ理由)。
+   * production wiring は本ファイルが export する `productionProgressSampleBuilder`
+   * を明示的に渡し、test は stub を明示的に渡すこと。
+   */
+  progressSampleBuilder: ProgressDryRunSampleBuilder;
 }
+
+/** production 実装: `getDataSource` + `buildProgressPdfData` (PDF 実体は生成しない) */
+export const productionProgressSampleBuilder: ProgressDryRunSampleBuilder = {
+  async buildPdfData({ tenantId, tenantName, ownerEmail, userId, now }) {
+    const dataSource = getDataSource({ tenantId, isDemo: false });
+    return buildProgressPdfData({
+      dataSource,
+      tenant: { id: tenantId, name: tenantName, ownerEmail },
+      userId,
+      now,
+    });
+  },
+};
 
 export function createDispatchDryRunRouter(
   deps: DispatchDryRunRouteDeps,
@@ -97,6 +124,7 @@ export function createDispatchDryRunRouter(
   const limiter = deps.limiter ?? dispatchDryRunLimiter;
   const progressLogger =
     deps.progressDryRunLogger ?? createStructuredProgressDryRunLogger(defaultLogger);
+  const progressSampleBuilder = deps.progressSampleBuilder;
 
   router.get(
     "/dispatch/dry-run/progress",
@@ -108,6 +136,8 @@ export function createDispatchDryRunRouter(
           loader: deps.loader,
           now: new Date(),
           logger: progressLogger,
+          sampleBuilder: progressSampleBuilder,
+          senderEmail: deps.senderEmail,
         }),
       );
       res.json(result);

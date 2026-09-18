@@ -211,6 +211,23 @@ D-1〜D-8 の前提として、`DispatchSettings` PUT を **patch semantics** �
 - 進捗レポートの件名・本文をテナント単位に変更したい要件: 設定 UI 拡張 + DispatchSettings に template フィールド追加
 - pending lease 切れの `manual_review_required` 件数が多い (Cloud Run 不安定): heartbeat lease 更新 / Cloud Tasks 移行
 
+## 追記 (2026-09-18、配信可視化 PR2b)
+
+進捗レポート dry-run に「テナント代表サンプル1名分の実文面プレビュー」を追加した。完了通知レーンの dry-run (`CompletionDryRunResult.wouldNotify[].mimePreview`) は当初から実文面を全対象者ぶん表示していたが、進捗レポートレーンは件数のみで非対称だった。この非対称は運用者から見て「進捗レポートだけ実際どんな文面が届くか事前確認できない」という不透明さの原因になっていた。
+
+- **サンプル対象の選定**: テナントごとに「送信対象になる受講者」の `userId` 昇順で先頭 1 名のみ (`ProgressDryRunResult.wouldSendSample`)。進捗レポートは受講者ごとに進捗率・期限が異なり全員ぶんの `buildProgressPdfData` 実行はコストが高いため、既存の「PDF 実体は生成しない」dry-run の設計判断 (read-only、AC-α7-06) を維持しつつ最小コストで実文面を見せる折衷案。非決定的な抽出だとリロードのたびに対象者が変わり送信前チェックとして信頼できないため、決定的な選定規則にした。
+- **DI 設計**: `progress-report-dry-run.ts` サービスモジュール自体は Firestore/`DataSource` に直接依存させず、`ProgressDryRunSampleBuilder` を注入可能にした (`sampleBuilder?`)。production wiring (`getDataSource` + `buildProgressPdfData`) は route 層 (`dispatch-dry-run.ts`) の `productionProgressSampleBuilder` が担う。**route 層では意図的に必須パラメータ化**した — 省略時に「production は実装あり、test は未注入」という暗黙 default を許すと、test fixture がたまたま `wouldSendCount > 0` を作った瞬間に test が無自覚に実 Firestore へアクセスする事故リスクがあるため (`senderEmail` が既に必須なのと同じ理由)。
+- **エラー処理**: サンプル生成に失敗しても dry-run 全体は落とさない (best-effort、`ProgressDryRunLogger.warnSampleBuildFailed` で警告のみ)。
+- 完了通知側の `CompletionDryRunTarget` と進捗側の新設 `ProgressDryRunSample` は共通の `DryRunMimePreview` 型を再利用し、UI (`MimePreviewList`) も構造的部分型 (`MimePreviewTarget`) で一般化して両レーンから共有する。
+
+## 追記 (2026-09-18、配信可視化 PR3)
+
+`run-progress-reports.ts` に配信結果の Google Chat 通知 (`notifier?: DispatchNotifier`) を追加した。テナント単位の集計 (`TenantMetricsEntry`) を tenant ループ内で新設し、成功・abort (`RunAbortError`)・想定外エラーの 3 経路すべてから通知する (完了通知レーンの `run-completion-notifications.ts` と対称の設計、詳細は ADR-042 2026-09-18 追記を参照)。
+
+- **`ProgressMetrics` のフィールド名差異への対応**: 進捗レーンは完了通知レーンの `manualReviewRequired` と異なり `pendingPromotedToManualReview` という名称を使う (既存フィールド名、本 PR での変更対象外)。`TenantMetricsEntry.manualReviewRequired` へマッピングする際にこの読み替えが必要。
+- **0件スキップと at-least-once retry の暗黙の重複防止依存**: 成功パスで `sent === 0 && failed === 0 && pendingPromotedToManualReview === 0` の場合は通知しない。この規則は Cloud Scheduler retry 時の重複投稿抑制を暗黙に兼ねる (retry 時は claim 済み recipient のため通常 0 件になる)。abort/想定外エラー時はこのスキップを適用しない (中断自体が異常事態のため)。詳細は ADR-042 2026-09-18 追記を参照。
+- **occurrenceId の相関**: 進捗レーンは `runId` に加え `occurrenceId` も Chat メッセージ本文に含める (完了通知レーンには存在しないフィールド)。Cloud Scheduler の同一 scheduled execution からの分割 retry を事後相関するため。
+
 ## References
 
 - 設計仕様書: `docs/specs/2026-06-01-progress-report-dispatch-design.md`

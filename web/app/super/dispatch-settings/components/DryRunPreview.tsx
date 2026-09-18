@@ -24,9 +24,9 @@
 import type {
   CompletionDryRunResult,
   CompletionDryRunSkipReason,
-  CompletionDryRunTarget,
   CompletionDryRunTenantSummary,
   DispatchLane,
+  DryRunMimePreview,
   ProgressDryRunResult,
   ProgressDryRunSkipReason,
   ProgressDryRunTenantSummary,
@@ -255,6 +255,17 @@ function ProgressPreview({ result }: { result: ProgressDryRunResult }) {
         lane="progress"
         summaries={result.tenantsSummary}
       />
+
+      {result.wouldSendSample.length > 0 ? (
+        <MimePreviewList
+          targets={result.wouldSendSample}
+          title="サンプル文面プレビュー（テナントごと代表1名分、PDF実体は生成しません）"
+        />
+      ) : (
+        <p className="text-xs text-muted-foreground" role="status">
+          サンプル文面プレビューの対象者はいません。
+        </p>
+      )}
     </div>
   );
 }
@@ -295,7 +306,7 @@ function CompletionPreview({ result }: { result: CompletionDryRunResult }) {
       />
 
       {result.wouldNotify.length > 0 ? (
-        <MimePreviewList targets={result.wouldNotify} />
+        <MimePreviewList targets={result.wouldNotify} title="送信内容プレビュー" />
       ) : (
         // Codex review C2 (PR #519、2026-06-04): wouldNotify=[] を「単に表示しない」
         // ではなく「送信予定者なし」として明示 (AC-α7-11)。
@@ -396,7 +407,12 @@ function SummaryRow({
     : null;
   return (
     <tr className="border-b last:border-b-0">
-      <td className="py-1 pr-2 font-mono text-[11px]">{summary.tenantId}</td>
+      <td className="py-1 pr-2">
+        <span>{summary.tenantName}</span>
+        <span className="ml-1 font-mono text-[10px] text-muted-foreground">
+          ({summary.tenantId})
+        </span>
+      </td>
       <td className="py-1 pr-2">
         {summary.skipped ? (
           <Badge variant="secondary">{skipLabel ?? "skip"}</Badge>
@@ -461,11 +477,32 @@ function CompletionSummaryCells({
   );
 }
 
-function MimePreviewList({ targets }: { targets: CompletionDryRunTarget[] }) {
+/**
+ * 完了通知 (`CompletionDryRunTarget`) / 進捗レポート (`ProgressDryRunSample`) 両方の
+ * mime プレビュー表示に対応する構造的部分型 (PR2b で一般化)。`courseIdsSnapshot` は
+ * 完了通知レーン専用のため optional にし、進捗レーンでは表示を省略する。
+ */
+interface MimePreviewTarget {
+  tenantId: string;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  mimePreview: DryRunMimePreview;
+  courseIdsSnapshot?: string[];
+}
+
+function MimePreviewList({
+  targets,
+  title,
+}: {
+  targets: MimePreviewTarget[];
+  /** 完了通知は「送信内容プレビュー」(全対象)、進捗レポートは「サンプル文面プレビュー」(代表1名/テナント) */
+  title: string;
+}) {
   return (
     <details className="rounded-md border bg-card p-2">
       <summary className="cursor-pointer text-sm font-medium">
-        送信内容プレビュー ({targets.length} 件)
+        {title} ({targets.length} 件)
       </summary>
       <ul className="mt-2 space-y-2">
         {targets.map((target) => (
@@ -480,7 +517,10 @@ function MimePreviewList({ targets }: { targets: CompletionDryRunTarget[] }) {
               </span>
             </p>
             <p className="mt-0.5 text-muted-foreground">
-              テナント: {target.tenantId} / 講座 {target.courseIdsSnapshot.length} 件
+              テナント: {target.tenantId}
+              {target.courseIdsSnapshot && (
+                <> / 講座 {target.courseIdsSnapshot.length} 件</>
+              )}
             </p>
             <details className="mt-1">
               <summary className="cursor-pointer text-muted-foreground">

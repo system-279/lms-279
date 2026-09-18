@@ -38,6 +38,12 @@ export interface TenantCcConfigView {
   ownerEmail: string | null;
   /** 追加 CC email 配列 (cc-email-validator で個別検証される、AC-25) */
   notificationCcEmails: string[];
+  /**
+   * テナント表示名 (dispatch 可視化機能で使用、doc の `name` フィールド欠落時は
+   * tenantId をフォールバック。フォールバック規約は factory.ts の buildProductionPdf
+   * と同一)。
+   */
+  name: string;
 }
 
 /**
@@ -55,6 +61,8 @@ export interface DispatchTenantInfo {
    * tenant doc の `progressReportEnabled` 欠落時は false (default opt-out)。
    */
   progressReportEnabled: boolean;
+  /** テナント表示名 (dispatch 可視化機能で使用、`TenantCcConfigView.name` と同一規約) */
+  name: string;
 }
 
 /**
@@ -92,6 +100,17 @@ export interface DispatchTenantDataView {
       "courseId" | "isCompleted" | "totalLessons" | "completedLessons"
     >[]
   >;
+  /**
+   * PR2a (送信実績一覧): userId 配列からユーザー情報をバッチ取得する。
+   * 退会等で存在しない userId は結果配列に含めない (呼び出し側で userId → 情報の
+   * map 化を想定、不在は「表示できない」扱いにする)。
+   *
+   * 実装契約: 逐次 N+1 読み取りを避け、Firestore 実装は `db.getAll()` 等の
+   * バッチ取得を使うこと (`tenants.ts:408` 参照)。
+   */
+  getUsersByIds(
+    userIds: string[],
+  ): Promise<Pick<User, "id" | "email" | "name">[]>;
 }
 
 /**
@@ -128,15 +147,23 @@ export interface InMemoryTenantFixture {
       "courseId" | "isCompleted" | "totalLessons" | "completedLessons"
     >[]
   >;
-  /** CC 設定 (null なら disable と同等) */
-  ccConfig: TenantCcConfigView | null;
+  /**
+   * CC 設定 (null なら disable と同等)。`name` は fixture 直下の `name` フィールドから
+   * loader が合成するため、既存テスト fixture の型を壊さないようここでは除外する。
+   */
+  ccConfig: Omit<TenantCcConfigView, "name"> | null;
   /**
    * Phase 3 ADR-039 D-6/D-7: テナント基本情報。
    * 既存テストの fixture との互換のため optional。未指定時は
    * `{ active: true, progressReportEnabled: false }` と扱う。
    * `listProgressReportTargetUsers` / `getTenantInfo` のみが参照する。
    */
-  info?: Omit<DispatchTenantInfo, "tenantId">;
+  info?: Omit<DispatchTenantInfo, "tenantId" | "name">;
+  /**
+   * テナント表示名 (dispatch 可視化機能で使用)。未指定時は tenantId をフォールバック
+   * (Firestore 実装のフォールバック規約と同一、`factory.ts` の buildProductionPdf 参照)。
+   */
+  name?: string;
   /**
    * Phase 3 ADR-039 D-5 (Plan A): テナント全体の videoAccessUntil (ISO 8601)。
    * 未指定なら「期限なし」扱い (全 user pass)。`listProgressReportTargetUsers` の
@@ -207,12 +234,17 @@ export class InMemoryTenantDataLoader implements TenantDataLoader {
       async listCourseProgressForUser(userId) {
         return fixture.courseProgresses.get(userId) ?? [];
       },
+      async getUsersByIds(userIds) {
+        const idSet = new Set(userIds);
+        return fixture.users.filter((u) => idSet.has(u.id));
+      },
     };
   }
 
   async getTenantCcConfig(tenantId: string): Promise<TenantCcConfigView | null> {
     const fixture = this.fixtures.get(tenantId);
-    return fixture?.ccConfig ?? null;
+    if (!fixture?.ccConfig) return null;
+    return { ...fixture.ccConfig, name: fixture.name ?? tenantId };
   }
 
   async getTenantInfo(tenantId: string): Promise<DispatchTenantInfo | null> {
@@ -222,6 +254,7 @@ export class InMemoryTenantDataLoader implements TenantDataLoader {
       tenantId,
       active: fixture.info?.active ?? true,
       progressReportEnabled: fixture.info?.progressReportEnabled ?? false,
+      name: fixture.name ?? tenantId,
     };
   }
 }

@@ -29,6 +29,7 @@ import {
   type DispatchSettings,
   type ProgressReportClaimOutcome,
   type ProgressReportRecipient,
+  type ProgressReportRecipientStatus,
   type ProgressReportSettings,
   type ReservationOutcome,
 } from "@lms-279/shared-types";
@@ -409,6 +410,43 @@ export type UpdateDispatchSettingsOutcome =
     };
 
 // ============================================================
+// 送信実績一覧 (PR2a、super-admin向け可視化機能)
+// ============================================================
+
+/** keyset カーソルの1要素 (テナント×レーン単位のシャード内での再開位置) */
+export interface SendHistoryShardCursor {
+  /** 処理日時 (claimedAt/reservedAt、ISO 8601) */
+  processedAt: string;
+  /** tiebreaker (Firestore doc id) */
+  docId: string;
+}
+
+export interface ListSendHistoryShardInput {
+  tenantId: string;
+  lane: DispatchLane;
+  /** このシャードから取得する最大件数 */
+  limit: number;
+  /** このカーソルより後 (処理日時降順で厳密に後) のみ返す。未指定なら先頭から */
+  after?: SendHistoryShardCursor;
+}
+
+/**
+ * 送信実績一覧の1シャード分 (単一テナント×単一レーン) の取得結果。
+ * tenantName / userName 等の join は route 層の責務 (storage は生データのみ返す)。
+ */
+export interface SendHistoryShardItem {
+  tenantId: string;
+  lane: DispatchLane;
+  userId: string;
+  status: ProgressReportRecipientStatus | CompletionNotification["status"];
+  /** 処理日時 (claimedAt/reservedAt、ISO 8601) */
+  processedAt: string;
+  /** 送信完了時刻 (sentAt/notifiedAt、ISO 8601)。未送信時は null */
+  sentAt: string | null;
+  docId: string;
+}
+
+// ============================================================
 // DispatchStorage interface
 // ============================================================
 
@@ -659,5 +697,21 @@ export interface DispatchStorage {
   getProgressRecipient(
     input: GetProgressRecipientInput,
   ): Promise<ProgressReportRecipient | null>;
+
+  // ----- Send history (PR2a、送信実績一覧) -----
+  /**
+   * 単一テナント×単一レーンの送信実績を処理日時降順で最大 limit 件取得する。
+   *
+   * route 層はテナント横断のマージソート (keyset merge) を行うため、本メソッドは
+   * 1 シャード分の取得のみを担う (`routes/super/dispatch-send-history.ts` PR2a 参照)。
+   *
+   * 実装契約:
+   *   - `processedAt desc, docId desc` で安定ソートして返す
+   *   - `after` 指定時は `(processedAt, docId)` が cursor より厳密に後の行のみ返す
+   *     (同一 processedAt の取りこぼし/重複を tiebreaker で防ぐ)
+   */
+  listSendHistoryShard(
+    input: ListSendHistoryShardInput,
+  ): Promise<SendHistoryShardItem[]>;
 }
 

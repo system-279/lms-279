@@ -104,6 +104,7 @@ export async function runCompletionNotificationDryRun(
     if (!ccConfig?.completionNotificationEnabled) {
       tenantsSummary.push({
         tenantId,
+        tenantName: ccConfig?.name ?? tenantId,
         skipped: true,
         skipReason: "tenant_completion_notification_disabled",
         usersScanned: 0,
@@ -118,6 +119,7 @@ export async function runCompletionNotificationDryRun(
     if (publishedCourses.length === 0) {
       tenantsSummary.push({
         tenantId,
+        tenantName: ccConfig.name,
         skipped: true,
         skipReason: "no_published_courses",
         usersScanned: 0,
@@ -187,6 +189,7 @@ export async function runCompletionNotificationDryRun(
 
     tenantsSummary.push({
       tenantId,
+      tenantName: ccConfig.name,
       skipped: false,
       usersScanned: users.length,
       eligibleCount,

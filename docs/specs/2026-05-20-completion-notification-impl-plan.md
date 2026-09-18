@@ -493,10 +493,10 @@ enabled = true に切替 (UI から)
 |---|---|---|---|
 | ~~Google Group エイリアスが DWD subject として使えない~~ | ~~中~~ | ~~高~~ | ✅ **顕在化 (2026-05-21)**、ADR-037 案 X (SendAs) を採用して回避。後続リスクは「SendAs send mode smoke で From ヘッダ偽装が認められるか (OQ-X)」に置き換わる |
 | SendAs 経由送信で Gmail API が From ヘッダを書き換える / spam 判定で拒否 | 低 | 中 | OQ-X smoke (`mode=send`) で実機確認、失敗時は ADR-037 案 Y (実 User 化) を再評価 |
-| Cloud Run 300 秒で全 user 処理が完了しない (将来テナント増) | 低 (現状 2 テナント) | 中 | Phase 4 Integration Test で実測、超過時は resumable run を将来課題に |
+| Cloud Run 300 秒で全 user 処理が完了しない (将来テナント増) | ⚠️ 要再評価 (設計当時2テナント想定 → 2026-09-18実機確認で4テナントに増加、OQ-4参照) | 中 | Phase 4 Integration Test で実測、超過時は resumable run を将来課題に |
 | Reservation transaction が高頻度競合する | 低 | 低 | 並列度 8 + 単一 worker 想定なら問題なし、超過時は lease 短縮 |
-| 受講者の Gmail が受信拒否設定 | 低 | 低 | Gmail API 403 宛先固有として failed_permanent 記録、本田様判断 |
-| 本田様の Workspace 管理コンソール権限が不足 | 低 | 高 (Phase 0 ブロック) | Phase 0 開始時に最優先で確認 |
+| 受講者の Gmail が受信拒否設定 | 低 | 低 | Gmail API 403 宛先固有として failed_permanent 記録、開発者判断 |
+| 開発者の Workspace 管理コンソール権限が不足 | 低 | 高 (Phase 0 ブロック) | Phase 0 開始時に最優先で確認 |
 | 法務確認 (TTL 1 年) で延長要請 | 低 | 低 | TTL を 2-7 年等に調整、Firestore TTL Policy で対応可能 |
 | Cloud Scheduler の barometer 起動誤差 | 低 | 低 | DB 設定との一致判定で吸収、5 分以内のずれは許容 |
 
