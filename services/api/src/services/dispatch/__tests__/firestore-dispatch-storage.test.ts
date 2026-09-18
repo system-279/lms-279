@@ -892,6 +892,10 @@ describe("FirestoreDispatchStorage.listSendHistoryShard", () => {
     expect(m.collectionCalls).toContain("tenants/tenant-a/completion_notifications");
     expect(m.queryCalls).toHaveLength(1);
     expect(m.queryCalls[0].orderBy[0]).toEqual(["reservedAt", "desc"]);
+    // tiebreaker: 同一 processedAt の並列 claim/reservation を安定ソートするための
+    // 2番目の orderBy (FieldPath.documentId() desc)。方向の取り違えや削除は
+    // ページング正確性の要のため明示的に assert する (test-analyzer 指摘反映)。
+    expect(m.queryCalls[0].orderBy[1]).toEqual(["__name__", "desc"]);
     expect(m.queryCalls[0].limit).toBe(50);
     expect(m.queryCalls[0].startAfter).toBeUndefined();
 
@@ -930,6 +934,7 @@ describe("FirestoreDispatchStorage.listSendHistoryShard", () => {
 
     expect(m.collectionCalls).toContain("tenants/tenant-a/progress_report_sends");
     expect(m.queryCalls[0].orderBy[0]).toEqual(["claimedAt", "desc"]);
+    expect(m.queryCalls[0].orderBy[1]).toEqual(["__name__", "desc"]);
     expect(items[0]).toMatchObject({
       status: "pending",
       processedAt: NOW_ISO,

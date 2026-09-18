@@ -61,15 +61,33 @@ function laneParam(value: unknown): DispatchLane | undefined {
 /** opaque cursor = base64(JSON.stringify({ [shardKey]: SendHistoryShardCursor })) */
 type ShardCursorMap = Record<string, SendHistoryShardCursor>;
 
+function isValidShardCursor(value: unknown): value is SendHistoryShardCursor {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as SendHistoryShardCursor).processedAt === "string" &&
+    typeof (value as SendHistoryShardCursor).docId === "string"
+  );
+}
+
 function decodeCursor(raw: string | undefined): ShardCursorMap {
   if (!raw) return {};
   try {
     const json = Buffer.from(raw, "base64url").toString("utf-8");
     const parsed = JSON.parse(json) as unknown;
-    if (parsed && typeof parsed === "object") {
-      return parsed as ShardCursorMap;
+    if (!parsed || typeof parsed !== "object") return {};
+    // 各シャード値の形を検証してから取り込む (fable-review / pr-review-toolkit
+    // type-design-analyzer 指摘反映: トップレベルが object であることしか
+    // 検証していなかったため、不正な形のネスト値が isoToTimestamp まで到達し
+    // 500 になっていた。ファイル自身が謳う「先頭から fallback」を、不正な
+    // 個々のシャード値単位でも成立させる)。
+    const result: ShardCursorMap = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (isValidShardCursor(value)) {
+        result[key] = value;
+      }
     }
-    return {};
+    return result;
   } catch {
     // 不正な cursor は「先頭から」に fallback (dispatch-pagination.ts の
     // 「cursor 不明時は空ページ+null で終端扱い」とは異なり、こちらは複数シャード合成

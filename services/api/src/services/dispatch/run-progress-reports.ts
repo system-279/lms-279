@@ -63,8 +63,8 @@ import { buildProgressReportMime } from "./progress-mime-builder.js";
 import { recordAuditLog } from "./dispatch-audit.js";
 import { sanitizeErrorForAudit } from "./dispatch-error-sanitizer.js";
 import { RunAbortError, type DispatchEnv } from "./run-completion-notifications.js";
+import { notifyDispatchResult } from "./chat-notify.js";
 import type { DispatchNotifier, TenantMetricsEntry } from "./chat-notify.js";
-import { logger } from "../../utils/logger.js";
 
 import type { DispatchStorage } from "./dispatch-storage.js";
 import type {
@@ -302,38 +302,45 @@ export async function runProgressReports(
         pendingPromotedToManualReview: 0,
       };
 
-      // ⑦ user 並列度 8 (FR-3)
-      await runWithConcurrency(users, userConcurrency, async (user) => {
-        await processProgressUser({
-          tenantId,
-          user,
-          publishedCourses,
-          ccConfig,
-          dataView,
-          settings,
-          runId,
-          runStartedAt,
-          occurrenceId,
-          now,
-          storage,
-          env,
-          pdfBuilder,
-          sendRaw,
-          metrics: tenantMetrics,
+      // try/finally で必ず merge する (pr-review-toolkit silent-failure-hunter HIGH 反映):
+      // runWithConcurrency が RunAbortError 等で reject した場合、abort 発生時点で
+      // 既に処理済みだったユーザー分の件数が finally 無しだと merge されずに失われ、
+      // 外側の metrics (audit log / abortLaneLock / Chat 通知の totalSent いずれにも使われる)
+      // が実際より過小に報告されてしまう (PR3 で tenantMetrics バッファを導入した際の regression)。
+      try {
+        // ⑦ user 並列度 8 (FR-3)
+        await runWithConcurrency(users, userConcurrency, async (user) => {
+          await processProgressUser({
+            tenantId,
+            user,
+            publishedCourses,
+            ccConfig,
+            dataView,
+            settings,
+            runId,
+            runStartedAt,
+            occurrenceId,
+            now,
+            storage,
+            env,
+            pdfBuilder,
+            sendRaw,
+            metrics: tenantMetrics,
+          });
         });
-      });
-
-      metrics.sent += tenantMetrics.sent;
-      metrics.skipped += tenantMetrics.skipped;
-      metrics.failed += tenantMetrics.failed;
-      metrics.pendingPromotedToManualReview += tenantMetrics.pendingPromotedToManualReview;
-      perTenantMetrics.push({
-        tenantId,
-        tenantName: tenantInfo.name,
-        sent: tenantMetrics.sent,
-        failed: tenantMetrics.failed,
-        manualReviewRequired: tenantMetrics.pendingPromotedToManualReview,
-      });
+      } finally {
+        metrics.sent += tenantMetrics.sent;
+        metrics.skipped += tenantMetrics.skipped;
+        metrics.failed += tenantMetrics.failed;
+        metrics.pendingPromotedToManualReview += tenantMetrics.pendingPromotedToManualReview;
+        perTenantMetrics.push({
+          tenantId,
+          tenantName: tenantInfo.name,
+          sent: tenantMetrics.sent,
+          failed: tenantMetrics.failed,
+          manualReviewRequired: tenantMetrics.pendingPromotedToManualReview,
+        });
+      }
     }
 
     // ⑭ run 完了 — durationMs を audit log に記録 (evaluator AC-PR-21 反映)。
@@ -347,7 +354,17 @@ export async function runProgressReports(
       durationMs: runDurationMs,
       now,
     });
-    await notifyProgressDispatchResult(notifier, "completed", runId, occurrenceId, metrics, perTenantMetrics);
+    await notifyDispatchResult({
+      notifier,
+      outcome: "completed",
+      lane: "progress",
+      runId,
+      occurrenceId,
+      totalSent: metrics.sent,
+      totalFailed: metrics.failed,
+      totalManualReviewRequired: metrics.pendingPromotedToManualReview,
+      perTenant: perTenantMetrics,
+    });
     return responseFromMetrics(runId, occurrenceId, metrics);
   } catch (err) {
     // abort 経路でも duration を記録 (evaluator AC-PR-21 反映、完了通知レーンと整合)
@@ -366,15 +383,18 @@ export async function runProgressReports(
         durationMs: abortDurationMs,
         now,
       });
-      await notifyProgressDispatchResult(
+      await notifyDispatchResult({
         notifier,
-        "aborted",
+        outcome: "aborted",
+        lane: "progress",
         runId,
         occurrenceId,
-        metrics,
-        perTenantMetrics,
-        sanitizedCauseMessage,
-      );
+        totalSent: metrics.sent,
+        totalFailed: metrics.failed,
+        totalManualReviewRequired: metrics.pendingPromotedToManualReview,
+        perTenant: perTenantMetrics,
+        abortedReason: sanitizedCauseMessage,
+      });
       return responseFromMetrics(runId, occurrenceId, metrics);
     }
     // 想定外エラーの abort 経路: lock 解放 + audit 記録 (code-review #8 反映、
@@ -391,56 +411,19 @@ export async function runProgressReports(
       durationMs: abortDurationMs,
       now,
     });
-    await notifyProgressDispatchResult(
+    await notifyDispatchResult({
       notifier,
-      "unexpected_error",
-      runId,
-      occurrenceId,
-      metrics,
-      perTenantMetrics,
-      sanitizedErrorMessage,
-    );
-    throw err;
-  }
-}
-
-/**
- * PR3: 進捗レポートレーンの配信結果を Chat 通知する (成功/中断/想定外エラーの3経路すべてから呼ぶ)。
- * 0件スキップ (未送信スキップ) は成功パスのみに適用し、abort/例外時は部分送信が0件でも通知する
- * (中断そのものが異常事態のため。完了通知レーンの notifyDispatchResult と同じ設計、
- * run-completion-notifications.ts 参照)。
- */
-async function notifyProgressDispatchResult(
-  notifier: DispatchNotifier | undefined,
-  outcome: "completed" | "aborted" | "unexpected_error",
-  runId: string,
-  occurrenceId: string,
-  metrics: ProgressMetrics,
-  perTenantMetrics: TenantMetricsEntry[],
-  abortedReason?: string,
-): Promise<void> {
-  if (!notifier) return;
-  if (outcome === "completed" && metrics.sent === 0 && metrics.failed === 0 && metrics.pendingPromotedToManualReview === 0) {
-    return;
-  }
-  try {
-    await notifier({
-      outcome,
+      outcome: "unexpected_error",
       lane: "progress",
       runId,
       occurrenceId,
       totalSent: metrics.sent,
       totalFailed: metrics.failed,
       totalManualReviewRequired: metrics.pendingPromotedToManualReview,
-      perTenant: perTenantMetrics.filter(
-        (t) => t.sent > 0 || t.failed > 0 || t.manualReviewRequired > 0,
-      ),
-      abortedReason,
+      perTenant: perTenantMetrics,
+      abortedReason: sanitizedErrorMessage,
     });
-  } catch (err) {
-    logger.error("dispatch chat notify failed", {
-      error: err instanceof Error ? err : new Error(String(err)),
-    });
+    throw err;
   }
 }
 

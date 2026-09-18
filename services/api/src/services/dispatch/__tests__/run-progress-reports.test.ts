@@ -1287,6 +1287,50 @@ describe("PR3: Google Chat 通知 (notifier wiring)", () => {
     expect(typeof call.abortedReason).toBe("string");
   });
 
+  it("abort (scope_revoked、1人目送信成功後に2人目で中断) → 1人目のsent件数がrun/notifierに反映される (pr-review-toolkit silent-failure-hunter HIGH 反映の regression test)", async () => {
+    storage.__setSettingsForTest(makeSettings());
+    loader.setTenant(
+      "t1",
+      makeFixture({
+        users: [
+          { id: "u1", email: "yamada@example.com", name: "山田 太郎" },
+          { id: "u2", email: "sato@example.com", name: "佐藤 花子" },
+        ],
+        courseProgresses: new Map([
+          ["u1", [{ courseId: "c1", isCompleted: false, totalLessons: 10, completedLessons: 2 }]],
+          ["u2", [{ courseId: "c1", isCompleted: false, totalLessons: 10, completedLessons: 2 }]],
+        ]),
+      }),
+    );
+    const errorScopeRevoked = {
+      response: {
+        status: 403,
+        data: {
+          error: { errors: [{ reason: "insufficientPermissions" }], status: "PERMISSION_DENIED" },
+        },
+      },
+    };
+    const sendRaw = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "msg-001", attempts: 1 })
+      .mockRejectedValueOnce(errorScopeRevoked);
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    const result = await runProgressReports({
+      runId: RUN_1, occurrenceId: OCC_1, now: NOW, storage, loader, env: ENV,
+      pdfBuilder: makePdfBuilder(), sendRaw, notifier,
+      userConcurrency: 1, // 直列化してu1完了→u2で中断、の順序を確定させる
+    });
+    // 修正前 (finally 無し) は tenantMetrics が merge されず 0 になっていた
+    expect(result.sent).toBe(1);
+    expect(notifier).toHaveBeenCalledTimes(1);
+    const call = notifier.mock.calls[0][0];
+    expect(call.outcome).toBe("aborted");
+    expect(call.totalSent).toBe(1);
+    expect(call.perTenant).toEqual([
+      { tenantId: "t1", tenantName: "t1", sent: 1, failed: 0, manualReviewRequired: 0 },
+    ]);
+  });
+
   it("想定外エラー → notifier が outcome='unexpected_error' で呼ばれたうえで run は throw する", async () => {
     storage.__setSettingsForTest(makeSettings());
     loader.setTenant("t1", makeFixture());

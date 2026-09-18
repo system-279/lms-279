@@ -61,8 +61,8 @@ import {
 } from "./run-lock.js";
 import { recordAuditLog } from "./dispatch-audit.js";
 import { sanitizeErrorForAudit } from "./dispatch-error-sanitizer.js";
+import { notifyDispatchResult } from "./chat-notify.js";
 import type { DispatchNotifier, TenantMetricsEntry } from "./chat-notify.js";
-import { logger } from "../../utils/logger.js";
 
 import type { DispatchStorage } from "./dispatch-storage.js";
 import type {
@@ -156,49 +156,6 @@ interface RunMetrics {
 }
 
 /**
- * PR3: 配信結果を Chat notifier へ通知する (成功/abort/例外の 3 経路すべてから呼ぶ)。
- *
- * Fable レビューで判明した設計ミス (成功パスにのみフックを置くと「5件送った直後に
- * scope_revoked で中断」のようなケースが完全に無通知になる) への対応。
- *
- * - 成功時 (outcome="completed") のみ 0 件スキップを適用する。中断・例外時は
- *   部分送信が 0 件でも通知する (中断そのものが異常事態のため)。
- * - notifier が reject しても run を落とさない (呼び出し元は必ず try-catch で包むこと、
- *   本関数自身もここで catch する防御的二重化)。
- */
-async function notifyDispatchResult(
-  notifier: DispatchNotifier | undefined,
-  outcome: "completed" | "aborted" | "unexpected_error",
-  runId: string,
-  metrics: RunMetrics,
-  perTenantMetrics: TenantMetricsEntry[],
-  abortedReason?: string,
-): Promise<void> {
-  if (!notifier) return;
-  if (outcome === "completed" && metrics.sent === 0 && metrics.failed === 0 && metrics.manualReviewRequired === 0) {
-    return;
-  }
-  try {
-    await notifier({
-      outcome,
-      lane: "completion",
-      runId,
-      totalSent: metrics.sent,
-      totalFailed: metrics.failed,
-      totalManualReviewRequired: metrics.manualReviewRequired,
-      perTenant: perTenantMetrics.filter(
-        (t) => t.sent > 0 || t.failed > 0 || t.manualReviewRequired > 0,
-      ),
-      abortedReason,
-    });
-  } catch (err) {
-    logger.error("dispatch chat notify failed", {
-      error: err instanceof Error ? err : new Error(String(err)),
-    });
-  }
-}
-
-/**
  * Phase 4 メインロジック。
  *
  * 戻り値: `RunCompletionNotificationsResponse` (Cloud Scheduler への HTTP response)。
@@ -279,35 +236,42 @@ export async function runCompletionNotifications(
         manualReviewRequired: 0,
       };
 
-      await runWithConcurrency(users, userConcurrency, async (user) => {
-        await processUser({
-          tenantId,
-          user,
-          publishedCourses,
-          ccConfig,
-          dataView,
-          settings,
-          runId,
-          runStartedAt,
-          now,
-          storage,
-          env,
-          sendMail,
-          metrics: tenantMetrics,
+      // try/finally で必ず merge する (pr-review-toolkit silent-failure-hunter HIGH 反映):
+      // runWithConcurrency が RunAbortError 等で reject した場合、abort 発生時点で
+      // 既に処理済みだったユーザー分の件数が finally 無しだと merge されずに失われ、
+      // 外側の metrics (audit log / abortRun / Chat 通知の totalSent いずれにも使われる)
+      // が実際より過小に報告されてしまう (PR3 で tenantMetrics バッファを導入した際の regression)。
+      try {
+        await runWithConcurrency(users, userConcurrency, async (user) => {
+          await processUser({
+            tenantId,
+            user,
+            publishedCourses,
+            ccConfig,
+            dataView,
+            settings,
+            runId,
+            runStartedAt,
+            now,
+            storage,
+            env,
+            sendMail,
+            metrics: tenantMetrics,
+          });
         });
-      });
-
-      metrics.sent += tenantMetrics.sent;
-      metrics.skipped += tenantMetrics.skipped;
-      metrics.failed += tenantMetrics.failed;
-      metrics.manualReviewRequired += tenantMetrics.manualReviewRequired;
-      perTenantMetrics.push({
-        tenantId,
-        tenantName: ccConfig.name,
-        sent: tenantMetrics.sent,
-        failed: tenantMetrics.failed,
-        manualReviewRequired: tenantMetrics.manualReviewRequired,
-      });
+      } finally {
+        metrics.sent += tenantMetrics.sent;
+        metrics.skipped += tenantMetrics.skipped;
+        metrics.failed += tenantMetrics.failed;
+        metrics.manualReviewRequired += tenantMetrics.manualReviewRequired;
+        perTenantMetrics.push({
+          tenantId,
+          tenantName: ccConfig.name,
+          sent: tenantMetrics.sent,
+          failed: tenantMetrics.failed,
+          manualReviewRequired: tenantMetrics.manualReviewRequired,
+        });
+      }
     }
 
     // ⑫ run 完了
@@ -324,7 +288,16 @@ export async function runCompletionNotifications(
       eventType: "run_completed",
       now,
     });
-    await notifyDispatchResult(notifier, "completed", runId, metrics, perTenantMetrics);
+    await notifyDispatchResult({
+      notifier,
+      outcome: "completed",
+      lane: "completion",
+      runId,
+      totalSent: metrics.sent,
+      totalFailed: metrics.failed,
+      totalManualReviewRequired: metrics.manualReviewRequired,
+      perTenant: perTenantMetrics,
+    });
     return {
       runId,
       processedTenants: metrics.processedTenants,
@@ -355,14 +328,17 @@ export async function runCompletionNotifications(
         errorMessage: sanitizedCauseMessage,
         now,
       });
-      await notifyDispatchResult(
+      await notifyDispatchResult({
         notifier,
-        "aborted",
+        outcome: "aborted",
+        lane: "completion",
         runId,
-        metrics,
-        perTenantMetrics,
-        sanitizedCauseMessage,
-      );
+        totalSent: metrics.sent,
+        totalFailed: metrics.failed,
+        totalManualReviewRequired: metrics.manualReviewRequired,
+        perTenant: perTenantMetrics,
+        abortedReason: sanitizedCauseMessage,
+      });
       return {
         runId,
         processedTenants: metrics.processedTenants,
@@ -380,14 +356,17 @@ export async function runCompletionNotifications(
       failed: metrics.failed,
       manualReviewRequired: metrics.manualReviewRequired,
     });
-    await notifyDispatchResult(
+    await notifyDispatchResult({
       notifier,
-      "unexpected_error",
+      outcome: "unexpected_error",
+      lane: "completion",
       runId,
-      metrics,
-      perTenantMetrics,
-      sanitizeErrorForAudit(err instanceof Error ? err.message : String(err)),
-    );
+      totalSent: metrics.sent,
+      totalFailed: metrics.failed,
+      totalManualReviewRequired: metrics.manualReviewRequired,
+      perTenant: perTenantMetrics,
+      abortedReason: sanitizeErrorForAudit(err instanceof Error ? err.message : String(err)),
+    });
     throw err;
   }
 }

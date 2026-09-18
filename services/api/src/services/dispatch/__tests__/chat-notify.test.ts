@@ -7,6 +7,8 @@
  *     テナント名への maskPii 適用
  *   - postToChat: 成功/Secret 取得失敗/非2xx/fetch 例外いずれも throw しない
  *   - createChatNotifier: postToChat の結果を {ok} に写す
+ *   - notifyDispatchResult: 完了通知/進捗レポート両レーン共通の通知ヘルパー
+ *     (pr-review-toolkit code-reviewer 指摘反映、両レーンの重複ロジックを一本化)
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -16,7 +18,9 @@ import {
   buildDeliveryReportText,
   postToChat,
   createChatNotifier,
+  notifyDispatchResult,
   type DispatchNotifyInput,
+  type NotifyDispatchResultInput,
 } from "../chat-notify.js";
 
 describe("maskPii", () => {
@@ -192,5 +196,139 @@ describe("createChatNotifier", () => {
     const result = await notifier(makeInput());
     expect(result).toEqual({ ok: false });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+function makeNotifyInput(
+  partial: Partial<NotifyDispatchResultInput> = {},
+): NotifyDispatchResultInput {
+  return {
+    notifier: vi.fn().mockResolvedValue({ ok: true }),
+    outcome: "completed",
+    lane: "completion",
+    runId: "run-1",
+    totalSent: 1,
+    totalFailed: 0,
+    totalManualReviewRequired: 0,
+    perTenant: [
+      { tenantId: "t1", tenantName: "テナントA", sent: 1, failed: 0, manualReviewRequired: 0 },
+    ],
+    ...partial,
+  };
+}
+
+describe("notifyDispatchResult (完了通知/進捗レポート共通ヘルパー)", () => {
+  it("notifier 未注入 (undefined) → 何もしない", async () => {
+    const input = makeNotifyInput({ notifier: undefined });
+    await notifyDispatchResult(input);
+    // 例外を投げず完了することのみを検証 (notifier が無いので呼び出し先が無い)
+  });
+
+  it("成功 (completed) かつ全カウント0 → notifier を呼ばない (0件スキップ)", async () => {
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    await notifyDispatchResult(
+      makeNotifyInput({
+        notifier,
+        totalSent: 0,
+        totalFailed: 0,
+        totalManualReviewRequired: 0,
+        perTenant: [],
+      }),
+    );
+    expect(notifier).not.toHaveBeenCalled();
+  });
+
+  it("成功 (completed) かつ sent=0 だが manualReviewRequired>0 → 0件スキップの対象外で notifier が呼ばれる (test-analyzer 指摘反映)", async () => {
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    await notifyDispatchResult(
+      makeNotifyInput({
+        notifier,
+        totalSent: 0,
+        totalFailed: 0,
+        totalManualReviewRequired: 1,
+        perTenant: [
+          { tenantId: "t1", tenantName: "テナントA", sent: 0, failed: 0, manualReviewRequired: 1 },
+        ],
+      }),
+    );
+    expect(notifier).toHaveBeenCalledTimes(1);
+  });
+
+  it("成功 (completed) かつ sent=0 だが failed>0 → 0件スキップの対象外で notifier が呼ばれる", async () => {
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    await notifyDispatchResult(
+      makeNotifyInput({
+        notifier,
+        totalSent: 0,
+        totalFailed: 1,
+        totalManualReviewRequired: 0,
+        perTenant: [
+          { tenantId: "t1", tenantName: "テナントA", sent: 0, failed: 1, manualReviewRequired: 0 },
+        ],
+      }),
+    );
+    expect(notifier).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborted かつ全カウント0 → 0件スキップは適用されず notifier が呼ばれる", async () => {
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    await notifyDispatchResult(
+      makeNotifyInput({
+        notifier,
+        outcome: "aborted",
+        totalSent: 0,
+        totalFailed: 0,
+        totalManualReviewRequired: 0,
+        perTenant: [],
+        abortedReason: "gmail_scope_revoked",
+      }),
+    );
+    expect(notifier).toHaveBeenCalledTimes(1);
+  });
+
+  it("perTenant は件数0のテナントを除外して notifier に渡す", async () => {
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    await notifyDispatchResult(
+      makeNotifyInput({
+        notifier,
+        perTenant: [
+          { tenantId: "t1", tenantName: "A", sent: 1, failed: 0, manualReviewRequired: 0 },
+          { tenantId: "t2", tenantName: "B", sent: 0, failed: 0, manualReviewRequired: 0 },
+        ],
+      }),
+    );
+    const call = notifier.mock.calls[0][0] as DispatchNotifyInput;
+    expect(call.perTenant.map((t) => t.tenantId)).toEqual(["t1"]);
+  });
+
+  it("notifier が {ok:false} を返す → runId/lane/outcome/occurrenceId 付きで warn ログが残る (silent-failure-hunter Medium 反映)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const notifier = vi.fn().mockResolvedValue({ ok: false });
+    await notifyDispatchResult(
+      makeNotifyInput({ notifier, lane: "progress", runId: "run-abc", occurrenceId: "occ-1" }),
+    );
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse((warnSpy.mock.calls[0] as [string])[0]) as Record<string, unknown>;
+    expect(logged).toMatchObject({
+      runId: "run-abc",
+      lane: "progress",
+      outcome: "completed",
+      occurrenceId: "occ-1",
+    });
+    warnSpy.mockRestore();
+  });
+
+  it("notifier が reject する → runId/lane/outcome 付きで error ログが残り、run 自体は例外を投げない", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const notifier = vi.fn().mockRejectedValue(new Error("chat webhook down"));
+    await expect(
+      notifyDispatchResult(
+        makeNotifyInput({ notifier, outcome: "unexpected_error", runId: "run-xyz" }),
+      ),
+    ).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse((errorSpy.mock.calls[0] as [string])[0]) as Record<string, unknown>;
+    expect(logged).toMatchObject({ runId: "run-xyz", lane: "completion", outcome: "unexpected_error" });
+    errorSpy.mockRestore();
   });
 });

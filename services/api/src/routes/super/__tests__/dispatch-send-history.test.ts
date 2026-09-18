@@ -320,4 +320,35 @@ describe("GET /api/v2/super/dispatch/send-history", () => {
     const body = res.body as GetSendHistoryResponse;
     expect(body.items.map((i) => i.lane).sort()).toEqual(["completion", "progress"]);
   });
+
+  it("不正な形のシャードカーソル (processedAt/docId欠落) を含むcursorでも500にならず先頭から返す (fable-review/type-design-analyzer 指摘反映)", async () => {
+    const storage = new InMemoryDispatchStorage();
+    const loader = new InMemoryTenantDataLoader();
+    loader.setTenant("tenant-a", {
+      publishedCourses: [],
+      users: [{ id: "user-1", email: "u1@example.com", name: "U1" }],
+      courseProgresses: new Map(),
+      ccConfig: null,
+      name: "テナントA",
+    });
+    await storage.tryReserveCompletionNotification({
+      tenantId: "tenant-a", userId: "user-1", runId: "run-1",
+      now: "2026-06-03T01:00:00.000Z", leaseExpiresAt: "2026-06-03T01:10:00.000Z",
+    });
+    const app = makeApp(storage, loader);
+
+    // { "tenant-a::completion": { "foo": "bar" } } 相当の壊れたcursor
+    const malformed = Buffer.from(
+      JSON.stringify({ "tenant-a::completion": { foo: "bar" } }),
+      "utf-8",
+    ).toString("base64url");
+
+    const res = await request(app).get(
+      `/api/v2/super/dispatch/send-history?lane=completion&cursor=${malformed}`,
+    );
+    expect(res.status).toBe(200);
+    const body = res.body as GetSendHistoryResponse;
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].tenantId).toBe("tenant-a");
+  });
 });

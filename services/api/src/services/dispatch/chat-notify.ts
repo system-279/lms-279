@@ -223,3 +223,90 @@ export function createChatNotifier(
     return { ok: result.ok };
   };
 }
+
+/**
+ * 呼び出し元 (`run-completion-notifications.ts` / `run-progress-reports.ts`) から
+ * 成功・abort・想定外エラーの3経路すべてで呼ぶ共通ヘルパー (pr-review-toolkit
+ * code-reviewer 指摘反映: 完了通知/進捗レポート両レーンにほぼ同一ロジックが
+ * コピーされ、将来の仕様変更でレーン間の分岐リスクがあったため一本化)。
+ *
+ * - 0件スキップ (`outcome==="completed" && 全カウント0`) は成功時のみ適用する。
+ *   中断・例外時は部分送信が0件でも通知する (中断そのものが異常事態のため)。
+ * - notifier が reject しても run を落とさない (呼び出し元は必ず try-catch で包むこと、
+ *   本関数自身もここで catch する防御的二重化)。
+ * - notifier が `{ok:false}` を返した場合も、runId/lane/occurrenceId/outcome を
+ *   含めて warn ログを残す (pr-review-toolkit silent-failure-hunter 指摘反映:
+ *   従来は戻り値が握りつぶされ、失敗しても相関情報付きのログが一切残らなかった)。
+ */
+export interface NotifyDispatchResultInput {
+  notifier: DispatchNotifier | undefined;
+  outcome: DispatchNotifyOutcome;
+  lane: DispatchLane;
+  runId: string;
+  /** progress レーンのみ設定 */
+  occurrenceId?: string;
+  totalSent: number;
+  totalFailed: number;
+  totalManualReviewRequired: number;
+  /** 件数 > 0 のテナントのみに絞り込むのは呼び出し元の責務ではなく本関数が行う */
+  perTenant: readonly TenantMetricsEntry[];
+  /** outcome !== "completed" のときのみ意味を持つ (sanitize 済の前提) */
+  abortedReason?: string;
+}
+
+export async function notifyDispatchResult(
+  input: NotifyDispatchResultInput,
+): Promise<void> {
+  const {
+    notifier,
+    outcome,
+    lane,
+    runId,
+    occurrenceId,
+    totalSent,
+    totalFailed,
+    totalManualReviewRequired,
+    perTenant,
+    abortedReason,
+  } = input;
+  if (!notifier) return;
+  if (
+    outcome === "completed" &&
+    totalSent === 0 &&
+    totalFailed === 0 &&
+    totalManualReviewRequired === 0
+  ) {
+    return;
+  }
+  try {
+    const result = await notifier({
+      outcome,
+      lane,
+      runId,
+      occurrenceId,
+      totalSent,
+      totalFailed,
+      totalManualReviewRequired,
+      perTenant: perTenant.filter(
+        (t) => t.sent > 0 || t.failed > 0 || t.manualReviewRequired > 0,
+      ),
+      abortedReason,
+    });
+    if (!result.ok) {
+      logger.warn("dispatch chat notify returned failure", {
+        runId,
+        lane,
+        outcome,
+        occurrenceId,
+      });
+    }
+  } catch (err) {
+    logger.error("dispatch chat notify failed", {
+      runId,
+      lane,
+      outcome,
+      occurrenceId,
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+  }
+}

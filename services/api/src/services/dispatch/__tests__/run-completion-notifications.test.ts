@@ -444,6 +444,49 @@ describe("Gmail エラー分類 (AC-14, AC-15, AC-17, AC-18)", () => {
       }
     }
   });
+
+  it("403 scope_revoked (concurrency=1、1人目送信成功後に2人目で中断) → 1人目の sent 件数が abort 後も run/audit に反映される (pr-review-toolkit silent-failure-hunter HIGH 反映の regression test)", async () => {
+    loader.setTenant(
+      "tenantA",
+      makeFixture({
+        users: [
+          { id: "user-1", email: "u1@example.com", name: "U1" },
+          { id: "user-2", email: "u2@example.com", name: "U2" },
+        ],
+        courseProgresses: new Map([
+          ["user-1", [{ courseId: "c1", isCompleted: true, totalLessons: 3, completedLessons: 3 }]],
+          ["user-2", [{ courseId: "c1", isCompleted: true, totalLessons: 3, completedLessons: 3 }]],
+        ]),
+      }),
+    );
+    const sendMail = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "msg-001", attempts: 1 } satisfies SendCompletionMailResult)
+      .mockRejectedValueOnce({
+        response: {
+          status: 403,
+          data: { error: { errors: [{ reason: "insufficientPermissions" }] } },
+        },
+      });
+    const notifier = vi.fn().mockResolvedValue({ ok: true });
+    const result = await runCompletionNotifications({
+      runId: "run-1", now: NOW, storage, loader, env: ENV, sendMail, notifier,
+      userConcurrency: 1, // 直列化して user-1 完了 → user-2 で abort、の順序を確定させる
+    });
+    // 修正前 (finally 無し) は tenantMetrics が merge されず 0 になっていた
+    expect(result.sent).toBe(1);
+    const run = await storage.getRun("run-1");
+    expect(run?.status).toBe("aborted");
+    expect(run?.sent).toBe(1);
+    // Chat 通知にも同じ正しい件数が渡ること
+    expect(notifier).toHaveBeenCalledTimes(1);
+    const call = notifier.mock.calls[0][0];
+    expect(call.outcome).toBe("aborted");
+    expect(call.totalSent).toBe(1);
+    expect(call.perTenant).toEqual([
+      { tenantId: "tenantA", tenantName: "tenantA", sent: 1, failed: 0, manualReviewRequired: 0 },
+    ]);
+  });
 });
 
 describe("audit log 整合", () => {
